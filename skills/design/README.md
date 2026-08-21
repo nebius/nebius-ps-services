@@ -27,7 +27,8 @@ that scaffold and the scaffold workflow does not call back into design.
   `app-stack`, and `ai-stack` handoff guidance, `system-design-rules` decision-review
   guidance, depth guidance, vertical-slice strategy, and `/plan` handoff
   template.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 
 ## Boundaries
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from html import unescape as html_unescape
 import ipaddress
 import json
 import os
@@ -16,7 +17,8 @@ import stat
 import subprocess
 import sys
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
+from urllib.request import url2pathname
 
 
 SCHEMA = "codex/remediation-budget-v4"
@@ -24,7 +26,8 @@ PREVIOUS_SCHEMA = "codex/remediation-budget-v3"
 LEGACY_SCHEMA = "codex/remediation-budget-v1"
 AUTHORIZATION_SCHEMA = "codex/remediation-budget-authorization-v1"
 AUTHORIZATION_FILE_NAME = "remediation-budget-authorization.json"
-REPORT_OBLIGATION_SCHEMA = "codex/troubleshoot-report-obligation-v2"
+REPORT_OBLIGATION_SCHEMA = "codex/troubleshoot-report-obligation-v3"
+PREVIOUS_REPORT_OBLIGATION_SCHEMA = "codex/troubleshoot-report-obligation-v2"
 REPORT_OBLIGATION_FILE_NAME = "troubleshoot-report-obligation.json"
 MARKER_START = "<!-- codex-remediation-budget:v1\n"
 MARKER_END = "\n-->"
@@ -32,10 +35,11 @@ MAX_MARKER_PREFIX_BYTES = 12 * 1024
 MAX_TASK_STATE_BYTES = 1024 * 1024
 MAX_AUTHORIZATION_BYTES = 4096
 MAX_REPORT_OBLIGATION_BYTES = 2048
-MAX_REPORT_CORRECTIONS = 1
+MAX_ADDITIONAL_CONTEXT_CHARS = 800
 MAX_FALLBACK_PREVIEW_CHARS = 9000
 REPORT_READY_FIELD = "_troubleshootReportReady"
 REPORT_FINALIZE_FIELD = "_troubleshootFinalizeReport"
+REPORT_FINALIZED_FIELD = "_troubleshootReportFinalized"
 DEFAULT_ATTEMPT_LIMIT = 5
 MAX_ATTEMPT_LIMIT = 10
 MAX_RECORDED_ATTEMPTS = 10
@@ -77,9 +81,13 @@ SENSITIVE_REPORT_RE = re.compile(
     r"""["']?(?:access[_-]?key|api[_-]?key|authorization|certificate|cookie|"""
     r"credential|password|passwd|private[_-]?key|"
     r"""pwd|secret|session|token)["']?\s*[:=]\s*\S+|"""
-    r"bearer\s+\S+|"
-    r"/(?:Users|home)/\S+|"
-    r"[A-Z]:[\\/]+Users[\\/]+\S+"
+    r"bearer\s+\S+"
+    r")"
+)
+LOCAL_IDENTITY_PATH_RE = re.compile(
+    r"(?i)(?:"
+    r"/(?:Users|home)/[^\s`<>()\[\]]+|"
+    r"[A-Z]:[\\/]+Users[\\/]+[^\s`<>()\[\]]+"
     r")"
 )
 URL_CANDIDATE_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
@@ -97,8 +105,66 @@ PRIVATE_HOST_RE = re.compile(
     r"(?:internal|corp|private|local)(?:\.[a-z0-9-]+)+)\b"
 )
 CLOUD_ACCESS_KEY_RE = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+MARKDOWN_LINK_START_RE = re.compile(r"!?\[[^\r\n]*?\]\(")
+INLINE_CODE_RE = re.compile(r"`(?P<value>[^`\r\n]+)`")
+HTTP_ROUTE_RE = re.compile(
+    r"\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+"
+    r"(?P<route>/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*)"
+)
+RELATIVE_PATH_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?P<path>(?:\.{1,2}/)?[A-Za-z0-9_.-]+"
+    r"(?:/[A-Za-z0-9_.-]+)+(?:\:\d+)?)"
+    r"(?![A-Za-z0-9_.-])"
+)
+SINGLE_FILE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?P<path>[A-Za-z0-9_.-]+\."
+    r"(?:c|conf|cpp|go|h|hpp|ini|java|js|json|jsx|log|md|py|rs|sh|toml|"
+    r"ts|tsx|txt|yaml|yml)(?:\:\d+)?)"
+    r"(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
+WINDOWS_PATH_RE = re.compile(r"(?i)(?:\b[A-Z]:[\\/]|\\\\)[^\s`<>()\[\]]+")
+UNIX_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9:])/[^\s`<>()\[\]]+")
+HOME_PATH_RE = re.compile(r"(?<![A-Za-z0-9_.-])~[\\/][^\s`<>()\[\]]+")
+FILE_URI_RE = re.compile(r"(?i)\bfile:(?://)?[^\s`<>()\[\]]+")
+REPORT_SAFETY_ISSUE = "report contains sensitive or unsafe reference content"
+REPORT_REFERENCE_FORMAT_ISSUE = "report contains a local reference format issue"
+LOCAL_REFERENCE_SAFE = "safe_repo_local"
+LOCAL_REFERENCE_FORMAT = "format_only"
+LOCAL_REFERENCE_UNSAFE = "unsafe_private_or_escape"
+LOCAL_REFERENCE_NONE = "not_local"
+AMBIGUOUS_PERCENT_ESCAPE_RE = re.compile(r"(?i)%(?:00|25|2e|2f|5c)|%(?![0-9a-f]{2})")
+DANGEROUS_URI_SCHEME_RE = re.compile(r"(?i)^(?:data|javascript|vbscript):")
+DANGEROUS_URI_SCHEME_ANY_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9+.-])(?:data|javascript|vbscript):"
+)
+COMMON_REPOSITORY_PATH_ROOTS = {
+    ".github",
+    "app",
+    "assets",
+    "bin",
+    "config",
+    "configs",
+    "docs",
+    "lib",
+    "references",
+    "scripts",
+    "src",
+    "templates",
+    "test",
+    "tests",
+}
+SENSITIVE_REPORT_WARNING = (
+    "Troubleshoot stopped because the report contained sensitive content or an "
+    "unsafe local reference. The hook did not request an automatic rewrite. "
+    "Review the visible response and invoke $troubleshoot again in a fresh turn "
+    "for a public-safe report."
+)
 REPORT_MARKER = "REMEDIATION_BUDGET_EXHAUSTED"
 MAX_REPORT_FIELD_CHARS = 70
+REFERENCE_ROOT_UNSET = object()
 LEGACY_EVIDENCE_NOTE = (
     "Retry-admission evidence summaries were not recorded by the earlier "
     "terminal marker contract."
@@ -117,6 +183,13 @@ GENERAL_REPORT_OUTCOMES = (
     "DIAGNOSED_NOT_FIXED",
     "BLOCKED_MISSING_EVIDENCE",
     "UNRESOLVED",
+)
+GENERAL_REPORT_NOTICE = (
+    "# Troubleshooting Report;S=Outcome|Root Cause And Fix|Verification|Next Action;C="
+    + "|".join(GENERAL_REPORT_OUTCOMES)
+    + ";F=Classification|Confidence|Fixed scope|Current state|Root cause|Changes "
+    "made|Verified|Not verified|Owner|Action|Done when;no secrets/private data;"
+    "ref=inline/link@Git-root;prefer=`repo/path:line`;escape/private=stop/no-rewrite."
 )
 REPORT_CONFIDENCE_VALUES = ("High", "Medium", "Low", "Unknown")
 VERIFIED_NO_GAP = "None within the declared scope."
@@ -185,6 +258,10 @@ def codex_home() -> Path:
 
 
 def resolve_root(cwd: str) -> str:
+    return resolve_git_root(cwd) or os.path.abspath(cwd)
+
+
+def resolve_git_root(cwd: str) -> str | None:
     cwd = os.path.abspath(cwd)
     try:
         root = subprocess.check_output(
@@ -194,7 +271,7 @@ def resolve_root(cwd: str) -> str:
         ).strip()
     except Exception:
         root = ""
-    return os.path.abspath(root or cwd)
+    return os.path.abspath(root) if root else None
 
 
 def safe_segment(value: str, *, limit: int = 80) -> str:
@@ -594,19 +671,24 @@ def _validate_report_obligation_data(
 ) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise GuardStateError("report obligation must contain a JSON object")
+    schema = data.get("schema")
+    if schema == PREVIOUS_REPORT_OBLIGATION_SCHEMA:
+        raise GuardStateError(
+            "report obligation uses the previous schema; preserve it and start "
+            "a fresh Codex session"
+        )
+    if schema != REPORT_OBLIGATION_SCHEMA:
+        raise GuardStateError("report obligation schema is invalid")
     if set(data) != {
         "schema",
         "workspace_hash",
         "session_hash",
         "turn_hash",
         "status",
-        "corrections",
     }:
         raise GuardStateError(
             "report obligation fields do not match the canonical schema"
         )
-    if data.get("schema") != REPORT_OBLIGATION_SCHEMA:
-        raise GuardStateError("report obligation schema is invalid")
     bindings = _payload_binding_hashes(payload)
     if bindings is None:
         raise GuardStateError("report obligation payload binding is unavailable")
@@ -621,17 +703,10 @@ def _validate_report_obligation_data(
         "active",
         "delivered",
         "advisory_incomplete",
+        "sensitive_detected",
         "fallback",
     }:
         raise GuardStateError("report obligation status is invalid")
-    corrections = data.get("corrections")
-    if (
-        isinstance(corrections, bool)
-        or not isinstance(corrections, int)
-        or corrections < 0
-        or corrections > MAX_REPORT_CORRECTIONS
-    ):
-        raise GuardStateError("report obligation correction count is invalid")
     return data
 
 
@@ -1236,7 +1311,10 @@ def _attempt_label(index: int) -> str:
 
 
 def _continue_with_report(
-    reason: str, state: GuardState, report_issue: str
+    reason: str,
+    state: GuardState,
+    report_issue: str,
+    project_root: object | None = None,
 ) -> dict[str, Any]:
     return {
         "decision": "block",
@@ -1245,7 +1323,7 @@ def _continue_with_report(
                 reason,
                 "Do not troubleshoot further or call tools.",
                 "Return this hook-generated, bounded, redacted report exactly:",
-                _fallback_report(state, report_issue),
+                _validated_fallback_report(state, report_issue, project_root),
             ]
         ),
     }
@@ -1299,9 +1377,13 @@ def _patch_updates_only_state(payload: dict[str, Any], state_file: Path | None) 
 
 def _substantive_report_value(value: str) -> bool:
     normalized_tokens = re.findall(r"[a-z]+", value.casefold())
-    return bool(value.strip()) and any(character.isalnum() for character in value) and not (
-        normalized_tokens
-        and all(token in PLACEHOLDER_TOKENS for token in normalized_tokens)
+    return (
+        bool(value.strip())
+        and any(character.isalnum() for character in value)
+        and not (
+            normalized_tokens
+            and all(token in PLACEHOLDER_TOKENS for token in normalized_tokens)
+        )
     )
 
 
@@ -1353,34 +1435,50 @@ def _evidence_report_value(section_lines: list[str], label: str) -> str | None:
     return evidence if _substantive_report_value(evidence) else None
 
 
-def _contains_sensitive_report_value(text: str) -> bool:
-    if (
-        SENSITIVE_REPORT_RE.search(text)
-        or PRIVATE_HOST_RE.search(text)
-        or CLOUD_ACCESS_KEY_RE.search(text)
-    ):
-        return True
-    for match in HOST_FIELD_RE.finditer(text):
-        value = match.group("value").strip("[](),.;")
-        if value.casefold().startswith(("http://", "https://")):
-            continue
-        hostname = value.rsplit(":", 1)[0].strip("[]")
-        if PRIVATE_HOST_RE.search(hostname) or "." not in hostname:
-            return True
-        try:
-            address = ipaddress.ip_address(hostname)
-        except ValueError:
-            address = None
-        if address is not None and (
-            address.is_private or address.is_loopback or address.is_link_local
+@dataclass(frozen=True)
+class LocalReferenceDecision:
+    status: str
+    normalized: str | None = None
+
+
+@dataclass(frozen=True)
+class MarkdownTarget:
+    full_span: tuple[int, int]
+    target_span: tuple[int, int]
+    value: str
+    angle_wrapped: bool
+
+
+@dataclass(frozen=True)
+class ReportReferenceAnalysis:
+    fatal: bool
+    advisory: bool
+    safe_spans: tuple[tuple[int, int], ...]
+
+
+def _contains_sensitive_report_value(
+    text: str, ignored_spans: tuple[tuple[int, int], ...] = ()
+) -> bool:
+    scan_values = tuple(dict.fromkeys((text, html_unescape(text))))
+    for scan_value in scan_values:
+        if (
+            SENSITIVE_REPORT_RE.search(scan_value)
+            or PRIVATE_HOST_RE.search(scan_value)
+            or CLOUD_ACCESS_KEY_RE.search(scan_value)
         ):
             return True
-    for candidate in URL_CANDIDATE_RE.findall(text):
-        try:
-            parsed = urlsplit(candidate)
-            hostname = parsed.hostname
-            if parsed.username or parsed.password or not hostname:
-                return True
+    for match in LOCAL_IDENTITY_PATH_RE.finditer(text):
+        if not any(
+            start <= match.start() and match.end() <= end
+            for start, end in ignored_spans
+        ):
+            return True
+    for scan_value in scan_values:
+        for match in HOST_FIELD_RE.finditer(scan_value):
+            value = match.group("value").strip("[](),.;")
+            if value.casefold().startswith(("http://", "https://")):
+                continue
+            hostname = value.rsplit(":", 1)[0].strip("[]")
             if PRIVATE_HOST_RE.search(hostname) or "." not in hostname:
                 return True
             try:
@@ -1391,45 +1489,498 @@ def _contains_sensitive_report_value(text: str) -> bool:
                 address.is_private or address.is_loopback or address.is_link_local
             ):
                 return True
-        except ValueError:
-            return True
-    for candidate in (
-        *IPV4_CANDIDATE_RE.findall(text),
-        *IPV6_CANDIDATE_RE.findall(text),
-    ):
-        try:
-            address = ipaddress.ip_address(candidate)
-        except ValueError:
-            continue
-        if address.is_private or address.is_loopback or address.is_link_local:
-            return True
+        for candidate in URL_CANDIDATE_RE.findall(scan_value):
+            try:
+                parsed = urlsplit(candidate)
+                hostname = parsed.hostname
+                if parsed.username or parsed.password or not hostname:
+                    return True
+                if PRIVATE_HOST_RE.search(hostname) or "." not in hostname:
+                    return True
+                try:
+                    address = ipaddress.ip_address(hostname)
+                except ValueError:
+                    address = None
+                if address is not None and (
+                    address.is_private or address.is_loopback or address.is_link_local
+                ):
+                    return True
+            except ValueError:
+                return True
+        for candidate in (
+            *IPV4_CANDIDATE_RE.findall(scan_value),
+            *IPV6_CANDIDATE_RE.findall(scan_value),
+        ):
+            try:
+                address = ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            if address.is_private or address.is_loopback or address.is_link_local:
+                return True
     return False
 
 
+def _blank_matches(text: str, pattern: re.Pattern[str]) -> str:
+    characters = list(text)
+    for match in pattern.finditer(text):
+        for index in range(match.start(), match.end()):
+            characters[index] = " "
+    return "".join(characters)
+
+
+def _blank_spans(text: str, spans: tuple[tuple[int, int], ...]) -> str:
+    characters = list(text)
+    for start, end in spans:
+        for index in range(start, end):
+            characters[index] = " "
+    return "".join(characters)
+
+
+def _markdown_unescape(value: str) -> str:
+    return html_unescape(
+        re.sub(r"\\([!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~])", r"\1", value)
+    )
+
+
+def _markdown_title_end(text: str, index: int) -> int | None:
+    while index < len(text) and text[index] in " \t":
+        index += 1
+    if index >= len(text):
+        return None
+    if text[index] == ")":
+        return index + 1
+    opener = text[index]
+    if opener not in {'"', "'", "("}:
+        return None
+    closer = ")" if opener == "(" else opener
+    index += 1
+    while index < len(text):
+        if text[index] == "\\" and index + 1 < len(text):
+            index += 2
+            continue
+        if text[index] in "\r\n":
+            return None
+        if text[index] == closer:
+            index += 1
+            while index < len(text) and text[index] in " \t":
+                index += 1
+            return index + 1 if index < len(text) and text[index] == ")" else None
+        index += 1
+    return None
+
+
+def _markdown_targets(text: str) -> tuple[tuple[MarkdownTarget, ...], bool]:
+    targets: list[MarkdownTarget] = []
+    ambiguous = False
+    for opener in MARKDOWN_LINK_START_RE.finditer(text):
+        index = opener.end()
+        target_start = index
+        target_end: int | None = None
+        link_end: int | None = None
+        angle_wrapped = index < len(text) and text[index] == "<"
+        if angle_wrapped:
+            target_start = index + 1
+            index += 1
+            while index < len(text):
+                if text[index] == "\\" and index + 1 < len(text):
+                    index += 2
+                    continue
+                if text[index] in "\r\n<":
+                    break
+                if text[index] == ">":
+                    target_end = index
+                    link_end = _markdown_title_end(text, index + 1)
+                    break
+                index += 1
+        else:
+            depth = 0
+            while index < len(text):
+                character = text[index]
+                if character == "\\" and index + 1 < len(text):
+                    index += 2
+                    continue
+                if character in "\r\n":
+                    break
+                if character == "(":
+                    depth += 1
+                elif character == ")":
+                    if depth == 0:
+                        target_end = index
+                        link_end = index + 1
+                        break
+                    depth -= 1
+                elif character in " \t" and depth == 0:
+                    target_end = index
+                    link_end = _markdown_title_end(text, index)
+                    break
+                index += 1
+        if target_end is None or link_end is None or target_end <= target_start:
+            ambiguous = True
+            continue
+        targets.append(
+            MarkdownTarget(
+                full_span=(opener.start(), link_end),
+                target_span=(target_start, target_end),
+                value=_markdown_unescape(text[target_start:target_end]),
+                angle_wrapped=angle_wrapped,
+            )
+        )
+    return tuple(targets), ambiguous
+
+
+def _public_markdown_target(target: str) -> bool:
+    normalized = target.strip()
+    if normalized.startswith("<") and normalized.endswith(">"):
+        normalized = normalized[1:-1].strip()
+    if normalized.startswith("#") and not any(
+        character.isspace() for character in normalized
+    ):
+        return True
+    if not normalized.casefold().startswith("https://") or any(
+        character.isspace() for character in normalized
+    ):
+        return False
+    try:
+        parsed = urlsplit(normalized)
+    except ValueError:
+        return False
+    return bool(parsed.hostname) and not parsed.username and not parsed.password
+
+
+def _decode_local_reference(value: str) -> str | None:
+    if AMBIGUOUS_PERCENT_ESCAPE_RE.search(value):
+        return None
+    try:
+        decoded = unquote(value, errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
+        return None
+    if AMBIGUOUS_PERCENT_ESCAPE_RE.search(decoded):
+        return None
+    return decoded
+
+
+def _strip_line_suffix(value: str) -> tuple[str, str] | None:
+    match = re.search(r":(?P<line>\d+)$", value)
+    if match is None:
+        return value, ""
+    if int(match.group("line")) <= 0:
+        return None
+    return value[: match.start()], match.group(0)
+
+
+def _classify_local_reference(
+    candidate: str, project_root: object | None
+) -> LocalReferenceDecision:
+    normalized = candidate.strip()
+    if normalized.startswith("<") and normalized.endswith(">"):
+        normalized = normalized[1:-1].strip()
+    if not normalized:
+        return LocalReferenceDecision(LOCAL_REFERENCE_FORMAT)
+    if normalized.startswith("#"):
+        return LocalReferenceDecision(LOCAL_REFERENCE_NONE)
+    if normalized.casefold().startswith(("http://", "https://")):
+        return LocalReferenceDecision(LOCAL_REFERENCE_NONE)
+    if DANGEROUS_URI_SCHEME_RE.match(normalized):
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+    if (
+        re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", normalized)
+        and not normalized.casefold().startswith("file:")
+        and not WINDOWS_PATH_RE.fullmatch(normalized)
+    ):
+        return LocalReferenceDecision(
+            LOCAL_REFERENCE_UNSAFE if "://" in normalized else LOCAL_REFERENCE_FORMAT
+        )
+
+    is_file_uri = normalized.casefold().startswith("file:")
+    line_suffix = ""
+    if is_file_uri:
+        try:
+            parsed = urlsplit(normalized)
+        except ValueError:
+            return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+        if (
+            parsed.scheme.casefold() != "file"
+            or parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.startswith("/")
+        ):
+            return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+        decoded = _decode_local_reference(parsed.path)
+        if decoded is None:
+            return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+        path_text = url2pathname(decoded)
+    else:
+        stripped = _strip_line_suffix(normalized)
+        if stripped is None:
+            return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+        encoded_path, line_suffix = stripped
+        decoded = _decode_local_reference(encoded_path)
+        if decoded is None:
+            return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+        path_text = decoded
+
+    if not path_text:
+        return LocalReferenceDecision(LOCAL_REFERENCE_FORMAT)
+    if DANGEROUS_URI_SCHEME_RE.match(path_text):
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+    if "?" in path_text or "#" in path_text:
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+    windows_home = os.name == "nt" and path_text.startswith("~\\")
+    if os.name != "nt" and ("\\" in path_text or WINDOWS_PATH_RE.fullmatch(path_text)):
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+    if path_text.startswith("//"):
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+
+    segment_text = path_text
+    if segment_text.startswith("~/") or windows_home:
+        segment_text = segment_text[2:]
+    elif segment_text.startswith("/"):
+        segment_text = segment_text[1:]
+    segments = re.split(r"[\\/]" if os.name == "nt" else r"/", segment_text)
+    if any(segment in {"", ".."} for segment in segments):
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+    format_only = any(segment == "." for segment in segments)
+
+    expanded = (
+        os.path.expanduser(path_text)
+        if path_text.startswith("~/") or windows_home
+        else path_text
+    )
+    path = Path(expanded)
+    if any(part in {"", ".."} for part in path.parts):
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+    format_only = format_only or any(part == "." for part in path.parts)
+    if project_root is None:
+        if path.is_absolute() or path_text.startswith("~/") or is_file_uri:
+            return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+        if format_only:
+            return LocalReferenceDecision(LOCAL_REFERENCE_FORMAT, path.as_posix())
+        return LocalReferenceDecision(
+            LOCAL_REFERENCE_SAFE, f"{path.as_posix()}{line_suffix}"
+        )
+
+    try:
+        root = Path(str(project_root)).resolve(strict=False)
+        resolved = (
+            path.resolve(strict=False)
+            if path.is_absolute()
+            else (root / path).resolve(strict=False)
+        )
+        relative = resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return LocalReferenceDecision(LOCAL_REFERENCE_UNSAFE)
+    if relative == Path(".") or format_only:
+        return LocalReferenceDecision(LOCAL_REFERENCE_FORMAT, relative.as_posix())
+    return LocalReferenceDecision(
+        LOCAL_REFERENCE_SAFE, f"{relative.as_posix()}{line_suffix}"
+    )
+
+
+def _looks_like_local_reference(candidate: str) -> bool:
+    path_text = re.sub(r":\d+$", "", candidate.strip())
+    segments = path_text.split("/")
+    return bool(
+        path_text.startswith(("./", "../"))
+        or re.search(r":\d+$", candidate)
+        or (segments and segments[0].casefold() in COMMON_REPOSITORY_PATH_ROOTS)
+        or (segments and "." in segments[-1])
+    )
+
+
+def _inline_reference_decision(
+    value: str, project_root: object | None
+) -> LocalReferenceDecision:
+    if HTTP_ROUTE_RE.fullmatch(value.strip()) or _public_markdown_target(value):
+        return LocalReferenceDecision(LOCAL_REFERENCE_NONE)
+    stripped = value.strip()
+    if stripped.casefold().startswith("http://"):
+        return LocalReferenceDecision(LOCAL_REFERENCE_FORMAT)
+    if not (
+        stripped.casefold().startswith("file:")
+        or stripped.startswith(("/", "~/", "./", "../"))
+        or "\\" in stripped
+        or WINDOWS_PATH_RE.fullmatch(stripped)
+        or RELATIVE_PATH_TOKEN_RE.fullmatch(stripped)
+        or SINGLE_FILE_TOKEN_RE.fullmatch(stripped)
+    ):
+        return LocalReferenceDecision(LOCAL_REFERENCE_NONE)
+    return _classify_local_reference(stripped, project_root)
+
+
+def _report_reference_analysis(
+    text: str, project_root: object | None
+) -> ReportReferenceAnalysis:
+    fatal = False
+    advisory = False
+    safe_spans: list[tuple[int, int]] = []
+    if DANGEROUS_URI_SCHEME_ANY_RE.search(html_unescape(text)):
+        fatal = True
+
+    markdown_targets, ambiguous_markdown = _markdown_targets(text)
+    if ambiguous_markdown:
+        fatal = True
+    for target_match in markdown_targets:
+        target = target_match.value
+        if _public_markdown_target(target):
+            continue
+        if target.strip().casefold().startswith("http://"):
+            advisory = True
+            continue
+        decision = _classify_local_reference(target, project_root)
+        if decision.status == LOCAL_REFERENCE_SAFE:
+            safe_spans.append(target_match.target_span)
+            if decision.normalized is not None and _contains_sensitive_report_value(
+                decision.normalized
+            ):
+                fatal = True
+        elif decision.status == LOCAL_REFERENCE_UNSAFE:
+            fatal = True
+        else:
+            advisory = True
+            if decision.normalized is not None:
+                safe_spans.append(target_match.target_span)
+                if _contains_sensitive_report_value(decision.normalized):
+                    fatal = True
+
+    for match in INLINE_CODE_RE.finditer(text):
+        decision = _inline_reference_decision(match.group("value"), project_root)
+        if decision.status == LOCAL_REFERENCE_SAFE:
+            safe_spans.append(match.span("value"))
+            if decision.normalized is not None and _contains_sensitive_report_value(
+                decision.normalized
+            ):
+                fatal = True
+        elif decision.status == LOCAL_REFERENCE_UNSAFE:
+            fatal = True
+        elif decision.status == LOCAL_REFERENCE_FORMAT:
+            advisory = True
+            if decision.normalized is not None:
+                safe_spans.append(match.span("value"))
+                if _contains_sensitive_report_value(decision.normalized):
+                    fatal = True
+
+    prose = _blank_spans(text, tuple(target.full_span for target in markdown_targets))
+    prose = _blank_matches(prose, INLINE_CODE_RE)
+    if any(
+        match.group(0).casefold().startswith("http://")
+        for match in URL_CANDIDATE_RE.finditer(text)
+    ):
+        advisory = True
+    prose = _blank_matches(prose, URL_CANDIDATE_RE)
+    prose = _blank_matches(prose, HTTP_ROUTE_RE)
+    if (
+        FILE_URI_RE.search(prose)
+        or WINDOWS_PATH_RE.search(prose)
+        or HOME_PATH_RE.search(prose)
+    ):
+        fatal = True
+    for match in UNIX_ABSOLUTE_PATH_RE.finditer(prose):
+        candidate = match.group(0)
+        if candidate.startswith(
+            (
+                "/Users/",
+                "/home/",
+                "/tmp/",
+                "/var/",
+                "/etc/",
+                "/opt/",
+                "/usr/",
+                "/private/",
+            )
+        ):
+            fatal = True
+    for match in RELATIVE_PATH_TOKEN_RE.finditer(prose):
+        candidate = match.group("path")
+        if "/" in candidate and _looks_like_local_reference(candidate):
+            advisory = True
+    if project_root is not None:
+        root = Path(str(project_root))
+        for match in SINGLE_FILE_TOKEN_RE.finditer(prose):
+            if (root / re.sub(r":\d+$", "", match.group("path"))).exists():
+                advisory = True
+    return ReportReferenceAnalysis(fatal, advisory, tuple(safe_spans))
+
+
+def _normalize_safe_local_references(text: str, project_root: object) -> str | None:
+    replacements: list[tuple[int, int, str]] = []
+    analysis = _report_reference_analysis(text, project_root)
+    if analysis.fatal or analysis.advisory:
+        return None
+    markdown_targets, ambiguous_markdown = _markdown_targets(text)
+    if ambiguous_markdown:
+        return None
+    for target_match in markdown_targets:
+        target = target_match.value
+        decision = _classify_local_reference(target, project_root)
+        if decision.status == LOCAL_REFERENCE_SAFE and decision.normalized is not None:
+            replacement = decision.normalized
+            if any(character.isspace() for character in replacement) and not (
+                target_match.angle_wrapped
+            ):
+                replacement = f"<{replacement}>"
+            replacements.append((*target_match.target_span, replacement))
+    for match in INLINE_CODE_RE.finditer(text):
+        decision = _inline_reference_decision(match.group("value"), project_root)
+        if decision.status == LOCAL_REFERENCE_SAFE and decision.normalized is not None:
+            replacements.append((*match.span("value"), decision.normalized))
+    normalized = text
+    for start, end, replacement in sorted(replacements, reverse=True):
+        normalized = normalized[:start] + replacement + normalized[end:]
+    return normalized
+
+
 def _bounded_report_value(
-    value: object, fallback: str, limit: int = MAX_REPORT_FIELD_CHARS
+    value: object,
+    fallback: str,
+    limit: int = MAX_REPORT_FIELD_CHARS,
+    project_root: object | None = REFERENCE_ROOT_UNSET,
 ) -> str:
     text = " ".join(value.split()) if isinstance(value, str) else ""
+    if project_root is not REFERENCE_ROOT_UNSET and text:
+        normalized = _normalize_safe_local_references(text, project_root)
+        text = normalized or ""
     if not text or _contains_sensitive_report_value(text):
         text = fallback
     if len(text) <= limit:
         return text
+    markdown_targets, ambiguous_markdown = _markdown_targets(text)
+    if (
+        markdown_targets
+        or ambiguous_markdown
+        or INLINE_CODE_RE.search(text)
+        or "`" in text
+        or URL_CANDIDATE_RE.search(text)
+    ):
+        return fallback
     return text[: limit - 3].rstrip() + "..."
 
 
 def _bounded_attempt_report_value(
-    value: object, fallback: str, limit: int = MAX_REPORT_FIELD_CHARS
+    value: object,
+    fallback: str,
+    limit: int = MAX_REPORT_FIELD_CHARS,
+    project_root: object | None = REFERENCE_ROOT_UNSET,
 ) -> str:
-    return _bounded_report_value(value, fallback, limit).replace("|", "/")
+    return _bounded_report_value(value, fallback, limit, project_root).replace("|", "/")
 
 
 def _concise_report_sections(
-    message: object,
+    message: object, project_root: object | None = None
 ) -> tuple[dict[str, list[str]] | None, str]:
     if not isinstance(message, str):
         return None, "response is not text"
-    if _contains_sensitive_report_value(message):
-        return None, "report contains a sensitive value that must be redacted"
+    reference_analysis = _report_reference_analysis(message, project_root)
+    if reference_analysis.fatal or _contains_sensitive_report_value(
+        message, reference_analysis.safe_spans
+    ):
+        return None, REPORT_SAFETY_ISSUE
+    if reference_analysis.advisory:
+        return None, REPORT_REFERENCE_FORMAT_ISSUE
     lines = [line.strip() for line in message.splitlines()]
     if lines.count("# Troubleshooting Report") != 1:
         return None, "report requires exactly one `# Troubleshooting Report` title"
@@ -1524,28 +2075,42 @@ def _concise_report_sections(
             changes,
         ):
             return None, f"{classification} requires an applied owner-correct repair"
-    if classification == "VERIFIED_FIXED" and values["- Not verified:"] != VERIFIED_NO_GAP:
+    if (
+        classification == "VERIFIED_FIXED"
+        and values["- Not verified:"] != VERIFIED_NO_GAP
+    ):
         return None, (
-            "VERIFIED_FIXED requires `- Not verified: "
-            + VERIFIED_NO_GAP
-            + "`"
+            "VERIFIED_FIXED requires `- Not verified: " + VERIFIED_NO_GAP + "`"
         )
     return sections, ""
 
 
-def _general_report_complete(message: object) -> tuple[bool, str]:
-    sections, issue = _concise_report_sections(message)
+def _general_report_complete(
+    message: object, project_root: object | None = None
+) -> tuple[bool, str]:
+    sections, issue = _concise_report_sections(message, project_root)
     return sections is not None, issue
 
 
-def _general_report_correction(report_issue: str) -> str:
+def _trusted_report_state_recovery(report_issue: str) -> str:
     return "\n".join(
         [
-            "The troubleshoot report must be redacted before this turn can stop.",
-            f"Current report issue: {_public_reason(report_issue)}.",
-            "Do not call tools. Return the concise report again without secrets, "
-            "private endpoints, internal hostnames, customer data, or local user paths.",
+            "Troubleshoot reporting state must be resolved before this turn can stop.",
+            f"Current state issue: {_public_reason(report_issue)}.",
+            "Do not call tools or rewrite private state speculatively. Preserve the "
+            "state and follow the stated recovery action.",
         ]
+    )
+
+
+def _report_state_write_failure() -> dict[str, Any]:
+    return _stop(
+        "Troubleshoot stopped because its private report status could not be recorded.",
+        warning=(
+            "Troubleshoot stopped at a trusted reporting-state boundary. The "
+            "assistant response was not repeated. Preserve the private state and "
+            "start a fresh Codex session before invoking $troubleshoot again."
+        ),
     )
 
 
@@ -1586,10 +2151,12 @@ def _report_classification(sections: dict[str, list[str]]) -> str:
     )
 
 
-def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
+def _report_complete(
+    message: object, state: GuardState, project_root: object | None = None
+) -> tuple[bool, str]:
     if not isinstance(message, str) or REPORT_MARKER not in message:
         return False, f"missing `{REPORT_MARKER}`"
-    sections, issue = _concise_report_sections(message)
+    sections, issue = _concise_report_sections(message, project_root)
     if sections is None:
         return False, issue
     markers = [line for line in sections["## Outcome"] if line == f"- {REPORT_MARKER}"]
@@ -1611,11 +2178,11 @@ def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
         return False, f"Outcome requires exact stop trigger `{state.stop_trigger}`"
 
     data = state.data or {}
-    blocker = _prefixed_report_value(
-        sections["## Root Cause And Fix"], "- Root cause:"
-    )
+    blocker = _prefixed_report_value(sections["## Root Cause And Fix"], "- Root cause:")
     expected_blocker = _bounded_report_value(
-        data.get("blocker_summary"), "The recorded blocker remains unresolved."
+        data.get("blocker_summary"),
+        "The recorded blocker remains unresolved.",
+        project_root=project_root,
     )
     if blocker != expected_blocker:
         return False, "Root cause must exactly match the bounded marker-derived blocker"
@@ -1623,7 +2190,9 @@ def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
         sections["## Root Cause And Fix"], "- Blocker key:"
     )
     expected_blocker_key = _bounded_report_value(
-        data.get("blocker_key"), "The recorded blocker source is unavailable."
+        data.get("blocker_key"),
+        "The recorded blocker source is unavailable.",
+        project_root=project_root,
     )
     if blocker_key != expected_blocker_key:
         return False, "Blocker key must exactly match the bounded marker-derived value"
@@ -1639,10 +2208,14 @@ def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
             if fields is None:
                 return False, f"Root Cause And Fix requires marker-derived {label}"
             expected_remediation = _bounded_attempt_report_value(
-                attempt.get("remediation"), "Remediation summary unavailable."
+                attempt.get("remediation"),
+                "Remediation summary unavailable.",
+                project_root=project_root,
             )
             expected_verification = _bounded_attempt_report_value(
-                attempt.get("verification"), "Verification summary unavailable."
+                attempt.get("verification"),
+                "Verification summary unavailable.",
+                project_root=project_root,
             )
             if fields != (
                 expected_remediation,
@@ -1656,11 +2229,16 @@ def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
                 "Historical evidence summary unavailable."
                 if new_evidence is None
                 else _bounded_report_value(
-                    new_evidence, "Evidence summary unavailable."
+                    new_evidence,
+                    "Evidence summary unavailable.",
+                    project_root=project_root,
                 )
             )
             if evidence != expected_evidence:
-                return False, f"Verification requires marker-derived evidence for {label}"
+                return (
+                    False,
+                    f"Verification requires marker-derived evidence for {label}",
+                )
             if new_evidence is None:
                 legacy_evidence = True
         if legacy_evidence and not any(
@@ -1670,7 +2248,11 @@ def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
     return True, ""
 
 
-def _fallback_report(state: GuardState, report_issue: str) -> str:
+def _fallback_report(
+    state: GuardState,
+    report_issue: str,
+    project_root: object | None = None,
+) -> str:
     data = state.data or {}
     attempts = data.get("attempts")
     attempt_lines: list[str] = []
@@ -1683,9 +2265,9 @@ def _fallback_report(state: GuardState, report_issue: str) -> str:
             label = _attempt_label(index)
             attempt_lines.append(
                 f"- {label} | Remediation: "
-                f"{_bounded_attempt_report_value(attempt.get('remediation'), 'Remediation summary unavailable.')} | "
-                f"Verification: {_bounded_attempt_report_value(attempt.get('verification'), 'Verification summary unavailable.')} | "
-                f"Result: {_bounded_report_value(attempt.get('result'), 'Result unavailable.', limit=40)}"
+                f"{_bounded_attempt_report_value(attempt.get('remediation'), 'Remediation summary unavailable.', project_root=project_root)} | "
+                f"Verification: {_bounded_attempt_report_value(attempt.get('verification'), 'Verification summary unavailable.', project_root=project_root)} | "
+                f"Result: {_bounded_report_value(attempt.get('result'), 'Result unavailable.', limit=40, project_root=project_root)}"
             )
             new_evidence = attempt.get("new_evidence")
             if new_evidence is None:
@@ -1693,17 +2275,23 @@ def _fallback_report(state: GuardState, report_issue: str) -> str:
                 evidence = "Historical evidence summary unavailable."
             else:
                 evidence = _bounded_report_value(
-                    new_evidence, "Evidence summary unavailable."
+                    new_evidence,
+                    "Evidence summary unavailable.",
+                    project_root=project_root,
                 )
             evidence_lines.append(f"- {label} | Evidence: {evidence}")
     if legacy_evidence:
         evidence_lines.append(f"- {LEGACY_EVIDENCE_NOTE}")
 
     blocker = _bounded_report_value(
-        data.get("blocker_summary"), "The recorded blocker remains unresolved."
+        data.get("blocker_summary"),
+        "The recorded blocker remains unresolved.",
+        project_root=project_root,
     )
     blocker_key = _bounded_report_value(
-        data.get("blocker_key"), "The recorded blocker source is unavailable."
+        data.get("blocker_key"),
+        "The recorded blocker source is unavailable.",
+        project_root=project_root,
     )
     return "\n".join(
         [
@@ -1729,6 +2317,20 @@ def _fallback_report(state: GuardState, report_issue: str) -> str:
             "- Action: Review the evidence before authorizing another bounded tranche.",
             "- Done when: A new explicit instruction authorizes the next safe action.",
         ]
+    )
+
+
+def _validated_fallback_report(
+    state: GuardState,
+    report_issue: str,
+    project_root: object | None = None,
+) -> str:
+    report = _fallback_report(state, report_issue, project_root)
+    complete, _ = _report_complete(report, state, project_root)
+    if complete:
+        return report
+    return _general_fallback_report(
+        "the exhausted marker could not be rendered as a public-safe report"
     )
 
 
@@ -1805,7 +2407,6 @@ def _begin_report_obligation(
             "session_hash": bindings[1],
             "turn_hash": _turn_hash(payload),
             "status": "active",
-            "corrections": 0,
         },
     )
 
@@ -1815,15 +2416,12 @@ def _update_report_obligation(
     obligation: ReportObligationState,
     *,
     status: str | None = None,
-    corrections: int | None = None,
 ) -> ReportObligationState:
     if obligation.kind != "valid" or not isinstance(obligation.data, dict):
         raise GuardStateError("a valid report obligation is required")
     data = json.loads(json.dumps(obligation.data))
     if status is not None:
         data["status"] = status
-    if corrections is not None:
-        data["corrections"] = corrections
     return _write_report_obligation_data(payload, data)
 
 
@@ -2059,7 +2657,11 @@ def _pending_context(
     state_kind: str | None = None,
 ) -> str:
     issue_context = (
-        f"Pending authorization cannot be promoted: {_public_reason(issue)}. "
+        "Pending authorization cannot be promoted: "
+        + _bounded_report_value(
+            _public_reason(issue), "invalid marker state", limit=160
+        )
+        + ". "
         if issue
         else ""
     )
@@ -2067,20 +2669,16 @@ def _pending_context(
         if issue and state_kind == "missing":
             action = (
                 "Before another tool call, restore the exact pre-resize canonical "
-                "marker in the advertised current.md and apply the authorized "
-                "attempt_limit, time_limit_minutes, and budget_authorization_id. "
-                "The authorization sidecar cannot reconstruct a deleted marker. "
-                "If the exact prior marker is unavailable, end this session and "
-                "request a fresh user-authorized troubleshoot session; do not reset "
-                "or invent blocker state."
+                "marker in current.md; the sidecar cannot reconstruct a deleted "
+                "marker. If unavailable, request a fresh user-authorized troubleshoot "
+                "session; do not reset or invent blocker state."
             )
         elif issue:
             action = (
-                "Before another tool call, repair the exact advertised current.md "
-                "marker and apply the authorized profile change atomically. Restore "
-                "every non-profile field to its exact pre-resize value, then set only "
-                "attempt_limit, time_limit_minutes, and budget_authorization_id to "
-                "the authorized values; do not reset or invent blocker state."
+                "Before another tool call, repair the exact advertised current.md: "
+                "Restore every non-profile field to its exact pre-resize value and "
+                "apply the authorized profile change atomically; do not reset or "
+                "invent blocker state."
             )
         else:
             action = (
@@ -2091,18 +2689,70 @@ def _pending_context(
             )
     else:
         action = (
-            "Before continuing troubleshooting, replace the prior terminal marker "
-            "with one complete canonical fresh active marker: set blocker_key and a "
-            "concise public-safe blocker_summary; set attempts to [], active_seconds "
-            "to 0, a fresh started_at, status to active, and stop_trigger to null. "
-            "For the same blocker, preserve its exact blocker_key, increment tranche, "
-            "and use a continuation-only override_summary. For a causally independent "
-            "blocker, use its new blocker_key at tranche 1 with override_summary null."
+            "Replace the prior terminal marker with one complete canonical fresh "
+            "active marker: blocker_key/public-safe blocker_summary; attempts=[]; "
+            "active_seconds=0; fresh started_at; status=active; stop_trigger=null. "
+            "Same: same key, tranche+1, continuation override_summary. Independent: "
+            "new key, tranche=1, override_summary=null."
         )
     return (
-        f"{issue_context}{action} Use schema {SCHEMA}, "
-        f"attempt_limit={pending['attempt_limit']}, "
-        f"time_limit_minutes={pending['time_limit_minutes']}, and "
+        f"{issue_context}{action} schema={SCHEMA}; "
+        f"attempt_limit={pending['attempt_limit']}; "
+        f"time_limit_minutes={pending['time_limit_minutes']}; "
+        f"budget_authorization_id={pending['authorization_id']}."
+    )
+
+
+def _pending_prompt_context(
+    pending: dict[str, Any],
+    issue: str | None = None,
+    state_kind: str | None = None,
+) -> str:
+    issue_text = _public_reason(issue) if issue else ""
+    if "missing:" in issue_text:
+        missing_fields = issue_text.split("missing:", 1)[1]
+        issue_text = "remediation marker is invalid: missing:" + missing_fields
+    issue_context = (
+        "Invalid: "
+        + _bounded_report_value(issue_text, "invalid marker state", limit=96)
+        + ". "
+        if issue
+        else ""
+    )
+    if pending["mode"] == "resize_active":
+        if issue and state_kind == "missing":
+            action = (
+                "The sidecar cannot reconstruct a deleted marker; restore exact "
+                "pre-resize current.md or start a fresh user-authorized troubleshoot "
+                "session; do not reset or invent state."
+            )
+        elif issue:
+            action = (
+                "Restore every non-profile field in current.md; apply the authorized "
+                "profile change atomically."
+            )
+        else:
+            action = (
+                "Before another tool call, change only attempt_limit, "
+                "time_limit_minutes, budget_authorization_id in current.md; preserve "
+                "its blocker, tranche, attempt ledger, counters, lifecycle, timestamps."
+            )
+    elif issue:
+        action = (
+            "Repair active current.md fields=blocker_key|blocker_summary|tranche|"
+            "override_summary|attempts|active_seconds|started_at|status|stop_trigger."
+        )
+    else:
+        action = (
+            "Replace prior terminal marker with complete canonical fresh active "
+            "marker: blocker_key=prior/new;blocker_summary=public-safe;tranche=+1/1;"
+            "override_summary=continuation/null;attempts=[];active_seconds=0;"
+            "started_at=new;status=active;stop_trigger=null."
+        )
+    return (
+        f"{issue_context}{action} schema={SCHEMA};"
+        f"attempt_limit={pending['attempt_limit']};"
+        f"time_limit_minutes={pending['time_limit_minutes']};"
         f"budget_authorization_id={pending['authorization_id']}."
     )
 
@@ -2127,11 +2777,7 @@ def evaluate_user_prompt(
     report_notice = ""
     if _report_obligation_active(report_obligation):
         if _report_turn_matches(payload, report_obligation):
-            report_notice = (
-                "Every explicit $troubleshoot invocation must end with the "
-                "concise terminal report. Ordinary report gaps are advisory; "
-                "safety and exhausted-budget boundaries remain strict."
-            )
+            report_notice = GENERAL_REPORT_NOTICE
         else:
             report_notice = (
                 "An earlier troubleshoot report remains undelivered after an "
@@ -2146,6 +2792,11 @@ def evaluate_user_prompt(
 
     def prompt_context(message: str) -> dict[str, Any]:
         combined = "\n".join(part for part in (report_notice, message) if part)
+        if len(combined) > MAX_ADDITIONAL_CONTEXT_CHARS:
+            return {
+                "decision": "block",
+                "reason": "Troubleshoot prompt context exceeds its safe bound.",
+            }
         return _prompt_context(combined)
 
     pending = (
@@ -2155,7 +2806,7 @@ def evaluate_user_prompt(
     )
     if isinstance(pending, dict):
         return prompt_context(
-            _pending_context(
+            _pending_prompt_context(
                 pending, _pending_transition_issue(state, authorization), state.kind
             )
         )
@@ -2223,14 +2874,14 @@ def evaluate_user_prompt(
             )
         except GuardStateError as exc:
             return {"decision": "block", "reason": _public_reason(str(exc))}
-        return prompt_context(_pending_context((updated.data or {})["pending"]))
+        return prompt_context(_pending_prompt_context((updated.data or {})["pending"]))
 
     if invocation is None:
         if authorization.kind == "valid":
             return prompt_context(
                 _profile_context(current_attempts, current_minutes, current_id)
             )
-        return {}
+        return prompt_context("") if report_notice else {}
 
     if (
         state.kind == "valid"
@@ -2270,7 +2921,7 @@ def evaluate_user_prompt(
             )
         except GuardStateError as exc:
             return {"decision": "block", "reason": _public_reason(str(exc))}
-        return prompt_context(_pending_context((updated.data or {})["pending"]))
+        return prompt_context(_pending_prompt_context((updated.data or {})["pending"]))
 
     if (
         state.kind == "valid"
@@ -2288,7 +2939,7 @@ def evaluate_user_prompt(
             )
         except GuardStateError as exc:
             return {"decision": "block", "reason": _public_reason(str(exc))}
-        return prompt_context(_pending_context((updated.data or {})["pending"]))
+        return prompt_context(_pending_prompt_context((updated.data or {})["pending"]))
 
     if supplied_fields:
         try:
@@ -2331,13 +2982,6 @@ def evaluate_pre_tool(
             + ". Preserve the private state and resolve this trusted-state "
             "boundary before calling another tool."
         )
-    elif _report_obligation_active(report_obligation):
-        corrections = int((report_obligation.data or {}).get("corrections", 0))
-        if corrections > 0:
-            report_denial = _deny(
-                "A sensitive troubleshoot report is awaiting redaction. Return "
-                "the concise public-safe report without calling another tool."
-            )
     terminal = (
         (authorization.data or {}).get("terminal")
         if authorization.kind == "valid"
@@ -2408,79 +3052,44 @@ def _evaluate_general_report_stop(
         )
         if payload.get("stop_hook_active"):
             return _stop(
-                "Troubleshoot reporting state remained invalid after one correction request.",
+                "Troubleshoot reporting state remained invalid after one recovery request.",
                 warning=_general_fallback_report(report_issue),
             )
         return {
             "decision": "block",
-            "reason": _general_report_correction(report_issue),
+            "reason": _trusted_report_state_recovery(report_issue),
         }
     if not _report_obligation_active(report_obligation):
         return {"continue": True}
 
+    cwd = payload.get("cwd")
+    project_root = resolve_git_root(cwd) if isinstance(cwd, str) else None
     report_complete, report_issue = _general_report_complete(
-        payload.get("last_assistant_message")
+        payload.get("last_assistant_message"), project_root
     )
     if report_complete:
         if not payload.get(REPORT_FINALIZE_FIELD):
             return {"continue": True, REPORT_READY_FIELD: True}
         try:
             _close_report_obligation(payload, report_obligation, "delivered")
-        except GuardStateError as exc:
-            return {
-                "decision": "block",
-                "reason": _general_report_correction(
-                    "the validated report could not be recorded safely: "
-                    + _public_reason(str(exc))
-                ),
-            }
+        except GuardStateError:
+            return _report_state_write_failure()
+        return {"continue": True, REPORT_FINALIZED_FIELD: True}
+
+    if report_issue != REPORT_SAFETY_ISSUE:
+        try:
+            _close_report_obligation(payload, report_obligation, "advisory_incomplete")
+        except GuardStateError:
+            return _report_state_write_failure()
         return {"continue": True}
 
-    if report_issue != "report contains a sensitive value that must be redacted":
-        try:
-            _close_report_obligation(
-                payload, report_obligation, "advisory_incomplete"
-            )
-        except GuardStateError as exc:
-            return {
-                "decision": "block",
-                "reason": _general_report_correction(
-                    "the advisory report disposition could not be recorded safely: "
-                    + _public_reason(str(exc))
-                ),
-            }
-        return {"continue": True}
-
-    corrections = int((report_obligation.data or {}).get("corrections", 0))
-    if corrections < MAX_REPORT_CORRECTIONS:
-        try:
-            _update_report_obligation(
-                payload,
-                report_obligation,
-                corrections=corrections + 1,
-            )
-        except GuardStateError as exc:
-            report_issue = (
-                "report correction state could not be recorded: "
-                + _public_reason(str(exc))
-            )
-        return {
-            "decision": "block",
-            "reason": _general_report_correction(report_issue),
-        }
-
-    fallback = _general_fallback_report(report_issue)
     try:
-        _close_report_obligation(payload, report_obligation, "fallback")
+        _close_report_obligation(payload, report_obligation, "sensitive_detected")
     except GuardStateError:
-        fallback += (
-            "\n- Report-state warning: the fallback status could not be recorded "
-            "safely."
-        )
+        return _report_state_write_failure()
     return _stop(
-        "A bounded troubleshoot safety fallback was emitted after sensitive "
-        "report content remained unredacted.",
-        warning=fallback,
+        "Troubleshoot stopped after sensitive or unsafe report content was detected.",
+        warning=SENSITIVE_REPORT_WARNING,
     )
 
 
@@ -2542,8 +3151,10 @@ def evaluate_stop(
             + (f": {state.reason}" if state.reason else "")
             + "."
         )
+    cwd = payload.get("cwd")
+    project_root = resolve_git_root(cwd) if isinstance(cwd, str) else None
     report_complete, report_issue = _report_complete(
-        payload.get("last_assistant_message"), state
+        payload.get("last_assistant_message"), state, project_root
     )
     if report_complete:
         if not payload.get(REPORT_FINALIZE_FIELD):
@@ -2553,14 +3164,16 @@ def evaluate_stop(
         except GuardStateError as exc:
             return {
                 "decision": "block",
-                "reason": _general_report_correction(
+                "reason": _trusted_report_state_recovery(
                     "the validated exhausted report could not be recorded: "
                     + _public_reason(str(exc))
                 ),
             }
-        return _stop(
+        result = _stop(
             "Remediation budget exhausted and troubleshooting report delivered."
         )
+        result[REPORT_FINALIZED_FIELD] = True
+        return result
     if payload.get("stop_hook_active"):
         try:
             _close_report_obligation(payload, report_obligation, "fallback")
@@ -2568,13 +3181,14 @@ def evaluate_stop(
             pass
         return _stop(
             "Remediation budget exhausted; a bounded fallback report was emitted.",
-            warning=_fallback_report(state, report_issue),
+            warning=_validated_fallback_report(state, report_issue, project_root),
         )
     return _continue_with_report(
         "The remediation budget is exhausted and the previous response did not "
         "contain the complete user-visible report. Produce it now.",
         state,
         report_issue,
+        project_root,
     )
 
 

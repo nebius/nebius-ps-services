@@ -1,30 +1,74 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import re
 import shlex
 import time
 import typing as t
+import uuid
+from enum import Enum
 from pathlib import Path
 
 from rich import print
 
-from ..config_loader import ResolvedDeploymentPlan
-from ..schema import VMHARouteTarget
-from .ssh_policy import build_openssh_base_command
+from ..config_loader import ResolvedDeploymentPlan, connection_static_remote_prefixes
+from ..schema import VMHAMigrationRouteBinding, VMHARouteTarget
+from .ssh_policy import SSHTrustPolicy, build_openssh_base_command
+from .vm_ha_cloud import (
+    operation_status_lookup_unsupported,
+    vm_ha_request_kwargs,
+    wait_vm_ha_operation,
+)
 from .vm_ha_routes import (
+    AcceptedRouteOperation,
+    ManagedRouteKind,
     ManagedRouteOwnership,
+    PendingRouteMutation,
     RouteApplyResult,
     RouteMutation,
     RouteMutationKind,
+    RouteMutationPhase,
     RouteReconciliationContext,
     RouteReconciliationPlan,
+    RouteReplacementCompensated,
+    RouteRollbackSnapshot,
     VerifiedAllocationOwnership,
     execute_route_plan,
     owned_route_snapshots,
     route_observation_snapshots,
 )
+
+
+class BGPAdvertisementState(str, Enum):
+    """Exact result of a read-only Adj-RIB-Out comparison."""
+
+    MATCH = "MATCH"
+    DRIFT = "DRIFT"
+    UNKNOWN = "UNKNOWN"
+
+
+class RouteManagementError(RuntimeError):
+    """A public route workflow could not prove its requested postcondition."""
+
+
+AGENT_CAPABILITIES_SCHEMA = "nebius-vpngw.agent-capabilities.v1"
+FORCE_RECONCILE_CAPABILITY = "force-reconcile-v1"
+VM_HA_AUTHORITY_FORCE_RECONCILE_CAPABILITY = (
+    "vm-ha-authority-bound-force-reconcile-v1"
+)
+
+
+class VMHAAdvertisementAuthority(t.NamedTuple):
+    owner_hostname: str
+    generation_id: str
+    owner_node_id: str
+    allocation_id: str
+    ownership_epochs_by_hostname: tuple[tuple[str, str], ...]
+
+    def ownership_epoch_for(self, hostname: str) -> str | None:
+        return dict(self.ownership_epochs_by_hostname).get(hostname)
 
 
 class _RouteReceiptStore(t.Protocol):
@@ -33,13 +77,177 @@ class _RouteReceiptStore(t.Protocol):
     def load_route_reconciliation_receipt(self) -> t.Mapping[str, object] | None: ...
 
 
+class _RouteMutationCheckpoint(t.Protocol):
+    def load_pending_mutation(self) -> PendingRouteMutation | None: ...
+
+    def checkpoint_pending_mutation(
+        self,
+        expected: PendingRouteMutation,
+        *,
+        phase: RouteMutationPhase,
+        rollback: RouteRollbackSnapshot | None,
+        accepted_operation: AcceptedRouteOperation | None,
+    ) -> PendingRouteMutation: ...
+
+
 class NebiusSDKRouteBackend:
     """Exact target-bound synchronous SDK adapter for on-node HA route effects."""
 
-    _REQUEST_TIMEOUT_SECONDS = 30.0
+    _AUTHORITY_MANAGED_LABEL = "nebius-vpngw-managed"
+    _AUTHORITY_CLUSTER_LABEL = "nebius-vpngw-cluster"
+    _AUTHORITY_ALLOCATION_LABEL = "nebius-vpngw-allocation"
+    _AUTHORITY_TARGET_LABEL = "nebius-vpngw-route-target"
+    _AUTHORITY_KIND_LABEL = "nebius-vpngw-route-kind"
+    _AUTHORITY_LABEL_KEYS = frozenset(
+        {
+            _AUTHORITY_MANAGED_LABEL,
+            _AUTHORITY_CLUSTER_LABEL,
+            _AUTHORITY_ALLOCATION_LABEL,
+            _AUTHORITY_TARGET_LABEL,
+            _AUTHORITY_KIND_LABEL,
+        }
+    )
 
     def __init__(self, sdk: t.Any) -> None:
         self.sdk = sdk
+        self._reconciliation_operation_id = "unbound-route-reconciliation"
+        self._mutation_checkpoint: _RouteMutationCheckpoint | None = None
+        self._authority_cluster_id: str | None = None
+        self._authority_allocation_id: str | None = None
+        self._authority_targets: tuple[VMHARouteTarget, ...] = ()
+
+    @staticmethod
+    def _authority_fingerprint(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
+
+    @classmethod
+    def _authority_labels(
+        cls,
+        *,
+        cluster_id: str,
+        allocation_id: str,
+        route_target: VMHARouteTarget,
+        route_kind: t.Any,
+    ) -> dict[str, str]:
+        target_payload = json.dumps(
+            route_target.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        kind = str(getattr(route_kind, "value", route_kind))
+        return {
+            cls._AUTHORITY_MANAGED_LABEL: "vm-ha-v1",
+            cls._AUTHORITY_CLUSTER_LABEL: cls._authority_fingerprint(cluster_id),
+            cls._AUTHORITY_ALLOCATION_LABEL: cls._authority_fingerprint(allocation_id),
+            cls._AUTHORITY_TARGET_LABEL: cls._authority_fingerprint(target_payload),
+            cls._AUTHORITY_KIND_LABEL: kind,
+        }
+
+    def bind_route_authority(
+        self,
+        *,
+        cluster_id: str,
+        allocation_id: str,
+        route_targets: tuple[VMHARouteTarget, ...],
+    ) -> None:
+        """Bind cloud-resident route authority to one installed HA generation."""
+
+        if not cluster_id or not allocation_id or not route_targets:
+            raise ValueError("VM-HA route authority binding is incomplete")
+        self._authority_cluster_id = cluster_id
+        self._authority_allocation_id = allocation_id
+        self._authority_targets = route_targets
+
+    @staticmethod
+    def _route_labels(route: object) -> dict[str, str]:
+        metadata = getattr(route, "metadata", None)
+        labels = getattr(metadata, "labels", {}) or {}
+        if not isinstance(labels, t.Mapping) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in labels.items()
+        ):
+            raise RuntimeError("VM-HA route labels are ambiguous")
+        return dict(labels)
+
+    def _cloud_authority(
+        self,
+        route: object,
+        target: VMHARouteTarget,
+    ) -> tuple[bool, ManagedRouteOwnership | None]:
+        labels = self._route_labels(route)
+        has_authority_labels = bool(self._AUTHORITY_LABEL_KEYS & labels.keys())
+        if not has_authority_labels:
+            return False, None
+        cluster_id = self._authority_cluster_id
+        allocation_id = self._authority_allocation_id
+        if (
+            cluster_id is None
+            or allocation_id is None
+            or target not in self._authority_targets
+            or RouteManager._route_next_hop_allocation_id(route) != allocation_id
+        ):
+            return True, None
+        kind_value = labels.get(self._AUTHORITY_KIND_LABEL)
+        try:
+            kind = ManagedRouteKind(str(kind_value))
+        except ValueError:
+            return True, None
+        expected = self._authority_labels(
+            cluster_id=cluster_id,
+            allocation_id=allocation_id,
+            route_target=target,
+            route_kind=kind,
+        )
+        if any(labels.get(key) != value for key, value in expected.items()):
+            return True, None
+        return True, ManagedRouteOwnership(
+            cluster_id=cluster_id,
+            kind=kind,
+            route_target=target,
+        )
+
+    def set_mutation_checkpoint(self, checkpoint: _RouteMutationCheckpoint) -> None:
+        self._mutation_checkpoint = checkpoint
+
+    def set_reconciliation_operation_id(self, operation_id: str) -> None:
+        if not operation_id:
+            raise ValueError("VM-HA route reconciliation operation ID is empty")
+        self._reconciliation_operation_id = operation_id
+
+    def _action_operation_id(self, action: str, mutation_identity: str) -> str:
+        raw = hashlib.sha256(
+            (f"{self._reconciliation_operation_id}\0{action}\0{mutation_identity}").encode()
+        ).digest()[:16]
+        return str(uuid.UUID(bytes=raw, version=4))
+
+    def _pending(self, mutation: RouteMutation) -> PendingRouteMutation | None:
+        checkpoint = self._mutation_checkpoint
+        if checkpoint is None:
+            return None
+        pending = checkpoint.load_pending_mutation()
+        if pending is None or pending.mutation != mutation:
+            raise RuntimeError("VM-HA route mutation checkpoint changed")
+        return pending
+
+    def _checkpoint(
+        self,
+        mutation: RouteMutation,
+        *,
+        phase: RouteMutationPhase,
+        rollback: RouteRollbackSnapshot | None,
+        accepted_operation: AcceptedRouteOperation | None,
+    ) -> PendingRouteMutation | None:
+        checkpoint = self._mutation_checkpoint
+        if checkpoint is None:
+            return None
+        pending = self._pending(mutation)
+        assert pending is not None
+        return checkpoint.checkpoint_pending_mutation(
+            pending,
+            phase=phase,
+            rollback=rollback,
+            accepted_operation=accepted_operation,
+        )
 
     @staticmethod
     def _client_types():
@@ -76,8 +284,7 @@ class NebiusSDKRouteBackend:
         for _page in range(1000):
             response = client.list(
                 list_request(parent_id=route_table_id, page_token=page_token),
-                timeout=self._REQUEST_TIMEOUT_SECONDS,
-                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                **vm_ha_request_kwargs(),
             ).wait()
             routes.extend(tuple(getattr(response, "items", ()) or ()))
             next_token = str(getattr(response, "next_page_token", "") or "")
@@ -103,8 +310,7 @@ class NebiusSDKRouteBackend:
             SubnetServiceClient(self.sdk)
             .get(
                 GetSubnetRequest(id=target.workload_subnet_id),
-                timeout=self._REQUEST_TIMEOUT_SECONDS,
-                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                **vm_ha_request_kwargs(),
             )
             .wait()
         )
@@ -112,8 +318,7 @@ class NebiusSDKRouteBackend:
             RouteTableServiceClient(self.sdk)
             .get(
                 GetRouteTableRequest(id=target.route_table_id),
-                timeout=self._REQUEST_TIMEOUT_SECONDS,
-                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                **vm_ha_request_kwargs(),
             )
             .wait()
         )
@@ -135,28 +340,375 @@ class NebiusSDKRouteBackend:
         ):
             raise RuntimeError("VM-HA route target membership changed")
 
+    def verify_migration_route(self, binding: VMHAMigrationRouteBinding) -> bool:
+        """Reobserve one exact approval-bound route without adopting by name."""
+
+        self.verify_target(binding.route_target)
+        matches = tuple(
+            route
+            for route in self._raw_routes(binding.route_target.route_table_id)
+            if RouteManager._metadata_id(route) == binding.route_id
+        )
+        if len(matches) > 1:
+            raise RuntimeError("VM-HA migration route identity is ambiguous")
+        if not matches:
+            return False
+        route = matches[0]
+        metadata = getattr(route, "metadata", None)
+        prefix = RouteManager._route_destination_network(route)
+        return bool(
+            RouteManager._metadata_name(route) == binding.name
+            and prefix is not None
+            and str(prefix) == binding.prefix
+            and RouteManager._route_next_hop_allocation_id(route) == binding.allocation_id
+            and str(getattr(metadata, "resource_version", "") or "") == binding.resource_revision
+        )
+
+    def verify_migration_successor(
+        self,
+        binding: VMHAMigrationRouteBinding,
+        ownership: ManagedRouteOwnership,
+    ) -> bool:
+        """Prove that cloud authority has superseded an old revision receipt."""
+
+        self.verify_target(binding.route_target)
+        matches = tuple(
+            route
+            for route in self._raw_routes(binding.route_target.route_table_id)
+            if RouteManager._metadata_id(route) == binding.route_id
+        )
+        if len(matches) > 1:
+            raise RuntimeError("VM-HA migration successor identity is ambiguous")
+        if not matches:
+            return False
+        route = matches[0]
+        prefix = RouteManager._route_destination_network(route)
+        _has_authority, cloud_ownership = self._cloud_authority(
+            route,
+            binding.route_target,
+        )
+        return bool(
+            RouteManager._metadata_name(route) == binding.name
+            and prefix is not None
+            and str(prefix) == binding.prefix
+            and cloud_ownership == ownership
+        )
+
     def list_routes(
         self,
         target: VMHARouteTarget,
         ownership: t.Mapping[str, ManagedRouteOwnership],
     ):
+        routes = self._raw_routes(target.route_table_id)
+        combined_ownership = dict(ownership)
+        for route in routes:
+            route_id = RouteManager._metadata_id(route)
+            has_cloud_authority, cloud_ownership = self._cloud_authority(route, target)
+            local_ownership = combined_ownership.get(route_id)
+            if local_ownership is not None and has_cloud_authority:
+                if cloud_ownership != local_ownership:
+                    raise RuntimeError(
+                        "VM-HA cloud route authority conflicts with the durable ledger"
+                    )
+            elif local_ownership is None and cloud_ownership is not None:
+                combined_ownership[route_id] = cloud_ownership
         return RouteManager(None)._vm_ha_route_snapshots(
-            self._raw_routes(target.route_table_id),
-            ownership_by_route_id=ownership,
+            routes,
+            ownership_by_route_id=combined_ownership,
             route_target=target,
+        )
+
+    def _stable_route_listing(self, target: VMHARouteTarget) -> tuple[tuple[object, ...], ...]:
+        """Return one exact target-reverified route-table observation."""
+
+        self.verify_target(target)
+        records: list[tuple[object, ...]] = []
+        for route in self._raw_routes(target.route_table_id):
+            metadata = getattr(route, "metadata", None)
+            route_id = RouteManager._metadata_id(route)
+            if not route_id:
+                raise RuntimeError("VM-HA route listing contains an unidentified route")
+            prefix = RouteManager._route_destination_network(route)
+            records.append(
+                (
+                    route_id,
+                    RouteManager._metadata_name(route),
+                    "" if prefix is None else str(prefix),
+                    str(RouteManager._route_next_hop_allocation_id(route) or ""),
+                    str(getattr(metadata, "resource_version", "") or ""),
+                    tuple(sorted(self._route_labels(route).items())),
+                )
+            )
+        return tuple(sorted(records))
+
+    def stably_absent_ledger_route_ids(
+        self,
+        ownership: t.Mapping[str, ManagedRouteOwnership],
+    ) -> frozenset[str]:
+        """Prove which local ledger identities no longer exist in cloud state."""
+
+        cluster_id = self._authority_cluster_id
+        if cluster_id is None or self._authority_allocation_id is None:
+            raise RuntimeError("VM-HA route authority backend is not bound")
+        for route_id, owner in ownership.items():
+            if (
+                not route_id
+                or owner.cluster_id != cluster_id
+                or owner.route_target not in self._authority_targets
+            ):
+                raise RuntimeError("VM-HA route ledger conflicts with the runtime binding")
+
+        absent: set[str] = set()
+        for target in self._authority_targets:
+            ledger_ids = {
+                route_id
+                for route_id, owner in ownership.items()
+                if owner.route_target == target
+            }
+            if not ledger_ids:
+                continue
+            first = self._stable_route_listing(target)
+            second = self._stable_route_listing(target)
+            if first != second:
+                raise RuntimeError("VM-HA route listing changed during stable reread")
+            observed_ids = {t.cast(str, record[0]) for record in second}
+            absent.update(ledger_ids - observed_ids)
+        return frozenset(absent)
+
+    def synchronize_authority_labels(
+        self,
+        ownership: t.Mapping[str, ManagedRouteOwnership],
+    ) -> None:
+        """Publish exact local ledger authority for safe standby discovery."""
+
+        cluster_id = self._authority_cluster_id
+        allocation_id = self._authority_allocation_id
+        if cluster_id is None or allocation_id is None:
+            raise RuntimeError("VM-HA route authority backend is not bound")
+        for route_id, owner in sorted(ownership.items()):
+            if owner.cluster_id != cluster_id or owner.route_target not in self._authority_targets:
+                raise RuntimeError("VM-HA route ledger conflicts with the runtime binding")
+            self.verify_target(owner.route_target)
+            matches = tuple(
+                route
+                for route in self._raw_routes(owner.route_target.route_table_id)
+                if RouteManager._metadata_id(route) == route_id
+            )
+            if len(matches) != 1:
+                raise RuntimeError("VM-HA ledger route identity is not exact in cloud state")
+            route = matches[0]
+            if RouteManager._route_next_hop_allocation_id(route) != allocation_id:
+                raise RuntimeError("VM-HA ledger route no longer uses the shared allocation")
+            current = self._route_labels(route)
+            expected = self._authority_labels(
+                cluster_id=cluster_id,
+                allocation_id=allocation_id,
+                route_target=owner.route_target,
+                route_kind=owner.kind,
+            )
+            present = self._AUTHORITY_LABEL_KEYS & current.keys()
+            if present and any(current.get(key) != value for key, value in expected.items()):
+                raise RuntimeError("VM-HA ledger route has conflicting cloud authority labels")
+            if all(current.get(key) == value for key, value in expected.items()):
+                continue
+            self._write_authority_labels(
+                route,
+                owner.route_target,
+                {**current, **expected},
+            )
+
+    def _write_authority_labels(
+        self,
+        route: object,
+        target: VMHARouteTarget,
+        labels: t.Mapping[str, str],
+    ) -> None:
+        from nebius.api.nebius.vpc.v1 import RouteServiceClient
+
+        before = self._rollback_snapshot(route, target)
+        metadata = getattr(route, "metadata", None)
+        spec = getattr(route, "spec", None)
+        revision = str(getattr(metadata, "resource_version", "") or "")
+        if not revision.isdecimal() or int(revision) <= 0:
+            raise RuntimeError("VM-HA route label update lacks an exact resource revision")
+        operation_id = self._action_operation_id(
+            "publish-authority-labels",
+            f"{before.route_id}:{revision}",
+        )
+        request = self._authority_label_update_request(
+            route_id=before.route_id,
+            parent_id=str(getattr(metadata, "parent_id", "") or target.route_table_id),
+            name=before.name,
+            resource_version=int(revision),
+            labels=labels,
+            description=str(getattr(spec, "description", "") or ""),
+            prefix=before.prefix,
+            allocation_id=before.allocation_id,
+        )
+        try:
+            operation = (
+                RouteServiceClient(self.sdk)
+                .update(
+                    request,
+                    **vm_ha_request_kwargs(operation_id),
+                )
+                .wait()
+            )
+        except Exception as error:
+            # SDK transport and service errors are not RuntimeError subclasses.
+            # Keep the long-running controller behind its current-boot guard so
+            # a rejected metadata migration cannot restart its systemd dependents.
+            raise RuntimeError("VM-HA route authority label update request failed") from error
+        try:
+            wait_vm_ha_operation(operation)
+        except Exception:
+            pass
+        else:
+            if not self._operation_succeeded(operation):
+                raise RuntimeError("VM-HA route authority label update failed")
+        expected_labels = tuple(sorted(labels.items()))
+        for attempt in range(5):
+            matches = tuple(
+                candidate
+                for candidate in self._raw_routes(target.route_table_id)
+                if RouteManager._metadata_id(candidate) == before.route_id
+            )
+            if len(matches) == 1:
+                after = self._rollback_snapshot(matches[0], target)
+                if (
+                    after.name != before.name
+                    or after.description != before.description
+                    or after.prefix != before.prefix
+                    or after.allocation_id != before.allocation_id
+                ):
+                    raise RuntimeError("VM-HA route changed while publishing authority labels")
+                if after.labels == expected_labels:
+                    return
+            elif len(matches) > 1:
+                raise RuntimeError("VM-HA route label update produced duplicate identities")
+            if attempt < 4:
+                time.sleep(0.2)
+        raise RuntimeError("VM-HA route authority labels were not durably observed")
+
+    @staticmethod
+    def _authority_label_update_request(
+        *,
+        route_id: str,
+        parent_id: str,
+        name: str,
+        resource_version: int,
+        labels: t.Mapping[str, str],
+        description: str,
+        prefix: str,
+        allocation_id: str,
+    ) -> t.Any:
+        """Build the full replacement spec required by Nebius UpdateRoute."""
+
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.vpc.v1 import (
+            AllocationNextHop,
+            DestinationMatch,
+            NextHop,
+            RouteSpec,
+            UpdateRouteRequest,
+        )
+
+        if not prefix or not allocation_id:
+            raise RuntimeError("VM-HA route authority update lacks the exact route spec")
+        return UpdateRouteRequest(
+            metadata=ResourceMetadata(
+                id=route_id,
+                parent_id=parent_id,
+                name=name,
+                resource_version=resource_version,
+                labels=dict(labels),
+            ),
+            spec=RouteSpec(
+                description=description,
+                destination=DestinationMatch(cidr=prefix),
+                next_hop=NextHop(allocation=AllocationNextHop(id=allocation_id)),
+            ),
         )
 
     @staticmethod
     def _name(mutation: RouteMutation) -> str:
-        import hashlib
-
         identity = (
             f"{mutation.cluster_id}:{mutation.route_target.route_table_id}:"
             f"{mutation.prefix}:{mutation.route_kind.value}:{mutation.allocation_id}"
         )
         return f"vpngw-ha-{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
 
-    def _create(self, mutation: RouteMutation) -> str:
+    def _resume_operation(self, cloud_operation_id: str) -> t.Any:
+        from nebius.api.nebius.common.v1 import GetOperationRequest, OperationServiceClient
+
+        return (
+            OperationServiceClient(self.sdk)
+            .get(
+                GetOperationRequest(id=cloud_operation_id),
+                **vm_ha_request_kwargs(),
+            )
+            .wait()
+        )
+
+    @staticmethod
+    def _operation_succeeded(operation: t.Any) -> bool:
+        successful = getattr(operation, "successful", None)
+        if not callable(successful):
+            raise RuntimeError("VM-HA route operation has no terminal success status")
+        return bool(successful())
+
+    def _accepted_operation(
+        self,
+        action: str,
+        mutation: RouteMutation,
+        submit: t.Callable[[], t.Any],
+    ) -> tuple[t.Any, AcceptedRouteOperation | None]:
+        action_operation_id = self._action_operation_id(action, mutation.operation_id)
+        pending = self._pending(mutation)
+        accepted = None if pending is None else pending.accepted_operation
+        if accepted is not None:
+            if accepted.action != action or accepted.action_operation_id != action_operation_id:
+                raise RuntimeError("a different accepted VM-HA route operation is pending")
+            try:
+                operation = self._resume_operation(accepted.cloud_operation_id)
+            except Exception as error:
+                if not operation_status_lookup_unsupported(error):
+                    raise
+                operation = submit().wait()
+                replayed_operation_id = str(getattr(operation, "id", "") or "")
+                if replayed_operation_id != accepted.cloud_operation_id:
+                    raise RuntimeError(
+                        "VM-HA idempotent route replay returned a different cloud "
+                        "operation identity"
+                    ) from error
+            return operation, accepted
+        operation = submit().wait()
+        cloud_operation_id = str(getattr(operation, "id", "") or "")
+        if pending is None:
+            return operation, None
+        if not cloud_operation_id:
+            raise RuntimeError("VM-HA route mutation returned no durable operation identity")
+        accepted = AcceptedRouteOperation(
+            action_operation_id=action_operation_id,
+            action=action,
+            cloud_operation_id=cloud_operation_id,
+        )
+        phase = {
+            "delete": RouteMutationPhase.DELETE_ACCEPTED,
+            "create": RouteMutationPhase.CREATE_ACCEPTED,
+            "restore": RouteMutationPhase.RESTORE_ACCEPTED,
+        }[action]
+        self._checkpoint(
+            mutation,
+            phase=phase,
+            rollback=mutation.rollback,
+            accepted_operation=accepted,
+        )
+        return operation, accepted
+
+    def _create_operation(
+        self, mutation: RouteMutation
+    ) -> tuple[t.Any, AcceptedRouteOperation | None]:
         (
             client_type,
             _list_request,
@@ -168,13 +720,21 @@ class NebiusSDKRouteBackend:
             next_hop,
             allocation_next_hop,
         ) = self._client_types()
-        operation = (
-            client_type(self.sdk)
-            .create(
+        action_operation_id = self._action_operation_id("create", mutation.operation_id)
+        return self._accepted_operation(
+            "create",
+            mutation,
+            lambda: client_type(self.sdk).create(
                 create_request(
                     metadata=metadata_type(
                         parent_id=mutation.route_target.route_table_id,
                         name=self._name(mutation),
+                        labels=self._authority_labels(
+                            cluster_id=mutation.cluster_id,
+                            allocation_id=mutation.allocation_id,
+                            route_target=mutation.route_target,
+                            route_kind=mutation.route_kind,
+                        ),
                     ),
                     spec=route_spec(
                         destination=destination_match(cidr=mutation.prefix),
@@ -183,29 +743,280 @@ class NebiusSDKRouteBackend:
                         ),
                     ),
                 ),
-                timeout=self._REQUEST_TIMEOUT_SECONDS,
-                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                **vm_ha_request_kwargs(action_operation_id),
+            ),
+        )
+
+    @staticmethod
+    def _rollback_snapshot(route: object, target: VMHARouteTarget) -> RouteRollbackSnapshot:
+        metadata = getattr(route, "metadata", None)
+        spec = getattr(route, "spec", None)
+        prefix = RouteManager._route_destination_network(route)
+        allocation_id = RouteManager._route_next_hop_allocation_id(route)
+        labels = getattr(metadata, "labels", {}) or {}
+        if not isinstance(labels, t.Mapping):
+            raise RuntimeError("VM-HA route rollback labels are ambiguous")
+        try:
+            return RouteRollbackSnapshot(
+                route_id=RouteManager._metadata_id(route),
+                resource_version=str(getattr(metadata, "resource_version", "") or ""),
+                name=RouteManager._metadata_name(route),
+                labels=tuple(sorted((str(key), str(value)) for key, value in labels.items())),
+                description=str(getattr(spec, "description", "") or ""),
+                prefix="" if prefix is None else str(prefix),
+                allocation_id=str(allocation_id or ""),
+                route_target=target,
             )
-            .wait()
+        except ValueError as error:
+            raise RuntimeError("VM-HA route is not exactly restorable") from error
+
+    def _restore_raw_route(
+        self,
+        rollback: RouteRollbackSnapshot,
+        *,
+        mutation: RouteMutation,
+    ) -> str:
+        """Compensate a failed replacement by restoring the exact removed route."""
+
+        (
+            client_type,
+            _list,
+            create_request,
+            _delete,
+            metadata_type,
+            route_spec,
+            destination_match,
+            next_hop,
+            allocation_next_hop,
+        ) = self._client_types()
+        action_operation_id = self._action_operation_id("restore", mutation.operation_id)
+        operation, accepted = self._accepted_operation(
+            "restore",
+            mutation,
+            lambda: client_type(self.sdk).create(
+                create_request(
+                    metadata=metadata_type(
+                        parent_id=rollback.route_target.route_table_id,
+                        name=rollback.name,
+                        labels=dict(rollback.labels),
+                    ),
+                    spec=route_spec(
+                        description=rollback.description,
+                        destination=destination_match(cidr=rollback.prefix),
+                        next_hop=next_hop(
+                            allocation=allocation_next_hop(id=rollback.allocation_id)
+                        ),
+                    ),
+                ),
+                **vm_ha_request_kwargs(action_operation_id),
+            ),
         )
-        operation.sync_wait(
-            timeout=self._REQUEST_TIMEOUT_SECONDS,
-            poll_iteration_timeout=self._REQUEST_TIMEOUT_SECONDS,
+        try:
+            wait_vm_ha_operation(operation)
+        except Exception:
+            restored = self._observe_rollback_route(rollback)
+            if not restored:
+                raise
+        else:
+            if not self._operation_succeeded(operation):
+                raise RuntimeError("VM-HA route rollback operation failed")
+            restored = self._observe_rollback_route(rollback)
+        for attempt in range(5):
+            restored = restored or self._observe_rollback_route(rollback)
+            if restored:
+                self._checkpoint(
+                    mutation,
+                    phase=RouteMutationPhase.RESTORED,
+                    rollback=rollback,
+                    accepted_operation=None,
+                )
+                return restored
+            if attempt < 4:
+                time.sleep(0.2)
+        raise RuntimeError("VM-HA route rollback postcondition was not observed")
+
+    def _observe_rollback_route(self, rollback: RouteRollbackSnapshot) -> str | None:
+        matches: list[str] = []
+        conflicts = False
+        for route in self._raw_routes(rollback.route_target.route_table_id):
+            route_id = RouteManager._metadata_id(route)
+            name = RouteManager._metadata_name(route)
+            prefix = RouteManager._route_destination_network(route)
+            allocation_id = RouteManager._route_next_hop_allocation_id(route)
+            metadata = getattr(route, "metadata", None)
+            spec = getattr(route, "spec", None)
+            raw_labels = getattr(metadata, "labels", {}) or {}
+            labels = (
+                tuple(sorted((str(key), str(value)) for key, value in raw_labels.items()))
+                if isinstance(raw_labels, t.Mapping)
+                else None
+            )
+            description = str(getattr(spec, "description", "") or "")
+            if name == rollback.name or (prefix is not None and str(prefix) == rollback.prefix):
+                if (
+                    name == rollback.name
+                    and str(prefix) == rollback.prefix
+                    and allocation_id == rollback.allocation_id
+                    and labels == rollback.labels
+                    and description == rollback.description
+                ):
+                    if route_id:
+                        matches.append(route_id)
+                else:
+                    conflicts = True
+        if len(matches) > 1 or (matches and conflicts):
+            raise RuntimeError("VM-HA route rollback produced duplicate or conflicting outcomes")
+        if conflicts:
+            raise RuntimeError("VM-HA route rollback has a conflicting outcome")
+        return matches[0] if matches else None
+
+    def _observe_desired_route(self, mutation: RouteMutation) -> str | None:
+        desired: list[str] = []
+        conflicting = False
+        expected_name = self._name(mutation)
+        expected_labels = self._authority_labels(
+            cluster_id=mutation.cluster_id,
+            allocation_id=mutation.allocation_id,
+            route_target=mutation.route_target,
+            route_kind=mutation.route_kind,
         )
-        if not operation.successful():
-            raise RuntimeError("VM-HA route creation operation failed")
-        route_id = str(operation.resource_id or "")
-        if not route_id:
-            route_id = self.recover_created_route(mutation) or ""
-        if not route_id:
-            raise RuntimeError("created VM-HA route has no authoritative identity")
-        return route_id
+        for route in self._raw_routes(mutation.route_target.route_table_id):
+            prefix = RouteManager._route_destination_network(route)
+            allocation_id = RouteManager._route_next_hop_allocation_id(route)
+            name = RouteManager._metadata_name(route)
+            if str(prefix) == mutation.prefix:
+                if allocation_id == mutation.allocation_id:
+                    route_id = RouteManager._metadata_id(route)
+                    labels = self._route_labels(route)
+                    if (
+                        route_id
+                        and name == expected_name
+                        and all(labels.get(key) == value for key, value in expected_labels.items())
+                    ):
+                        desired.append(route_id)
+                    else:
+                        conflicting = True
+                else:
+                    conflicting = True
+            elif name == expected_name:
+                conflicting = True
+        if len(desired) > 1:
+            raise RuntimeError("VM-HA route operation has duplicate desired outcomes")
+        if desired and conflicting:
+            raise RuntimeError("VM-HA route operation has stale or conflicting outcomes")
+        if conflicting:
+            raise RuntimeError("VM-HA route operation has a conflicting outcome")
+        return desired[0] if desired else None
+
+    def _delete_exact_route(self, mutation: RouteMutation) -> None:
+        if not mutation.route_id:
+            raise ValueError("VM-HA route deletion requires an exact route identity")
+        client_type, _list, _create, delete_request, *_rest = self._client_types()
+
+        action_operation_id = self._action_operation_id("delete", mutation.operation_id)
+        operation, accepted = self._accepted_operation(
+            "delete",
+            mutation,
+            lambda: client_type(self.sdk).delete(
+                delete_request(id=mutation.route_id),
+                **vm_ha_request_kwargs(action_operation_id),
+            ),
+        )
+        try:
+            wait_vm_ha_operation(operation)
+        except Exception:
+            if not any(
+                RouteManager._metadata_id(route) == mutation.route_id
+                for route in self._raw_routes(mutation.route_target.route_table_id)
+            ):
+                self._checkpoint(
+                    mutation,
+                    phase=RouteMutationPhase.ORIGINAL_ABSENT,
+                    rollback=mutation.rollback,
+                    accepted_operation=None,
+                )
+                return
+            raise
+        if not self._operation_succeeded(operation):
+            raise RuntimeError("VM-HA route deletion operation failed")
+        if any(
+            RouteManager._metadata_id(route) == mutation.route_id
+            for route in self._raw_routes(mutation.route_target.route_table_id)
+        ):
+            raise RuntimeError("VM-HA route deletion postcondition was not observed")
+        self._checkpoint(
+            mutation,
+            phase=RouteMutationPhase.ORIGINAL_ABSENT,
+            rollback=mutation.rollback,
+            accepted_operation=None,
+        )
 
     def apply_mutation(self, mutation: RouteMutation) -> str | None:
-        client_type, _list, _create, delete_request, *_rest = self._client_types()
-        created_route_id = None
-        if mutation.kind in {RouteMutationKind.CREATE, RouteMutationKind.REPLACE}:
+        pending = self._pending(mutation)
+        if pending is not None and pending.phase is RouteMutationPhase.RESTORED:
+            if mutation.rollback is None:
+                raise RuntimeError("VM-HA compensated replacement lacks rollback authority")
+            restored = self._observe_rollback_route(mutation.rollback)
+            if not restored:
+                raise RuntimeError("VM-HA compensated route replacement changed")
+            raise RouteReplacementCompensated(restored)
+        if pending is not None and pending.phase is RouteMutationPhase.RESTORE_ACCEPTED:
+            if mutation.rollback is None:
+                raise RuntimeError("VM-HA accepted rollback lacks exact restore authority")
+            restored = self._restore_raw_route(mutation.rollback, mutation=mutation)
+            raise RouteReplacementCompensated(restored)
+        if pending is not None and pending.phase is RouteMutationPhase.DESIRED_PRESENT:
+            desired = self._observe_desired_route(mutation)
+            if not desired:
+                raise RuntimeError("VM-HA completed route mutation changed")
+            return desired
+
+        created_route_id: str | None = None
+        if mutation.kind is RouteMutationKind.CREATE:
             created_route_id = self.recover_created_route(mutation)
+        elif mutation.kind is RouteMutationKind.REPLACE:
+            current_routes = self._raw_routes(mutation.route_target.route_table_id)
+            original = [
+                route
+                for route in current_routes
+                if RouteManager._metadata_id(route) == mutation.route_id
+            ]
+            if len(original) > 1:
+                raise RuntimeError("VM-HA route deletion resolved to duplicate identities")
+            if original:
+                observed_rollback = self._rollback_snapshot(original[0], mutation.route_target)
+                if mutation.rollback is not None and mutation.rollback != observed_rollback:
+                    raise RuntimeError("VM-HA route changed after rollback snapshot was persisted")
+                if mutation.rollback is None:
+                    pending = self._checkpoint(
+                        mutation,
+                        phase=RouteMutationPhase.INTENT,
+                        rollback=observed_rollback,
+                        accepted_operation=None,
+                    )
+                    mutation = RouteMutation(
+                        kind=mutation.kind,
+                        prefix=mutation.prefix,
+                        route_kind=mutation.route_kind,
+                        allocation_id=mutation.allocation_id,
+                        cluster_id=mutation.cluster_id,
+                        route_target=mutation.route_target,
+                        route_id=mutation.route_id,
+                        rollback=observed_rollback,
+                    )
+            else:
+                created_route_id = self.recover_created_route(mutation)
+                if not created_route_id and mutation.rollback is None:
+                    raise RuntimeError(
+                        "legacy VM-HA replacement lost both original and desired route"
+                    )
+                if pending is not None and pending.phase is RouteMutationPhase.DELETE_ACCEPTED:
+                    pending = self._checkpoint(
+                        mutation,
+                        phase=RouteMutationPhase.ORIGINAL_ABSENT,
+                        rollback=mutation.rollback,
+                        accepted_operation=None,
+                    )
         if mutation.kind in {RouteMutationKind.DELETE, RouteMutationKind.REPLACE}:
             if not mutation.route_id:
                 raise ValueError("VM-HA route deletion requires an exact route identity")
@@ -225,45 +1036,79 @@ class NebiusSDKRouteBackend:
                     != mutation.allocation_id
                 ):
                     raise RuntimeError("VM-HA route next hop changed before deletion")
-                operation = (
-                    client_type(self.sdk)
-                    .delete(
-                        delete_request(id=mutation.route_id),
-                        timeout=self._REQUEST_TIMEOUT_SECONDS,
-                        auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
-                    )
-                    .wait()
-                )
-                operation.sync_wait(
-                    timeout=self._REQUEST_TIMEOUT_SECONDS,
-                    poll_iteration_timeout=self._REQUEST_TIMEOUT_SECONDS,
-                )
-                if not operation.successful():
-                    raise RuntimeError("VM-HA route deletion operation failed")
-                if any(
-                    RouteManager._metadata_id(route) == mutation.route_id
-                    for route in self._raw_routes(mutation.route_target.route_table_id)
-                ):
-                    raise RuntimeError("VM-HA route deletion postcondition was not observed")
+                self._delete_exact_route(mutation)
         if mutation.kind in {RouteMutationKind.CREATE, RouteMutationKind.REPLACE}:
-            return created_route_id or self._create(mutation)
+            if created_route_id:
+                return created_route_id
+            operation, accepted = self._create_operation(mutation)
+            try:
+                wait_vm_ha_operation(operation)
+            except Exception:
+                observed_route_id = self._observe_desired_route(mutation)
+                if not observed_route_id:
+                    raise
+            else:
+                if self._operation_succeeded(operation):
+                    observed_route_id = self._observe_desired_route(mutation)
+                    if not observed_route_id:
+                        raise RuntimeError("VM-HA route creation postcondition was not observed")
+                else:
+                    observed_route_id = self._observe_desired_route(mutation)
+                    if not observed_route_id:
+                        self._checkpoint(
+                            mutation,
+                            phase=(
+                                RouteMutationPhase.ORIGINAL_ABSENT
+                                if mutation.kind is RouteMutationKind.REPLACE
+                                else RouteMutationPhase.INTENT
+                            ),
+                            rollback=mutation.rollback,
+                            accepted_operation=None,
+                        )
+                        if mutation.kind is RouteMutationKind.REPLACE:
+                            if mutation.rollback is None:
+                                raise RuntimeError(
+                                    "VM-HA terminal replacement failure has no rollback snapshot"
+                                )
+                            if self._observe_desired_route(mutation) is not None:
+                                raise RuntimeError(
+                                    "VM-HA desired route appeared before compensation"
+                                )
+                            try:
+                                restored_route_id = self._restore_raw_route(
+                                    mutation.rollback,
+                                    mutation=mutation,
+                                )
+                            except Exception as rollback_error:
+                                raise RuntimeError(
+                                    "VM-HA route replacement and compensating rollback both failed"
+                                ) from rollback_error
+                            raise RouteReplacementCompensated(restored_route_id)
+                        raise RuntimeError("VM-HA route creation operation failed")
+            self._checkpoint(
+                mutation,
+                phase=RouteMutationPhase.DESIRED_PRESENT,
+                rollback=mutation.rollback,
+                accepted_operation=None,
+            )
+            return observed_route_id
         return None
 
     def recover_created_route(self, mutation: RouteMutation) -> str | None:
-        expected_name = self._name(mutation)
-        matches = []
-        for route in self._raw_routes(mutation.route_target.route_table_id):
-            if RouteManager._metadata_name(route) != expected_name:
-                continue
-            if (
-                str(RouteManager._route_destination_network(route)) == mutation.prefix
-                and RouteManager._route_next_hop_allocation_id(route) == mutation.allocation_id
-            ):
-                matches.append(RouteManager._metadata_id(route))
-        matches = [route_id for route_id in matches if route_id]
-        if len(matches) > 1:
-            raise RuntimeError("VM-HA route operation resolved to duplicate route identities")
-        return matches[0] if matches else None
+        return self._observe_desired_route(mutation)
+
+    def recover_deleted_route(self, mutation: RouteMutation) -> bool:
+        if not mutation.route_id:
+            raise ValueError("VM-HA route deletion recovery requires an exact route identity")
+        return not any(
+            RouteManager._metadata_id(route) == mutation.route_id
+            for route in self._raw_routes(mutation.route_target.route_table_id)
+        )
+
+    def recover_restored_route(self, mutation: RouteMutation) -> str | None:
+        if mutation.rollback is None:
+            return None
+        return self._observe_rollback_route(mutation.rollback)
 
     @staticmethod
     def execute_verified_plan(
@@ -324,10 +1169,18 @@ class RouteManager:
             networks.append(network)
         return networks
 
-    def __init__(self, project_id: str | None, auth_token: str | None = None) -> None:
+    def __init__(
+        self,
+        project_id: str | None,
+        auth_token: str | None = None,
+        *,
+        ssh_policy: SSHTrustPolicy | None = None,
+    ) -> None:
         self.project_id = project_id
         self.auth_token = auth_token
         self.endpoint = "vpc.api.nebius.cloud:443"
+        self._ssh_policy = ssh_policy
+        self._agent_capabilities_by_host: dict[str, frozenset[str]] = {}
 
     def _channel(self):
         """Create a synchronous gRPC channel for VPC API."""
@@ -353,11 +1206,139 @@ class RouteManager:
         # Return channel with composite credentials
         return grpc.secure_channel(self.endpoint, composite_creds)
 
+    def _create_read_sdk(self) -> t.Any:
+        """Create the supported synchronous Nebius SDK surface for route reads."""
+        import os
+
+        from nebius.sdk import SDK
+
+        token = self.auth_token or os.environ.get("NEBIUS_IAM_TOKEN")
+        if not token:
+            raise ValueError(
+                "No authentication token available. Set NEBIUS_IAM_TOKEN or pass auth_token."
+            )
+        return SDK(credentials=token, user_agent_prefix="nebius-vpngw")
+
+    @staticmethod
+    def _list_sdk_items(
+        client: t.Any,
+        request_type: t.Any,
+        *,
+        parent_id: str,
+    ) -> tuple[object, ...]:
+        """Read every SDK list page while rejecting cyclic or unbounded pagination."""
+        items: list[object] = []
+        page_token = ""
+        seen_tokens: set[str] = set()
+        for _page in range(1000):
+            response = client.list(
+                request_type(
+                    parent_id=parent_id,
+                    page_size=1000,
+                    page_token=page_token,
+                )
+            ).wait()
+            items.extend(tuple(getattr(response, "items", ()) or ()))
+            next_token = str(getattr(response, "next_page_token", "") or "")
+            if not next_token:
+                return tuple(items)
+            if next_token == page_token or next_token in seen_tokens:
+                raise RuntimeError("VPC route listing returned a cyclic page token")
+            seen_tokens.add(next_token)
+            page_token = next_token
+        raise RuntimeError("VPC route listing exceeded the bounded page limit")
+
+    def _list_allocations_with_sdk(
+        self,
+        allocation_client: t.Any,
+        list_request_type: t.Any,
+    ) -> dict[str, str]:
+        """Map every project allocation ID to a printable allocated IP address."""
+        alloc_to_ip: dict[str, str] = {}
+        allocations = self._list_sdk_items(
+            allocation_client,
+            list_request_type,
+            parent_id=self.project_id or "",
+        )
+        for allocation in allocations:
+            status = getattr(allocation, "status", None)
+            details = getattr(status, "details", None)
+            cidr = getattr(details, "allocated_cidr", None)
+            try:
+                network = ipaddress.ip_network(str(cidr), strict=False)
+            except Exception:
+                continue
+            allocation_id = self._metadata_id(allocation)
+            if not allocation_id:
+                continue
+            alloc_to_ip[allocation_id] = str(
+                network.network_address
+                if network.prefixlen == network.max_prefixlen
+                else next(network.hosts(), network.network_address)
+            )
+        return alloc_to_ip
+
+    def _resolve_target_network_id_with_sdk(
+        self,
+        sdk: t.Any,
+        local_cfg: dict,
+        *,
+        subnet_client: t.Any,
+        get_subnet_by_name_request: t.Any,
+        network_client_type: t.Any,
+        get_network_by_name_request: t.Any,
+        list_networks_request: t.Any,
+    ) -> str | None:
+        """Resolve the configured or uniquely discoverable VPC through SDK clients."""
+        gateway_group = local_cfg.get("gateway_group", {}) or {}
+        explicit_network_id = str(gateway_group.get("network_id") or "").strip()
+        if explicit_network_id:
+            return explicit_network_id
+
+        try:
+            subnet = subnet_client.get_by_name(
+                get_subnet_by_name_request(
+                    parent_id=self.project_id or "",
+                    name=self._gateway_subnet_name(local_cfg),
+                )
+            ).wait()
+            subnet_network_id = getattr(getattr(subnet, "spec", None), "network_id", None)
+            if subnet_network_id:
+                return str(subnet_network_id)
+        except Exception:
+            pass
+
+        network_client = network_client_type(sdk)
+        try:
+            network = network_client.get_by_name(
+                get_network_by_name_request(
+                    parent_id=self.project_id or "",
+                    name="default-network",
+                )
+            ).wait()
+            network_id = self._metadata_id(network)
+            if network_id:
+                return network_id
+        except Exception:
+            pass
+
+        try:
+            networks = self._list_sdk_items(
+                network_client,
+                list_networks_request,
+                parent_id=self.project_id or "",
+            )
+        except Exception:
+            return None
+        if len(networks) == 1:
+            return self._metadata_id(networks[0]) or None
+        return None
+
     def _list_allocations(
         self, channel: t.Any
     ) -> tuple[list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]], dict[str, str]]:
         """Return list of (network, allocation_id) and a lookup map for pretty-printing."""
-        from nebius.api.nebius.vpc.v1 import (
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore[attr-defined]
             allocation_service_pb2,
             allocation_service_pb2_grpc,
         )
@@ -391,7 +1372,7 @@ class RouteManager:
     ) -> dict[int, str]:
         import ipaddress
 
-        from nebius.api.nebius.compute.v1 import (
+        from nebius.api.nebius.compute.v1 import (  # type: ignore[attr-defined]
             instance_service_pb2,
             instance_service_pb2_grpc,
         )
@@ -503,7 +1484,10 @@ class RouteManager:
             if mode == "bgp":
                 conn_prefixes = self._get_bgp_learned_routes(plan, conn, local_cfg)
             else:
-                conn_prefixes = list(conn.get("remote_prefixes") or [])
+                conn_prefixes = connection_static_remote_prefixes(
+                    conn,
+                    instance_index=instance_index,
+                )
 
             source_label = f"{conn_name}@vm{instance_index}"
             for prefix in conn_prefixes:
@@ -564,7 +1548,17 @@ class RouteManager:
     @staticmethod
     def _extract_status_subnet_cidrs(subnet_obj) -> list[ipaddress.IPv4Network]:
         subnet_status = getattr(subnet_obj, "status", None)
-        cidrs = getattr(subnet_status, "ipv4_private_cidrs", []) or []
+        status_pools = getattr(subnet_status, "ipv4_private_pools", None)
+        cidrs = [
+            cidr
+            for pool in status_pools or ()
+            for cidr in (getattr(pool, "cidrs", ()) or ())
+        ]
+        if not cidrs:
+            # Compatibility with older SDK responses that predate status pools.
+            # Current SDK objects are handled above and never touch this
+            # deprecated property.
+            cidrs = list(getattr(subnet_status, "ipv4_private_cidrs", ()) or ())
         networks: list[ipaddress.IPv4Network] = []
         for cidr in cidrs:
             network = RouteManager._parse_ipv4_network(str(cidr))
@@ -620,8 +1614,23 @@ class RouteManager:
         sanitized_set = {str(network) for network in sanitized_cidrs}
         return sanitized_cidrs, raw_status_set != sanitized_set
 
-    @staticmethod
-    def _ssh_base_command(local_cfg: dict, *, connect_timeout: int = 10) -> list[str]:
+    def _ssh_policy_hostname(self, external_ip: str) -> str | None:
+        if self._ssh_policy is None:
+            return None
+        try:
+            return self._ssh_policy.hostname_for_transport(external_ip)
+        except ValueError:
+            raise RouteManagementError(
+                "VM-HA SSH trust does not bind this gateway management address."
+            ) from None
+
+    def _ssh_base_command(
+        self,
+        local_cfg: dict,
+        *,
+        external_ip: str,
+        connect_timeout: int = 10,
+    ) -> list[str]:
         import os
 
         gateway_group = local_cfg.get("gateway_group", {}) or {}
@@ -632,6 +1641,8 @@ class RouteManager:
         return build_openssh_base_command(
             key_path=key_path,
             connect_timeout=connect_timeout,
+            policy=self._ssh_policy,
+            hostname=self._ssh_policy_hostname(external_ip),
         )
 
     @staticmethod
@@ -655,14 +1666,26 @@ class RouteManager:
     ):
         import subprocess
 
-        return subprocess.run(
-            self._ssh_base_command(local_cfg, connect_timeout=ssh_connect_timeout)
-            + [self._ssh_target(local_cfg, external_ip), remote_cmd],
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        try:
+            return subprocess.run(
+                self._ssh_base_command(
+                    local_cfg,
+                    external_ip=external_ip,
+                    connect_timeout=ssh_connect_timeout,
+                )
+                + [self._ssh_target(local_cfg, external_ip), remote_cmd],
+                input=stdin_text,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except RouteManagementError:
+            raise
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            raise RouteManagementError(
+                "SSH transport or host-trust validation failed before the gateway "
+                "command completed."
+            ) from error
 
     def _query_bgp_summary(self, external_ip: str, local_cfg: dict) -> dict | None:
         import json
@@ -676,9 +1699,10 @@ class RouteManager:
         if result.returncode != 0:
             return None
         try:
-            return json.loads(result.stdout)
+            payload = json.loads(result.stdout)
         except json.JSONDecodeError:
             return None
+        return payload if isinstance(payload, dict) else None
 
     def _query_bgp_advertised_routes(
         self,
@@ -687,6 +1711,12 @@ class RouteManager:
         local_cfg: dict,
     ) -> dict | None:
         import json
+
+        try:
+            if ipaddress.ip_address(peer_ip).version != 4:
+                return None
+        except ValueError:
+            return None
 
         result = self._run_ssh(
             local_cfg,
@@ -697,15 +1727,144 @@ class RouteManager:
         if result.returncode != 0:
             return None
         try:
-            return json.loads(result.stdout)
+            payload = json.loads(result.stdout)
         except json.JSONDecodeError:
             return None
+        return payload if isinstance(payload, dict) else None
+
+    def _query_vm_ha_status(self, external_ip: str, local_cfg: dict) -> dict | None:
+        result = self._run_ssh(
+            local_cfg,
+            external_ip,
+            "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-status",
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _vm_ha_advertisement_authority(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+    ) -> VMHAAdvertisementAuthority | None:
+        """Resolve one exact owner from two current, generation-bound agent projections."""
+
+        if plan.vm_ha is None:
+            return None
+        instances = tuple(plan.iter_instance_configs())
+        if len(instances) != 2:
+            return None
+        statuses: dict[str, dict] = {}
+        node_to_host: dict[str, str] = {}
+        allocation_ids: set[str] = set()
+        owner_node_ids: set[str] = set()
+        generation_ids: set[str] = set()
+        ownership_epochs_by_hostname: dict[str, str] = {}
+        for inst_cfg in instances:
+            node = inst_cfg.vm_ha_node
+            generation = inst_cfg.vm_ha_generation
+            if node is None or generation is None or not inst_cfg.external_ip:
+                return None
+            status = self._query_vm_ha_status(inst_cfg.external_ip, local_cfg)
+            expected_digests = {
+                "configuration": generation.digests.configuration,
+                "static_routes": generation.digests.static_routes,
+                "bgp_policy": generation.digests.bgp_policy,
+            }
+            if not (
+                isinstance(status, dict)
+                and status.get("schema") == "nebius-vpngw/vm-ha-status-v1"
+                and status.get("cluster_id") == plan.vm_ha.cluster_id
+                and status.get("node_id") == node.node_id
+                and status.get("generation_id") == generation.generation_id
+                and status.get("digests") == expected_digests
+                and status.get("apply_locked") is False
+                and status.get("pending_operation_id") is None
+                and isinstance(status.get("allocation_id"), str)
+                and status.get("allocation_id")
+                and isinstance(status.get("observed_owner_node_id"), str)
+                and isinstance(status.get("ownership_epoch"), str)
+                and status.get("ownership_epoch")
+            ):
+                return None
+            statuses[inst_cfg.hostname] = status
+            node_to_host[node.node_id] = inst_cfg.hostname
+            allocation_ids.add(t.cast(str, status["allocation_id"]))
+            owner_node_ids.add(t.cast(str, status["observed_owner_node_id"]))
+            generation_ids.add(generation.generation_id)
+            ownership_epochs_by_hostname[inst_cfg.hostname] = t.cast(
+                str, status["ownership_epoch"]
+            )
+        if (
+            len(allocation_ids) != 1
+            or len(owner_node_ids) != 1
+            or len(generation_ids) != 1
+        ):
+            return None
+        owner_node_id = next(iter(owner_node_ids))
+        owner_hostname = node_to_host.get(owner_node_id)
+        if owner_hostname is None:
+            return None
+        for hostname, status in statuses.items():
+            if hostname == owner_hostname:
+                route_receipt = status.get("route_reconciliation")
+                if not (
+                    status.get("data_plane_mode") == "active"
+                    and status.get("candidate_attachment_exact") is True
+                    and status.get("ownership_re_read_exact") is True
+                    and isinstance(route_receipt, dict)
+                    and route_receipt.get("owner_node_id") == owner_node_id
+                    and route_receipt.get("allocation_id") in allocation_ids
+                    and route_receipt.get("ownership_epoch")
+                    == ownership_epochs_by_hostname[owner_hostname]
+                    and route_receipt.get("generation_id") in generation_ids
+                    and route_receipt.get("digests") == status.get("digests")
+                ):
+                    return None
+            elif not (
+                status.get("data_plane_mode") == "passive"
+                and status.get("former_attachment_exact") is True
+                and status.get("candidate_attachment_absent") is True
+            ):
+                return None
+        return VMHAAdvertisementAuthority(
+            owner_hostname=owner_hostname,
+            generation_id=next(iter(generation_ids)),
+            owner_node_id=owner_node_id,
+            allocation_id=next(iter(allocation_ids)),
+            ownership_epochs_by_hostname=tuple(
+                sorted(ownership_epochs_by_hostname.items())
+            ),
+        )
+
+    @staticmethod
+    def _vm_ha_lifecycle_is_stable(
+        plan: ResolvedDeploymentPlan,
+        guard: t.Callable[[], bool] | None,
+    ) -> bool:
+        if plan.vm_ha is None:
+            return True
+        if guard is None:
+            return False
+        try:
+            return guard() is True
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return False
 
     def _expected_advertised_prefixes(
         self,
         plan: ResolvedDeploymentPlan,
         local_cfg: dict,
-    ) -> dict[str, dict[str, set[str]]]:
+        *,
+        vm_ha_owner_hostname: str | None = None,
+    ) -> dict[str, dict[str, set[str]]] | None:
+        if plan.vm_ha is not None and vm_ha_owner_hostname is None:
+            return None
         defaults_mode = (
             self._normalize_value(
                 (local_cfg.get("defaults", {}).get("routing", {}) or {}).get("mode")
@@ -717,9 +1876,7 @@ class RouteManager:
             for prefix in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
             if (network := self._parse_prefix(prefix)) is not None
         }
-        expected_by_host: dict[str, dict[str, set[str]]] = {
-            inst_cfg.hostname: {} for inst_cfg in plan.iter_instance_configs()
-        }
+        expected_by_host: dict[str, dict[str, set[str]]] = {}
         instances_by_index = {
             inst_cfg.instance_index: inst_cfg for inst_cfg in plan.iter_instance_configs()
         }
@@ -736,6 +1893,11 @@ class RouteManager:
             )
 
             for tunnel in conn.get("tunnels", []) or []:
+                instance_index = int(tunnel.get("gateway_instance_index", 0) or 0)
+                inst_cfg = instances_by_index.get(instance_index)
+                if not inst_cfg:
+                    continue
+                host_expectations = expected_by_host.setdefault(inst_cfg.hostname, {})
                 if self._normalize_value(tunnel.get("ha_role") or "active") == "disable":
                     continue
 
@@ -747,16 +1909,26 @@ class RouteManager:
                 if not peer_ip:
                     continue
 
-                instance_index = int(tunnel.get("gateway_instance_index", 0) or 0)
-                inst_cfg = instances_by_index.get(instance_index)
-                if not inst_cfg:
-                    continue
-
-                expected_by_host.setdefault(inst_cfg.hostname, {})[peer_ip] = set(
-                    advertised_prefixes
-                )
+                host_prefixes = advertised_prefixes
+                if plan.vm_ha is not None and inst_cfg.hostname != vm_ha_owner_hostname:
+                    host_prefixes = set()
+                host_expectations[peer_ip] = set(host_prefixes)
 
         return expected_by_host
+
+    def _bgp_instance_indices(self, local_cfg: dict) -> set[int]:
+        default_mode = (
+            self._normalize_value(
+                ((local_cfg.get("defaults") or {}).get("routing") or {}).get("mode")
+            )
+            or "bgp"
+        )
+        indices: set[int] = set()
+        for connection in local_cfg.get("connections") or []:
+            mode = self._normalize_value(connection.get("routing_mode") or default_mode)
+            if mode == "bgp":
+                indices.update(self._connection_instance_indices(connection))
+        return indices
 
     @staticmethod
     def _parse_prefix(prefix: str) -> ipaddress.IPv4Network | None:
@@ -811,7 +1983,7 @@ class RouteManager:
         *,
         network_id: str,
     ) -> list[ipaddress.IPv4Network]:
-        from nebius.api.nebius.vpc.v1 import (
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore[attr-defined]
             network_service_pb2,
             network_service_pb2_grpc,
             pool_service_pb2,
@@ -1015,6 +2187,7 @@ class RouteManager:
             ),
             route_allocation_id=self._route_next_hop_allocation_id,
             route_next_hop=self._vm_ha_route_next_hop,
+            route_rollback=NebiusSDKRouteBackend._rollback_snapshot,
             route_target=route_target,
         )
 
@@ -1621,22 +2794,40 @@ class RouteManager:
         return deleted
 
     @staticmethod
-    def _bgp_advertisements_need_refresh(
+    def _bgp_advertisement_state(
         expected_by_peer: dict[str, set[str]],
         observed_peers: set[str],
         observed_prefixes_by_peer: dict[str, set[str]],
-    ) -> bool:
+    ) -> BGPAdvertisementState:
         if observed_peers != set(expected_by_peer):
-            return True
+            return BGPAdvertisementState.DRIFT
 
         for peer_ip, expected_prefixes in expected_by_peer.items():
             observed_prefixes = observed_prefixes_by_peer.get(peer_ip)
             if observed_prefixes is None:
-                continue
+                return BGPAdvertisementState.UNKNOWN
             if observed_prefixes != expected_prefixes:
-                return True
+                return BGPAdvertisementState.DRIFT
 
-        return False
+        return BGPAdvertisementState.MATCH
+
+    @staticmethod
+    def _advertised_bgp_prefixes(adv_data: dict) -> set[str] | None:
+        total = adv_data.get("totalPrefixCounter")
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            return None
+        advertised_routes = adv_data.get("advertisedRoutes")
+        if advertised_routes is None and total == 0:
+            advertised_routes = {}
+        if not isinstance(advertised_routes, dict):
+            return None
+        normalized: set[str] = set()
+        for prefix in advertised_routes:
+            network = RouteManager._parse_ipv4_network(str(prefix))
+            if network is None:
+                return None
+            normalized.add(str(network))
+        return normalized if len(normalized) == total else None
 
     def _collect_observed_bgp_advertisements(
         self,
@@ -1647,7 +2838,14 @@ class RouteManager:
         if not bgp_summary:
             return None
 
-        peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {}) or {}
+        ipv4_unicast = bgp_summary.get("ipv4Unicast")
+        if not isinstance(ipv4_unicast, dict):
+            return None
+        peers = ipv4_unicast.get("peers")
+        if not isinstance(peers, dict):
+            return None
+        if any(not isinstance(peer_info, dict) for peer_info in peers.values()):
+            return None
         observed_peers = set(peers)
         observed_prefixes_by_peer: dict[str, set[str]] = {}
 
@@ -1659,46 +2857,131 @@ class RouteManager:
             if adv_data is None:
                 continue
 
-            advertised_routes = adv_data.get("advertisedRoutes", {}) or {}
-            observed_prefixes_by_peer[peer_ip] = set(advertised_routes)
+            advertised_prefixes = self._advertised_bgp_prefixes(adv_data)
+            if advertised_prefixes is not None:
+                observed_prefixes_by_peer[peer_ip] = advertised_prefixes
 
         return observed_peers, observed_prefixes_by_peer
 
-    def _reload_runtime_config(self, inst_cfg, local_cfg: dict) -> bool:
-        remote_tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
-        upload_result = self._run_ssh(
-            local_cfg,
-            inst_cfg.external_ip,
-            f"cat > {remote_tmp_path}",
-            timeout=20,
-            stdin_text=inst_cfg.config_yaml,
-        )
-        if upload_result.returncode != 0:
-            print(
-                f"[yellow]Failed to upload refreshed config to {inst_cfg.hostname}: "
-                f"{upload_result.stderr.strip() or upload_result.stdout.strip()}[/yellow]"
-            )
-            return False
+    def require_agent_capabilities(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+    ) -> None:
+        """Prove every repair target supports the private installed-agent contract."""
 
-        reload_cmd = (
-            "sudo mkdir -p /etc/nebius-vpngw"
-            f" && sudo mv {remote_tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
-            " && sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml"
-            " && sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml"
-            " && (sudo systemctl is-active --quiet nebius-vpngw-agent"
-            " && sudo systemctl reload nebius-vpngw-agent"
-            " || sudo systemctl start nebius-vpngw-agent)"
-        )
-        reload_result = self._run_ssh(
+        required = {FORCE_RECONCILE_CAPABILITY}
+        if plan.vm_ha is not None:
+            required.add(VM_HA_AUTHORITY_FORCE_RECONCILE_CAPABILITY)
+
+        target_indices = self._bgp_instance_indices(local_cfg)
+        if not target_indices:
+            return
+
+        observed: dict[str, frozenset[str]] = {}
+        for inst_cfg in plan.iter_instance_configs():
+            if inst_cfg.instance_index not in target_indices:
+                continue
+            cached = self._agent_capabilities_by_host.get(inst_cfg.hostname)
+            if cached is not None and required.issubset(cached):
+                observed[inst_cfg.hostname] = cached
+                continue
+            if not inst_cfg.external_ip:
+                raise RouteManagementError(
+                    f"Cannot verify installed-agent capabilities on {inst_cfg.hostname}: "
+                    "the gateway has no external management IP."
+                )
+
+            result = self._run_ssh(
+                local_cfg,
+                inst_cfg.external_ip,
+                (
+                    "sudo /usr/bin/python3 -m nebius_vpngw.agent.main "
+                    "--agent-capabilities"
+                ),
+                timeout=15,
+            )
+            if result.returncode != 0:
+                raise RouteManagementError(
+                    f"Gateway {inst_cfg.hostname} does not expose the required "
+                    "installed-agent capability contract. Run 'nebius-vpngw apply' "
+                    "with this CLI version, verify the deployment, and retry."
+                )
+            try:
+                payload = json.loads(result.stdout)
+            except (TypeError, json.JSONDecodeError) as error:
+                raise RouteManagementError(
+                    f"Gateway {inst_cfg.hostname} returned malformed installed-agent "
+                    "capability evidence. Run 'nebius-vpngw apply' and retry."
+                ) from error
+            features = payload.get("features") if isinstance(payload, dict) else None
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema") != AGENT_CAPABILITIES_SCHEMA
+                or not isinstance(features, list)
+                or any(not isinstance(feature, str) for feature in features)
+            ):
+                raise RouteManagementError(
+                    f"Gateway {inst_cfg.hostname} returned an unsupported installed-agent "
+                    "capability document. Run 'nebius-vpngw apply' and retry."
+                )
+            feature_set = frozenset(features)
+            missing = sorted(required - feature_set)
+            if missing:
+                raise RouteManagementError(
+                    f"Gateway {inst_cfg.hostname} is missing required installed-agent "
+                    f"capabilities: {', '.join(missing)}. Run 'nebius-vpngw apply' "
+                    "and retry."
+                )
+            observed[inst_cfg.hostname] = feature_set
+
+        self._agent_capabilities_by_host.update(observed)
+
+    def _force_reconcile_runtime_config(
+        self,
+        inst_cfg,
+        local_cfg: dict,
+        *,
+        vm_ha_authority: VMHAAdvertisementAuthority | None = None,
+    ) -> bool:
+        reconcile_argv = [
+            "sudo",
+            "/usr/bin/python3",
+            "-m",
+            "nebius_vpngw.agent.main",
+            "--force-reconcile",
+        ]
+        if vm_ha_authority is not None:
+            target_epoch = vm_ha_authority.ownership_epoch_for(inst_cfg.hostname)
+            if target_epoch is None:
+                print(
+                    f"[yellow]Failed to force-reconcile nebius-vpngw-agent on "
+                    f"{inst_cfg.hostname}: current host ownership epoch is unavailable[/yellow]"
+                )
+                return False
+            reconcile_argv.extend(
+                [
+                    "--expected-vm-ha-owner",
+                    vm_ha_authority.owner_node_id,
+                    "--expected-vm-ha-generation",
+                    vm_ha_authority.generation_id,
+                    "--expected-vm-ha-epoch",
+                    target_epoch,
+                    "--expected-vm-ha-allocation",
+                    vm_ha_authority.allocation_id,
+                ]
+            )
+        reconcile_cmd = shlex.join(reconcile_argv)
+        reconcile_result = self._run_ssh(
             local_cfg,
             inst_cfg.external_ip,
-            reload_cmd,
+            reconcile_cmd,
             timeout=30,
         )
-        if reload_result.returncode != 0:
+        if reconcile_result.returncode != 0:
             print(
-                f"[yellow]Failed to reload nebius-vpngw-agent on {inst_cfg.hostname}: "
-                f"{reload_result.stderr.strip() or reload_result.stdout.strip()}[/yellow]"
+                f"[yellow]Failed to force-reconcile nebius-vpngw-agent on {inst_cfg.hostname}: "
+                f"{reconcile_result.stderr.strip() or reconcile_result.stdout.strip()}[/yellow]"
             )
             return False
 
@@ -1708,20 +2991,43 @@ class RouteManager:
         self,
         plan: ResolvedDeploymentPlan,
         local_cfg: dict,
+        *,
+        vm_ha_lifecycle_guard: t.Callable[[], bool] | None = None,
     ) -> None:
         import time
 
-        expected_by_host = self._expected_advertised_prefixes(plan, local_cfg)
+        lifecycle_stable = self._vm_ha_lifecycle_is_stable(plan, vm_ha_lifecycle_guard)
+        authority = (
+            self._vm_ha_advertisement_authority(plan, local_cfg)
+            if plan.vm_ha is not None and lifecycle_stable
+            else None
+        )
+        expected_by_host = self._expected_advertised_prefixes(
+            plan,
+            local_cfg,
+            vm_ha_owner_hostname=(
+                authority.owner_hostname if authority is not None else None
+            ),
+        )
+        if expected_by_host is None:
+            raise RouteManagementError(
+                "VM-HA BGP advertisements are UNKNOWN because exact owner and "
+                "generation authority could not be established; no repair was attempted."
+            )
         if not expected_by_host:
             return
+
+        self.require_agent_capabilities(plan, local_cfg)
 
         print("[bold]Checking live BGP advertisements against current YAML...[/bold]")
 
         for inst_cfg in plan.iter_instance_configs():
             if not inst_cfg.external_ip:
                 continue
+            if inst_cfg.hostname not in expected_by_host:
+                continue
 
-            expected_by_peer = expected_by_host.get(inst_cfg.hostname, {})
+            expected_by_peer = expected_by_host[inst_cfg.hostname]
             print(
                 f"[cyan]  • Inspecting gateway {inst_cfg.hostname} ({inst_cfg.external_ip})...[/cyan]"
             )
@@ -1731,22 +3037,27 @@ class RouteManager:
                 local_cfg,
             )
             if observed_state is None:
-                print(
-                    f"[yellow]    Could not query live BGP advertisements from {inst_cfg.hostname}. "
-                    "Skipping reconciliation for this gateway.[/yellow]"
+                raise RouteManagementError(
+                    f"Could not query live BGP advertisements from {inst_cfg.hostname}; "
+                    "no repair was attempted."
                 )
-                continue
 
             observed_peers, observed_prefixes_by_peer = observed_state
-            if not self._bgp_advertisements_need_refresh(
+            audit_state = self._bgp_advertisement_state(
                 expected_by_peer,
                 observed_peers,
                 observed_prefixes_by_peer,
-            ):
+            )
+            if audit_state is BGPAdvertisementState.MATCH:
                 print(
                     f"[green]    ✓ Live BGP advertisements on {inst_cfg.hostname} already match the current YAML.[/green]"
                 )
                 continue
+            if audit_state is BGPAdvertisementState.UNKNOWN:
+                raise RouteManagementError(
+                    f"Live BGP advertisements on {inst_cfg.hostname} are UNKNOWN; "
+                    "no repair was attempted."
+                )
 
             expected_prefixes = sorted(
                 {prefix for prefixes in expected_by_peer.values() for prefix in prefixes}
@@ -1760,9 +3071,32 @@ class RouteManager:
                     f"{', '.join(expected_prefixes)}[/dim]"
                 )
 
-            print("[dim]    Step 2/3: Uploading current resolved config and reloading agent[/dim]")
-            if not self._reload_runtime_config(inst_cfg, local_cfg):
-                continue
+            if plan.vm_ha is not None and (
+                authority is None
+                or not self._vm_ha_lifecycle_is_stable(plan, vm_ha_lifecycle_guard)
+                or self._vm_ha_advertisement_authority(plan, local_cfg) != authority
+            ):
+                raise RouteManagementError(
+                    "VM-HA authority changed before repair; no repair was attempted."
+                )
+            print(
+                "[dim]    Step 2/3: Force-reconciling the installed config under "
+                "current authority[/dim]"
+            )
+            reconciled = (
+                self._force_reconcile_runtime_config(inst_cfg, local_cfg)
+                if authority is None
+                else self._force_reconcile_runtime_config(
+                    inst_cfg,
+                    local_cfg,
+                    vm_ha_authority=authority,
+                )
+            )
+            if not reconciled:
+                raise RouteManagementError(
+                    f"Failed to force-reconcile the installed configuration on "
+                    f"{inst_cfg.hostname}."
+                )
 
             print("[dim]    Step 3/3: Re-checking live BGP advertisements[/dim]")
             time.sleep(3)
@@ -1771,29 +3105,118 @@ class RouteManager:
                 local_cfg,
             )
             if refreshed_state is None:
-                print(
-                    f"[yellow]    Reloaded {inst_cfg.hostname}, but could not verify live BGP advertisements yet.[/yellow]"
+                raise RouteManagementError(
+                    f"Reconciled {inst_cfg.hostname}, but could not verify live BGP "
+                    "advertisements."
                 )
-                continue
 
+            if plan.vm_ha is not None and (
+                authority is None
+                or not self._vm_ha_lifecycle_is_stable(plan, vm_ha_lifecycle_guard)
+                or self._vm_ha_advertisement_authority(plan, local_cfg) != authority
+            ):
+                raise RouteManagementError(
+                    "VM-HA authority changed during repair; refreshed state is UNKNOWN."
+                )
             refreshed_peers, refreshed_prefixes_by_peer = refreshed_state
-            if self._bgp_advertisements_need_refresh(
+            refreshed_audit = self._bgp_advertisement_state(
                 expected_by_peer,
                 refreshed_peers,
                 refreshed_prefixes_by_peer,
-            ):
-                print(
-                    f"[yellow]    {inst_cfg.hostname} still advertises prefixes that do not match the current YAML. "
-                    "Run 'nebius-vpngw apply' if this persists.[/yellow]"
+            )
+            if refreshed_audit is BGPAdvertisementState.DRIFT:
+                raise RouteManagementError(
+                    f"{inst_cfg.hostname} still advertises prefixes that do not match "
+                    "the installed configuration. Run 'nebius-vpngw apply' and retry."
                 )
-                continue
+            if refreshed_audit is BGPAdvertisementState.UNKNOWN:
+                raise RouteManagementError(
+                    f"Reconciled {inst_cfg.hostname}, but exact BGP advertisement "
+                    "evidence is still UNKNOWN."
+                )
 
             print(
                 f"[green]    ✓ Refreshed live BGP advertisements on {inst_cfg.hostname} to match the current YAML.[/green]"
             )
 
+    def audit_bgp_advertisements(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+        *,
+        vm_ha_lifecycle_guard: t.Callable[[], bool] | None = None,
+    ) -> dict[str, BGPAdvertisementState]:
+        """Observe live BGP exports without writing config or reloading a service."""
+
+        lifecycle_stable = self._vm_ha_lifecycle_is_stable(plan, vm_ha_lifecycle_guard)
+        authority = (
+            self._vm_ha_advertisement_authority(plan, local_cfg)
+            if plan.vm_ha is not None and lifecycle_stable
+            else None
+        )
+        expected_by_host = self._expected_advertised_prefixes(
+            plan,
+            local_cfg,
+            vm_ha_owner_hostname=(
+                authority.owner_hostname if authority is not None else None
+            ),
+        )
+        results: dict[str, BGPAdvertisementState] = {}
+        print("[bold]BGP Advertisement Audit (read-only)[/bold]")
+        for inst_cfg in plan.iter_instance_configs():
+            if not inst_cfg.external_ip:
+                continue
+            if expected_by_host is None:
+                state = BGPAdvertisementState.UNKNOWN
+            elif inst_cfg.hostname not in expected_by_host:
+                continue
+            else:
+                observed = self._collect_observed_bgp_advertisements(
+                    inst_cfg.external_ip,
+                    local_cfg,
+                )
+                state = (
+                    BGPAdvertisementState.UNKNOWN
+                    if observed is None
+                    else self._bgp_advertisement_state(
+                        expected_by_host.get(inst_cfg.hostname, {}),
+                        observed[0],
+                        observed[1],
+                    )
+                )
+            results[inst_cfg.hostname] = state
+
+        authority_changed = plan.vm_ha is not None and (
+            authority is None
+            or not self._vm_ha_lifecycle_is_stable(plan, vm_ha_lifecycle_guard)
+            or self._vm_ha_advertisement_authority(plan, local_cfg) != authority
+        )
+        if authority_changed:
+            results = {
+                hostname: BGPAdvertisementState.UNKNOWN for hostname in results
+            }
+
+        for hostname, state in results.items():
+            style = {
+                BGPAdvertisementState.MATCH: "green",
+                BGPAdvertisementState.DRIFT: "red",
+                BGPAdvertisementState.UNKNOWN: "yellow",
+            }[state]
+            print(f"[{style}]  {hostname}: {state.value}[/{style}]")
+        if expected_by_host is None:
+            print(
+                "[yellow]  Exact VM-HA owner/generation authority is unavailable; "
+                "UNKNOWN is not treated as drift and no repair was attempted.[/yellow]"
+            )
+        elif authority_changed:
+            print(
+                "[yellow]  VM-HA authority changed during observation; mixed-time "
+                "evidence was downgraded to UNKNOWN.[/yellow]"
+            )
+        return results
+
     def _resolve_target_network_id(self, channel, local_cfg: dict) -> str | None:
-        from nebius.api.nebius.vpc.v1 import (
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore[attr-defined]
             network_service_pb2,
             network_service_pb2_grpc,
             subnet_service_pb2,
@@ -1997,18 +3420,25 @@ class RouteManager:
             raise ValueError("VM-HA route target selection is duplicate or ambiguous")
         return canonical
 
-    def list_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
+    def list_routes(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+        *,
+        vm_ha_lifecycle_guard: t.Callable[[], bool] | None = None,
+    ) -> None:
         """List route tables attached to subnets matching gateway.local_prefixes."""
-        try:
-            channel = self._channel()
-        except Exception as e:
-            print(f"[red]Failed to open VPC SDK channel:[/red] {e}")
-            return
-        from nebius.api.nebius.vpc.v1 import (
-            route_service_pb2,
-            route_service_pb2_grpc,
-            subnet_service_pb2,
-            subnet_service_pb2_grpc,
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore[attr-defined]
+            AllocationServiceClient,
+            GetNetworkByNameRequest,
+            GetSubnetByNameRequest,
+            ListAllocationsRequest,
+            ListNetworksRequest,
+            ListRoutesRequest,
+            ListSubnetsRequest,
+            NetworkServiceClient,
+            RouteServiceClient,
+            SubnetServiceClient,
         )
         from rich.console import Console
         from rich.table import Table
@@ -2020,85 +3450,121 @@ class RouteManager:
             print("[yellow]No gateway.local_prefixes; nothing to list.[/yellow]")
             return
 
-        # Allocation mapping for pretty-printing next hop
-        _, alloc_to_ip = self._list_allocations(channel)
-
-        sstub = subnet_service_pb2_grpc.SubnetServiceStub(channel)
-        rstub = route_service_pb2_grpc.RouteServiceStub(channel)
+        sdk = self._create_read_sdk()
         console = Console()
-        gateway_subnet_name = self._gateway_subnet_name(local_cfg)
-        target_network_id = self._resolve_target_network_id(channel, local_cfg)
-        if not target_network_id:
-            print(
-                "[yellow]Could not resolve the target network for route listing. "
-                "Set gateway_group.network_id explicitly.[/yellow]"
+        try:
+            allocation_client = AllocationServiceClient(sdk)
+            subnet_client = SubnetServiceClient(sdk)
+            route_client = RouteServiceClient(sdk)
+
+            alloc_to_ip = self._list_allocations_with_sdk(
+                allocation_client,
+                ListAllocationsRequest,
             )
-            return
+            gateway_subnet_name = self._gateway_subnet_name(local_cfg)
+            target_network_id = self._resolve_target_network_id_with_sdk(
+                sdk,
+                local_cfg,
+                subnet_client=subnet_client,
+                get_subnet_by_name_request=GetSubnetByNameRequest,
+                network_client_type=NetworkServiceClient,
+                get_network_by_name_request=GetNetworkByNameRequest,
+                list_networks_request=ListNetworksRequest,
+            )
+            if not target_network_id:
+                print(
+                    "[yellow]Could not resolve the target network for route listing. "
+                    "Set gateway_group.network_id explicitly.[/yellow]"
+                )
+                return
 
-        subnets = sstub.List(
-            subnet_service_pb2.ListSubnetsRequest(parent_id=self.project_id or "")
-        ).items
-        selected_subnets, subnet_selection_diagnostics = self._select_local_prefix_subnets(
-            subnets,
-            gateway_prefixes,
-            target_network_id=target_network_id,
-            gateway_subnet_name=gateway_subnet_name,
-        )
-
-        for diagnostic in subnet_selection_diagnostics:
-            print(diagnostic)
-
-        if not selected_subnets:
-            print(
-                "[yellow]No workload subnets matched gateway.local_prefixes "
-                f"in network {target_network_id}.[/yellow]"
+            subnets = self._list_sdk_items(
+                subnet_client,
+                ListSubnetsRequest,
+                parent_id=self.project_id or "",
+            )
+            selected_subnets, subnet_selection_diagnostics = self._select_local_prefix_subnets(
+                subnets,
+                gateway_prefixes,
+                target_network_id=target_network_id,
+                gateway_subnet_name=gateway_subnet_name,
             )
 
-        for sn, selected_cidrs in selected_subnets:
-            subnet_name = self._metadata_name(sn)
-            subnet_cidrs = [str(net) for net in selected_cidrs]
+            for diagnostic in subnet_selection_diagnostics:
+                print(diagnostic)
 
-            rt_info = self._subnet_route_table(sn)
-            rt_id = str(getattr(rt_info, "id", "") or "")
-            rt_default = bool(getattr(rt_info, "default", False))
+            if not selected_subnets:
+                print(
+                    "[yellow]No workload subnets matched gateway.local_prefixes "
+                    f"in network {target_network_id}.[/yellow]"
+                )
 
-            print(f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})")
+            for subnet, selected_cidrs in selected_subnets:
+                subnet_name = self._metadata_name(subnet)
+                subnet_cidrs = [str(network) for network in selected_cidrs]
 
-            if not rt_id:
-                print("[yellow]  No route table attached[/yellow]")
-                continue
+                route_table = self._subnet_route_table(subnet)
+                route_table_id = str(getattr(route_table, "id", "") or "")
+                route_table_default = bool(getattr(route_table, "default", False))
 
-            print(f"[dim]  Route Table ID: {rt_id} (default={rt_default})[/dim]")
+                print(f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})")
 
-            routes = rstub.List(route_service_pb2.ListRoutesRequest(parent_id=rt_id)).items
+                if not route_table_id:
+                    print("[yellow]  No route table attached[/yellow]")
+                    continue
 
-            if not routes:
-                print("[dim]  No routes in route table[/dim]")
-                continue
+                print(
+                    f"[dim]  Route Table ID: {route_table_id} (default={route_table_default})[/dim]"
+                )
 
-            # Build table
-            table = Table(show_header=True, header_style="bold")
-            table.add_column("Destination", style="cyan")
-            table.add_column("Next Hop", style="green")
+                routes = self._list_sdk_items(
+                    route_client,
+                    ListRoutesRequest,
+                    parent_id=route_table_id,
+                )
 
-            for r in routes:
-                dest = r.spec.destination.cidr
-                nh = r.spec.next_hop
-                nh_desc = "-"
-                if nh.allocation.id:
-                    nh_desc = alloc_to_ip.get(nh.allocation.id, nh.allocation.id)
-                elif nh.default_egress_gateway:
-                    nh_desc = "default-egress"
+                if not routes:
+                    print("[dim]  No routes in route table[/dim]")
+                    continue
 
-                table.add_row(dest, nh_desc)
+                table = Table(show_header=True, header_style="bold")
+                table.add_column("Destination", style="cyan")
+                table.add_column("Next Hop", style="green")
 
-            console.print(table)
+                for route in routes:
+                    route_spec = getattr(route, "spec", None)
+                    destination = getattr(route_spec, "destination", None)
+                    next_hop = getattr(route_spec, "next_hop", None)
+                    destination_cidr = str(getattr(destination, "cidr", "") or "")
+                    allocation = getattr(next_hop, "allocation", None)
+                    allocation_id = str(getattr(allocation, "id", "") or "")
+                    next_hop_label = "-"
+                    if allocation_id:
+                        next_hop_label = alloc_to_ip.get(allocation_id, allocation_id)
+                    elif getattr(next_hop, "default_egress_gateway", False):
+                        next_hop_label = "default-egress"
+
+                    table.add_row(destination_cidr, next_hop_label)
+
+                console.print(table)
+        finally:
+            sdk.sync_close()
 
         # Add BGP advertised routes section
-        self._list_bgp_advertised_routes(plan, local_cfg, console)
+        self._list_bgp_advertised_routes(
+            plan,
+            local_cfg,
+            console,
+            vm_ha_lifecycle_guard=vm_ha_lifecycle_guard,
+        )
 
     def _list_bgp_advertised_routes(
-        self, plan: ResolvedDeploymentPlan, local_cfg: dict, console
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+        console,
+        *,
+        vm_ha_lifecycle_guard: t.Callable[[], bool] | None = None,
     ) -> None:
         """List BGP routes being advertised from gateway to peer routers.
 
@@ -2129,10 +3595,17 @@ class RouteManager:
             print("[dim]No BGP connections configured - routes are static[/dim]")
             return
 
-        self.ensure_bgp_advertisements_current(plan, local_cfg)
+        self.audit_bgp_advertisements(
+            plan,
+            local_cfg,
+            vm_ha_lifecycle_guard=vm_ha_lifecycle_guard,
+        )
 
         # Query each gateway VM
+        bgp_instance_indices = self._bgp_instance_indices(local_cfg)
         for inst_cfg in plan.iter_instance_configs():
+            if inst_cfg.instance_index not in bgp_instance_indices:
+                continue
             hostname = inst_cfg.hostname
             external_ip = inst_cfg.external_ip
 
@@ -2284,12 +3757,38 @@ class RouteManager:
         swap_route_table: bool = False,
         rollback_dir: Path | None = None,
     ) -> None:
+        """Run route management behind one typed public failure boundary."""
+
+        try:
+            self._add_routes(
+                plan,
+                local_cfg,
+                summarize=summarize,
+                swap_route_table=swap_route_table,
+                rollback_dir=rollback_dir,
+            )
+        except RouteManagementError:
+            raise
+        except Exception as error:
+            raise RouteManagementError(
+                "VPC route management failed before its requested postcondition "
+                "could be verified."
+            ) from error
+
+    def _add_routes(
+        self,
+        plan: ResolvedDeploymentPlan,
+        local_cfg: dict,
+        *,
+        summarize: bool = False,
+        swap_route_table: bool = False,
+        rollback_dir: Path | None = None,
+    ) -> None:
         """Ensure routes for connection.remote_prefixes and assign custom route tables when needed."""
         try:
             channel = self._channel()
         except Exception as e:
-            print(f"[red]Failed to open VPC SDK channel:[/red] {e}")
-            return
+            raise RouteManagementError(f"Failed to open the VPC SDK channel: {e}") from e
 
         # Create compute channel using same auth pattern as VPC channel
         try:
@@ -2311,8 +3810,8 @@ class RouteManager:
         except Exception:
             compute_channel = None
 
-        from nebius.api.nebius.common.v1 import metadata_pb2
-        from nebius.api.nebius.vpc.v1 import (
+        from nebius.api.nebius.common.v1 import metadata_pb2  # type: ignore[attr-defined]
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore[attr-defined]
             route_pb2,
             route_service_pb2,
             route_service_pb2_grpc,
@@ -2328,8 +3827,9 @@ class RouteManager:
             local_cfg.get("gateway", {}).get("local_prefixes") or []
         )
         if not gateway_prefixes:
-            print("[yellow]No gateway.local_prefixes; cannot determine relevant subnets.[/yellow]")
-            return
+            raise RouteManagementError(
+                "No gateway.local_prefixes are configured; workload subnets cannot be selected."
+            )
 
         allocations_by_index: dict[int, str] = {}
         if compute_channel:
@@ -2337,18 +3837,16 @@ class RouteManager:
                 compute_channel, plan
             )
         if not allocations_by_index:
-            print(
-                "[yellow]Could not resolve private gateway allocations; cannot create routes.[/yellow]"
+            raise RouteManagementError(
+                "Could not resolve private gateway allocations; no routes were changed."
             )
-            return
 
         target_network_id = self._resolve_target_network_id(channel, local_cfg)
         if not target_network_id:
-            print(
-                "[yellow]Could not resolve the target network for route updates. "
-                "Set gateway_group.network_id explicitly.[/yellow]"
+            raise RouteManagementError(
+                "Could not resolve the target network for route updates. Set "
+                "gateway_group.network_id explicitly."
             )
-            return
 
         network_pool_networks = self._get_network_private_pool_cidrs(
             channel,
@@ -2359,15 +3857,14 @@ class RouteManager:
             prefix_targets = self._collect_remote_prefix_targets(
                 plan, local_cfg, allocations_by_index
             )
-        except ValueError as e:
-            print(f"[red]{e}[/red]")
-            return
+        except ValueError as error:
+            raise RouteManagementError(str(error)) from error
 
         if not prefix_targets:
-            print(
-                "[yellow]No remote prefixes found (BGP: no learned routes; Static: no configured remote_prefixes)[/yellow]"
+            raise RouteManagementError(
+                "No remote prefixes were found (BGP: no learned routes; static: "
+                "no configured connection or tunnel prefixes)."
             )
-            return
 
         # Filter out local prefixes (don't create routes for our own VPC networks)
         local_networks = self._parse_ipv4_networks(
@@ -2429,11 +3926,12 @@ class RouteManager:
             print(diagnostic)
 
         if not selected_subnets:
-            print(
-                "[yellow]No workload subnets matched gateway.local_prefixes "
-                f"in network {target_network_id}. Nothing to update.[/yellow]"
+            raise RouteManagementError(
+                "No workload subnets matched gateway.local_prefixes in network "
+                f"{target_network_id}; no routes were changed."
             )
-            return
+
+        completed_subnets: set[str] = set()
 
         for sn, _selected_cidrs in selected_subnets:
             subnet_name = self._metadata_name(sn)
@@ -2611,6 +4109,7 @@ class RouteManager:
                     "[yellow]Rollback command:[/yellow] "
                     f"[bold]nebius vpc subnet update --file {shlex.quote(str(rollback_path))}[/bold]"
                 )
+                completed_subnets.add(subnet_name)
                 continue
 
             if not current_route_table_default and current_route_table_id:
@@ -2748,7 +4247,7 @@ class RouteManager:
                         )
                         continue
 
-            self._reconcile_route_table(
+            reconciled_routes = self._reconcile_route_table(
                 rstub,
                 route_service_pb2,
                 route_pb2,
@@ -2756,6 +4255,30 @@ class RouteManager:
                 route_table_id=rt_id,
                 prefix_targets=prefix_targets,
                 summarize=summarize,
+            )
+            installed_prefix_targets = self._installed_prefix_targets(
+                reconciled_routes,
+                prefix_targets,
+            )
+            missing_prefix_targets = sorted(
+                set(prefix_targets) - set(installed_prefix_targets)
+            )
+            if missing_prefix_targets:
+                print(
+                    f"[yellow]Route reconciliation on subnet {subnet_name} did not "
+                    "reach its requested postcondition.[/yellow]"
+                )
+                for prefix in missing_prefix_targets:
+                    print(f"[yellow]  Missing managed route: {prefix}[/yellow]")
+                continue
+            completed_subnets.add(subnet_name)
+
+        expected_subnets = {self._metadata_name(subnet) for subnet, _ in selected_subnets}
+        incomplete_subnets = sorted(expected_subnets - completed_subnets)
+        if incomplete_subnets:
+            raise RouteManagementError(
+                "Route management did not converge on workload subnet(s): "
+                + ", ".join(incomplete_subnets)
             )
 
     def _get_bgp_learned_routes(
@@ -2914,9 +4437,15 @@ class RouteManager:
                 owner_indices = self._connection_instance_indices(conn)
                 if owner_indices and inst_cfg.instance_index not in owner_indices:
                     continue
-                remote_prefixes = conn.get("remote_prefixes", []) or (
-                    conn.get("bgp", {}) or {}
-                ).get("remote_prefixes", [])
+                remote_prefixes = (
+                    conn.get("remote_prefixes", [])
+                    or (conn.get("bgp", {}) or {}).get("remote_prefixes", [])
+                    if routing_mode == "bgp"
+                    else connection_static_remote_prefixes(
+                        conn,
+                        instance_index=inst_cfg.instance_index,
+                    )
+                )
 
                 print(f"\n[bold]Connection: {conn_name}[/bold] (routing_mode: {routing_mode})")
 

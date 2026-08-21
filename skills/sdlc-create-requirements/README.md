@@ -12,11 +12,11 @@ Environment section for later evaluation and UAT.
 
 ## Main Boundaries
 
-- Edit `docs/design.md`.
-- Create execution plans.
-- Implement code or tests.
-- Rename existing requirement IDs.
-- Store raw credentials, private endpoints, customer data, or raw logs.
+- Do not edit `docs/design.md`.
+- Do not create execution plans.
+- Do not implement code or tests.
+- Do not rename existing requirement IDs.
+- Do not store raw credentials, private endpoints, customer data, or raw logs.
 
 ## Primary Inputs
 

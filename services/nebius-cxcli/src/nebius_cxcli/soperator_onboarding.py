@@ -4617,6 +4617,78 @@ def _resume_slurmcluster_identity_resources(
     return identity_resources, normalized_scope
 
 
+def _project_resume_slurmcluster_identity_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    identity_resources: Sequence[Mapping[str, Any]],
+    normalized_identity_scope: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project one validated source/target inventory into the immutable source view."""
+
+    projected = copy.deepcopy(to_plain_data(dict(snapshot)))
+    cluster_identity = projected.get("cluster_identity")
+    if not isinstance(cluster_identity, dict):
+        raise RuntimeError(
+            "External Soperator resume snapshot has no mutable cluster identity projection."
+        )
+    if normalized_identity_scope.get("identity_role") == "target":
+        source_ref = _mapping_value(normalized_identity_scope.get("source"))
+        slurmcluster_uid = str(source_ref.get("uid", "") or "").strip()
+    else:
+        slurmcluster_uid = _soperator_slurmcluster_uid(identity_resources)
+    if not slurmcluster_uid:
+        raise RuntimeError(
+            "External Soperator resume snapshot has no immutable source SlurmCluster UID."
+        )
+    cluster_identity["slurmcluster_uid"] = slurmcluster_uid
+
+    def _resource_identity(resource: Mapping[str, Any]) -> tuple[str, str, str]:
+        metadata = _mapping_value(resource.get("metadata"))
+        return (
+            str(metadata.get("namespace", "") or "soperator").strip(),
+            str(metadata.get("name", "") or "").strip(),
+            str(metadata.get("uid", "") or "").strip(),
+        )
+
+    selected_slurmclusters = {
+        _resource_identity(resource)
+        for resource in identity_resources
+        if str(resource.get("kind", "") or "").strip().lower() == "slurmcluster"
+    }
+    projected_resources = _sequence_of_mappings(projected.get("soperator_resources"))
+    projected["identity_soperator_resources"] = [
+        resource
+        for resource in projected_resources
+        if str(resource.get("kind", "") or "").strip().lower() != "slurmcluster"
+        or _resource_identity(resource) in selected_slurmclusters
+    ]
+    projected["resume_slurmcluster_identity"] = copy.deepcopy(
+        to_plain_data(dict(normalized_identity_scope))
+    )
+    return projected
+
+
+def _scope_soperator_resume_snapshot_identity(
+    snapshot: Mapping[str, Any],
+    *,
+    identity_scope: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebind a cached snapshot to one exact checkpoint-derived identity scope."""
+
+    soperator_resources = _sequence_of_mappings(snapshot.get("soperator_resources"))
+    identity_resources, normalized_identity_scope = _resume_slurmcluster_identity_resources(
+        soperator_resources,
+        identity_scope=identity_scope,
+    )
+    if not normalized_identity_scope:
+        return copy.deepcopy(to_plain_data(dict(snapshot)))
+    return _project_resume_slurmcluster_identity_snapshot(
+        snapshot,
+        identity_resources=identity_resources,
+        normalized_identity_scope=normalized_identity_scope,
+    )
+
+
 def collect_kubectl_soperator_snapshot(
     *,
     kube_context: str,
@@ -4980,14 +5052,11 @@ def collect_kubectl_soperator_snapshot(
         "collection_errors": collection_errors,
     }
     if normalized_identity_scope:
-        result["resume_slurmcluster_identity"] = normalized_identity_scope
-        selected_slurmcluster_ids = {id(item) for item in identity_resources}
-        result["identity_soperator_resources"] = [
-            item
-            for item in _sequence_of_mappings(collected_soperator_resources)
-            if str(item.get("kind", "") or "").strip().lower() != "slurmcluster"
-            or id(item) in selected_slurmcluster_ids
-        ]
+        return _project_resume_slurmcluster_identity_snapshot(
+            result,
+            identity_resources=identity_resources,
+            normalized_identity_scope=normalized_identity_scope,
+        )
     return result
 
 

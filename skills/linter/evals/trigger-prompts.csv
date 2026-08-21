@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+linter-positive-01,true,"Lint and safely auto-fix the Shell Markdown and Python files in this repository."
+linter-positive-02,true,"Run shellcheck and bash syntax validation on every shell script."
+linter-positive-03,true,"Use Ruff and markdownlint to fix the current lint failures."
+linter-negative-01,false,"Review this code for logical bugs and missing tests."
+linter-negative-02,false,"Format this JavaScript project with its existing formatter."
+linter-negative-03,false,"Optimize the runtime performance of this Python application."

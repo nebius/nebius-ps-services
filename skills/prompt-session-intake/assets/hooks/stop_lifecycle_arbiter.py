@@ -19,9 +19,14 @@ DELEGATES = (
 )
 REPORT_READY_FIELD = "_troubleshootReportReady"
 REPORT_FINALIZE_FIELD = "_troubleshootFinalizeReport"
+REPORT_FINALIZED_FIELD = "_troubleshootReportFinalized"
 PROMPT_CONTINUATION_FIELD = "_promptSessionMarkStopContinuation"
 ARBITER_BUDGET_SECONDS = 25.0
 DELEGATE_TIMEOUT_SECONDS = 8.0
+FINALIZATION_WARNING = (
+    "Troubleshoot report delivery could not be recorded at the trusted state "
+    "boundary. Preserve the private state and start a fresh Codex session."
+)
 
 
 def _run_delegate(
@@ -107,6 +112,30 @@ def _finalize_report(
     return finalized
 
 
+def _terminal_with_finalization_result(
+    terminal: dict[str, Any], finalized: dict[str, Any]
+) -> dict[str, Any]:
+    finalized_ok = bool(finalized.pop(REPORT_FINALIZED_FIELD, False))
+    if finalized_ok:
+        return terminal
+    combined = dict(terminal)
+    existing = combined.get("systemMessage")
+    combined["systemMessage"] = (
+        existing + "\n" + FINALIZATION_WARNING
+        if isinstance(existing, str) and existing
+        else FINALIZATION_WARNING
+    )
+    return combined
+
+
+def _finalization_failure() -> dict[str, Any]:
+    return {
+        "continue": False,
+        "stopReason": "Troubleshoot report delivery could not be recorded.",
+        "systemMessage": FINALIZATION_WARNING,
+    }
+
+
 def evaluate(payload: dict[str, Any], hook_dir: Path | None = None) -> dict[str, Any]:
     if payload.get("hook_event_name") != "Stop":
         return {"continue": True}
@@ -114,6 +143,7 @@ def evaluate(payload: dict[str, Any], hook_dir: Path | None = None) -> dict[str,
     directory = hook_dir or Path(__file__).resolve().parent
     blockers: list[tuple[str, dict[str, Any]]] = []
     report_ready = False
+    terminal: dict[str, Any] | None = None
     for name in DELEGATES:
         delegate = directory / name
         if not delegate.is_file() or delegate.resolve() == Path(__file__).resolve():
@@ -124,15 +154,19 @@ def evaluate(payload: dict[str, Any], hook_dir: Path | None = None) -> dict[str,
         ):
             report_ready = True
         if result.get("continue") is False:
-            if report_ready:
-                _finalize_report(directory, payload, deadline)
-            return result
+            if terminal is None:
+                terminal = result
+            continue
         if result.get("decision") == "block":
             blockers.append((name, result))
+    if terminal is not None:
+        if report_ready:
+            terminal = _terminal_with_finalization_result(
+                terminal, _finalize_report(directory, payload, deadline)
+            )
+        return terminal
     if len(blockers) == 1:
-        return _mark_prompt_continuation(
-            directory, payload, blockers[0][1], deadline
-        )
+        return _mark_prompt_continuation(directory, payload, blockers[0][1], deadline)
     if blockers:
         reasons = [
             f"- {name}: {result.get('reason', 'continuation required')}"
@@ -150,6 +184,8 @@ def evaluate(payload: dict[str, Any], hook_dir: Path | None = None) -> dict[str,
         )
     if report_ready:
         finalized = _finalize_report(directory, payload, deadline)
+        if not finalized.pop(REPORT_FINALIZED_FIELD, False):
+            return _finalization_failure()
         return _mark_prompt_continuation(directory, payload, finalized, deadline)
     return {"continue": True}
 

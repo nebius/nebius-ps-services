@@ -1,7 +1,7 @@
 [Unit]
 Description=Nebius VPNGW VM-HA cold-start forwarding guard
 DefaultDependencies=no
-After=local-fs.target systemd-sysctl.service
+After=local-fs.target systemd-sysctl.service systemd-tmpfiles-setup.service
 Before=network-online.target strongswan-starter.service strongswan.service frr.service nebius-vpngw-agent.service nebius-vpngw-vm-ha.service
 ConditionPathExists=/etc/nebius-vpngw/vm-ha-enabled
 
@@ -13,7 +13,9 @@ RemainAfterExit=yes
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/nebius-vpngw /proc/sys/net/ipv4/ip_forward
+RuntimeDirectory=nebius-vpngw
+RuntimeDirectoryMode=0755
+ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw /proc/sys/net/ipv4/ip_forward
 AmbientCapabilities=CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN
 

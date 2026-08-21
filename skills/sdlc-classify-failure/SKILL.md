@@ -1,6 +1,6 @@
 ---
 name: sdlc-classify-failure
-description: "Use only as part of the Agentic SDLC workflow; use when a phase or evaluation fails and deterministic evidence, diagnosis validation, repair budgets, invalidation, and the earliest responsible retry or stop route must be recorded before any loop retry."
+description: "Use only as part of the Agentic SDLC workflow; classify a failed phase or evaluation with deterministic evidence, diagnosis, repair budget, invalidation, and the earliest responsible retry or stop route."
 ---
 
 # Classify Failure
@@ -145,8 +145,11 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

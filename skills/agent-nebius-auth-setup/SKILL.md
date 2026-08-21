@@ -1,6 +1,6 @@
 ---
 name: agent-nebius-auth-setup
-description: Explicitly bootstrap or repair Codex Agent Nebius authentication for one current-session project. Use only when the user invokes this skill directly. It manages the fixed codex-agent-sa account, one exact-permit tenant group, a project-bound credential and profile, optional bounded local-repair leases, and separately requested hook installation.
+description: "Use only when explicitly invoked to bootstrap or repair current-project Codex Agent Nebius auth: account/tenant access, credentials/profile, repair lease, or separately requested auth hooks."
 ---
 
 # Agent Nebius Auth Setup

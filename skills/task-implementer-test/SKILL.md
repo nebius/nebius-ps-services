@@ -1,6 +1,6 @@
 ---
 name: task-implementer-test
-description: "Use only when the user explicitly asks to verify Task Implementer: run the no-flag lightweight contract and temporary-fixture suite without a real application, or use --create, --create --keep, and --destroy for one replaceable verifier-owned local frontend/API/PostgreSQL stack."
+description: "Use only when the user explicitly asks to verify Task Implementer: run the no-flag contract/fixture suite, or use --create/--keep/--destroy for one replaceable verifier-owned local frontend/API/PostgreSQL stack."
 ---
 
 # Task Implementer Test

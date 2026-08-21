@@ -32,12 +32,19 @@ Usually owned by `app-stack`:
 
 Owned by `ai-stack` when present:
 
-- Prompt and policy assembly, typed agent kernel, model request construction,
-  tool selection, structured output, run budgets, and agent-local context.
-- Current Python defaults: OpenAI Agents SDK for intentionally OpenAI-native
-  agents; Pydantic AI for bounded agents using non-OpenAI providers or a typed
-  provider-neutral boundary.
-- May be absent for direct inference or deterministic application logic.
+- Application-owned logical runtime facade, prompt and agent version
+  resolution, deterministic routing policy, normalized events, run budgets,
+  and canonical run identity.
+- Current portable Python default: Pydantic AI's low-level direct model API for
+  direct requests that need `ModelResponse` control, a no-tools single-request
+  `Agent` for direct-call behavior that needs typed parsing or validation
+  services, and Pydantic AI `Agent` for bounded model-directed loops across
+  supported providers.
+- Pydantic AI capabilities or Harness are conditional specialist layers.
+  Provider-native agent SDKs are separate evaluated runtime escapes, not model
+  adapters and not nested inside Pydantic AI.
+- May be absent for intentionally provider-specific direct inference or
+  deterministic application logic that already owns its model requests.
 
 ### Workflow And Durability Plane
 
@@ -46,7 +53,8 @@ Owned jointly by AI and application workflow owners:
 - Explicit state graphs, checkpoints, interrupts, timers, retries, recovery,
   long waits, compensation, and human interaction.
 - Use LangGraph for explicit in-application graph semantics.
-- Use Temporal for cross-service durable workflows and external side effects.
+- Select one qualified durable workflow owner for cross-service workflows and
+  external side effects.
 - Keep one owner for each retry, checkpoint, and idempotency boundary.
 
 ### Capability And Interoperability Plane
@@ -64,9 +72,12 @@ Owned by capability providers and `ai-stack` integration owners:
 
 Owned by `ai-stack` and platform owners:
 
-- Internal provider contract, native provider adapters, exact model capability
-  profiles, credential injection, routing, fallback, rate limits, budgets, and
-  provider telemetry.
+- Pydantic AI model/provider implementations and resolved profiles, explicit
+  provider settings, supplemental operational and governance metadata,
+  credential injection, routing, fallback, rate limits, budgets, and provider
+  telemetry.
+- Add a custom cross-runtime provider contract only when shared non-Pydantic
+  consumers create real semantic portability requirements.
 - Use agentgateway when a shared platform needs common policy across LLM, MCP,
   A2A, HTTP, and gRPC traffic. Keep it Conditional for a small single-provider
   application.
@@ -105,6 +116,9 @@ Define data, control, trust, identity, protocol, state, and telemetry interfaces
 between planes. Avoid a product that silently owns several planes unless that
 integrated ownership is intentional, evaluated, and reversible.
 
+Read `provider-agnostic-agent-platform.md` when these planes form a portable
+agent application or shared agent platform.
+
 ## AI Behavior Decision
 
 Apply this per capability before choosing an SDK or framework:
@@ -132,8 +146,8 @@ It is normal for one application to combine:
 
 ```text
 deterministic application logic and workflows
-  + direct model calls at explicit steps
-  + bounded agents for genuinely dynamic tasks
+  + Pydantic AI direct model calls at explicit portable steps
+  + bounded Pydantic AI agents for genuinely dynamic tasks
   + Codex for coding-focused engineering tasks
 ```
 

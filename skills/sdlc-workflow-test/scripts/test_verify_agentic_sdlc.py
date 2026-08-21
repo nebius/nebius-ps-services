@@ -80,6 +80,90 @@ class VerifierContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def source_contract_context(self) -> verifier.Context:
+        source_root = MODULE_PATH.parents[2]
+        return replace(
+            self.ctx,
+            skills_root=source_root,
+            design_path=source_root / verifier.DESIGN_RELATIVE,
+        )
+
+    def test_slow_aggregate_suites_have_measured_timeout_headroom(self) -> None:
+        self.assertEqual(verifier.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
+        self.assertEqual(
+            verifier.CAPABILITY_SUITE_TIMEOUT_SECONDS,
+            {"worktree": 300, "task-waves": 900},
+        )
+
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with mock.patch.object(verifier, "run", return_value=completed) as runner:
+            verifier.check_capability_regressions(self.ctx)
+
+        self.assertEqual(len(runner.call_args_list), 15)
+        for call in runner.call_args_list:
+            command = " ".join(str(value) for value in call.args[0])
+            if "test-worktree-manager.py" in command:
+                expected = 300
+            elif "test-task-waves.py" in command:
+                expected = 900
+            else:
+                expected = 120
+            self.assertEqual(call.kwargs["timeout"], expected, command)
+
+    def test_design_contract_normalizes_whitespace(self) -> None:
+        rendered = "\n\n".join(
+            term.replace(" ", "\n", 1) for term in verifier.DESIGN_REQUIRED_TERMS
+        )
+        self.ctx.design_path.write_text(rendered, encoding="utf-8")
+
+        verifier.check_design(self.ctx)
+
+        checks = [check for check in self.ctx.checks if check.name == "Design contract"]
+        self.assertEqual([check.status for check in checks], ["PASS"])
+
+    def test_design_contract_reports_a_missing_normalized_term(self) -> None:
+        missing = verifier.DESIGN_REQUIRED_TERMS[-1]
+        self.ctx.design_path.write_text(
+            "\n".join(verifier.DESIGN_REQUIRED_TERMS[:-1]), encoding="utf-8"
+        )
+
+        verifier.check_design(self.ctx)
+
+        checks = [check for check in self.ctx.checks if check.name == "Design contract"]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn(missing, checks[0].detail)
+
+    def copied_source_contract_context(self) -> verifier.Context:
+        source_root = MODULE_PATH.parents[2]
+        copied_root = self.root / "contract-skills"
+        copied_root.mkdir()
+        files = {
+            Path("README.md"),
+            verifier.DESIGN_RELATIVE,
+            Path("sdlc-create-requirements/README.md"),
+            Path(
+                "sdlc-create-requirements/assets/templates/requirements.md.template"
+            ),
+            Path("sdlc-create-design/assets/templates/design.md.template"),
+            Path("sdlc-start/references/prompt-requirements-refinement.md"),
+            Path("sdlc-start/scripts/validate_project_specs.py"),
+            Path("sdlc-workflow-test/SKILL.md"),
+            Path("maintain-project-specs/SKILL.md"),
+            Path("align-skill/scripts/validate-skill-structure.py"),
+        }
+        for skill in verifier.REQUIRED_SDLC_SKILLS:
+            files.add(Path(skill) / "SKILL.md")
+            files.add(Path(skill) / "agents" / "openai.yaml")
+        for relative in files:
+            target = copied_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root / relative, target)
+        return replace(
+            self.ctx,
+            skills_root=copied_root,
+            design_path=copied_root / verifier.DESIGN_RELATIVE,
+        )
+
     def write_manifest(
         self,
         *,
@@ -294,6 +378,143 @@ class VerifierContractTests(unittest.TestCase):
         self.ctx.add("Environment checked", "Execution contract", "FAIL", "failed")
         self.assertEqual(verifier.final_status(self.ctx), "FAIL")
 
+    def test_source_phase_contract_rejects_bad_source_prefix(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.skills_root / "sdlc-create-design" / "SKILL.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                verifier.DESCRIPTION_PREFIX,
+                "Use only as an Agentic SDLC adapter;",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        verifier.check_source_phase_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "source.phase-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("sdlc-create-design", checks[0].detail)
+
+    def test_source_catalog_validation_rejects_missing_reference(self) -> None:
+        ctx = self.copied_source_contract_context()
+        template = (
+            ctx.skills_root
+            / "sdlc-create-design"
+            / "assets"
+            / "templates"
+            / "design.md.template"
+        )
+        template.unlink()
+        verifier.check_source_catalog_validation(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "source.catalog-structure"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+
+    def test_spec_ownership_contract_accepts_canonical_sources(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["PASS"])
+
+    def test_spec_ownership_contract_rejects_legacy_owner(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.design_path
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + "\nOnly `sdlc-create-requirements` writes canonical requirements.\n",
+            encoding="utf-8",
+        )
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("legacy ownership term", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_missing_owner_dependency(self) -> None:
+        ctx = self.copied_source_contract_context()
+        (ctx.skills_root / "maintain-project-specs" / "SKILL.md").unlink()
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("authoritative owner contract", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_missing_phase_invariant(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.skills_root / "sdlc-evaluate" / "SKILL.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "`maintain-project-specs` is the sole semantic, schema, and validation owner",
+                "Canonical ownership is documented elsewhere",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("sdlc-evaluate", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_unsafe_readme_boundary(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.skills_root / "sdlc-create-requirements" / "README.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "- Do not edit `docs/design.md`.",
+                "- Edit `docs/design.md`.",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("README boundaries", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_missing_template_envelope(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = (
+            ctx.skills_root
+            / "sdlc-create-design"
+            / "assets"
+            / "templates"
+            / "design.md.template"
+        )
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join(lines[1:]) + "\n", encoding="utf-8")
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("design template", checks[0].detail)
+
     def test_missing_live_evidence_is_partial(self) -> None:
         verifier.add_agent_required_sections(self.ctx)
         live = [
@@ -422,6 +643,14 @@ class VerifierContractTests(unittest.TestCase):
 
     def test_runtime_support_skills_are_parity_dependencies(self) -> None:
         self.assertIn(
+            "maintain-project-specs",
+            verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
+        )
+        self.assertIn(
+            "maintain-project-specs",
+            verifier.SOURCE_PARITY_SKILLS,
+        )
+        self.assertIn(
             "nebius-grafana-query",
             verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
         )
@@ -454,6 +683,7 @@ class VerifierContractTests(unittest.TestCase):
             for check in self.ctx.checks
             if check.capability_id
             in {
+                "runtime.project-spec-owner-dependency",
                 "runtime.worktree-dependency",
                 "runtime.observability-dependency",
                 "runtime.project-agent-instructions-dependency",
@@ -462,6 +692,7 @@ class VerifierContractTests(unittest.TestCase):
         self.assertEqual(
             support_checks,
             {
+                "runtime.project-spec-owner-dependency": "PASS",
                 "runtime.worktree-dependency": "PASS",
                 "runtime.observability-dependency": "PASS",
                 "runtime.project-agent-instructions-dependency": "PASS",

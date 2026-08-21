@@ -44,7 +44,8 @@ daemon settings.
 - `scripts/container_smoke_test.py`: bounded disposable local runtime test.
 - `scripts/container_runtime_common.py`: shared bounded subprocess capture used
   by both validation helpers.
-- `evals/trigger-prompts.md`: trigger and ownership-boundary examples.
+- `evals/trigger-prompts.csv`: trigger and ownership-boundary examples.
+- `evals/process-cases.md`: supplemental workflow and output-quality cases.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 
 Runtime activation is not proven by source validation alone. Installation and

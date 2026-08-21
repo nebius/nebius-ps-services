@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import copy
+import hashlib
 import importlib.resources as resources
 import ipaddress
+import json
+import math
 import os
+import re
 import subprocess
 import textwrap
 import time
@@ -13,14 +16,26 @@ from pathlib import Path
 
 from ..config_loader import GatewayGroupSpec
 from ..schema import (
-    VMHACredentialReferences,
+    VMHAMigrationRouteBinding,
     VMHARole,
     VMHARouteTarget,
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
-from .ssh_policy import SSHTrustPolicy, build_openssh_base_command
+from .ssh_policy import (
+    VM_HA_SSH_HOST_KEY_PATH,
+    SSHTrustPolicy,
+    build_openssh_base_command,
+)
 from .vm_diff import VMDiffAnalyzer, VMSpec
+from .vm_ha_cloud import (
+    AllocationOwner,
+    instance_cloud_state,
+    nebius_request_error_code_is,
+    operation_status_lookup_unsupported,
+    vm_ha_request_kwargs,
+    wait_vm_ha_operation,
+)
 from .vm_ha_identity import (
     PROVISIONING_MARKER_PREFIX,
     FormerVMHAEvidence,
@@ -31,10 +46,20 @@ from .vm_ha_identity import (
     render_provisioning_marker,
 )
 from .vm_ha_lifecycle import (
+    VMHALifecycleJournal,
     VMHALifecycleMember,
     VMHALifecycleState,
     VMHALifecycleStatus,
     lifecycle_member_map,
+    normalize_vm_ha_observation,
+    vm_ha_activation_effect_is_host_only,
+    vm_ha_effective_resource_bindings,
+    vm_ha_observation_changed_paths,
+    vm_ha_passive_replacement_binding_key,
+    vm_ha_passive_replacement_cycle_for_approval,
+    vm_ha_passive_replacement_cycles,
+    vm_ha_passive_replacement_effect,
+    vm_ha_resource_binding_matches_observation,
 )
 
 if t.TYPE_CHECKING:
@@ -93,6 +118,55 @@ class VMProvisioningResult(dict[str, str]):
         self.vm_ha_runtime_binding = vm_ha_runtime_binding
 
 
+def _protobuf_field_present(message: t.Any, field: str) -> bool:
+    if message is None:
+        return False
+    has_field = getattr(message, "HasField", None)
+    if callable(has_field):
+        try:
+            return bool(has_field(field))
+        except (TypeError, ValueError):
+            pass
+    return getattr(message, field, None) is not None
+
+
+def validate_vm_ha_shared_allocation(
+    allocation: t.Any,
+    *,
+    expected_allocation_id: str,
+    expected_name: str,
+    expected_project_id: str,
+    expected_subnet_id: str,
+    expected_owner: tuple[str, str] | None,
+) -> str:
+    """Validate one shared allocation without using its name as authority."""
+
+    metadata = getattr(allocation, "metadata", None)
+    allocation_id = str(getattr(allocation, "id", None) or getattr(metadata, "id", None) or "")
+    if not expected_allocation_id or allocation_id != expected_allocation_id:
+        raise RuntimeError("VM-HA shared allocation identity does not match approval")
+    if str(getattr(metadata, "name", "") or "") != expected_name:
+        raise RuntimeError("VM-HA shared allocation name is not canonical")
+    if str(getattr(metadata, "parent_id", "") or "") != expected_project_id:
+        raise RuntimeError("VM-HA shared allocation parent project changed")
+    spec = getattr(allocation, "spec", None)
+    if not _protobuf_field_present(spec, "ipv4_private") or _protobuf_field_present(
+        spec, "ipv4_public"
+    ):
+        raise RuntimeError("VM-HA shared allocation must be private and not public")
+    private = getattr(spec, "ipv4_private", None)
+    if str(getattr(private, "subnet_id", "") or "") != expected_subnet_id:
+        raise RuntimeError("VM-HA shared allocation subnet does not match the gateway")
+
+    from .vm_ha_cloud import AllocationOwner, allocation_observation
+
+    observed_owner = allocation_observation(allocation_id, allocation).owner
+    required_owner = None if expected_owner is None else AllocationOwner(*expected_owner)
+    if observed_owner != required_owner:
+        raise RuntimeError("VM-HA shared allocation assignment does not match approval")
+    return allocation_id
+
+
 class VMManager:
     """Manage Nebius gateway VM lifecycle.
 
@@ -124,6 +198,792 @@ class VMManager:
         self._former_vm_ha_candidate_provenance: FormerVMHAProvenance | None = None
         self._former_vm_ha_lifecycle: VMHALifecycleState | None = None
         self._vm_ha_route_targets: tuple[VMHARouteTarget, ...] | None = None
+        self._vm_ha_journal: VMHALifecycleJournal | None = None
+        self._vm_ha_effect_spec: GatewayGroupSpec | None = None
+        self._vm_ha_effect_prefixes: list[str] | None = None
+        self._reported_gateway_network_messages: set[str] = set()
+
+    def _report_gateway_network_once(self, message: str) -> None:
+        """Emit one network-resolution notice per manager."""
+
+        if message in self._reported_gateway_network_messages:
+            return
+        self._reported_gateway_network_messages.add(message)
+        print(message)
+
+    @staticmethod
+    def _existing_instances_message(count: int, *, recreate: bool) -> str:
+        if count == 0:
+            return "[VMManager] No existing VMs found"
+        suffix = " for recreation" if recreate else ""
+        return f"[VMManager] Found {count} existing VM(s){suffix}"
+
+    def set_vm_ha_lifecycle_journal(self, journal: VMHALifecycleJournal) -> None:
+        """Install the only durable authority for explicit VM-HA effects."""
+
+        if self._vm_ha_journal is not None and self._vm_ha_journal is not journal:
+            raise RuntimeError("VM-HA lifecycle journal cannot be rebound")
+        self._vm_ha_journal = journal
+
+    def _vm_ha_resource_binding(self, key: str) -> str | None:
+        journal = self._vm_ha_journal
+        if journal is None or journal.state.transaction is None:
+            return None
+        return vm_ha_effective_resource_bindings(
+            dict(journal.state.transaction.resource_bindings)
+        ).get(key)
+
+    def _stable_vm_ha_effect_observation(self) -> dict[str, object]:
+        spec = self._vm_ha_effect_spec
+        if spec is None or spec.vm_ha is None:
+            raise RuntimeError("VM-HA cloud effect has no bound observation scope")
+        first = self.observe_vm_ha_migration_state(
+            spec,
+            self._vm_ha_effect_prefixes,
+        )
+        second = self.observe_vm_ha_migration_state(
+            spec,
+            self._vm_ha_effect_prefixes,
+        )
+        if first != second:
+            raise RuntimeError("VM-HA cloud observation changed during stable reread")
+        return first
+
+    @staticmethod
+    def _vm_ha_effect_member_index(effect: str, observation: t.Mapping[str, object]) -> int:
+        matched = re.fullmatch(r"provision-(.+)-(?:compute|boot-disk)", effect)
+        if matched is None:
+            matched = re.fullmatch(
+                r"provision-(.+)-eth[0-9]+-(?:public|primary)-allocation",
+                effect,
+            )
+        members = observation.get("members")
+        if not isinstance(members, list):
+            raise RuntimeError("VM-HA cloud observation has no member set")
+        name = matched.group(1) if matched is not None else ""
+        if not name and effect.startswith("replace-failed-"):
+            candidate_names = [
+                str(item.get("instance_name") or "") for item in members if isinstance(item, dict)
+            ]
+            replacement_actions = (
+                "delete-compute",
+                "delete-boot-disk",
+                "create-compute",
+                "create-boot-disk",
+            )
+            name_matches = [
+                candidate
+                for candidate in candidate_names
+                if candidate
+                and any(
+                    re.fullmatch(
+                        rf"replace-failed-(?:[2-9][0-9]*-)?{re.escape(candidate)}-{action}",
+                        effect,
+                    )
+                    for action in replacement_actions
+                )
+            ]
+            if len(name_matches) == 1:
+                name = name_matches[0]
+        if not name:
+            raise RuntimeError(f"VM-HA cloud effect {effect} has no member identity")
+        matches = [
+            index
+            for index, item in enumerate(members)
+            if isinstance(item, dict) and item.get("instance_name") == name
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(f"VM-HA cloud effect member {name} is not canonical")
+        return matches[0]
+
+    def _vm_ha_effect_permitted_paths(
+        self,
+        effect: str,
+        observation: t.Mapping[str, object],
+    ) -> tuple[str, ...]:
+        """Return the exhaustive path-level mutation contract for one cloud effect."""
+
+        if effect == "provision-shared-allocation":
+            return tuple(
+                sorted(
+                    {
+                        "/shared_allocation/allocation_id",
+                        "/shared_allocation/owner",
+                        "/shared_allocation/parent_id",
+                        "/shared_allocation/present",
+                        "/shared_allocation/private_subnet_id",
+                        "/shared_allocation/public_shape_present",
+                        "/shared_allocation/resource_revision",
+                    }
+                )
+            )
+        if effect == "attach-shared-allocation-active":
+            members = observation.get("members")
+            if not isinstance(members, list):
+                raise RuntimeError("VM-HA cloud observation has no member set")
+            spec = self._vm_ha_effect_spec
+            if spec is None or spec.vm_ha is None:
+                raise RuntimeError("VM-HA active effect has no bound specification")
+            active_name = f"{spec.name}-{spec.vm_ha.active_instance_index}"
+            active = [
+                index
+                for index, item in enumerate(members)
+                if isinstance(item, dict) and item.get("instance_name") == active_name
+            ]
+            if len(active) != 1:
+                raise RuntimeError("VM-HA active member observation is not canonical")
+            prefix = f"/members/{active[0]}"
+            return tuple(
+                sorted(
+                    {
+                        f"{prefix}/aliases",
+                        f"{prefix}/aliases/*",
+                        f"{prefix}/compute_revision",
+                        "/shared_allocation/owner",
+                        "/shared_allocation/owner/*",
+                        "/shared_allocation/resource_revision",
+                    }
+                )
+            )
+        if re.fullmatch(
+            r"(?:provision-.+|replace-failed-(?:[2-9][0-9]*-)?.+-create)-compute",
+            effect,
+        ):
+            index = self._vm_ha_effect_member_index(effect, observation)
+            prefix = f"/members/{index}"
+            return tuple(
+                sorted(
+                    {
+                        f"{prefix}/aliases",
+                        f"{prefix}/aliases/*",
+                        f"{prefix}/boot_disk_id",
+                        f"{prefix}/compute_id",
+                        f"{prefix}/compute_revision",
+                        f"{prefix}/network_interface_name",
+                        f"{prefix}/parent_id",
+                        f"{prefix}/present",
+                        f"{prefix}/primary_allocation_id",
+                        f"{prefix}/public_allocation_id",
+                        f"{prefix}/public_ip",
+                        f"{prefix}/subnet_id",
+                    }
+                )
+            )
+        if (
+            re.fullmatch(r"provision-.+-boot-disk", effect)
+            or re.fullmatch(
+                r"replace-failed-(?:[2-9][0-9]*-)?.+-(?:delete|create)-boot-disk",
+                effect,
+            )
+            or re.fullmatch(
+                r"provision-.+-eth[0-9]+-(?:public|primary)-allocation",
+                effect,
+            )
+            or effect
+            in {
+                "construct-authoritative-runtime-binding",
+                "resolve-authoritative-route-targets",
+            }
+        ):
+            return ()
+        if re.fullmatch(r"replace-failed-(?:[2-9][0-9]*-)?.+-delete-compute", effect):
+            index = self._vm_ha_effect_member_index(effect, observation)
+            prefix = f"/members/{index}"
+            return tuple(
+                sorted(
+                    {
+                        prefix,
+                        f"{prefix}/*",
+                        f"{prefix}/aliases/*",
+                    }
+                )
+            )
+        raise RuntimeError(f"VM-HA cloud effect {effect} is not registered")
+
+    @staticmethod
+    def _normalized_observation_string_set(
+        observation: tuple[tuple[str, str], ...],
+        path: str,
+    ) -> frozenset[str]:
+        values: list[str] = []
+        for leaf_path, encoded in observation:
+            if not re.fullmatch(rf"{re.escape(path)}/[0-9]+", leaf_path):
+                continue
+            value = json.loads(encoded)
+            if not isinstance(value, str) or not value:
+                raise RuntimeError("VM-HA alias observation is malformed")
+            values.append(value)
+        if len(values) != len(set(values)):
+            raise RuntimeError("VM-HA alias observation contains duplicates")
+        return frozenset(values)
+
+    @staticmethod
+    def _normalized_observation_value(
+        observation: tuple[tuple[str, str], ...],
+        path: str,
+    ) -> object:
+        values = [json.loads(encoded) for leaf_path, encoded in observation if leaf_path == path]
+        if len(values) != 1:
+            raise RuntimeError(f"VM-HA observation has no canonical value for {path}")
+        return values[0]
+
+    def _validate_vm_ha_effect_postcondition(
+        self,
+        effect: str,
+        observation: t.Mapping[str, object],
+    ) -> None:
+        journal = self._vm_ha_journal
+        transaction = None if journal is None else journal.state.transaction
+        guard = None if transaction is None else transaction.observation_guard
+        if guard is None or guard.effect != effect:
+            raise RuntimeError("VM-HA cloud effect lost its durable observation guard")
+        if re.fullmatch(r"replace-failed-(?:[2-9][0-9]*-)?.+-delete-compute", effect):
+            index = self._vm_ha_effect_member_index(effect, observation)
+            members = observation.get("members")
+            if not isinstance(members, list) or not isinstance(members[index], dict):
+                raise RuntimeError("VM-HA Compute delete observation is malformed")
+            prefix = f"/members/{index}"
+            if self._normalized_observation_value(
+                guard.pre_observation,
+                f"{prefix}/present",
+            ) is not True or members[index] != {
+                "instance_name": members[index].get("instance_name"),
+                "present": False,
+            }:
+                raise RuntimeError("VM-HA Compute delete footprint changed unexpectedly")
+            return
+        if re.fullmatch(
+            r"(?:provision-.+|replace-failed-(?:[2-9][0-9]*-)?.+-create)-compute",
+            effect,
+        ):
+            index = self._vm_ha_effect_member_index(effect, observation)
+            members = observation.get("members")
+            if not isinstance(members, list) or not isinstance(members[index], dict):
+                raise RuntimeError("VM-HA Compute create observation is malformed")
+            member = t.cast(dict[str, object], members[index])
+            instance_name = str(member.get("instance_name") or "")
+            prefix = f"/members/{index}"
+            if (
+                self._normalized_observation_value(
+                    guard.pre_observation,
+                    f"{prefix}/present",
+                )
+                is not False
+            ):
+                raise RuntimeError("VM-HA Compute create footprint did not begin absent")
+            before_aliases = self._normalized_observation_string_set(
+                guard.pre_observation,
+                f"{prefix}/aliases",
+            )
+            raw_aliases = member.get("aliases")
+            if not isinstance(raw_aliases, list) or any(
+                not isinstance(alias, str) or not alias for alias in raw_aliases
+            ):
+                raise RuntimeError("VM-HA Compute create footprint has malformed aliases")
+            aliases = frozenset(raw_aliases)
+            if len(aliases) != len(raw_aliases):
+                raise RuntimeError("VM-HA Compute create footprint has duplicate aliases")
+            shared = observation.get("shared_allocation")
+            if not isinstance(shared, dict):
+                raise RuntimeError("VM-HA Compute create footprint has no shared allocation")
+            expected_shared_id = self._vm_ha_resource_binding("shared-allocation-id")
+            expected_disk = self._vm_ha_resource_binding(f"disk:{instance_name}")
+            expected_primary = self._vm_ha_resource_binding(
+                f"primary-allocation:{instance_name}:eth0"
+            )
+            expected_public = self._vm_ha_resource_binding(
+                f"public-allocation:{instance_name}:eth0"
+            )
+            expected_subnet = str(shared.get("private_subnet_id") or "")
+            if (
+                not all(
+                    (
+                        expected_shared_id,
+                        expected_disk,
+                        expected_primary,
+                        expected_public,
+                        expected_subnet,
+                    )
+                )
+                or shared.get("allocation_id") != expected_shared_id
+            ):
+                raise RuntimeError("VM-HA Compute create footprint lacks durable dependencies")
+            expected = {
+                "aliases": before_aliases,
+                "boot_disk_id": expected_disk,
+                "network_interface_name": "eth0",
+                "parent_id": self.project_id or "",
+                "present": True,
+                "primary_allocation_id": expected_primary,
+                "public_allocation_id": expected_public,
+                "subnet_id": expected_subnet,
+            }
+            actual = {
+                "aliases": aliases,
+                "boot_disk_id": member.get("boot_disk_id"),
+                "network_interface_name": member.get("network_interface_name"),
+                "parent_id": member.get("parent_id"),
+                "present": member.get("present"),
+                "primary_allocation_id": member.get("primary_allocation_id"),
+                "public_allocation_id": member.get("public_allocation_id"),
+                "subnet_id": member.get("subnet_id"),
+            }
+            if actual != expected or any(
+                not isinstance(member.get(key), str) or not member.get(key)
+                for key in ("compute_id", "compute_revision")
+            ):
+                raise RuntimeError("VM-HA Compute create footprint changed unexpectedly")
+            return
+        if effect != "attach-shared-allocation-active":
+            return
+        members = observation.get("members")
+        spec = self._vm_ha_effect_spec
+        if not isinstance(members, list) or spec is None or spec.vm_ha is None:
+            raise RuntimeError("VM-HA active member observation is malformed")
+        shared = observation.get("shared_allocation")
+        if not isinstance(shared, dict):
+            raise RuntimeError("VM-HA shared allocation observation is malformed")
+        raw_owner = shared.get("owner")
+        allocation_id = self._vm_ha_resource_binding("shared-allocation-id")
+        if isinstance(raw_owner, dict) and allocation_id:
+            retained_owner = AllocationOwner(
+                str(raw_owner.get("compute_id") or ""),
+                str(raw_owner.get("network_interface_name") or ""),
+            )
+            if self._is_retained_vm_ha_owner(allocation_id, retained_owner):
+                matching_indices = [
+                    index
+                    for index, member in enumerate(members)
+                    if isinstance(member, dict)
+                    and member.get("compute_id") == retained_owner.instance_id
+                    and member.get("network_interface_name")
+                    == retained_owner.network_interface_name
+                ]
+                if len(matching_indices) != 1:
+                    raise RuntimeError("VM-HA retained owner observation is not canonical")
+                retained_index = matching_indices[0]
+                retained_member = members[retained_index]
+                assert isinstance(retained_member, dict)
+                raw_aliases = retained_member.get("aliases")
+                if not isinstance(raw_aliases, list) or any(
+                    not isinstance(alias, str) or not alias for alias in raw_aliases
+                ):
+                    raise RuntimeError("VM-HA retained owner aliases are malformed")
+                after_aliases = frozenset(raw_aliases)
+                before_aliases = self._normalized_observation_string_set(
+                    guard.pre_observation,
+                    f"/members/{retained_index}/aliases",
+                )
+                before_owner = AllocationOwner(
+                    str(
+                        self._normalized_observation_value(
+                            guard.pre_observation,
+                            "/shared_allocation/owner/compute_id",
+                        )
+                    ),
+                    str(
+                        self._normalized_observation_value(
+                            guard.pre_observation,
+                            "/shared_allocation/owner/network_interface_name",
+                        )
+                    ),
+                )
+                if (
+                    len(after_aliases) != len(raw_aliases)
+                    or allocation_id not in after_aliases
+                    or after_aliases != before_aliases
+                    or before_owner != retained_owner
+                ):
+                    raise RuntimeError("VM-HA retained owner changed during apply")
+                return
+        active_name = f"{spec.name}-{spec.vm_ha.active_instance_index}"
+        matching_indices = [
+            index
+            for index, member in enumerate(members)
+            if isinstance(member, dict) and member.get("instance_name") == active_name
+        ]
+        if len(matching_indices) != 1:
+            raise RuntimeError("VM-HA active member observation is not canonical")
+        index = matching_indices[0]
+        if not isinstance(members[index], dict):
+            raise RuntimeError("VM-HA active member observation is malformed")
+        raw_aliases = members[index].get("aliases")
+        if not isinstance(raw_aliases, list) or any(
+            not isinstance(alias, str) or not alias for alias in raw_aliases
+        ):
+            raise RuntimeError("VM-HA active alias observation is malformed")
+        after_aliases = frozenset(raw_aliases)
+        if len(after_aliases) != len(raw_aliases):
+            raise RuntimeError("VM-HA active alias observation contains duplicates")
+        before_aliases = self._normalized_observation_string_set(
+            guard.pre_observation,
+            f"/members/{index}/aliases",
+        )
+        if not allocation_id:
+            raise RuntimeError("VM-HA shared allocation identity is not durable")
+        if after_aliases != before_aliases | {allocation_id}:
+            raise RuntimeError("VM-HA shared-allocation attachment changed an unrelated alias")
+
+    def _begin_vm_ha_effect(self, effect: str) -> str | None:
+        journal = self._vm_ha_journal
+        if journal is None:
+            return None
+        observation = self._stable_vm_ha_effect_observation()
+        operation_id = journal.begin(
+            effect,
+            observation=observation,
+            permitted_paths=self._vm_ha_effect_permitted_paths(effect, observation),
+        )
+        transaction = journal.state.transaction
+        if (
+            transaction is not None
+            and transaction.accepted_cloud_operation_effect == effect
+            and transaction.accepted_cloud_operation_id is not None
+        ):
+            client = self._get_client()
+            if client is None:
+                raise RuntimeError("VM-HA accepted cloud operation cannot be resumed")
+            from nebius.api.nebius.common.v1 import (  # type: ignore
+                GetOperationRequest,
+                OperationServiceClient,
+            )
+
+            try:
+                accepted = (
+                    OperationServiceClient(client)
+                    .get(
+                        GetOperationRequest(id=transaction.accepted_cloud_operation_id),
+                        **vm_ha_request_kwargs(),
+                    )
+                    .wait()
+                )
+            except Exception as error:
+                if not operation_status_lookup_unsupported(error):
+                    raise
+            else:
+                wait_vm_ha_operation(accepted)
+        return operation_id
+
+    def _complete_vm_ha_effect(
+        self,
+        effect: str,
+        *,
+        resource_updates: t.Mapping[str, str] | None = None,
+    ) -> None:
+        journal = self._vm_ha_journal
+        if journal is None:
+            return
+        transaction = journal.state.transaction
+        if transaction is not None and effect in transaction.completed_effects:
+            journal.complete(effect, resource_updates=resource_updates)
+            return
+        observation = self._stable_vm_ha_effect_observation()
+        self._validate_vm_ha_effect_postcondition(effect, observation)
+        journal.complete(
+            effect,
+            resource_updates=resource_updates,
+            observation=observation,
+        )
+
+    @staticmethod
+    def _idempotency_kwargs(operation_id: str | None) -> dict[str, object]:
+        if not operation_id:
+            return {}
+        return {"metadata": (("x-idempotency-key", operation_id),)}
+
+    @staticmethod
+    def _canonical_observation_digest(value: object) -> str:
+        encoded = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _observation_resource_bindings(
+        observation: t.Mapping[str, object],
+    ) -> dict[str, str]:
+        bindings: dict[str, str] = {}
+        raw_members = observation.get("members", [])
+        if not isinstance(raw_members, list):
+            raise RuntimeError("VM-HA authoritative member observation is malformed")
+        for raw_member in raw_members:
+            if not isinstance(raw_member, dict) or not raw_member.get("present"):
+                continue
+            name = str(raw_member.get("instance_name") or "")
+            nic = str(raw_member.get("network_interface_name") or "")
+            for source, key in (
+                ("compute_id", f"compute:{name}"),
+                ("boot_disk_id", f"disk:{name}"),
+                ("primary_allocation_id", f"primary-allocation:{name}:{nic}"),
+                ("public_allocation_id", f"public-allocation:{name}:{nic}"),
+            ):
+                value = str(raw_member.get(source) or "")
+                if value:
+                    bindings[key] = value
+        shared = observation.get("shared_allocation")
+        if isinstance(shared, dict) and shared.get("present"):
+            allocation_id = str(shared.get("allocation_id") or "")
+            if allocation_id:
+                bindings["shared-allocation-id"] = allocation_id
+            owner = shared.get("owner")
+            if isinstance(owner, dict):
+                compute_id = str(owner.get("compute_id") or "")
+                nic = str(owner.get("network_interface_name") or "")
+                if compute_id and nic:
+                    bindings["shared-allocation-owner-compute"] = compute_id
+                    bindings["shared-allocation-owner-nic"] = nic
+        bindings["route-targets-digest"] = VMManager._canonical_observation_digest(
+            observation.get("route_targets", [])
+        )
+        return bindings
+
+    def _verify_vm_ha_transaction_preconditions(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+    ) -> None:
+        journal = self._vm_ha_journal
+        if journal is None or journal.state.transaction is None:
+            raise RuntimeError("VM-HA mutation has no durable transaction")
+        observation = self.observe_vm_ha_migration_state(spec, local_prefixes)
+        transaction = journal.state.transaction
+        normalized = normalize_vm_ha_observation(observation)
+        if transaction.pending_effect is None:
+            if transaction.observation and normalized != transaction.observation:
+                raise RuntimeError("VM-HA trusted cloud state changed before mutation")
+        else:
+            if transaction.observation_guard is None:
+                raise RuntimeError("VM-HA non-cloud effect cannot resume through provisioning")
+            try:
+                journal.state.begin_effect(
+                    transaction.pending_effect,
+                    observation=observation,
+                )
+            except ValueError as error:
+                raise RuntimeError(
+                    f"VM-HA pending effect observed unrelated cloud drift: {error}"
+                ) from error
+        cloud_effects = set(transaction.completed_effects) - {"prepare-service-account"}
+        if (
+            not cloud_effects
+            and transaction.pending_effect is None
+            and not transaction.observation
+            and (
+                self._canonical_observation_digest(observation) != transaction.current_state_digest
+            )
+        ):
+            raise RuntimeError("VM-HA approved current state changed before mutation")
+        observed_bindings = self._observation_resource_bindings(observation)
+        expected_bindings = vm_ha_effective_resource_bindings(dict(transaction.resource_bindings))
+        for key, value in expected_bindings.items():
+            if not vm_ha_resource_binding_matches_observation(
+                key,
+                value,
+                observed=observed_bindings,
+                expected=expected_bindings,
+            ):
+                raise RuntimeError(f"VM-HA transaction resource identity drifted: {key}")
+
+        state = journal.state
+        if state.status not in {
+            VMHALifecycleStatus.ACTIVATING,
+            VMHALifecycleStatus.ACTIVE,
+        }:
+            return
+        raw_members = observation.get("members", [])
+        if not isinstance(raw_members, list):
+            raise RuntimeError("VM-HA authoritative member observation is malformed")
+        observed_members = {
+            str(item.get("instance_name")): item
+            for item in raw_members
+            if isinstance(item, dict) and item.get("present")
+        }
+        for member in state.members:
+            current = observed_members.get(member.instance_name)
+            if current is None or {
+                "aliases": tuple(sorted(str(value) for value in current.get("aliases", []))),
+                "compute_id": str(current.get("compute_id") or ""),
+                "compute_revision": str(current.get("compute_revision") or ""),
+                "disk_id": str(current.get("boot_disk_id") or ""),
+                "network_interface_name": str(current.get("network_interface_name") or ""),
+                "primary_allocation_id": str(current.get("primary_allocation_id") or ""),
+                "public_allocation_id": str(current.get("public_allocation_id") or ""),
+                "public_ip": str(current.get("public_ip") or ""),
+                "subnet_id": str(current.get("subnet_id") or ""),
+            } != {
+                "aliases": member.alias_allocation_ids,
+                "compute_id": member.compute_id,
+                "compute_revision": member.compute_revision,
+                "disk_id": member.disk_id,
+                "network_interface_name": member.network_interface_name,
+                "primary_allocation_id": member.primary_allocation_id,
+                "public_allocation_id": member.public_allocation_id,
+                "public_ip": member.public_ip,
+                "subnet_id": member.network_interface_subnet_id,
+            }:
+                raise RuntimeError(
+                    f"VM-HA lifecycle member identity drifted: {member.instance_name}"
+                )
+
+    @staticmethod
+    def _is_vm_ha_activation_effect(effect: str | None) -> bool:
+        return effect is not None and vm_ha_activation_effect_is_host_only(effect)
+
+    @staticmethod
+    def _without_route_observation(
+        observation: tuple[tuple[str, str], ...],
+    ) -> tuple[tuple[str, str], ...]:
+        route_effect_paths = {
+            "/shared_allocation/resource_revision",
+        }
+        return tuple(
+            item
+            for item in observation
+            if not item[0].startswith("/routes") and item[0] not in route_effect_paths
+        )
+
+    @staticmethod
+    def _without_route_revisions(
+        observation: tuple[tuple[str, str], ...],
+    ) -> tuple[tuple[str, str], ...]:
+        """Remove only mutable revisions while retaining exact route identity."""
+
+        return tuple(
+            item for item in observation if re.fullmatch(r"/routes/\d+/revision", item[0]) is None
+        )
+
+    @staticmethod
+    def _serialized_route_targets(
+        targets: tuple[VMHARouteTarget, ...],
+    ) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                json.dumps(
+                    target.model_dump(mode="json"),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                for target in targets
+            )
+        )
+
+    def resume_vm_ha_activation(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+    ) -> VMProvisioningResult:
+        """Rebuild a bound activation view without replaying provisioning effects."""
+
+        journal = self._vm_ha_journal
+        if (
+            journal is None
+            or journal.state.record_version != 4
+            or journal.state.status is not VMHALifecycleStatus.ACTIVATING
+            or journal.state.transaction is None
+        ):
+            raise RuntimeError("VM-HA activation resume requires an exact v4 checkpoint")
+        state = journal.state
+        transaction = state.transaction
+        assert transaction is not None
+        if transaction.pending_effect is not None and not self._is_vm_ha_activation_effect(
+            transaction.pending_effect
+        ):
+            raise RuntimeError("VM-HA activation has an unknown pending effect")
+        if transaction.pending_effect is not None and transaction.observation_guard is not None:
+            raise RuntimeError("VM-HA activation effect unexpectedly carries a cloud guard")
+
+        try:
+            route_targets = tuple(
+                sorted(
+                    (
+                        VMHARouteTarget.model_validate(json.loads(value))
+                        for value in state.route_targets
+                    ),
+                    key=lambda target: (
+                        target.project_id,
+                        target.network_id,
+                        target.workload_subnet_id,
+                        target.route_table_id,
+                    ),
+                )
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError("VM-HA lifecycle route targets are malformed") from error
+        self._vm_ha_shared_allocation_id = state.allocation_id
+        self._vm_ha_route_targets = route_targets
+        self._vm_ha_effect_spec = spec
+        self._vm_ha_effect_prefixes = local_prefixes
+
+        before = self.observe_vm_ha_migration_state(spec, local_prefixes)
+        normalized = normalize_vm_ha_observation(before)
+        route_effect = "verify-active-forwarding-and-routes"
+        route_changes_authorized = bool(
+            transaction.pending_effect == route_effect
+            or route_effect in transaction.completed_effects
+        )
+        if route_changes_authorized:
+            current_non_route = self._without_route_observation(normalized)
+            trusted_non_route = self._without_route_observation(transaction.observation)
+            if current_non_route != trusted_non_route:
+                changed_paths = ", ".join(
+                    sorted(
+                        vm_ha_observation_changed_paths(
+                            trusted_non_route,
+                            current_non_route,
+                        )
+                    )
+                )
+                raise RuntimeError(
+                    f"VM-HA non-route cloud state changed during activation: {changed_paths}"
+                )
+        elif normalized != transaction.observation:
+            current_without_revisions = self._without_route_revisions(normalized)
+            trusted_without_revisions = self._without_route_revisions(transaction.observation)
+            if current_without_revisions != trusted_without_revisions:
+                raise RuntimeError("VM-HA cloud state changed before route activation")
+
+        observed_bindings = self._observation_resource_bindings(before)
+        for key, value in vm_ha_effective_resource_bindings(
+            dict(transaction.resource_bindings)
+        ).items():
+            if key == "route-runtime-id":
+                continue
+            if observed_bindings.get(key) != value:
+                raise RuntimeError(f"VM-HA activation resource identity drifted: {key}")
+
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA activation resume requires the Nebius SDK")
+        binding = self._build_vm_ha_runtime_binding(client, spec)
+        if (
+            binding.cluster_id != state.cluster_id
+            or binding.shared_allocation_id != state.allocation_id
+            or binding.route_runtime_id != state.route_runtime_id
+            or self._serialized_route_targets(binding.route_targets) != state.route_targets
+        ):
+            raise RuntimeError("VM-HA activation runtime binding changed")
+        bound_nodes = {node.node_id: node for node in binding.nodes}
+        for member in state.members:
+            node = bound_nodes.get(member.node_id)
+            if (
+                node is None
+                or node.compute_id != member.compute_id
+                or node.network_interface_name != member.network_interface_name
+                or node.role.value != member.role
+            ):
+                raise RuntimeError(
+                    f"VM-HA activation member binding changed: {member.instance_name}"
+                )
+        after = self.observe_vm_ha_migration_state(spec, local_prefixes)
+        if normalize_vm_ha_observation(after) != normalized:
+            raise RuntimeError("VM-HA cloud state changed during activation resume")
+        return VMProvisioningResult(
+            {member.instance_name: member.public_ip for member in state.members},
+            vm_ha_runtime_binding=binding,
+        )
 
     def get_ha_instance(self, instance_id: str) -> t.Any:
         """Read one Compute instance without permissive provisioning fallback."""
@@ -135,7 +995,14 @@ class VMManager:
             InstanceServiceClient,
         )
 
-        return InstanceServiceClient(client).get(GetInstanceRequest(id=instance_id)).wait()
+        return (
+            InstanceServiceClient(client)
+            .get(
+                GetInstanceRequest(id=instance_id),
+                **vm_ha_request_kwargs(),
+            )
+            .wait()
+        )
 
     def _get_ha_instance_by_name(self, client: t.Any, name: str) -> t.Any:
         """Resolve one HA Compute identity without treating SDK errors as absence."""
@@ -146,7 +1013,10 @@ class VMManager:
 
         instance = (
             InstanceServiceClient(client)
-            .get_by_name(GetByNameRequest(parent_id=self.project_id, name=name))
+            .get_by_name(
+                GetByNameRequest(parent_id=self.project_id, name=name),
+                **vm_ha_request_kwargs(),
+            )
             .wait()
         )
         instance_id = self._resource_id(instance)
@@ -157,7 +1027,62 @@ class VMManager:
             raise RuntimeError(f"VM-HA Compute {name} changed identity during re-read")
         return authoritative
 
-    def stop_ha_instance(self, instance_id: str) -> None:
+    def _get_ha_disk_by_name(self, client: t.Any, name: str) -> t.Any | None:
+        """Resolve one HA disk, treating only typed NOT_FOUND as absence."""
+
+        if not self.project_id:
+            raise RuntimeError("VM-HA disk lookup requires a project ID")
+        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+        from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+
+        try:
+            return (
+                DiskServiceClient(client)
+                .get_by_name(
+                    GetByNameRequest(parent_id=self.project_id, name=name),
+                    **vm_ha_request_kwargs(),
+                )
+                .wait()
+            )
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(f"VM-HA disk {name} could not be classified") from error
+
+    def _require_retained_allocation(
+        self,
+        allocation_client: t.Any,
+        allocation_id: str,
+        *,
+        require_detached: bool,
+    ) -> t.Any:
+        """Reread one exact retained allocation without name-based adoption."""
+
+        from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
+
+        try:
+            allocation = allocation_client.get(
+                GetAllocationRequest(id=allocation_id),
+                **vm_ha_request_kwargs(),
+            ).wait()
+        except Exception as error:
+            raise RuntimeError(
+                "VM-HA retained allocation disappeared during passive replacement"
+            ) from error
+        if self._resource_id(allocation) != allocation_id:
+            raise RuntimeError("VM-HA retained allocation identity changed")
+        parent_id = str(getattr(getattr(allocation, "metadata", None), "parent_id", "") or "")
+        if parent_id and parent_id != (self.project_id or ""):
+            raise RuntimeError("VM-HA retained allocation parent project changed")
+        if require_detached and self._allocation_is_attached(allocation):
+            raise RuntimeError("VM-HA retained allocation did not detach from the retired passive")
+        return allocation
+
+    def stop_ha_instance(
+        self,
+        instance_id: str,
+        operation_id: str | None = None,
+    ) -> None:
         """Request a Compute stop without accepting scaffold-mode success."""
         client = self._get_client()
         if client is None:
@@ -167,7 +1092,15 @@ class VMManager:
             StopInstanceRequest,
         )
 
-        InstanceServiceClient(client).stop(StopInstanceRequest(id=instance_id)).wait()
+        operation = (
+            InstanceServiceClient(client)
+            .stop(
+                StopInstanceRequest(id=instance_id),
+                **vm_ha_request_kwargs(operation_id),
+            )
+            .wait()
+        )
+        self._sync_vm_ha_operation(operation)
 
     def get_ha_allocation(self, allocation_id: str) -> t.Any:
         """Read one allocation without converting access failure into absence."""
@@ -179,29 +1112,52 @@ class VMManager:
             GetAllocationRequest,
         )
 
-        return AllocationServiceClient(client).get(GetAllocationRequest(id=allocation_id)).wait()
+        return (
+            AllocationServiceClient(client)
+            .get(
+                GetAllocationRequest(id=allocation_id),
+                **vm_ha_request_kwargs(),
+            )
+            .wait()
+        )
 
-    def set_ha_private_allocation(
+    def set_ha_private_alias(
         self,
         instance_id: str,
         network_interface_name: str,
-        allocation_id: str | None,
+        allocation_id: str,
+        present: bool,
+        operation_id: str | None = None,
     ) -> None:
-        """Idempotently set the exact private allocation on one instance NIC."""
+        """Idempotently add or remove one exact secondary alias on one NIC."""
         client = self._get_client()
         if client is None:
             raise RuntimeError("Nebius SDK client is unavailable for VM-HA fencing")
         from nebius.api.nebius.compute.v1 import (  # type: ignore
             InstanceServiceClient,
-            IPAddress,
+            IPAlias,
             UpdateInstanceRequest,
         )
 
+        from .vm_ha_cloud import (
+            clone_nebius_sdk_message,
+            network_interface_alias_allocation_ids,
+        )
+
         instance = self.get_ha_instance(instance_id)
-        spec = copy.deepcopy(getattr(instance, "spec", None))
-        metadata = copy.deepcopy(getattr(instance, "metadata", None))
-        if spec is None or metadata is None:
+        original_spec = getattr(instance, "spec", None)
+        original_metadata = getattr(instance, "metadata", None)
+        if original_spec is None or original_metadata is None:
             raise RuntimeError(f"Compute instance {instance_id} has no mutable spec metadata")
+        # Nebius SDK response messages are not deepcopy-safe: deserialized
+        # metadata and repeated NIC fields are cleared by deepcopy.
+        spec = clone_nebius_sdk_message(original_spec)
+        metadata = clone_nebius_sdk_message(original_metadata)
+        resource_version = str(getattr(metadata, "resource_version", "") or "")
+        if not resource_version.isdecimal() or int(resource_version) <= 0:
+            raise RuntimeError(
+                f"Compute instance {instance_id} has no positive resource-version precondition"
+            )
 
         interfaces = list(getattr(spec, "network_interfaces", []) or [])
         matching = [
@@ -216,20 +1172,33 @@ class VMManager:
             )
 
         index, interface = matching[0]
-        current_id = getattr(getattr(interface, "ip_address", None), "allocation_id", None)
-        normalized_current = str(current_id) if current_id else None
-        if normalized_current == allocation_id:
+        current_ids = network_interface_alias_allocation_ids(
+            interface,
+            description=f"Compute instance {instance_id} NIC {network_interface_name}",
+        )
+        if (allocation_id in current_ids) is present:
             return
 
-        updated_interface = copy.deepcopy(interface)
-        updated_interface.ip_address = (
-            IPAddress(allocation_id=allocation_id) if allocation_id else IPAddress()
+        updated_interface = clone_nebius_sdk_message(interface)
+        desired_ids = (
+            (*current_ids, allocation_id)
+            if present
+            else tuple(current_id for current_id in current_ids if current_id != allocation_id)
         )
+        updated_interface.aliases = [
+            IPAlias(allocation_id=current_id) for current_id in desired_ids
+        ]
         interfaces[index] = updated_interface
         spec.network_interfaces = interfaces
-        InstanceServiceClient(client).update(
-            UpdateInstanceRequest(metadata=metadata, spec=spec)
-        ).wait()
+        operation = (
+            InstanceServiceClient(client)
+            .update(
+                UpdateInstanceRequest(metadata=metadata, spec=spec),
+                **vm_ha_request_kwargs(operation_id),
+            )
+            .wait()
+        )
+        self._sync_vm_ha_operation(operation)
 
     def vm_ha_cloud_adapter(
         self,
@@ -245,20 +1214,142 @@ class VMManager:
             instance_reader=self.get_ha_instance,
             instance_stopper=self.stop_ha_instance,
             allocation_reader=self.get_ha_allocation,
-            allocation_setter=self.set_ha_private_allocation,
+            alias_allocation_setter=self.set_ha_private_alias,
             attempts=attempts,
             poll_interval=poll_interval,
             sleeper=sleeper,
         )
 
     @staticmethod
-    def _vm_ha_credential_references(node_id: str) -> VMHACredentialReferences:
-        base = f"/etc/nebius-vpngw/vm-ha/{node_id}"
-        return VMHACredentialReferences(
-            certificate_authority="/etc/nebius-vpngw/vm-ha/ca.crt",
-            certificate=f"{base}.crt",
-            private_key=f"{base}.key",
+    def _vm_ha_nebius_credentials_path() -> str:
+        return "/etc/nebius-vpngw/vm-ha/nebius-credentials.json"
+
+    def _vm_ha_migration_route_bindings(
+        self,
+        spec: GatewayGroupSpec,
+        route_targets: tuple[VMHARouteTarget, ...],
+        shared_allocation_id: str,
+    ) -> tuple[VMHAMigrationRouteBinding, ...]:
+        """Recover exact approval-bound routes from the v4 journal.
+
+        A later apply observes routes after ordinary-to-HA migration, when their
+        next hop is already the shared allocation.  Carry those exact records to
+        both members so either node can independently materialize the same
+        durable route authority after exact cloud reproof.
+        """
+
+        journal = self._vm_ha_journal
+        transaction = None if journal is None else journal.state.transaction
+        if spec.vm_ha is None or transaction is None or not transaction.observation:
+            return ()
+
+        active_index = spec.vm_ha.active_instance_index
+        member_path = f"/members/{active_index}"
+        expected_instance_name = f"{spec.name}-{active_index}"
+        observed_instance_name = self._normalized_observation_value(
+            transaction.observation,
+            f"{member_path}/instance_name",
         )
+        primary_allocation_id = self._normalized_observation_value(
+            transaction.observation,
+            f"{member_path}/primary_allocation_id",
+        )
+        if (
+            observed_instance_name != expected_instance_name
+            or not isinstance(primary_allocation_id, str)
+            or not primary_allocation_id
+        ):
+            raise RuntimeError("VM-HA approved active primary allocation is malformed")
+
+        targets_by_table = {target.route_table_id: target for target in route_targets}
+        route_indexes = sorted(
+            {
+                int(matched.group(1))
+                for path, _value in transaction.observation
+                if (matched := re.fullmatch(r"/routes/([0-9]+)/route_id", path)) is not None
+            }
+        )
+        bindings: list[VMHAMigrationRouteBinding] = []
+        for index in route_indexes:
+            base = f"/routes/{index}"
+            values = {
+                field: self._normalized_observation_value(
+                    transaction.observation,
+                    f"{base}/{field}",
+                )
+                for field in (
+                    "allocation_id",
+                    "name",
+                    "prefix",
+                    "revision",
+                    "route_id",
+                    "route_table_id",
+                )
+            }
+            if any(not isinstance(value, str) for value in values.values()):
+                raise RuntimeError("VM-HA approved route observation is malformed")
+            string_values = t.cast(dict[str, str], values)
+            if string_values["allocation_id"] not in {
+                primary_allocation_id,
+                shared_allocation_id,
+            }:
+                continue
+            prefix = string_values["prefix"]
+            route_target = targets_by_table.get(string_values["route_table_id"])
+            if route_target is None:
+                raise RuntimeError("VM-HA approved migration route target is undeclared")
+            legacy_name = f"vpngw-{prefix.replace('/', '-')}"[:63]
+            if string_values["allocation_id"] == primary_allocation_id:
+                if string_values["name"] != legacy_name:
+                    continue
+            elif string_values["name"] not in self._vm_ha_managed_route_names(
+                cluster_id=spec.vm_ha.cluster_id,
+                route_target=route_target,
+                prefix=prefix,
+                allocation_id=shared_allocation_id,
+            ):
+                continue
+            try:
+                bindings.append(
+                    VMHAMigrationRouteBinding(
+                        route_id=string_values["route_id"],
+                        name=string_values["name"],
+                        prefix=prefix,
+                        allocation_id=string_values["allocation_id"],
+                        resource_revision=string_values["revision"],
+                        route_target=route_target,
+                    )
+                )
+            except ValueError as error:
+                raise RuntimeError("VM-HA approved migration route is malformed") from error
+        return tuple(
+            sorted(
+                bindings,
+                key=lambda route: (
+                    route.route_target.route_table_id,
+                    route.prefix,
+                    route.route_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _vm_ha_managed_route_names(
+        *,
+        cluster_id: str,
+        route_target: VMHARouteTarget,
+        prefix: str,
+        allocation_id: str,
+    ) -> frozenset[str]:
+        """Return exact canonical static/BGP names for one managed route identity."""
+
+        names: set[str] = set()
+        for route_kind in ("bgp", "static"):
+            identity = (
+                f"{cluster_id}:{route_target.route_table_id}:{prefix}:{route_kind}:{allocation_id}"
+            )
+            names.add(f"vpngw-ha-{hashlib.sha256(identity.encode()).hexdigest()[:24]}")
+        return frozenset(names)
 
     def _build_vm_ha_runtime_binding(
         self,
@@ -273,11 +1364,16 @@ class VMManager:
         allocation = self.get_ha_allocation(allocation_id)
         if self._resource_id(allocation) != allocation_id:
             raise RuntimeError("VM-HA shared allocation changed identity during final re-read")
-        from .vm_ha_cloud import AllocationOwner, allocation_observation
+        from .vm_ha_cloud import (
+            AllocationOwner,
+            allocation_observation,
+            network_interface_alias_allocation_ids,
+        )
 
         allocation_owner = allocation_observation(allocation_id, allocation).owner
 
         nodes: list[VMHARuntimeNodeBinding] = []
+        alias_owners: list[AllocationOwner] = []
         for member in vm_ha.members:
             instance_name = f"{spec.name}-{member.instance_index}"
             instance = self._get_ha_instance_by_name(client, instance_name)
@@ -290,17 +1386,12 @@ class VMManager:
             if len(interfaces) != 1 or not getattr(interfaces[0], "name", None):
                 raise RuntimeError(f"VM-HA {instance_name} must have one authoritative NIC")
             interface_name = str(interfaces[0].name)
-            compute_allocation_id = str(
-                getattr(getattr(interfaces[0], "ip_address", None), "allocation_id", None) or ""
+            alias_allocation_ids = network_interface_alias_allocation_ids(
+                interfaces[0],
+                description=f"VM-HA {instance_name} NIC {interface_name}",
             )
-            if member.role.value == "active" and compute_allocation_id != allocation_id:
-                raise RuntimeError(
-                    "VM-HA configured active Compute NIC does not own the shared allocation"
-                )
-            if member.role.value != "active" and compute_allocation_id == allocation_id:
-                raise RuntimeError(
-                    "VM-HA passive Compute NIC conflicts with shared allocation ownership"
-                )
+            if allocation_id in alias_allocation_ids:
+                alias_owners.append(AllocationOwner(compute_id, interface_name))
             status_interfaces = list(
                 getattr(getattr(instance, "status", None), "network_interfaces", []) or []
             )
@@ -317,14 +1408,22 @@ class VMManager:
                     compute_id=compute_id,
                     network_interface_name=interface_name,
                     peer_endpoint=f"{endpoint_address}:9443",
-                    credentials=self._vm_ha_credential_references(member.node_id),
+                    nebius_credentials_path=self._vm_ha_nebius_credentials_path(),
                 )
             )
 
+        if len(alias_owners) != 1:
+            raise RuntimeError("VM-HA passive Compute NIC conflicts with shared alias ownership")
+        if allocation_owner != alias_owners[0]:
+            raise RuntimeError("VM-HA shared allocation owner does not match the exact member NIC")
         active = next(node for node in nodes if node.role is VMHARole.ACTIVE)
-        if allocation_owner != AllocationOwner(
+        configured_active_owner = AllocationOwner(
             active.compute_id,
             active.network_interface_name,
+        )
+        if allocation_owner != configured_active_owner and (
+            allocation_owner is None
+            or not self._is_retained_vm_ha_owner(allocation_id, allocation_owner)
         ):
             raise RuntimeError("VM-HA shared allocation is not exact on configured active")
         final_allocation = self.get_ha_allocation(allocation_id)
@@ -339,6 +1438,9 @@ class VMManager:
             shared_allocation_id=allocation_id,
             nodes=t.cast(tuple[VMHARuntimeNodeBinding, VMHARuntimeNodeBinding], tuple(nodes)),
             route_targets=route_targets,
+            migration_routes=self._vm_ha_migration_route_bindings(
+                spec, route_targets, allocation_id
+            ),
             route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
                 vm_ha.cluster_id, allocation_id, route_targets
             ),
@@ -347,6 +1449,238 @@ class VMManager:
             static_routes_digest=digests.static_routes,
             bgp_policy_digest=digests.bgp_policy,
         )
+
+    @staticmethod
+    def _instance_boot_disk_id(instance: t.Any) -> str:
+        boot_disk = getattr(getattr(instance, "spec", None), "boot_disk", None)
+        existing = getattr(boot_disk, "existing_disk", None)
+        return str(getattr(existing, "id", None) or getattr(boot_disk, "disk_id", None) or "")
+
+    @staticmethod
+    def _metadata_revision(resource: t.Any) -> str:
+        return str(getattr(getattr(resource, "metadata", None), "resource_version", "") or "")
+
+    def observe_vm_ha_migration_state(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+    ) -> dict[str, object]:
+        """Return a canonical, secret-free approval observation of cloud truth."""
+
+        if spec.vm_ha is None or not self.project_id:
+            raise RuntimeError("VM-HA approval observation requires exact HA intent")
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA approval observation requires the Nebius SDK")
+        existing = self._discover_vm_ha_members(client, spec)
+        from .vm_ha_cloud import allocation_observation, network_interface_alias_allocation_ids
+
+        members: list[dict[str, object]] = []
+        for member in sorted(spec.vm_ha.members, key=lambda item: item.instance_index):
+            name = f"{spec.name}-{member.instance_index}"
+            observed = existing.get(name)
+            if observed is None:
+                members.append({"instance_name": name, "present": False})
+                continue
+            instance, public_ip = observed
+            metadata = getattr(instance, "metadata", None)
+            interfaces = list(
+                getattr(getattr(instance, "spec", None), "network_interfaces", []) or []
+            )
+            if len(interfaces) != 1:
+                raise RuntimeError(f"VM-HA approval found ambiguous NICs on {name}")
+            interface = interfaces[0]
+            nic_name = str(getattr(interface, "name", "") or "")
+            if not nic_name:
+                raise RuntimeError(f"VM-HA approval found an unnamed NIC on {name}")
+            members.append(
+                {
+                    "aliases": list(
+                        network_interface_alias_allocation_ids(
+                            interface,
+                            description=f"VM-HA approval {name} NIC {nic_name}",
+                        )
+                    ),
+                    "boot_disk_id": self._instance_boot_disk_id(instance),
+                    "compute_id": self._resource_id(instance),
+                    "compute_revision": self._metadata_revision(instance),
+                    "instance_name": name,
+                    "network_interface_name": nic_name,
+                    "parent_id": str(getattr(metadata, "parent_id", "") or ""),
+                    "primary_allocation_id": str(
+                        getattr(getattr(interface, "ip_address", None), "allocation_id", "") or ""
+                    ),
+                    "public_allocation_id": str(
+                        getattr(
+                            getattr(interface, "public_ip_address", None),
+                            "allocation_id",
+                            "",
+                        )
+                        or ""
+                    ),
+                    "public_ip": public_ip,
+                    "subnet_id": str(getattr(interface, "subnet_id", "") or ""),
+                    "state": instance_cloud_state(instance).value,
+                    "present": True,
+                }
+            )
+
+        allocation_name = f"{spec.name}-{spec.vm_ha.cluster_id}-shared-private-ip"
+        allocation = self._find_ha_allocation_by_name(
+            self._resolve_client_apis(client)[3], allocation_name
+        )
+        shared: dict[str, object] = {
+            "allocation_name": allocation_name,
+            "present": allocation is not None,
+        }
+        if allocation is not None:
+            allocation_id = self._resource_id(allocation)
+            if not allocation_id:
+                raise RuntimeError("VM-HA approval allocation has no identity")
+            metadata = getattr(allocation, "metadata", None)
+            allocation_spec = getattr(allocation, "spec", None)
+            private = getattr(allocation_spec, "ipv4_private", None)
+            public_present = _protobuf_field_present(allocation_spec, "ipv4_public")
+            owner = allocation_observation(allocation_id, allocation).owner
+            shared.update(
+                {
+                    "allocation_id": allocation_id,
+                    "parent_id": str(getattr(metadata, "parent_id", "") or ""),
+                    "private_subnet_id": str(getattr(private, "subnet_id", "") or ""),
+                    "public_shape_present": public_present,
+                    "resource_revision": self._metadata_revision(allocation),
+                    "owner": (
+                        None
+                        if owner is None
+                        else {
+                            "compute_id": owner.instance_id,
+                            "network_interface_name": owner.network_interface_name,
+                        }
+                    ),
+                }
+            )
+
+        route_targets = self._resolve_vm_ha_route_targets(client, spec, local_prefixes)
+        from .route_manager import NebiusSDKRouteBackend, RouteManager
+
+        backend = NebiusSDKRouteBackend(client)
+        route_rows: list[dict[str, object]] = []
+        for target in route_targets:
+            backend.verify_target(target)
+            for route in backend._raw_routes(target.route_table_id):
+                prefix = RouteManager._route_destination_network(route)
+                labels = backend._route_labels(route)
+                route_rows.append(
+                    {
+                        "allocation_id": str(
+                            RouteManager._route_next_hop_allocation_id(route) or ""
+                        ),
+                        "authority_labels": {
+                            key: labels[key]
+                            for key in sorted(backend._AUTHORITY_LABEL_KEYS)
+                            if key in labels
+                        },
+                        "name": RouteManager._metadata_name(route),
+                        "prefix": "" if prefix is None else str(prefix),
+                        "route_id": RouteManager._metadata_id(route),
+                        "route_table_id": target.route_table_id,
+                        "revision": self._metadata_revision(route),
+                    }
+                )
+        route_rows.sort(
+            key=lambda item: (
+                str(item["route_table_id"]),
+                str(item["prefix"]),
+                str(item["route_id"]),
+            )
+        )
+        return {
+            "members": members,
+            "project_id": self.project_id,
+            "routes": route_rows,
+            "route_targets": [target.model_dump(mode="json") for target in route_targets],
+            "shared_allocation": shared,
+        }
+
+    def build_vm_ha_lifecycle_members(
+        self,
+        spec: GatewayGroupSpec,
+        public_targets: t.Mapping[str, str],
+    ) -> tuple[VMHALifecycleMember, VMHALifecycleMember]:
+        """Authoritatively reread every persisted member identity after provisioning."""
+
+        if spec.vm_ha is None:
+            raise RuntimeError("VM-HA lifecycle binding requires explicit HA")
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA lifecycle binding requires the Nebius SDK")
+        from .vm_ha_cloud import network_interface_alias_allocation_ids
+
+        members: list[VMHALifecycleMember] = []
+        for member in sorted(spec.vm_ha.members, key=lambda item: item.instance_index):
+            name = f"{spec.name}-{member.instance_index}"
+            instance = self._get_ha_instance_by_name(client, name)
+            interfaces = list(
+                getattr(getattr(instance, "spec", None), "network_interfaces", []) or []
+            )
+            if len(interfaces) != 1:
+                raise RuntimeError(f"VM-HA lifecycle found ambiguous NICs on {name}")
+            interface = interfaces[0]
+            members.append(
+                VMHALifecycleMember(
+                    instance_index=member.instance_index,
+                    instance_name=name,
+                    node_id=member.node_id,
+                    role=member.role.value,
+                    compute_id=self._resource_id(instance) or "",
+                    network_interface_name=str(getattr(interface, "name", "") or ""),
+                    public_ip=str(public_targets.get(name, "") or ""),
+                    compute_revision=self._metadata_revision(instance),
+                    disk_id=self._instance_boot_disk_id(instance),
+                    network_interface_subnet_id=str(getattr(interface, "subnet_id", "") or ""),
+                    primary_allocation_id=str(
+                        getattr(getattr(interface, "ip_address", None), "allocation_id", "") or ""
+                    ),
+                    public_allocation_id=str(
+                        getattr(
+                            getattr(interface, "public_ip_address", None),
+                            "allocation_id",
+                            "",
+                        )
+                        or ""
+                    ),
+                    alias_allocation_ids=network_interface_alias_allocation_ids(
+                        interface,
+                        description=f"VM-HA lifecycle {name}",
+                    ),
+                )
+            )
+        return t.cast(tuple[VMHALifecycleMember, VMHALifecycleMember], tuple(members))
+
+    def finalize_vm_ha_provisioning(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+        public_targets: t.Mapping[str, str],
+    ) -> tuple[VMHALifecycleMember, VMHALifecycleMember]:
+        """Freeze one stable, transaction-bound aggregate before activation staging."""
+
+        self._vm_ha_effect_spec = spec
+        self._vm_ha_effect_prefixes = local_prefixes
+        before = self._stable_vm_ha_effect_observation()
+        self._verify_vm_ha_transaction_preconditions(spec, local_prefixes)
+        members = self.build_vm_ha_lifecycle_members(spec, public_targets)
+        after = self._stable_vm_ha_effect_observation()
+        if before != after:
+            raise RuntimeError("VM-HA cloud state changed during final provisioning proof")
+        journal = self._vm_ha_journal
+        if (
+            journal is None
+            or journal.state.transaction is None
+            or normalize_vm_ha_observation(after) != journal.state.transaction.observation
+        ):
+            raise RuntimeError("VM-HA final provisioning proof does not match the transaction")
+        return members
 
     def _resolve_vm_ha_route_targets(
         self,
@@ -367,7 +1701,8 @@ class VMManager:
 
         def observe() -> tuple[VMHARouteTarget, ...]:
             observed = subnet_client.list_by_network(
-                ListSubnetsByNetworkRequest(network_id=network_id)
+                ListSubnetsByNetworkRequest(network_id=network_id),
+                **vm_ha_request_kwargs(),
             ).wait()
             return route_manager.resolve_vm_ha_route_targets(
                 getattr(observed, "items", ()) or (),
@@ -390,23 +1725,94 @@ class VMManager:
         active_network_interface_name: str,
     ) -> None:
         """Attach only from detached state; provisioning never performs a takeover."""
-        from .vm_ha_cloud import AllocationOwner, allocation_observation
+        from .vm_ha_cloud import allocation_observation
 
         expected = AllocationOwner(active_compute_id, active_network_interface_name)
+        effect = "attach-shared-allocation-active"
+        operation_id = self._begin_vm_ha_effect(effect)
         observed = allocation_observation(
             allocation_id,
             self.get_ha_allocation(allocation_id),
         ).owner
         if observed == expected:
+            self._complete_vm_ha_effect(
+                effect,
+                resource_updates={
+                    "shared-allocation-owner-compute": active_compute_id,
+                    "shared-allocation-owner-nic": active_network_interface_name,
+                },
+            )
             return
         if observed is not None:
+            if self._is_retained_vm_ha_owner(allocation_id, observed):
+                self._complete_vm_ha_effect(
+                    effect,
+                    resource_updates={
+                        "shared-allocation-owner-compute": observed.instance_id,
+                        "shared-allocation-owner-nic": observed.network_interface_name,
+                    },
+                )
+                return
             raise RuntimeError(
                 "VM-HA shared allocation is already attached outside configured active"
             )
-        self.set_ha_private_allocation(
+        self.set_ha_private_alias(
             active_compute_id,
             active_network_interface_name,
             allocation_id,
+            True,
+            operation_id,
+        )
+        confirmed = allocation_observation(
+            allocation_id,
+            self.get_ha_allocation(allocation_id),
+        ).owner
+        if confirmed != expected:
+            raise RuntimeError("VM-HA shared allocation attachment postcondition was not observed")
+        self._complete_vm_ha_effect(
+            effect,
+            resource_updates={
+                "shared-allocation-owner-compute": active_compute_id,
+                "shared-allocation-owner-nic": active_network_interface_name,
+            },
+        )
+
+    def _is_retained_vm_ha_owner(
+        self,
+        allocation_id: str,
+        owner: t.Any,
+    ) -> bool:
+        """Accept one exact transaction-bound owner during managed apply/resume."""
+
+        journal = self._vm_ha_journal
+        if (
+            journal is None
+            or journal.state.status
+            not in {
+                VMHALifecycleStatus.PROVISIONING,
+                VMHALifecycleStatus.ACTIVATING,
+            }
+            or journal.state.allocation_id != allocation_id
+            or journal.state.transaction is None
+            or journal.state.transaction.predecessor_sha256 is None
+        ):
+            return False
+        compute_id = str(getattr(owner, "instance_id", "") or "")
+        nic_name = str(getattr(owner, "network_interface_name", "") or "")
+        if not compute_id or not nic_name:
+            return False
+        bindings = vm_ha_effective_resource_bindings(
+            dict(journal.state.transaction.resource_bindings)
+        )
+        if (
+            bindings.get("shared-allocation-id") != allocation_id
+            or bindings.get("shared-allocation-owner-compute") != compute_id
+            or bindings.get("shared-allocation-owner-nic") != nic_name
+        ):
+            return False
+        return any(
+            member.compute_id == compute_id and member.network_interface_name == nic_name
+            for member in journal.state.members
         )
 
     def check_changes(self, spec: GatewayGroupSpec) -> list[tuple[str, t.Any]]:
@@ -1407,7 +2813,8 @@ class VMManager:
             or (
                 lifecycle_state.status is not self._former_vm_ha_lifecycle.status
                 and not (
-                    self._former_vm_ha_lifecycle.status is VMHALifecycleStatus.ACTIVE
+                    self._former_vm_ha_lifecycle.status
+                    in {VMHALifecycleStatus.ACTIVATING, VMHALifecycleStatus.ACTIVE}
                     and lifecycle_state.status is VMHALifecycleStatus.REMOVAL_IN_PROGRESS
                 )
             )
@@ -1476,16 +2883,19 @@ class VMManager:
         *,
         policy: SSHTrustPolicy | None = None,
         username: str = "ubuntu",
+        probe_timeout: float = 10.0,
     ) -> None:
         """Verify every existing member's exact pin without changing remote state."""
 
+        if not math.isfinite(probe_timeout) or probe_timeout <= 0:
+            raise ValueError("VM-HA SSH probe timeout must be finite and positive")
         selected_policy = policy or self._ssh_policy
         if selected_policy is None:
             raise RuntimeError("VM-HA existing-member verification requires an SSH policy")
         for name, public_ip in existing.items():
             ssh_base = build_openssh_base_command(
                 key_path=self._management_key_path,
-                connect_timeout=5,
+                connect_timeout=max(1, min(5, math.ceil(probe_timeout))),
                 policy=selected_policy,
                 hostname=name,
             )
@@ -1494,7 +2904,7 @@ class VMManager:
                 result = subprocess.run(
                     ssh_base + [f"{username}@{public_ip}", "true"],
                     capture_output=True,
-                    timeout=10,
+                    timeout=probe_timeout,
                 )
             except Exception as error:
                 raise RuntimeError(
@@ -1511,6 +2921,61 @@ class VMManager:
                     f"SSH host identity verification failed for existing VM-HA member {name}"
                 )
             raise RuntimeError(f"Existing VM-HA member {name} is unreachable before cloud mutation")
+
+    def _wait_for_vm_ha_member_ssh(
+        self,
+        name: str,
+        public_ip: str,
+        *,
+        username: str,
+        timeout: float = 300,
+    ) -> None:
+        """Wait until one newly created, pinned member accepts management SSH."""
+
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("VM-HA SSH readiness timeout must be finite and positive")
+        deadline = time.monotonic() + timeout
+        last_error: RuntimeError | None = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Replacement VM-HA member {name} did not reach pinned SSH readiness"
+                ) from last_error
+            try:
+                self.verify_vm_ha_existing_identities(
+                    {name: public_ip},
+                    username=username,
+                    probe_timeout=min(10.0, remaining),
+                )
+                return
+            except RuntimeError as error:
+                if "identity verification failed" in str(error).lower():
+                    raise
+                last_error = error
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Replacement VM-HA member {name} did not reach pinned SSH readiness"
+                ) from last_error
+            time.sleep(min(5.0, remaining))
+
+    def wait_for_vm_ha_member_ssh(
+        self,
+        name: str,
+        public_ip: str,
+        *,
+        username: str,
+        timeout: float = 300,
+    ) -> None:
+        """Wait for one exact pinned VM-HA management endpoint."""
+
+        self._wait_for_vm_ha_member_ssh(
+            name,
+            public_ip,
+            username=username,
+            timeout=timeout,
+        )
 
     @staticmethod
     def _render_vm_ha_enrollment_cloud_init(
@@ -1540,7 +3005,7 @@ class VMManager:
             )
             .replace(
                 sshd_anchor,
-                sshd_anchor + "            HostKey /etc/ssh/ssh_host_vpngw_key\n",
+                sshd_anchor + f"            HostKey {VM_HA_SSH_HOST_KEY_PATH}\n",
                 1,
             )
         )
@@ -1809,16 +3274,16 @@ class VMManager:
         except Exception:
             pass
 
-    @staticmethod
-    def _sync_vm_ha_operation(operation: t.Any) -> None:
+    def _sync_vm_ha_operation(self, operation: t.Any) -> None:
         """Synchronize an HA mutation without swallowing SDK ambiguity."""
-        if hasattr(operation, "sync_wait"):
-            operation.sync_wait()
-            return
-        if hasattr(operation, "wait"):
-            operation.wait()
-            return
-        raise RuntimeError("VM-HA allocation create returned no waitable operation")
+        journal = self._vm_ha_journal
+        if journal is not None and journal.state.transaction is not None:
+            effect = journal.state.transaction.pending_effect
+            cloud_operation_id = str(getattr(operation, "id", "") or "")
+            if not effect or not cloud_operation_id:
+                raise RuntimeError("VM-HA mutation returned no durable operation identity")
+            journal.record_cloud_operation(effect, cloud_operation_id)
+        wait_vm_ha_operation(operation)
 
     @staticmethod
     def _resource_state(resource: t.Any) -> str | None:
@@ -1922,9 +3387,15 @@ class VMManager:
 
             for parent in parents_to_try:
                 try:
-                    request = GetImageLatestByFamilyRequest(
-                        image_family=provisioning.boot_image,
-                        **({"parent_id": parent} if parent else {}),
+                    request = (
+                        GetImageLatestByFamilyRequest(
+                            image_family=provisioning.boot_image,
+                            parent_id=parent,
+                        )
+                        if parent
+                        else GetImageLatestByFamilyRequest(
+                            image_family=provisioning.boot_image,
+                        )
                     )
                     image = image_client.get_latest_by_family(request).wait()
                     candidate_id = self._resource_id(image)
@@ -1967,9 +3438,20 @@ class VMManager:
         disk_client: t.Any,
         create_request: t.Any,
         disk_name: str,
+        operation_id: str | None = None,
     ) -> str | None:
-        operation = disk_client.create(create_request).wait()
-        self._sync_operation(operation)
+        operation = disk_client.create(
+            create_request,
+            **(
+                vm_ha_request_kwargs(operation_id)
+                if operation_id
+                else self._idempotency_kwargs(operation_id)
+            ),
+        ).wait()
+        if operation_id:
+            self._sync_vm_ha_operation(operation)
+        else:
+            self._sync_operation(operation)
         resource = getattr(getattr(operation, "result", None), "resource", None)
         return self._resource_id(resource) or self._lookup_boot_disk_id(disk_client, disk_name)
 
@@ -2044,12 +3526,20 @@ class VMManager:
     ) -> tuple[str, str | None]:
         boot_disk_name = f"{inst_name}-boot"
         boot_disk_id = None
+        effect = f"provision-{inst_name}-boot-disk"
+        binding_key = f"disk:{inst_name}"
+        expected_disk_id = self._vm_ha_resource_binding(binding_key)
+        operation_id = self._begin_vm_ha_effect(effect) if spec.vm_ha is not None else None
 
         try:
             from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
 
             disk_client = DiskServiceClient(client)  # type: ignore
-            if not recreate:
+            if expected_disk_id:
+                boot_disk_id = self._resolve_existing_boot_disk_id(disk_client, boot_disk_name)
+                if boot_disk_id != expected_disk_id:
+                    raise RuntimeError(f"VM-HA boot disk identity changed for {inst_name}")
+            elif not recreate and spec.vm_ha is None:
                 boot_disk_id = self._resolve_existing_boot_disk_id(disk_client, boot_disk_name)
 
             if not boot_disk_id:
@@ -2073,6 +3563,7 @@ class VMManager:
                         disk_client,
                         create_request,
                         boot_disk_name,
+                        operation_id,
                     )
                 except Exception as e:
                     message = str(e)
@@ -2090,6 +3581,7 @@ class VMManager:
                                     disk_client,
                                     create_request,
                                     boot_disk_name,
+                                    operation_id,
                                 )
                             except Exception as retry_err:
                                 print(f"[VMManager] Disk creation retry failed: {retry_err}")
@@ -2099,6 +3591,8 @@ class VMManager:
                     else:
                         print(f"[VMManager] boot disk create failed: {e}")
         except Exception:
+            if spec.vm_ha is not None:
+                raise
             boot_disk_id = self._ensure_boot_disk_legacy(
                 disk_api,
                 spec,
@@ -2106,6 +3600,13 @@ class VMManager:
                 provisioning,
             )
 
+        if spec.vm_ha is not None:
+            if not boot_disk_id:
+                raise RuntimeError(f"VM-HA boot disk {boot_disk_name} has no identity")
+            self._complete_vm_ha_effect(
+                effect,
+                resource_updates={binding_key: boot_disk_id},
+            )
         return boot_disk_name, boot_disk_id
 
     @staticmethod
@@ -2253,6 +3754,40 @@ class VMManager:
             "(best effort only)."
         )
 
+    def _validate_vm_ha_replayed_public_allocation(
+        self,
+        alloc_client: t.Any,
+        alloc_obj: t.Any,
+        *,
+        alloc_name: str,
+        subnet_id: str,
+        desired_ip: str,
+    ) -> t.Any:
+        """Validate the exact unattached public allocation after create replay."""
+
+        alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
+        metadata = getattr(alloc_obj, "metadata", None)
+        spec = getattr(alloc_obj, "spec", None)
+        ipv4_public = getattr(spec, "ipv4_public", None) if spec is not None else None
+        if (
+            self._allocation_name(alloc_obj) != alloc_name
+            or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+            or ipv4_public is None
+            or getattr(spec, "ipv4_private", None) is not None
+            or str(getattr(ipv4_public, "subnet_id", "") or "") != subnet_id
+        ):
+            raise RuntimeError(f"VM-HA public allocation {alloc_name} has a foreign resource shape")
+        state = self._allocation_state(alloc_obj)
+        if not state or state.rsplit(".", 1)[-1].upper() != "ALLOCATED":
+            raise RuntimeError(f"VM-HA public allocation {alloc_name} is not stably allocated")
+        return self._validate_requested_public_allocation(
+            alloc_client,
+            alloc_obj,
+            desired_ip=desired_ip,
+            alloc_name=alloc_name,
+            require_resolved_ip=True,
+        )
+
     def _find_requested_public_allocation(
         self,
         alloc_client: t.Any,
@@ -2315,6 +3850,7 @@ class VMManager:
         alloc_name: str,
         subnet_id: str,
         desired_ip: str | None,
+        operation_id: str | None = None,
     ) -> t.Any | None:
         try:
             from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
@@ -2336,8 +3872,18 @@ class VMManager:
                     )
                 ),
             )
-            operation = alloc_client.create(request).wait()
-            self._sync_operation(operation)
+            operation = alloc_client.create(
+                request,
+                **(
+                    vm_ha_request_kwargs(operation_id)
+                    if operation_id
+                    else self._idempotency_kwargs(operation_id)
+                ),
+            ).wait()
+            if operation_id:
+                self._sync_vm_ha_operation(operation)
+            else:
+                self._sync_operation(operation)
             resource = getattr(getattr(operation, "result", None), "resource", None)
             return (
                 resource
@@ -2349,6 +3895,8 @@ class VMManager:
             )
         except Exception as e:
             print(f"[VMManager] allocation create via client failed: {e}")
+            if operation_id:
+                raise
             return self._get_allocation_by_name(alloc_client, alloc_name)
 
     def _create_public_allocation_via_api(
@@ -2376,11 +3924,34 @@ class VMManager:
         subnet_id: str | None,
         desired_ip: str | None,
         preserved_alloc_id: str | None,
+        approved_allocation_id: str | None = None,
+        operation_id: str | None = None,
     ) -> tuple[str, t.Any | None]:
         alloc_name = f"{inst_name}-{nic_name}-ip"
         alloc_obj = None
 
-        if desired_ip:
+        if approved_allocation_id:
+            alloc_obj = self._get_allocation_by_id(alloc_client, approved_allocation_id)
+            if self._resource_id(alloc_obj) != approved_allocation_id:
+                raise RuntimeError(
+                    f"VM-HA approved public allocation changed identity for {inst_name}"
+                )
+            if desired_ip and subnet_id:
+                alloc_obj = self._validate_vm_ha_replayed_public_allocation(
+                    alloc_client,
+                    alloc_obj,
+                    alloc_name=alloc_name,
+                    subnet_id=subnet_id,
+                    desired_ip=desired_ip,
+                )
+            else:
+                alloc_obj = self._require_public_allocation_in_gateway_subnet(
+                    alloc_client,
+                    alloc_obj,
+                    subnet_id,
+                    desired_ip or self._resolve_known_allocation_ip(alloc_client, alloc_obj),
+                )
+        elif desired_ip and self._vm_ha_journal is None:
             alloc_obj, _ = self._find_requested_public_allocation(
                 alloc_client,
                 alloc_api,
@@ -2396,7 +3967,12 @@ class VMManager:
                     desired_ip,
                 )
 
-        if alloc_obj is None and not desired_ip and preserved_alloc_id:
+        if (
+            alloc_obj is None
+            and not desired_ip
+            and preserved_alloc_id
+            and self._vm_ha_journal is None
+        ):
             try:
                 alloc_obj = self._get_allocation_by_id(alloc_client, preserved_alloc_id)
                 if alloc_obj:
@@ -2416,7 +3992,7 @@ class VMManager:
                 )
                 alloc_obj = None
 
-        if alloc_obj is None:
+        if alloc_obj is None and self._vm_ha_journal is None:
             alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
             if alloc_obj:
                 print(f"[VMManager] Found existing allocation by name: {alloc_name}")
@@ -2453,6 +4029,7 @@ class VMManager:
                     alloc_name,
                     subnet_id,
                     desired_ip,
+                    operation_id,
                 )
                 if desired_ip and created_alloc is not None:
                     created_alloc = self._validate_requested_public_allocation(
@@ -2479,6 +4056,26 @@ class VMManager:
                     )
                 return alloc_name, created_alloc
         except Exception as e:
+            if self._vm_ha_journal is not None:
+                if (
+                    not operation_id
+                    or not desired_ip
+                    or alloc_client is None
+                    or not nebius_request_error_code_is(e, "ALREADY_EXISTS")
+                ):
+                    raise
+                existing = self._find_ha_allocation_by_name(alloc_client, alloc_name)
+                if existing is None:
+                    raise RuntimeError(
+                        f"VM-HA public allocation {alloc_name} was absent after create conflict"
+                    ) from e
+                return alloc_name, self._validate_vm_ha_replayed_public_allocation(
+                    alloc_client,
+                    existing,
+                    alloc_name=alloc_name,
+                    subnet_id=subnet_id,
+                    desired_ip=desired_ip,
+                )
             print(f"[VMManager] allocation create failed: {e}")
 
         return alloc_name, None
@@ -2488,6 +4085,7 @@ class VMManager:
         alloc_client: t.Any,
         alloc_name: str,
         subnet_id: str,
+        operation_id: str | None = None,
     ) -> t.Any | None:
         try:
             from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
@@ -2504,8 +4102,18 @@ class VMManager:
                 ),
                 spec=AllocationSpec(ipv4_private=IPv4PrivateAllocationSpec(subnet_id=subnet_id)),
             )
-            operation = alloc_client.create(request).wait()
-            self._sync_operation(operation)
+            operation = alloc_client.create(
+                request,
+                **(
+                    vm_ha_request_kwargs(operation_id)
+                    if operation_id
+                    else self._idempotency_kwargs(operation_id)
+                ),
+            ).wait()
+            if operation_id:
+                self._sync_vm_ha_operation(operation)
+            else:
+                self._sync_operation(operation)
             resource = getattr(getattr(operation, "result", None), "resource", None)
             return (
                 resource
@@ -2517,6 +4125,8 @@ class VMManager:
             )
         except Exception as e:
             print(f"[VMManager] private allocation create via client failed: {e}")
+            if operation_id:
+                raise
             return self._get_allocation_by_name(alloc_client, alloc_name)
 
     def _find_ha_allocation_by_name(self, alloc_client: t.Any, alloc_name: str) -> t.Any | None:
@@ -2525,7 +4135,10 @@ class VMManager:
             raise RuntimeError("VM-HA allocation lookup requires an SDK client and project ID")
         from nebius.api.nebius.vpc.v1 import ListAllocationsRequest  # type: ignore
 
-        response = alloc_client.list(ListAllocationsRequest(parent_id=self.project_id)).wait()
+        response = alloc_client.list(
+            ListAllocationsRequest(parent_id=self.project_id),
+            **vm_ha_request_kwargs(),
+        ).wait()
         allocations = list(getattr(response, "items", response))
         matching = [
             allocation
@@ -2558,8 +4171,29 @@ class VMManager:
             raise RuntimeError("VM-HA provisioning requires allocation SDK and resolved subnet")
 
         allocation_name = f"{spec.name}-{vm_ha.cluster_id}-shared-private-ip"
-        allocation = self._find_ha_allocation_by_name(alloc_client, allocation_name)
-        if allocation is None:
+        effect = "provision-shared-allocation"
+        binding_key = "shared-allocation-id"
+        approved_allocation_id = self._vm_ha_resource_binding(binding_key)
+        approved_owner_compute = self._vm_ha_resource_binding("shared-allocation-owner-compute")
+        approved_owner_nic = self._vm_ha_resource_binding("shared-allocation-owner-nic")
+        approved_owner = (
+            (approved_owner_compute, approved_owner_nic)
+            if approved_owner_compute and approved_owner_nic
+            else None
+        )
+        operation_id = self._begin_vm_ha_effect(effect)
+        allocation = None
+        if approved_allocation_id:
+            allocation = self.get_ha_allocation(approved_allocation_id)
+            validate_vm_ha_shared_allocation(
+                allocation,
+                expected_allocation_id=approved_allocation_id,
+                expected_name=allocation_name,
+                expected_project_id=self.project_id or "",
+                expected_subnet_id=subnet_id,
+                expected_owner=approved_owner,
+            )
+        else:
             try:
                 from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
                 from nebius.api.nebius.vpc.v1 import (  # type: ignore
@@ -2577,13 +4211,23 @@ class VMManager:
                         spec=AllocationSpec(
                             ipv4_private=IPv4PrivateAllocationSpec(subnet_id=subnet_id)
                         ),
-                    )
+                    ),
+                    **vm_ha_request_kwargs(operation_id),
                 ).wait()
                 self._sync_vm_ha_operation(operation)
+                created = getattr(getattr(operation, "result", None), "resource", None)
+                approved_allocation_id = self._resource_id(created) or str(
+                    getattr(operation, "resource_id", "") or ""
+                )
+                if not approved_allocation_id:
+                    raise RuntimeError(
+                        "VM-HA allocation create returned no authoritative resource identity"
+                    )
             except Exception as create_error:
-                raise RuntimeError(
-                    f"VM-HA shared allocation {allocation_name} could not be created"
-                ) from create_error
+                if not nebius_request_error_code_is(create_error, "ALREADY_EXISTS"):
+                    raise RuntimeError(
+                        f"VM-HA shared allocation {allocation_name} could not be created"
+                    ) from create_error
             allocation = self._find_ha_allocation_by_name(alloc_client, allocation_name)
             if allocation is None:
                 raise RuntimeError(
@@ -2593,6 +4237,20 @@ class VMManager:
         allocation_id = self._resource_id(allocation)
         if not allocation_id:
             raise RuntimeError(f"VM-HA shared allocation {allocation_name} has no ID")
+        if approved_allocation_id and allocation_id != approved_allocation_id:
+            raise RuntimeError("VM-HA shared allocation changed identity after create")
+        validate_vm_ha_shared_allocation(
+            allocation,
+            expected_allocation_id=allocation_id,
+            expected_name=allocation_name,
+            expected_project_id=self.project_id or "",
+            expected_subnet_id=subnet_id,
+            expected_owner=approved_owner,
+        )
+        self._complete_vm_ha_effect(
+            effect,
+            resource_updates={binding_key: allocation_id},
+        )
         self._vm_ha_shared_allocation_id = allocation_id
         return allocation_id
 
@@ -2602,9 +4260,21 @@ class VMManager:
         inst_name: str,
         nic_name: str,
         subnet_id: str | None,
+        approved_allocation_id: str | None = None,
+        operation_id: str | None = None,
     ) -> tuple[str, t.Any | None]:
         alloc_name = f"{inst_name}-{nic_name}-private-ip"
-        alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
+        alloc_obj = (
+            self._get_allocation_by_id(alloc_client, approved_allocation_id)
+            if approved_allocation_id
+            else None
+        )
+        if approved_allocation_id and self._resource_id(alloc_obj) != approved_allocation_id:
+            raise RuntimeError(
+                f"VM-HA approved primary allocation changed identity for {inst_name}"
+            )
+        if alloc_obj is None and self._vm_ha_journal is None:
+            alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
         if alloc_obj is not None:
             print(f"[VMManager] Found existing private allocation by name: {alloc_name}")
             return alloc_name, alloc_obj
@@ -2626,9 +4296,12 @@ class VMManager:
                 alloc_client,
                 alloc_name,
                 subnet_id,
+                operation_id,
             )
         except Exception as e:
             print(f"[VMManager] private allocation create failed: {e}")
+            if self._vm_ha_journal is not None:
+                raise
             return alloc_name, None
 
     def _ensure_instance_allocations(
@@ -2655,6 +4328,11 @@ class VMManager:
             preserved_alloc_id = (
                 preserved_alloc_ids[nic_index] if nic_index < len(preserved_alloc_ids) else None
             )
+            public_effect = f"provision-{inst_name}-{nic_name}-public-allocation"
+            public_key = f"public-allocation:{inst_name}:{nic_name}"
+            public_operation_id = (
+                self._begin_vm_ha_effect(public_effect) if spec.vm_ha is not None else None
+            )
             alloc_name, alloc_obj = self._ensure_public_allocation(
                 alloc_api,
                 alloc_client,
@@ -2663,6 +4341,8 @@ class VMManager:
                 provisioning.subnet_id,
                 desired_ip,
                 preserved_alloc_id,
+                approved_allocation_id=self._vm_ha_resource_binding(public_key),
+                operation_id=public_operation_id,
             )
             alloc_id = self._resource_id(alloc_obj)
             if alloc_id:
@@ -2672,22 +4352,41 @@ class VMManager:
                     alloc_ip = self.get_allocation_ip(alloc_id)
                     if alloc_ip:
                         vm_ips[inst_name] = alloc_ip
+                if spec.vm_ha is not None:
+                    self._complete_vm_ha_effect(
+                        public_effect,
+                        resource_updates={public_key: alloc_id},
+                    )
+            elif spec.vm_ha is not None:
+                raise RuntimeError(f"VM-HA member {inst_name} requires an exact public allocation")
 
-            if spec.vm_ha is not None:
-                if self._vm_ha_shared_allocation_id is None:
-                    raise RuntimeError("VM-HA shared allocation identity is unavailable")
-                if instance_index == spec.vm_ha.active_instance_index:
-                    self._private_alloc_ids[inst_name].append(self._vm_ha_shared_allocation_id)
-                continue
-
+            private_effect = f"provision-{inst_name}-{nic_name}-primary-allocation"
+            private_key = f"primary-allocation:{inst_name}:{nic_name}"
+            private_operation_id = (
+                self._begin_vm_ha_effect(private_effect) if spec.vm_ha is not None else None
+            )
             private_alloc_name, private_alloc_obj = self._ensure_private_allocation(
-                alloc_client, inst_name, nic_name, provisioning.subnet_id
+                alloc_client,
+                inst_name,
+                nic_name,
+                provisioning.subnet_id,
+                approved_allocation_id=self._vm_ha_resource_binding(private_key),
+                operation_id=private_operation_id,
             )
             private_alloc_id = self._resource_id(private_alloc_obj)
             if private_alloc_id:
                 self._private_alloc_ids[inst_name].append(private_alloc_id)
                 print(
                     f"[VMManager] Private IP allocation {private_alloc_name} ready: {private_alloc_id}"
+                )
+                if spec.vm_ha is not None:
+                    self._complete_vm_ha_effect(
+                        private_effect,
+                        resource_updates={private_key: private_alloc_id},
+                    )
+            elif spec.vm_ha is not None:
+                raise RuntimeError(
+                    f"VM-HA member {inst_name} requires an independent primary private allocation"
                 )
 
         return alloc_ids
@@ -2765,6 +4464,9 @@ class VMManager:
         boot_disk_id: str | None,
         alloc_ids: list[str],
         vm_ips: dict[str, str],
+        *,
+        strict_vm_ha: bool = False,
+        operation_id: str | None = None,
     ) -> bool:
         inst_req = {
             "metadata": {
@@ -2885,21 +4587,36 @@ class VMManager:
             except Exception:
                 pass
 
-            spec_kwargs = {
-                "resources": resources,
-                "network_interfaces": ni_msgs,
-                "cloud_init_user_data": provisioning.cloud_init,
-            }
             if boot_disk_msg is not None and boot_disk_id:
-                spec_kwargs["boot_disk"] = boot_disk_msg
-            spec = InstanceSpec(**spec_kwargs)
+                spec = InstanceSpec(
+                    resources=resources,
+                    network_interfaces=ni_msgs,
+                    cloud_init_user_data=provisioning.cloud_init,
+                    boot_disk=boot_disk_msg,
+                )
+            else:
+                spec = InstanceSpec(
+                    resources=resources,
+                    network_interfaces=ni_msgs,
+                    cloud_init_user_data=provisioning.cloud_init,
+                )
             req = CreateInstanceRequest(metadata=metadata, spec=spec)
             try:
-                op = isc.create(req).wait()
-                try:
-                    op.sync_wait()
-                except Exception:
-                    pass
+                op = isc.create(
+                    req,
+                    **(
+                        vm_ha_request_kwargs(operation_id)
+                        if strict_vm_ha
+                        else self._idempotency_kwargs(operation_id)
+                    ),
+                ).wait()
+                if strict_vm_ha:
+                    self._sync_vm_ha_operation(op)
+                else:
+                    try:
+                        op.sync_wait()
+                    except Exception:
+                        pass
                 created = True
                 print(f"[VMManager] Instance {inst_name} created successfully via SDK")
 
@@ -2923,16 +4640,20 @@ class VMManager:
                     )
             except Exception as e:
                 print(f"[VMManager] InstanceServiceClient create failed: {e}")
+                if strict_vm_ha:
+                    raise
                 import traceback
 
                 traceback.print_exc()
         except Exception as e:
             print(f"[VMManager] InstanceServiceClient initialization failed: {e}")
+            if strict_vm_ha:
+                raise
 
         if created:
             return True
 
-        if instance_api is not None and hasattr(instance_api, "create"):
+        if not strict_vm_ha and instance_api is not None and hasattr(instance_api, "create"):
             print(f"[VMManager] Creating instance {inst_name} ...")
             try:
                 try:
@@ -2963,17 +4684,42 @@ class VMManager:
     ) -> None:
         inst_name = f"{spec.name}-{instance_index}"
         vm_exists = self._instance_exists(client, instance_api, inst_name)
+        compute_key = f"compute:{inst_name}"
+        compute_effect = f"provision-{inst_name}-compute"
+        approved_compute_id = self._vm_ha_resource_binding(compute_key)
+        pending_compute = bool(
+            self._vm_ha_journal is not None
+            and self._vm_ha_journal.state.transaction is not None
+            and self._vm_ha_journal.state.transaction.pending_effect == compute_effect
+        )
         if expected_vm_exists is not None and vm_exists != expected_vm_exists:
             raise RuntimeError(
                 f"VM-HA member {inst_name} changed existence after identity preflight"
             )
         if vm_exists and not recreate:
-            print(f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation")
-            vm_ip = self.get_vm_public_ip(inst_name)
-            if vm_ip:
-                vm_ips[inst_name] = vm_ip
-                print(f"[VMManager] {inst_name} IP: {vm_ip}")
-            return
+            if spec.vm_ha is not None:
+                authoritative = self._get_ha_instance_by_name(client, inst_name)
+                observed_compute_id = self._resource_id(authoritative)
+                if approved_compute_id:
+                    if observed_compute_id != approved_compute_id:
+                        raise RuntimeError(f"VM-HA Compute identity changed for {inst_name}")
+                elif not pending_compute:
+                    raise RuntimeError(
+                        f"VM-HA Compute {inst_name} exists without approved transaction identity"
+                    )
+                else:
+                    # Replay the exact idempotent create below so the accepted
+                    # operation, rather than the resource name, proves ownership.
+                    vm_exists = False
+            if vm_exists:
+                print(
+                    f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation"
+                )
+                vm_ip = self.get_vm_public_ip(inst_name)
+                if vm_ip:
+                    vm_ips[inst_name] = vm_ip
+                    print(f"[VMManager] {inst_name} IP: {vm_ip}")
+                return
         if vm_exists and recreate:
             print(
                 f"[VMManager] WARNING: VM {inst_name} still exists after deletion (race condition?)"
@@ -3005,7 +4751,8 @@ class VMManager:
         )
         if not boot_disk_id:
             boot_disk_id = self._resolve_boot_disk_id_before_create(client, boot_disk_name)
-        self._create_instance_with_fallback(
+        operation_id = self._begin_vm_ha_effect(compute_effect) if spec.vm_ha is not None else None
+        created = self._create_instance_with_fallback(
             client,
             instance_api,
             inst_name,
@@ -3013,7 +4760,23 @@ class VMManager:
             boot_disk_id,
             alloc_ids,
             vm_ips,
+            strict_vm_ha=spec.vm_ha is not None,
+            operation_id=operation_id,
         )
+        if spec.vm_ha is not None:
+            if not created:
+                raise RuntimeError(f"VM-HA Compute {inst_name} was not created")
+            authoritative = self._get_ha_instance_by_name(client, inst_name)
+            compute_id = self._resource_id(authoritative)
+            if not compute_id:
+                raise RuntimeError(f"VM-HA Compute {inst_name} has no identity")
+            expected_compute_id = self._vm_ha_resource_binding(compute_key)
+            if expected_compute_id and expected_compute_id != compute_id:
+                raise RuntimeError(f"VM-HA Compute identity changed for {inst_name}")
+            self._complete_vm_ha_effect(
+                compute_effect,
+                resource_updates={compute_key: compute_id},
+            )
 
     def _log_scaffold_mode_instances(self, spec: GatewayGroupSpec) -> None:
         for i in range(spec.instance_count):
@@ -3023,6 +4786,317 @@ class VMManager:
             print(
                 f"[VMManager] ensure instance {inst_name} pub_ip={pub_ip} platform={spec.vm_spec.get('platform')} subnet={self._gateway_subnet_name(spec)}"
             )
+
+    def replace_failed_vm_ha_passive(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+        *,
+        approval_digest: str,
+    ) -> None:
+        """Replace only a transaction-created passive that failed initial bootstrap."""
+
+        journal = self._vm_ha_journal
+        if spec.vm_ha is None or journal is None or journal.state.transaction is None:
+            raise RuntimeError("VM-HA passive replacement requires durable explicit HA intent")
+        state = journal.state
+        if state.status is not VMHALifecycleStatus.PROVISIONING:
+            raise RuntimeError("VM-HA passive replacement requires a PROVISIONING checkpoint")
+        transaction = state.transaction
+        assert transaction is not None
+        passive_member = next(
+            (member for member in state.members if member.role == "passive"),
+            None,
+        )
+        if passive_member is None:
+            raise RuntimeError("VM-HA passive replacement has no configured passive")
+        passive_name = passive_member.instance_name
+        bindings = dict(transaction.resource_bindings)
+        replacement_cycle = vm_ha_passive_replacement_cycle_for_approval(
+            bindings,
+            passive_name,
+            approval_digest,
+        )
+        if replacement_cycle is None:
+            cycles = vm_ha_passive_replacement_cycles(bindings, passive_name)
+            replacement_cycle = (cycles[-1] + 1) if cycles else 1
+            current_bindings = vm_ha_effective_resource_bindings(bindings)
+            retired_compute_id = current_bindings.get(f"compute:{passive_name}")
+            retired_disk_id = current_bindings.get(f"disk:{passive_name}")
+        else:
+            retired_compute_id = bindings.get(
+                vm_ha_passive_replacement_binding_key(
+                    "retired-compute",
+                    passive_name,
+                    replacement_cycle,
+                )
+            )
+            retired_disk_id = bindings.get(
+                vm_ha_passive_replacement_binding_key(
+                    "retired-disk",
+                    passive_name,
+                    replacement_cycle,
+                )
+            )
+        if not retired_compute_id or not retired_disk_id:
+            raise RuntimeError("VM-HA passive replacement lacks exact retired identities")
+
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA passive replacement requires the Nebius SDK")
+        self._vm_ha_effect_spec = spec
+        self._vm_ha_effect_prefixes = local_prefixes
+        before = self._stable_vm_ha_effect_observation()
+        journal.authorize_failed_passive_replacement(
+            passive_instance_name=passive_name,
+            approval_digest=approval_digest,
+            retired_compute_id=retired_compute_id,
+            retired_disk_id=retired_disk_id,
+            current_observation=before,
+            replacement_cycle=replacement_cycle,
+        )
+        self._verify_vm_ha_transaction_preconditions(spec, local_prefixes)
+        transaction = journal.state.transaction
+        assert transaction is not None
+        completed = set(transaction.completed_effects)
+
+        create_compute_effect = vm_ha_passive_replacement_effect(
+            passive_name,
+            replacement_cycle,
+            "create-compute",
+        )
+        if create_compute_effect in completed:
+            replacement_compute_id = self._vm_ha_resource_binding(f"compute:{passive_name}")
+            replacement_compute = self._get_ha_instance_by_name(client, passive_name)
+            if (
+                not replacement_compute_id
+                or replacement_compute_id == retired_compute_id
+                or self._resource_id(replacement_compute) != replacement_compute_id
+            ):
+                raise RuntimeError("VM-HA completed passive replacement identity drifted")
+            replacement_public_ip = self._vm_public_ip_from_object(replacement_compute)
+            if not replacement_public_ip:
+                raise RuntimeError("VM-HA completed passive replacement has no public IP")
+            self._wait_for_vm_ha_member_ssh(
+                passive_name,
+                replacement_public_ip,
+                username=(
+                    spec.vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+                ),
+            )
+            return
+
+        current_members = self._discover_vm_ha_members(client, spec)
+        expected_names = {member.instance_name for member in state.members}
+        active_names = {member.instance_name for member in state.members if member.role == "active"}
+        if frozenset(current_members) not in {
+            frozenset(expected_names),
+            frozenset(active_names),
+        }:
+            raise RuntimeError("VM-HA passive replacement member set changed before deletion")
+        rendered = self._prepare_vm_ha_enrollment_cloud_inits(
+            spec,
+            local_prefixes,
+            expected_names - {passive_name},
+            False,
+        )
+        passive_cloud_init = rendered.get(passive_name)
+        if not passive_cloud_init:
+            raise RuntimeError("VM-HA passive replacement cloud-init was not prevalidated")
+        provisioning = replace(
+            self._build_vm_provisioning_config(client, spec, local_prefixes),
+            cloud_init=passive_cloud_init,
+        )
+        instance_api, _disk_api, _alloc_api, allocation_client = self._resolve_client_apis(client)
+        if allocation_client is None:
+            raise RuntimeError("VM-HA passive replacement requires the Allocation API")
+        primary_id = self._vm_ha_resource_binding(f"primary-allocation:{passive_name}:eth0")
+        public_id = self._vm_ha_resource_binding(f"public-allocation:{passive_name}:eth0")
+        if not primary_id or not public_id:
+            raise RuntimeError("VM-HA passive replacement lacks retained member allocations")
+        self._require_retained_allocation(
+            allocation_client,
+            primary_id,
+            require_detached=False,
+        )
+        self._require_retained_allocation(
+            allocation_client,
+            public_id,
+            require_detached=False,
+        )
+
+        delete_compute_effect = vm_ha_passive_replacement_effect(
+            passive_name,
+            replacement_cycle,
+            "delete-compute",
+        )
+        if delete_compute_effect not in completed:
+            operation_id = self._begin_vm_ha_effect(delete_compute_effect)
+            current_passive = self._get_vm_by_name_for_vm_ha_preflight(client, passive_name)
+            if current_passive is not None:
+                if self._resource_id(current_passive) != retired_compute_id:
+                    raise RuntimeError("VM-HA passive replacement Compute identity changed")
+                from nebius.api.nebius.compute.v1 import (  # type: ignore
+                    DeleteInstanceRequest,
+                    InstanceServiceClient,
+                )
+
+                operation = (
+                    InstanceServiceClient(client)
+                    .delete(
+                        DeleteInstanceRequest(id=retired_compute_id),
+                        **vm_ha_request_kwargs(operation_id),
+                    )
+                    .wait()
+                )
+                self._sync_vm_ha_operation(operation)
+            if self._get_vm_by_name_for_vm_ha_preflight(client, passive_name) is not None:
+                raise RuntimeError("VM-HA retired passive Compute still exists after deletion")
+            self._complete_vm_ha_effect(delete_compute_effect)
+            completed.add(delete_compute_effect)
+
+        self._require_retained_allocation(
+            allocation_client,
+            primary_id,
+            require_detached=True,
+        )
+        self._require_retained_allocation(
+            allocation_client,
+            public_id,
+            require_detached=True,
+        )
+
+        boot_disk_name = f"{passive_name}-boot"
+        delete_disk_effect = vm_ha_passive_replacement_effect(
+            passive_name,
+            replacement_cycle,
+            "delete-boot-disk",
+        )
+        if delete_disk_effect not in completed:
+            operation_id = self._begin_vm_ha_effect(delete_disk_effect)
+            disk = self._get_ha_disk_by_name(client, boot_disk_name)
+            if disk is not None:
+                metadata = getattr(disk, "metadata", None)
+                if (
+                    self._resource_id(disk) != retired_disk_id
+                    or str(getattr(metadata, "name", "") or "") != boot_disk_name
+                    or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+                ):
+                    raise RuntimeError("VM-HA passive replacement boot disk identity changed")
+                from nebius.api.nebius.compute.v1 import (  # type: ignore
+                    DeleteDiskRequest,
+                    DiskServiceClient,
+                )
+
+                operation = (
+                    DiskServiceClient(client)
+                    .delete(
+                        DeleteDiskRequest(id=retired_disk_id),
+                        **vm_ha_request_kwargs(operation_id),
+                    )
+                    .wait()
+                )
+                self._sync_vm_ha_operation(operation)
+            if self._get_ha_disk_by_name(client, boot_disk_name) is not None:
+                raise RuntimeError("VM-HA retired passive boot disk still exists after deletion")
+            self._complete_vm_ha_effect(delete_disk_effect)
+            completed.add(delete_disk_effect)
+
+        create_disk_effect = vm_ha_passive_replacement_effect(
+            passive_name,
+            replacement_cycle,
+            "create-boot-disk",
+        )
+        operation_id = (
+            None
+            if create_disk_effect in completed
+            else self._begin_vm_ha_effect(create_disk_effect)
+        )
+        replacement_disk = self._get_ha_disk_by_name(client, boot_disk_name)
+        replacement_disk_id = self._resource_id(replacement_disk)
+        if replacement_disk is None:
+            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+
+            image_id = self._resolve_boot_image_id(client, spec, provisioning)
+            if not image_id:
+                raise RuntimeError("VM-HA passive replacement could not resolve the boot image")
+            replacement_disk_id = self._submit_boot_disk_create(
+                DiskServiceClient(client),
+                self._build_boot_disk_create_request(
+                    boot_disk_name,
+                    provisioning,
+                    image_id,
+                ),
+                boot_disk_name,
+                operation_id,
+            )
+            replacement_disk = self._get_ha_disk_by_name(client, boot_disk_name)
+        if (
+            not replacement_disk_id
+            or replacement_disk is None
+            or self._resource_id(replacement_disk) != replacement_disk_id
+            or replacement_disk_id == retired_disk_id
+        ):
+            raise RuntimeError("VM-HA replacement passive boot disk identity is invalid")
+        if create_disk_effect not in completed:
+            self._complete_vm_ha_effect(
+                create_disk_effect,
+                resource_updates={
+                    vm_ha_passive_replacement_binding_key(
+                        "disk",
+                        passive_name,
+                        replacement_cycle,
+                    ): replacement_disk_id
+                },
+            )
+            completed.add(create_disk_effect)
+        elif self._vm_ha_resource_binding(f"disk:{passive_name}") != replacement_disk_id:
+            raise RuntimeError("VM-HA replacement passive boot disk identity drifted")
+
+        operation_id = self._begin_vm_ha_effect(create_compute_effect)
+        replacement_compute = self._get_vm_by_name_for_vm_ha_preflight(client, passive_name)
+        vm_ips: dict[str, str] = {}
+        self._private_alloc_ids[passive_name] = [primary_id]
+        if replacement_compute is None:
+            created = self._create_instance_with_fallback(
+                client,
+                instance_api,
+                passive_name,
+                provisioning,
+                replacement_disk_id,
+                [public_id],
+                vm_ips,
+                strict_vm_ha=True,
+                operation_id=operation_id,
+            )
+            if not created:
+                raise RuntimeError("VM-HA replacement passive Compute was not created")
+            replacement_compute = self._get_ha_instance_by_name(client, passive_name)
+        replacement_compute_id = self._resource_id(replacement_compute)
+        if not replacement_compute_id or replacement_compute_id == retired_compute_id:
+            raise RuntimeError("VM-HA replacement passive Compute identity is invalid")
+        self._complete_vm_ha_effect(
+            create_compute_effect,
+            resource_updates={
+                vm_ha_passive_replacement_binding_key(
+                    "compute",
+                    passive_name,
+                    replacement_cycle,
+                ): replacement_compute_id,
+            },
+        )
+        replacement_public_ip = self._vm_public_ip_from_object(replacement_compute)
+        if not replacement_public_ip:
+            replacement_public_ip = vm_ips.get(passive_name)
+        if not replacement_public_ip:
+            raise RuntimeError("VM-HA replacement passive has no public IP")
+        self._wait_for_vm_ha_member_ssh(
+            passive_name,
+            replacement_public_ip,
+            username=(
+                spec.vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+            ),
+        )
 
     def ensure_group(
         self,
@@ -3057,6 +5131,9 @@ class VMManager:
         except Exception:
             pass
         client = self._build_sdk_client(spec.region)
+        if spec.vm_ha is not None:
+            self._vm_ha_effect_spec = spec
+            self._vm_ha_effect_prefixes = local_prefixes
 
         try:
             if client is not None:
@@ -3078,14 +5155,21 @@ class VMManager:
                         set(vm_ha_existing),
                         recreate,
                     )
+                    self._require_vm_ha_member_snapshot(
+                        client,
+                        spec,
+                        vm_ha_existing,
+                    )
+                    if self._vm_ha_journal is None:
+                        raise RuntimeError(
+                            "VM-HA provisioning requires a durable lifecycle transaction"
+                        )
+                    self._verify_vm_ha_transaction_preconditions(spec, local_prefixes)
                     existing = [vm_obj for vm_obj, _ in vm_ha_existing.values()]
                 else:
                     existing = self._discover_existing_instances(client, spec)
 
-                if not existing:
-                    print("[VMManager] No existing VMs found")
-                else:
-                    print(f"[VMManager] Found {len(existing)} existing VM(s) for recreation")
+                print(self._existing_instances_message(len(existing), recreate=recreate))
 
                 preserved_allocations: dict[str, list[str]] = {}
                 if recreate and existing:
@@ -3111,9 +5195,12 @@ class VMManager:
                         spec,
                         provisioning.subnet_id,
                     )
+                    route_effect = "resolve-authoritative-route-targets"
+                    self._begin_vm_ha_effect(route_effect)
                     self._vm_ha_route_targets = self._resolve_vm_ha_route_targets(
                         client, spec, local_prefixes
                     )
+                    self._complete_vm_ha_effect(route_effect)
                 for i in range(spec.instance_count):
                     inst_name = f"{spec.name}-{i}"
                     if spec.vm_ha is not None:
@@ -3188,7 +5275,15 @@ class VMManager:
 
         if spec.vm_ha is not None:
             try:
+                binding_effect = "construct-authoritative-runtime-binding"
+                self._begin_vm_ha_effect(binding_effect)
                 binding = self._build_vm_ha_runtime_binding(client, spec)
+                self._complete_vm_ha_effect(
+                    binding_effect,
+                    resource_updates={
+                        "route-runtime-id": binding.route_runtime_id,
+                    },
+                )
             except Exception as e:
                 self._private_alloc_ids.clear()
                 self._vm_ha_shared_allocation_id = None
@@ -3274,7 +5369,9 @@ class VMManager:
             if not current:
                 continue
             try:
-                if hasattr(current, "value"):
+                if hasattr(current, "name"):
+                    current = current.name
+                elif hasattr(current, "value"):
                     current = current.value
             except Exception:
                 pass
@@ -3487,6 +5584,142 @@ class VMManager:
             return desired_ip
         raise RuntimeError(f"Allocation {alloc_name} returned no IP address (API may be delayed).")
 
+    def _prepare_public_allocations_for_subnet(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+        subnet_id: str,
+        *,
+        instance_indices: t.Collection[int],
+        desired_external_ips: list[list[str]] | None,
+        require_unattached: bool,
+    ) -> dict[int, list[str]]:
+        selected_indices = tuple(sorted(set(instance_indices)))
+        if not selected_indices:
+            return {}
+        invalid_indices = [
+            index for index in selected_indices if index < 0 or index >= spec.instance_count
+        ]
+        if invalid_indices:
+            raise ValueError(
+                "Public allocation instance indices are outside the gateway group: "
+                + ", ".join(str(index) for index in invalid_indices)
+            )
+
+        # CURRENT PLATFORM LIMITATION: num_nics=1 (enforced elsewhere on apply).
+        num_nics = int(spec.vm_spec.get("num_nics", 1))
+        if num_nics > 1:
+            print(
+                f"[VMManager] WARNING: num_nics={num_nics} but current platform only supports 1 NIC. Using num_nics=1."
+            )
+            num_nics = 1
+
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
+
+        alloc_client = AllocationServiceClient(client)
+        desired_matrix = desired_external_ips or []
+        desired_any = any(
+            self._desired_requested_ip(desired_matrix, index, nic_index)
+            for index in selected_indices
+            for nic_index in range(num_nics)
+        )
+        allocations_by_ip = self._list_allocations_by_ip(alloc_client) if desired_any else {}
+        allocated_by_instance: dict[int, list[str]] = {}
+
+        for inst_index in selected_indices:
+            inst_name = f"{spec.name}-{inst_index}"
+            inst_ips: list[str] = []
+            for nic_index in range(num_nics):
+                nic_name = f"eth{nic_index}"
+                alloc_name = f"{inst_name}-{nic_name}-ip"
+                desired_ip = self._normalize_ip_value(
+                    self._desired_requested_ip(desired_matrix, inst_index, nic_index)
+                )
+                alloc_obj, allocations_by_ip = self._resolve_prepared_public_allocation(
+                    alloc_client,
+                    subnet_id,
+                    alloc_name,
+                    desired_ip,
+                    allocations_by_ip,
+                )
+                if alloc_obj is None:
+                    alloc_obj = self._create_prepared_public_allocation(
+                        alloc_client,
+                        subnet_id,
+                        alloc_name,
+                        desired_ip,
+                        allocations_by_ip,
+                    )
+
+                resolved_ip = self._resolve_prepared_public_ip(
+                    alloc_client,
+                    alloc_obj,
+                    alloc_name,
+                    desired_ip,
+                )
+                if require_unattached:
+                    alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
+                    metadata = getattr(alloc_obj, "metadata", None)
+                    allocation_spec = getattr(alloc_obj, "spec", None)
+                    ipv4_public = (
+                        getattr(allocation_spec, "ipv4_public", None)
+                        if allocation_spec is not None
+                        else None
+                    )
+                    state = self._allocation_state(alloc_obj)
+                    if (
+                        self._allocation_name(alloc_obj) != alloc_name
+                        or str(getattr(metadata, "parent_id", "") or "")
+                        != (self.project_id or "")
+                        or ipv4_public is None
+                        or getattr(allocation_spec, "ipv4_private", None) is not None
+                        or str(getattr(ipv4_public, "subnet_id", "") or "") != subnet_id
+                    ):
+                        raise RuntimeError(
+                            f"Passive public allocation {alloc_name} has a foreign resource shape"
+                        )
+                    if not state or state.rsplit(".", 1)[-1].upper() != "ALLOCATED":
+                        raise RuntimeError(
+                            f"Passive public allocation {alloc_name} is not stably allocated"
+                        )
+                    self._validate_requested_public_allocation(
+                        alloc_client,
+                        alloc_obj,
+                        desired_ip=resolved_ip,
+                        alloc_name=alloc_name,
+                        require_resolved_ip=True,
+                    )
+                inst_ips.append(resolved_ip)
+            allocated_by_instance[inst_index] = inst_ips
+
+        return allocated_by_instance
+
+    def prepare_public_allocations(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        instance_indices: t.Collection[int],
+        desired_external_ips: list[list[str]] | None = None,
+        require_unattached: bool = False,
+    ) -> dict[int, list[str]]:
+        """Ensure networking and reserve public allocations only for selected instances."""
+
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client not available; cannot prepare network.")
+        subnet_id = self._ensure_vpngw_subnet(client, spec)
+        if not subnet_id:
+            raise RuntimeError("Failed to resolve or create the dedicated gateway subnet.")
+        self._ensure_vpngw_route_table(client, subnet_id)
+        return self._prepare_public_allocations_for_subnet(
+            client,
+            spec,
+            subnet_id,
+            instance_indices=instance_indices,
+            desired_external_ips=desired_external_ips,
+            require_unattached=require_unattached,
+        )
+
     def prepare_network(
         self,
         spec: GatewayGroupSpec,
@@ -3512,70 +5745,22 @@ class VMManager:
         if not allocate_ips:
             return []
 
-        # CURRENT PLATFORM LIMITATION: num_nics=1 (enforced elsewhere on apply).
-        num_nics = int(spec.vm_spec.get("num_nics", 1))
-        if num_nics > 1:
-            print(
-                f"[VMManager] WARNING: num_nics={num_nics} but current platform only supports 1 NIC. Using num_nics=1."
-            )
-            num_nics = 1
-
-        from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
-
-        alloc_client = AllocationServiceClient(client)
-
-        desired_matrix = desired_external_ips or []
-        desired_any = any(
-            isinstance(row, list) and any(str(ip or "").strip() for ip in row)
-            for row in desired_matrix
+        allocated_by_instance = self._prepare_public_allocations_for_subnet(
+            client,
+            spec,
+            subnet_id,
+            instance_indices=range(spec.instance_count),
+            desired_external_ips=desired_external_ips,
+            require_unattached=False,
         )
-        allocations_by_ip = self._list_allocations_by_ip(alloc_client) if desired_any else {}
-
-        allocated_ips: list[list[str]] = []
-
-        for inst_index in range(spec.instance_count):
-            inst_name = f"{spec.name}-{inst_index}"
-            inst_ips: list[str] = []
-
-            for nic_index in range(num_nics):
-                nic_name = f"eth{nic_index}"
-                alloc_name = f"{inst_name}-{nic_name}-ip"
-                desired_ip = self._normalize_ip_value(
-                    self._desired_requested_ip(desired_matrix, inst_index, nic_index)
-                )
-                alloc_obj, allocations_by_ip = self._resolve_prepared_public_allocation(
-                    alloc_client,
-                    subnet_id,
-                    alloc_name,
-                    desired_ip,
-                    allocations_by_ip,
-                )
-                if alloc_obj is None:
-                    alloc_obj = self._create_prepared_public_allocation(
-                        alloc_client,
-                        subnet_id,
-                        alloc_name,
-                        desired_ip,
-                        allocations_by_ip,
-                    )
-
-                inst_ips.append(
-                    self._resolve_prepared_public_ip(
-                        alloc_client,
-                        alloc_obj,
-                        alloc_name,
-                        desired_ip,
-                    )
-                )
-
-            allocated_ips.append(inst_ips)
-
-        return allocated_ips
+        return [allocated_by_instance[index] for index in range(spec.instance_count)]
 
     def _resolve_gateway_network(
         self,
         client: t.Any,
         spec: GatewayGroupSpec,
+        *,
+        report_selection: bool = False,
     ) -> tuple[t.Any, str, str, t.Any]:
         from nebius.api.nebius.vpc.v1 import (  # type: ignore
             GetNetworkByNameRequest,
@@ -3590,13 +5775,19 @@ class VMManager:
         if spec.network_id:
             try:
                 network_obj = net_client.get(GetNetworkRequest(id=spec.network_id)).wait()
-                print(f"[VMManager] Using network from YAML: {spec.network_id}")
+                if report_selection:
+                    self._report_gateway_network_once(
+                        f"[VMManager] Using network from YAML: {spec.network_id}"
+                    )
             except Exception as e:
                 raise RuntimeError(
                     f"[VMManager] Specified network_id '{spec.network_id}' not found: {e}"
                 ) from e
         else:
-            print("[VMManager] No gateway_group.network_id in YAML, auto-discovering network...")
+            if report_selection:
+                self._report_gateway_network_once(
+                    "[VMManager] No gateway_group.network_id in YAML, auto-discovering network..."
+                )
             try:
                 network_obj = net_client.get_by_name(
                     GetNetworkByNameRequest(
@@ -3604,7 +5795,8 @@ class VMManager:
                         name="default-network",
                     )
                 ).wait()
-                print("[VMManager] Found default-network, using it")
+                if report_selection:
+                    self._report_gateway_network_once("[VMManager] Found default-network, using it")
             except Exception:
                 network_obj = None
 
@@ -3626,7 +5818,10 @@ class VMManager:
                             "name",
                             "unknown",
                         )
-                        print(f"[VMManager] Found single custom network: {net_name}, using it")
+                        if report_selection:
+                            self._report_gateway_network_once(
+                                f"[VMManager] Found single custom network: {net_name}, using it"
+                            )
                     else:
                         net_names = [
                             getattr(getattr(network, "metadata", None), "name", "unknown")
@@ -3864,6 +6059,7 @@ class VMManager:
             network_obj, network_id, network_name, subnet_client = self._resolve_gateway_network(
                 client,
                 spec,
+                report_selection=True,
             )
             subnet_obj = self._find_gateway_subnet(subnet_client, network_id, subnet_name)
             if subnet_obj is not None:
@@ -4484,8 +6680,8 @@ class VMManager:
             "  - [ systemctl, start, fail2ban ]\n"
             "  - [ systemctl, start, log-restart-required.timer ]\n"
             '  - [ bash, -lc, "if [ ! -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr; fi" ]\n'
-            "  # Reload SSH to apply hardening config\n"
-            "  - [ systemctl, reload, ssh ]\n"
+            "  # Validate SSH configuration, then activate the service model provided by the image\n"
+            '  - [ bash, -lc, "set -e; /usr/sbin/sshd -t; systemctl reset-failed ssh.service ssh.socket 2>/dev/null || true; if systemctl is-active --quiet ssh.socket || systemctl is-enabled --quiet ssh.socket; then systemctl restart ssh.socket; else systemctl restart ssh.service; fi; ss -H -lnt sport = :22 | grep -q ." ]\n'
             "  # Reboot only after cloud-init has written files and enabled services\n"
             '  - [ bash, -lc, "if [ -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then logger -t vpngw \\"Rebooting to activate ESP4/kernel update before VPN services start\\"; shutdown -r +1 \\"Nebius VPN Gateway rebooting to activate ESP4/kernel update\\"; fi" ]\n'
             "  # Log completion\n"

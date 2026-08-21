@@ -1,6 +1,6 @@
 ---
 name: app-stack
-description: "Use for selecting, reviewing, simplifying, modernizing, or implementing an application technology stack when the stack is undecided or under review; do not use for isolated implementation when the stack is already fixed or for AI-specific model, training, inference, agent, interoperability, retrieval, or evaluation stack selection. Classify the application and quality attributes, choose the smallest justified architecture, mark optional components, verify volatile choices with official docs, route undecided AI layers through `ai-stack`, and coordinate matching specialist skills when implementation is requested."
+description: "Select or review an undecided application stack and smallest justified architecture. Route AI layers to ai-stack; not for a fixed stack or isolated implementation."
 ---
 
 # App Stack

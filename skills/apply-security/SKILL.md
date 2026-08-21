@@ -1,6 +1,6 @@
 ---
 name: apply-security
-description: "Use as a security reviewer, adviser, and safe remediation helper for software design, implementation, code review, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD workflows, Bash scripts, and application code in Python, Java, JavaScript, TypeScript, or Rust. Use when work may affect secrets, public exposure, IAM/RBAC, auth, input handling, injection, deserialization, crypto, dependencies, containers, workflows, or supply-chain risk. Advises implicitly; patches only when the current task allows edits and the fix is low-risk."
+description: "Review software, infrastructure, CI/CD, containers, IaC, or design for security risks involving secrets, IAM/auth, exposure, inputs, dependencies, or supply chain. Advise implicitly; patch only when authorized."
 ---
 
 # Apply Security

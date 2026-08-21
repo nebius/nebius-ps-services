@@ -224,6 +224,8 @@ class PeerHeartbeat:
     configured_role: str
     observed_owner_id: str | None
     generation_id: str
+    mtls_epoch: int
+    certificate_fingerprint: str
     digests: DigestSet
     service_healthy: bool
     route_ready: bool
@@ -246,6 +248,13 @@ class PeerHeartbeat:
         if self.observed_owner_id is not None:
             _require_identifier("observed_owner_id", self.observed_owner_id)
         _require_sha256("generation_id", self.generation_id)
+        if (
+            not isinstance(self.mtls_epoch, int)
+            or isinstance(self.mtls_epoch, bool)
+            or self.mtls_epoch < 1
+        ):
+            raise StateValidationError("mtls_epoch must be a positive integer")
+        _require_sha256("certificate_fingerprint", self.certificate_fingerprint)
         if self.generation_id != self.digests.configuration:
             raise StateValidationError(
                 "generation_id must equal the canonical configuration digest"
@@ -261,11 +270,13 @@ class PeerHeartbeat:
             "configured_role": self.configured_role,
             "digests": self.digests.to_dict(),
             "generation_id": self.generation_id,
+            "mtls_epoch": self.mtls_epoch,
+            "certificate_fingerprint": self.certificate_fingerprint,
             "node_id": self.node_id,
             "observed_owner_id": self.observed_owner_id,
             "promotion_ready": self.promotion_ready,
             "route_ready": self.route_ready,
-            "schema": "nebius-vpngw/vm-ha-heartbeat-v1",
+            "schema": "nebius-vpngw/vm-ha-heartbeat-v2",
             "sent_at": self.sent_at,
             "sequence": self.sequence,
             "service_healthy": self.service_healthy,
@@ -287,6 +298,8 @@ class PeerHeartbeat:
                 "configured_role",
                 "observed_owner_id",
                 "generation_id",
+                "mtls_epoch",
+                "certificate_fingerprint",
                 "digests",
                 "service_healthy",
                 "route_ready",
@@ -294,7 +307,7 @@ class PeerHeartbeat:
             },
             "peer heartbeat",
         )
-        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v1":
+        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v2":
             raise StateValidationError("unsupported peer heartbeat schema")
         sequence = value["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -311,6 +324,10 @@ class PeerHeartbeat:
             configured_role=str(value["configured_role"]),
             observed_owner_id=observed_owner_id,
             generation_id=_require_sha256("generation_id", value["generation_id"]),
+            mtls_epoch=value["mtls_epoch"],
+            certificate_fingerprint=_require_sha256(
+                "certificate_fingerprint", value["certificate_fingerprint"]
+            ),
             digests=DigestSet.from_mapping(value["digests"]),
             service_healthy=_require_bool("service_healthy", value["service_healthy"]),
             route_ready=_require_bool("route_ready", value["route_ready"]),
@@ -381,6 +398,8 @@ class PeerReplayGuard:
         heartbeat: PeerHeartbeat,
         *,
         authenticated_node_id: str,
+        authenticated_certificate_fingerprint: str,
+        authenticated_mtls_epoch: int,
         expected_cluster_id: str,
         expected_node_id: str,
     ) -> ReplayState:
@@ -390,6 +409,14 @@ class PeerReplayGuard:
             )
         if heartbeat.cluster_id != expected_cluster_id or heartbeat.node_id != expected_node_id:
             raise StateValidationError("heartbeat is outside the expected cluster or peer identity")
+        if (
+            heartbeat.certificate_fingerprint
+            != authenticated_certificate_fingerprint
+            or heartbeat.mtls_epoch != authenticated_mtls_epoch
+        ):
+            raise StateValidationError(
+                "heartbeat mTLS identity does not match the authenticated peer certificate"
+            )
 
         current = self._state
         if current is None:

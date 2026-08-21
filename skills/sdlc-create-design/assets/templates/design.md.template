@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD003 MD022 MD033 MD041 -->
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
 ---
 schema: maintain-project-specs/design-v1
@@ -183,3 +184,4 @@ UAT impact: included
 
 ## Change Log
 <!-- maintain-project-specs:design:end -->
+<!-- markdownlint-enable MD003 MD022 MD033 MD041 -->

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import sys
 from dataclasses import dataclass, field
@@ -73,6 +74,11 @@ SDLC_ONLY_DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
 SDLC_PREFIX_EXTERNAL_SKILLS = {"sdlc-workflow-test"}
 OPENAI_METADATA_RELATIVE_PATH = "agents/openai.yaml"
 WRONG_OPENAI_METADATA_FILENAME = "agents.openai.yaml"
+TRIGGER_EVAL_RELATIVE_PATH = "evals/trigger-prompts.csv"
+LEGACY_TRIGGER_EVAL_RELATIVE_PATH = "evals/trigger-prompts.md"
+TRIGGER_EVAL_HEADER = ("id", "should_trigger", "prompt")
+MIN_TRIGGER_CASES_PER_LABEL = 3
+SKILL_MD_LINE_BUDGET = 500
 EXPLICIT_INVOCATION_DESCRIPTION_MARKERS = (
     "use only when the user explicitly asks",
     "use only when the user explicitly requests",
@@ -132,6 +138,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         epilog=(
             "Examples:\n"
             "  python3 scripts/validate-skill-structure.py .\n"
+            "  python3 scripts/validate-skill-structure.py --require-evals .\n"
             "  python3 scripts/validate-skill-structure.py skills/align-skill\n"
             "  python3 scripts/validate-skill-structure.py skills/"
         ),
@@ -151,6 +158,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "Optional validation profile. The default basic profile checks "
             "generic skill structure only. stateful-workflow additionally "
             "requires the standard state-machine skill sections."
+        ),
+    )
+    parser.add_argument(
+        "--require-evals",
+        action="store_true",
+        help=(
+            "Require each selected skill to provide the canonical "
+            "evals/trigger-prompts.csv suite. Any canonical suite that exists "
+            "is validated even when this flag is omitted."
         ),
     )
     return parser.parse_args(argv)
@@ -527,7 +543,143 @@ def validate_openai_metadata_policy(
         )
 
 
-def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
+def validate_trigger_evals(
+    skill_dir: Path,
+    *,
+    require_evals: bool,
+    result: SkillResult,
+) -> None:
+    eval_path = skill_dir / TRIGGER_EVAL_RELATIVE_PATH
+    legacy_path = skill_dir / LEGACY_TRIGGER_EVAL_RELATIVE_PATH
+
+    current_path = skill_dir
+    for path_part in Path(TRIGGER_EVAL_RELATIVE_PATH).parts:
+        current_path /= path_part
+        if current_path.is_symlink():
+            result.failures.append(
+                f"{TRIGGER_EVAL_RELATIVE_PATH} must be a target-owned regular "
+                "file; symlinks are not allowed"
+            )
+            return
+
+    if not eval_path.exists():
+        if require_evals:
+            detail = (
+                f"; {LEGACY_TRIGGER_EVAL_RELATIVE_PATH} does not satisfy the "
+                "canonical CSV contract"
+                if legacy_path.exists()
+                else ""
+            )
+            result.failures.append(
+                f"missing required {TRIGGER_EVAL_RELATIVE_PATH}{detail}"
+            )
+        return
+
+    try:
+        resolved_skill_dir = skill_dir.resolve(strict=True)
+        resolved_eval_path = eval_path.resolve(strict=True)
+    except OSError as exc:
+        result.failures.append(
+            f"cannot resolve {TRIGGER_EVAL_RELATIVE_PATH}: {exc}"
+        )
+        return
+
+    if not resolved_eval_path.is_relative_to(resolved_skill_dir):
+        result.failures.append(
+            f"{TRIGGER_EVAL_RELATIVE_PATH} must remain inside the skill directory"
+        )
+        return
+
+    if not eval_path.is_file():
+        result.failures.append(f"{TRIGGER_EVAL_RELATIVE_PATH} is not a file")
+        return
+
+    if require_evals and legacy_path.exists():
+        result.failures.append(
+            "strict eval validation rejects dual trigger authorities: "
+            f"{TRIGGER_EVAL_RELATIVE_PATH} and "
+            f"{LEGACY_TRIGGER_EVAL_RELATIVE_PATH}"
+        )
+
+    seen_ids: dict[str, int] = {}
+    seen_prompts: dict[str, int] = {}
+    label_counts = {"true": 0, "false": 0}
+
+    try:
+        with eval_path.open(encoding="utf-8", newline="") as stream:
+            reader = csv.reader(stream, strict=True)
+            header = next(reader, None)
+            if header is None or tuple(header) != TRIGGER_EVAL_HEADER:
+                expected = ",".join(TRIGGER_EVAL_HEADER)
+                result.failures.append(
+                    f"{TRIGGER_EVAL_RELATIVE_PATH} must use exact header: {expected}"
+                )
+                return
+
+            for row_number, row in enumerate(reader, start=2):
+                if len(row) != len(TRIGGER_EVAL_HEADER):
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} must "
+                        "contain exactly 3 columns"
+                    )
+                    continue
+
+                case_id, label, prompt = (value.strip() for value in row)
+                if not case_id:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} "
+                        "has a blank id"
+                    )
+                elif case_id in seen_ids:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} rows "
+                        f"{seen_ids[case_id]} and {row_number} have duplicate ids"
+                    )
+                else:
+                    seen_ids[case_id] = row_number
+
+                if label not in label_counts:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} "
+                        "should_trigger must be lowercase true or false"
+                    )
+                else:
+                    label_counts[label] += 1
+
+                if not prompt:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} "
+                        "has a blank prompt"
+                    )
+                elif prompt in seen_prompts:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} rows "
+                        f"{seen_prompts[prompt]} and {row_number} have duplicate "
+                        "prompts"
+                    )
+                else:
+                    seen_prompts[prompt] = row_number
+    except (OSError, UnicodeError, csv.Error) as exc:
+        result.failures.append(
+            f"cannot read {TRIGGER_EVAL_RELATIVE_PATH}: {exc}"
+        )
+        return
+
+    for label in ("true", "false"):
+        count = label_counts[label]
+        if count < MIN_TRIGGER_CASES_PER_LABEL:
+            result.failures.append(
+                f"{TRIGGER_EVAL_RELATIVE_PATH} needs at least "
+                f"{MIN_TRIGGER_CASES_PER_LABEL} {label} cases; found {count}"
+            )
+
+
+def validate_skill(
+    skill_dir: Path,
+    *,
+    profile: str = "basic",
+    require_evals: bool = False,
+) -> SkillResult:
     result = SkillResult(path=skill_dir)
     skill_md = skill_dir / "SKILL.md"
 
@@ -580,6 +732,13 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
         result.failures.append(f"cannot read SKILL.md for learning loop: {exc}")
         skill_text = ""
 
+    line_count = len(skill_text.splitlines())
+    if line_count > SKILL_MD_LINE_BUDGET:
+        result.warnings.append(
+            f"SKILL.md has {line_count} lines; review progressive disclosure "
+            f"above the {SKILL_MD_LINE_BUDGET}-line budget"
+        )
+
     if name:
         validate_openai_metadata_policy(
             skill_dir,
@@ -603,6 +762,12 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
 
     if profile == "stateful-workflow" and skill_text:
         validate_stateful_workflow_profile(skill_text, result)
+
+    validate_trigger_evals(
+        skill_dir,
+        require_evals=require_evals,
+        result=result,
+    )
 
     for child in sorted(skill_dir.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
@@ -670,7 +835,12 @@ def main(argv: list[str]) -> int:
         skills, warnings = discover_skills(target)
         discovery_warnings.extend(warnings)
         all_results.extend(
-            validate_skill(skill, profile=args.profile) for skill in skills
+            validate_skill(
+                skill,
+                profile=args.profile,
+                require_evals=args.require_evals,
+            )
+            for skill in skills
         )
 
     for warning in discovery_warnings:

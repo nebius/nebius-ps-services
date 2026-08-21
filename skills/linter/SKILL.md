@@ -1,6 +1,6 @@
 ---
 name: linter
-description: Lint and auto-fix Shell, Markdown, and Python files in a repository. Use when users ask to lint shell scripts with shellcheck and bash -n, lint all nested Markdown files with markdownlint (fix first, then .markdownlint.json fallback rules), or lint Python files with ruff (fix first, then targeted Ruff rules in pyproject.toml).
+description: "Lint and auto-fix repository Shell, Markdown, or Python files using shellcheck/bash -n, markdownlint with project fallbacks, or Ruff with targeted pyproject rules."
 ---
 
 # Linter

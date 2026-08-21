@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Create a fast local Git commit on the current branch without pushing. Use when the user explicitly asks to commit current local changes, or when a fresh explicit `$worktree integrate` delegates one exact child/source commit: inspect the complete diff, stage with repo-root `git add -A`, validate, commit with normal hooks, and report exact evidence. Do not use for pushes, pull requests, branch repair, or Agentic SDLC feature commits."
+description: "Use only when explicitly asked for one local Git commit without push: inspect the full diff, stage repo-wide, validate, commit, and report. Also handles exact worktree-integration commits; not for PRs."
 ---
 
 # Commit

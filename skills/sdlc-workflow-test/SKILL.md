@@ -1,6 +1,6 @@
 ---
 name: sdlc-workflow-test
-description: "Use only when explicitly asked, outside the Agentic SDLC workflow, to safely verify the whole Agentic SDLC system: keep the no-flag lightweight verifier unchanged, or use --create to replace the previous exactly owned local three-tier Docker application before computer-use GUI UAT, with --keep, --resume, --destroy, exact cleanup, and sanitized reporting."
+description: "Use only when explicitly asked, outside Agentic SDLC, to verify the workflow with the no-flag check or --create/--keep/--resume/--destroy for one owned local three-tier Docker app plus GUI UAT and sanitized cleanup."
 ---
 
 # SDLC Workflow Test
@@ -157,8 +157,10 @@ remotes.
    ```
 
    This script checks source-installed parity for all required SDLC skills and
-   the `worktree`, `nebius-grafana-query`, and conditional `troubleshoot`
-   runtime support, explicit-only invocation policy, prompt workspace/history/
+   the `maintain-project-specs`, `worktree`, `nebius-grafana-query`,
+   `project-agent-instructions`, and conditional `troubleshoot` runtime
+   support, explicit-only invocation policy, canonical shared spec ownership,
+   prompt workspace/history/
    rename/lifecycle regressions, execution scope/recovery/replan/secret gates,
    sequential fallback, Task Implementer interoperability, the composed
    managed outer-worktree lease lifecycle, bounded observability contract,
@@ -179,7 +181,8 @@ remotes.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
    `sdlc-create-requirements`, `sdlc-start`, `sdlc-gather-context`,
-   `sdlc-create-design`, `sdlc-auto-steering`, `sdlc-create-plan`,
+   `sdlc-create-design`, `project-agent-instructions`, `sdlc-auto-steering`,
+   `sdlc-create-plan`,
    `sdlc-prepare-execution`, `sdlc-tdd`,
    `sdlc-implement-plan`, `sdlc-validate-codes`, `sdlc-unit-tests`,
    `sdlc-evaluate`, `sdlc-update-documents`, `sdlc-align-specs`,

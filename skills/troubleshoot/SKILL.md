@@ -1,6 +1,6 @@
 ---
 name: troubleshoot
-description: "Use for causal troubleshooting and repair of difficult, persistent, intermittent, cross-layer, environment-specific, regression, performance, concurrency, corruption, CI-only, production-only, installed-software, service, container, network, storage, Kubernetes, cloud, application-code, or shell-script failures. Preserve evidence, test competing hypotheses, localize the earliest divergence, prove the mechanism, apply the smallest durable fix within the user's authority, and verify it. Do not use for routine syntax, lint, formatting, dependency installation, generic review, ordinary feature work, or an already-understood mechanical fix."
+description: "Diagnose and repair difficult, persistent, intermittent, or cross-layer failures by proving the causal divergence and smallest durable fix. Not for routine lint, setup, review, feature work, or known mechanical fixes."
 ---
 
 # Troubleshoot
@@ -565,9 +565,23 @@ If the host terminates before Stop, only a resumed turn in the same session can
 report that interruption. An ordinary missing,
 malformed, partial, `FAIL`, or `UNKNOWN` report is advisory: Stop continues,
 no tool is denied, and no generated fallback replaces the assistant response.
-Sensitive output may receive one bounded redaction correction. Invalid trusted
-coordination state, missing authority, peer Stop policy, and exact remediation-
-budget exhaustion remain fail-closed.
+Prefer plain inline-code repository-relative local labels such as
+`references/verification-and-reporting.md`, optionally followed by a colon and
+positive line number. Inline or Markdown destinations may use relative,
+platform-native absolute, home-relative, or constrained local `file:` syntax
+only when their decoded canonical targets remain inside the Git repository
+root derived from the event working directory; without that root, absolute,
+home-relative, and local `file:` forms are unsafe. A harmless contained format
+defect is advisory. Sensitive content, ambiguous or renderer-active link
+syntax, an outside-root target, traversal or symlink escape, or an unsafe URI
+closes as `sensitive_detected` and stops with one generic warning. The same
+resolver normalizes contained targets and atomically replaces unsafe or
+over-limit markup in strict exhausted-report fallbacks. Read
+`references/verification-and-reporting.md` before authoring local links or
+interpreting a reference warning. The hook requests no automatic replacement
+report and cannot retract output already rendered by the host. Invalid trusted
+coordination state, missing authority, peer Stop policy, and exact
+remediation-budget exhaustion remain fail-closed.
 
 At budget exhaustion, use the same concise report, add
 `REMEDIATION_BUDGET_EXHAUSTED` and the exact stop trigger under `Outcome`,

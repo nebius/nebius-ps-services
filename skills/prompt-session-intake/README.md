@@ -70,5 +70,9 @@ python3 prompt-session-intake/scripts/test_prompt_session.py -v
 python3 prompt-session-intake/scripts/test_skill_contract.py -v
 ```
 
+Evaluation sources are `evals/trigger-prompts.csv` for canonical routing cases
+and `evals/process-cases.md` for supplemental projection, concurrency, and
+failure-path expectations.
+
 See [the state contract](references/state-contract.md) for identity,
 transition, concurrency, and capture-isolated failure rules.

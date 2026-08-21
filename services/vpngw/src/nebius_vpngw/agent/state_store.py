@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .vm_ha.store import atomic_write_json
 
-RENDER_VERSION = 3
+RENDER_VERSION = 4
 
 
 def _get_package_version() -> str:

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -14,9 +16,11 @@ from typing import Optional
 import unittest
 from unittest import mock
 
+import project_agent_instructions as project_agent_cli
 from project_agent_instructions_lib import contracts
 from project_agent_instructions_lib import discovery
 from project_agent_instructions_lib import private_state
+from project_agent_instructions_lib import render_state
 from project_agent_instructions_lib import target_io
 from project_agent_instructions_lib import workflow
 
@@ -397,6 +401,470 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(
             render_state["schema"], "project-agent-instructions.render-state.v1"
         )
+
+    def test_render_rejects_existing_sufficient_for_managed_target(self) -> None:
+        initial = self.inspect()
+        self.apply(initial, self.decision(initial, "needed"))
+        current = self.inspect()
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as raised:
+            workflow.render_decision(
+                self.write_json("manifest.json", current),
+                self.write_json(
+                    "decision.json", self.decision(current, "existing-sufficient")
+                ),
+                self.private / "rules.md",
+                self.private / "render-state.json",
+                self.private,
+            )
+
+        self.assertEqual(raised.exception.code, "EXISTING_INSTRUCTIONS_GAP")
+        self.assertFalse((self.private / "rules.md").exists())
+        self.assertFalse((self.private / "render-state.json").exists())
+
+    def test_render_revises_exactly_owned_empty_rules_to_needed_rules(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+        rules_path = self.private / "rules.md"
+        state_path = self.private / "render-state.json"
+        workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+        prior_state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(rules_path.read_bytes(), b"")
+
+        self.write_json("decision.json", self.decision(manifest, "needed"))
+        revised = workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+
+        rendered = rules_path.read_bytes()
+        current_state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertIn(b"Run the focused contract tests", rendered)
+        self.assertEqual(revised["rules_sha256"], contracts._sha256_bytes(rendered))
+        self.assertNotEqual(
+            current_state["decision_sha256"], prior_state["decision_sha256"]
+        )
+        self.assertEqual(current_state["rules_sha256"], revised["rules_sha256"])
+        self.assertFalse(revised["repository_mutated"])
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_render_revision_rejects_mismatched_predecessor_state(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+        rules_path = self.private / "rules.md"
+        state_path = self.private / "render-state.json"
+        workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+        predecessor = json.loads(state_path.read_text(encoding="utf-8"))
+        predecessor["rules_sha256"] = "0" * 64
+        self.write_json("render-state.json", predecessor)
+        self.write_json("decision.json", self.decision(manifest, "needed"))
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as raised:
+            workflow.render_decision(
+                manifest_path,
+                decision_path,
+                rules_path,
+                state_path,
+                self.private,
+            )
+
+        self.assertEqual(raised.exception.code, "UNSAFE_TARGET")
+        self.assertEqual(rules_path.read_bytes(), b"")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_render_revision_rechecks_predecessor_state_at_final_cas(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+        rules_path = self.private / "rules.md"
+        state_path = self.private / "render-state.json"
+        workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+        self.write_json("decision.json", self.decision(manifest, "needed"))
+        original_validate = workflow.validate_render_predecessor
+
+        def mutate_state_after_validation(*args: object, **kwargs: object) -> object:
+            predecessor = original_validate(*args, **kwargs)
+            changed = json.loads(state_path.read_text(encoding="utf-8"))
+            changed["decision_sha256"] = "0" * 64
+            self.write_json("render-state.json", changed)
+            return predecessor
+
+        with (
+            mock.patch.object(
+                workflow,
+                "validate_render_predecessor",
+                side_effect=mutate_state_after_validation,
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError) as raised,
+        ):
+            workflow.render_decision(
+                manifest_path,
+                decision_path,
+                rules_path,
+                state_path,
+                self.private,
+            )
+
+        self.assertEqual(raised.exception.code, "CONCURRENT_MODIFICATION")
+        self.assertEqual(rules_path.read_bytes(), b"")
+        self.assertEqual(
+            json.loads(state_path.read_text(encoding="utf-8"))["decision_sha256"],
+            "0" * 64,
+        )
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_render_revision_rejects_hard_linked_predecessor(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+        rules_path = self.private / "rules.md"
+        state_path = self.private / "render-state.json"
+        workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+        os.link(rules_path, self.private / "unexpected-rules-link")
+        self.write_json("decision.json", self.decision(manifest, "needed"))
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as raised:
+            workflow.render_decision(
+                manifest_path,
+                decision_path,
+                rules_path,
+                state_path,
+                self.private,
+            )
+
+        self.assertEqual(raised.exception.code, "UNSAFE_TARGET")
+        self.assertEqual(rules_path.read_bytes(), b"")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_render_rejects_a_concurrent_private_bundle_writer(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "needed")
+        )
+
+        with render_state.render_lock(self.private):
+            with self.assertRaises(contracts.ProjectInstructionsError) as raised:
+                workflow.render_decision(
+                    manifest_path,
+                    decision_path,
+                    self.private / "rules.md",
+                    self.private / "render-state.json",
+                    self.private,
+                )
+
+        self.assertEqual(raised.exception.code, "CONCURRENT_MODIFICATION")
+        self.assertFalse((self.private / "rules.md").exists())
+        self.assertFalse((self.private / "render-state.json").exists())
+
+    def test_render_lock_creation_failure_returns_structured_blocker(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "needed")
+        )
+        os.chmod(self.private, 0o500)
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "render",
+                    "--manifest",
+                    str(manifest_path),
+                    "--decision",
+                    str(decision_path),
+                    "--private-root",
+                    str(self.private),
+                    "--output",
+                    str(self.private / "rules.md"),
+                    "--state",
+                    str(self.private / "render-state.json"),
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        finally:
+            os.chmod(self.private, 0o700)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(json.loads(completed.stdout)["code"], "UNSAFE_TARGET")
+        self.assertEqual(completed.stderr, "")
+        self.assertFalse((self.private / ".render.lock").exists())
+        self.assertFalse((self.private / "rules.md").exists())
+        self.assertFalse((self.private / "render-state.json").exists())
+
+    def test_render_cli_classifies_and_recovers_state_publish_failure(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+        rules_path = self.private / "rules.md"
+        state_path = self.private / "render-state.json"
+        workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+        predecessor_state = state_path.read_bytes()
+        self.write_json("decision.json", self.decision(manifest, "needed"))
+
+        render_args = [
+            "render",
+            "--manifest",
+            str(manifest_path),
+            "--decision",
+            str(decision_path),
+            "--private-root",
+            str(self.private),
+            "--output",
+            str(rules_path),
+            "--state",
+            str(state_path),
+        ]
+        original_write = workflow._write_private_json
+
+        def fail_state_publication(*args: object, **kwargs: object) -> None:
+            with mock.patch.object(
+                private_state.tempfile,
+                "mkstemp",
+                side_effect=OSError("injected state publication failure"),
+            ):
+                original_write(*args, **kwargs)
+
+        blocked_output = io.StringIO()
+        with (
+            mock.patch.object(
+                workflow,
+                "_write_private_json",
+                side_effect=fail_state_publication,
+            ),
+            contextlib.redirect_stdout(blocked_output),
+        ):
+            blocked_code = project_agent_cli.main(render_args)
+
+        blocked = json.loads(blocked_output.getvalue())
+        self.assertEqual(blocked_code, 2)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(
+            blocked["code"], "RENDER_STATE_PUBLICATION_INCOMPLETE"
+        )
+        self.assertIn(b"Run the focused contract tests", rules_path.read_bytes())
+        self.assertEqual(state_path.read_bytes(), predecessor_state)
+        recovered_output = io.StringIO()
+        with contextlib.redirect_stdout(recovered_output):
+            recovered_code = project_agent_cli.main(render_args)
+        recovered = json.loads(recovered_output.getvalue())
+        current_state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(recovered_code, 0)
+        self.assertEqual(current_state["rules_sha256"], recovered["rules_sha256"])
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_render_cli_retries_state_directory_sync_after_replace(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+        rules_path = self.private / "rules.md"
+        state_path = self.private / "render-state.json"
+        workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+        predecessor_state = state_path.read_bytes()
+        self.write_json("decision.json", self.decision(manifest, "needed"))
+        render_args = [
+            "render",
+            "--manifest",
+            str(manifest_path),
+            "--decision",
+            str(decision_path),
+            "--private-root",
+            str(self.private),
+            "--output",
+            str(rules_path),
+            "--state",
+            str(state_path),
+        ]
+        original_write = workflow._write_private_json
+        original_fsync = private_state.os.fsync
+
+        def fail_directory_sync(descriptor: int) -> None:
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError("injected directory sync failure")
+            original_fsync(descriptor)
+
+        def fail_state_publication(*args: object, **kwargs: object) -> None:
+            with mock.patch.object(
+                private_state.os,
+                "fsync",
+                side_effect=fail_directory_sync,
+            ):
+                original_write(*args, **kwargs)
+
+        blocked_output = io.StringIO()
+        with (
+            mock.patch.object(
+                workflow,
+                "_write_private_json",
+                side_effect=fail_state_publication,
+            ),
+            contextlib.redirect_stdout(blocked_output),
+        ):
+            blocked_code = project_agent_cli.main(render_args)
+
+        self.assertEqual(blocked_code, 2)
+        self.assertEqual(
+            json.loads(blocked_output.getvalue())["code"],
+            "RENDER_STATE_PUBLICATION_INCOMPLETE",
+        )
+        self.assertNotEqual(state_path.read_bytes(), predecessor_state)
+        directory_synced = False
+
+        def observe_directory_sync(descriptor: int) -> None:
+            nonlocal directory_synced
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                directory_synced = True
+            original_fsync(descriptor)
+
+        def observe_state_publication(*args: object, **kwargs: object) -> None:
+            with mock.patch.object(
+                private_state.os,
+                "fsync",
+                side_effect=observe_directory_sync,
+            ):
+                original_write(*args, **kwargs)
+
+        recovered_output = io.StringIO()
+        with (
+            mock.patch.object(
+                workflow,
+                "_write_private_json",
+                side_effect=observe_state_publication,
+            ),
+            contextlib.redirect_stdout(recovered_output),
+        ):
+            recovered_code = project_agent_cli.main(render_args)
+
+        self.assertEqual(recovered_code, 0)
+        self.assertTrue(directory_synced)
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_render_cli_rejects_hard_linked_state_during_recovery(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+        rules_path = self.private / "rules.md"
+        state_path = self.private / "render-state.json"
+        workflow.render_decision(
+            manifest_path,
+            decision_path,
+            rules_path,
+            state_path,
+            self.private,
+        )
+        self.write_json("decision.json", self.decision(manifest, "needed"))
+        render_args = [
+            "render",
+            "--manifest",
+            str(manifest_path),
+            "--decision",
+            str(decision_path),
+            "--private-root",
+            str(self.private),
+            "--output",
+            str(rules_path),
+            "--state",
+            str(state_path),
+        ]
+        original_write = workflow._write_private_json
+
+        def fail_state_publication(*args: object, **kwargs: object) -> None:
+            with mock.patch.object(
+                private_state.tempfile,
+                "mkstemp",
+                side_effect=OSError("injected state publication failure"),
+            ):
+                original_write(*args, **kwargs)
+
+        blocked_output = io.StringIO()
+        with (
+            mock.patch.object(
+                workflow,
+                "_write_private_json",
+                side_effect=fail_state_publication,
+            ),
+            contextlib.redirect_stdout(blocked_output),
+        ):
+            blocked_code = project_agent_cli.main(render_args)
+
+        self.assertEqual(blocked_code, 2)
+        self.assertEqual(
+            json.loads(blocked_output.getvalue())["code"],
+            "RENDER_STATE_PUBLICATION_INCOMPLETE",
+        )
+        linked_state = self.private / "unexpected-state-link.json"
+        os.link(state_path, linked_state)
+        predecessor_bytes = state_path.read_bytes()
+        recovered_output = io.StringIO()
+        with contextlib.redirect_stdout(recovered_output):
+            recovered_code = project_agent_cli.main(render_args)
+
+        recovered = json.loads(recovered_output.getvalue())
+        self.assertEqual(recovered_code, 2)
+        self.assertEqual(recovered["code"], "UNSAFE_TARGET")
+        self.assertEqual(state_path.read_bytes(), predecessor_bytes)
+        self.assertEqual(linked_state.read_bytes(), predecessor_bytes)
+        self.assertEqual(state_path.stat().st_nlink, 2)
+        self.assertFalse((self.repo / "AGENTS.md").exists())
 
     def test_same_managed_body_with_receipt_preserves_target(self) -> None:
         first = self.inspect()

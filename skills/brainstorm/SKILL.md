@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: "Use for exploratory, chat-only brainstorming about an idea, proposal, design direction, architecture question, product/technical topic, or research question before implementation. Gather only source-ranked context relevant to the topic, question, or problem from the current project folder, sibling projects, related skills, internal Confluence/Slack via connectors or MCP when available, and official vendor docs; resolve recommendation-changing source conflicts with bounded `research` when source priority is insufficient; for major decisions, consult installed `design` and `system-design-rules` skills as advisory sources when accessible; challenge assumptions and discuss options without making code changes."
+description: "Explore ideas or technical directions in chat before implementation using source-ranked context. Compare options; use research for due diligence and design for decisions/plans; never edit code."
 ---
 
 # Brainstorm
@@ -191,5 +191,5 @@ the user to judge the answer:
 
 - Read `references/source-priority.md` for the detailed context-gathering
   rubric, source conflict handling, and answer-shaping patterns.
-- Use `evals/trigger-prompts.md` for trigger readiness examples when tuning or
+- Use `evals/trigger-prompts.csv` for trigger readiness examples when tuning or
   reviewing this skill.

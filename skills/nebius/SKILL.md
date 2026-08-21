@@ -1,6 +1,6 @@
 ---
 name: nebius
-description: "Use for Nebius SDK/cloud automation in Python: IAM/Object Storage, service accounts/access keys, VPC pools/subnets/routes, quota checks, MK8s compatibility/readiness, GPU platform/preset/fabric/operator decisions, and observability endpoint/auth wiring. Do not use for Terraform scaffolding, Helm charts, or nebius-cxcli module onboarding."
+description: "Build Nebius SDK/cloud automation in Python for IAM/Object Storage, service accounts, VPC, quotas, MK8s readiness, GPU platforms, or observability auth. Use Terraform, Helm, or cxcli for their owned workflows."
 ---
 
 # Nebius

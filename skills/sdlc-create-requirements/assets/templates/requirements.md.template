@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD003 MD022 MD033 MD041 -->
 <!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
 ---
 schema: maintain-project-specs/requirements-v1
@@ -149,3 +150,4 @@ As a <user>, I want <capability>, so that <outcome>.
 
 ## Change Log
 <!-- maintain-project-specs:requirements:end -->
+<!-- markdownlint-enable MD003 MD022 MD033 MD041 -->

@@ -60,7 +60,7 @@ class VMHANodeRecord:
     node_id: str
     instance_index: int
     role: schema.VMHARole
-    credential_sources: schema.VMHACredentialSourceReferences
+    nebius_credentials_path: str
 
 
 @dataclass(frozen=True)
@@ -188,6 +188,86 @@ def _expand_env(obj: t.Any, missing: set[str]) -> t.Any:
     return obj
 
 
+def _placeholder_names_used_only_as_tunnel_psks(config: t.Any) -> set[str]:
+    """Return unresolved variables whose every occurrence is one exact tunnel PSK."""
+
+    occurrences: dict[str, list[tuple[tuple[str | int, ...], bool]]] = {}
+
+    def visit(value: t.Any, path: tuple[str | int, ...]) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                visit(child, (*path, str(key)))
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, (*path, index))
+            return
+        if not isinstance(value, str):
+            return
+        exact = _ENV_PATTERN.fullmatch(value)
+        for match in _ENV_PATTERN.finditer(value):
+            occurrences.setdefault(match.group(1), []).append(
+                (path, exact is not None and exact.group(1) == match.group(1))
+            )
+
+    visit(config, ())
+
+    def is_tunnel_psk(path: tuple[str | int, ...]) -> bool:
+        return bool(
+            len(path) == 5
+            and path[0] == "connections"
+            and isinstance(path[1], int)
+            and path[2] == "tunnels"
+            and isinstance(path[3], int)
+            and path[4] == "psk"
+        )
+
+    return {
+        name
+        for name, uses in occurrences.items()
+        if uses and all(exact and is_tunnel_psk(path) for path, exact in uses)
+    }
+
+
+def has_unresolved_tunnel_psk_placeholders(config: t.Any) -> bool:
+    """Return whether config retains a missing variable used only as a tunnel PSK."""
+
+    return bool(_placeholder_names_used_only_as_tunnel_psks(config))
+
+
+def _schema_view_with_unresolved_tunnel_psks(
+    config: t.Any,
+    placeholder_names: set[str],
+) -> tuple[t.Any, dict[tuple[int, int], str]]:
+    """Substitute schema-safe sentinels while retaining exact PSK references."""
+
+    validation_view = copy.deepcopy(config)
+    retained: dict[tuple[int, int], str] = {}
+    if not isinstance(validation_view, dict):
+        return validation_view, retained
+    connections = validation_view.get("connections")
+    if not isinstance(connections, list):
+        return validation_view, retained
+    for connection_index, connection in enumerate(connections):
+        if not isinstance(connection, dict):
+            continue
+        tunnels = connection.get("tunnels")
+        if not isinstance(tunnels, list):
+            continue
+        for tunnel_index, tunnel in enumerate(tunnels):
+            if not isinstance(tunnel, dict):
+                continue
+            psk = tunnel.get("psk")
+            if not isinstance(psk, str):
+                continue
+            match = _ENV_PATTERN.fullmatch(psk)
+            if match is None or match.group(1) not in placeholder_names:
+                continue
+            retained[(connection_index, tunnel_index)] = psk
+            tunnel["psk"] = "status-unresolved-psk"
+    return validation_view, retained
+
+
 def _to_int(val: t.Any) -> int | None:
     """Return integer if val represents an int, else None.
 
@@ -230,6 +310,36 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def connection_static_remote_prefixes(
+    connection: t.Mapping[str, t.Any],
+    *,
+    instance_index: int | None = None,
+) -> list[str]:
+    """Return normalized static prefixes owned by one connection/member.
+
+    The public schema permits prefixes at connection level and on individual
+    tunnels.  Disabled tunnels never contribute, and member-scoped callers see
+    only the tunnels rendered on that gateway VM.
+    """
+
+    prefixes = {str(prefix) for prefix in connection.get("remote_prefixes") or []}
+    for tunnel in connection.get("tunnels") or []:
+        role = str(tunnel.get("ha_role") or "active").strip().lower().replace("_", "-")
+        if role == "disable":
+            continue
+        try:
+            tunnel_instance_index = int(tunnel.get("gateway_instance_index", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if instance_index is not None and tunnel_instance_index != instance_index:
+            continue
+        prefixes.update(
+            str(prefix)
+            for prefix in (tunnel.get("static_routes") or {}).get("remote_prefixes") or []
+        )
+    return sorted(prefixes)
+
+
 def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
     vm_ha = (local_cfg.get("gateway_group") or {}).get("vm_ha")
     if not vm_ha or not vm_ha.get("enabled", False):
@@ -240,9 +350,7 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
             node_id=str(member["node_id"]),
             instance_index=int(member["instance_index"]),
             role=schema.VMHARole(member["role"]),
-            credential_sources=schema.VMHACredentialSourceReferences.model_validate(
-                member["credential_sources"]
-            ),
+            nebius_credentials_path=str(member["nebius_credentials_path"]),
         )
         for member in sorted(vm_ha["members"], key=lambda item: int(item["instance_index"]))
     )
@@ -256,15 +364,10 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
     for connection in local_cfg.get("connections") or []:
         connection_mode = connection.get("routing_mode") or defaults_mode
         if connection_mode == "static":
-            remote_prefixes = set(connection.get("remote_prefixes") or [])
-            for tunnel in connection.get("tunnels") or []:
-                remote_prefixes.update(
-                    (tunnel.get("static_routes") or {}).get("remote_prefixes") or []
-                )
             static_routes.append(
                 {
                     "connection": connection.get("name"),
-                    "remote_prefixes": sorted(remote_prefixes),
+                    "remote_prefixes": connection_static_remote_prefixes(connection),
                 }
             )
         elif connection_mode == "bgp":
@@ -293,7 +396,7 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
         key=lambda item: int(item["instance_index"]),
     )
     for member in canonical_config["gateway_group"]["vm_ha"]["members"]:
-        member.pop("credential_sources", None)
+        member.pop("nebius_credentials_path", None)
     canonical_configuration = _canonical_json(canonical_config)
     logical_manifests = VMHALogicalManifests(
         static_routes_json=_canonical_json(static_routes),
@@ -326,6 +429,7 @@ def load_local_config(
     path: Path,
     *,
     allow_missing_placeholders: bool = False,
+    allow_missing_tunnel_psk_placeholders: bool = False,
     validate_schema: bool = True,
 ) -> dict:
     with path.open("r", encoding="utf-8") as f:
@@ -369,6 +473,10 @@ def load_local_config(
     except Exception:
         # Ignore and let normal missing handling report variables
         pass
+    unresolved_tunnel_psk_names: set[str] = set()
+    if allow_missing_tunnel_psk_placeholders:
+        unresolved_tunnel_psk_names = _placeholder_names_used_only_as_tunnel_psks(expanded)
+        missing.difference_update(unresolved_tunnel_psk_names)
     if missing and not allow_missing_placeholders:
         # Surface all missing vars at once to help the user export them.
         raise ValueError(
@@ -401,14 +509,22 @@ def load_local_config(
     # ============================================================================
     if validate_schema:
         try:
-            validated_config = schema.validate_config(expanded)
+            validation_input, retained_psks = _schema_view_with_unresolved_tunnel_psks(
+                expanded,
+                unresolved_tunnel_psk_names,
+            )
+            validated_config = schema.validate_config(validation_input)
             # Convert back to dict for downstream processing
             # (preserves existing code paths while ensuring schema compliance)
             expanded = validated_config.model_dump(mode="python", exclude_none=False)
+            for (connection_index, tunnel_index), placeholder in retained_psks.items():
+                expanded["connections"][connection_index]["tunnels"][tunnel_index][
+                    "psk"
+                ] = placeholder
             if not vm_ha_was_provided:
                 expanded["gateway_group"].pop("vm_ha", None)
             else:
-                _validate_vm_ha_credential_sources(expanded)
+                _validate_vm_ha_nebius_credentials(expanded)
         except ValidationError as e:
             # Format Pydantic errors into user-friendly messages
             errors = []
@@ -427,34 +543,54 @@ def load_local_config(
     return expanded
 
 
-def _validate_vm_ha_credential_sources(config: dict) -> None:
-    """Fail closed on unsafe operator files without disclosing their paths."""
+def _validate_vm_ha_nebius_credentials(config: dict) -> None:
+    """Validate node-scoped operator credential JSON without disclosing paths."""
 
     vm_ha = (config.get("gateway_group") or {}).get("vm_ha") or {}
     if not vm_ha.get("enabled", False):
         return
+    credential_inodes: dict[tuple[int, int], str] = {}
     for member in vm_ha.get("members") or []:
         node_id = str(member.get("node_id") or "unknown")
-        sources = member.get("credential_sources") or {}
-        for name in (
-            "certificate_authority",
-            "certificate",
-            "private_key",
-            "nebius_credentials",
-        ):
-            path = Path(str(sources.get(name) or ""))
-            try:
-                metadata = path.lstat()
-            except OSError as exc:
+        path = Path(str(member.get("nebius_credentials_path") or ""))
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise ValueError(
+                f"VM-HA Nebius credentials for {node_id} are unavailable"
+            ) from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_nlink != 1
+            ):
                 raise ValueError(
-                    f"VM-HA credential source {name} for {node_id} is unavailable"
-                ) from exc
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-                raise ValueError(
-                    f"VM-HA credential source {name} for {node_id} must be a non-symlink regular file"
+                    f"VM-HA Nebius credentials for {node_id} must be an owner-only "
+                    "non-linked regular file"
                 )
-            if not os.access(path, os.R_OK):
-                raise ValueError(f"VM-HA credential source {name} for {node_id} is not readable")
+            payload = bytearray()
+            while chunk := os.read(descriptor, 1024 * 1024):
+                payload.extend(chunk)
+            identity = path.lstat()
+            if identity.st_dev != metadata.st_dev or identity.st_ino != metadata.st_ino:
+                raise ValueError(f"VM-HA Nebius credentials for {node_id} changed while reading")
+        except OSError as exc:
+            raise ValueError(f"VM-HA Nebius credentials for {node_id} are unreadable") from exc
+        finally:
+            os.close(descriptor)
+        try:
+            parsed = json.loads(bytes(payload).decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"VM-HA Nebius credentials for {node_id} are not valid JSON") from exc
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError(f"VM-HA Nebius credentials for {node_id} must be a JSON object")
+        inode = (metadata.st_dev, metadata.st_ino)
+        if inode in credential_inodes:
+            raise ValueError("VM-HA members must use distinct Nebius credential files")
+        credential_inodes[inode] = node_id
 
 
 def _detect_vendor(text: str) -> str:

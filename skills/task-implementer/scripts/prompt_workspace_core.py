@@ -236,7 +236,27 @@ def load_json_object(path: Path, label: str) -> dict[str, object]:
     return value
 
 
-def canonical_git_root(path: Path) -> Path:
+def read_only_git_environment() -> dict[str, str]:
+    """Return a Git environment that cannot redirect reads into side effects."""
+
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+    )
+    return environment
+
+
+def canonical_git_root(
+    path: Path, *, git_environment: dict[str, str] | None = None
+) -> Path:
     candidate = path.expanduser().resolve()
     if not candidate.is_dir():
         raise PromptWorkspaceError(
@@ -250,6 +270,7 @@ def canonical_git_root(path: Path) -> Path:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
     except FileNotFoundError as exc:
         raise PromptWorkspaceError(
@@ -266,7 +287,9 @@ def canonical_git_root(path: Path) -> Path:
     return Path(result.stdout.strip()).resolve()
 
 
-def enclosing_git_storage(path: Path) -> Path | None:
+def enclosing_git_storage(
+    path: Path, *, git_environment: dict[str, str] | None = None
+) -> Path | None:
     """Return an enclosing worktree or Git metadata directory."""
 
     candidate = path.expanduser()
@@ -281,6 +304,7 @@ def enclosing_git_storage(path: Path) -> Path | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
         if worktree.returncode == 0 and worktree.stdout.strip():
             return Path(worktree.stdout.strip()).resolve()
@@ -291,6 +315,7 @@ def enclosing_git_storage(path: Path) -> Path | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
     except FileNotFoundError as exc:
         raise PromptWorkspaceError(
@@ -363,8 +388,13 @@ def contains_secret(text: str) -> bool:
     )
 
 
-def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
-    root = canonical_git_root(repo_path)
+def repo_and_scope(
+    repo_path: Path,
+    scope_value: str,
+    *,
+    git_environment: dict[str, str] | None = None,
+) -> tuple[Path, Path, str]:
+    root = canonical_git_root(repo_path, git_environment=git_environment)
     scope_candidate = Path(scope_value).expanduser()
     if scope_candidate.is_absolute():
         source_root = scope_candidate.resolve()
@@ -384,7 +414,7 @@ def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
 
 
 def workspace_git_identity(
-    root: Path,
+    root: Path, *, git_environment: dict[str, str] | None = None
 ) -> tuple[Path, Path, str, str, str, str | None]:
     try:
         common_result = subprocess.run(
@@ -401,6 +431,7 @@ def workspace_git_identity(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
         worktrees_result = subprocess.run(
             ["git", "-C", str(root), "worktree", "list", "--porcelain"],
@@ -409,6 +440,7 @@ def workspace_git_identity(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
         branch_result = subprocess.run(
             ["git", "-C", str(root), "symbolic-ref", "-q", "--short", "HEAD"],
@@ -417,6 +449,7 @@ def workspace_git_identity(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise PromptWorkspaceError(
@@ -455,6 +488,7 @@ def workspace_git_identity(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
         lane_config_result = subprocess.run(
             [
@@ -471,6 +505,7 @@ def workspace_git_identity(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise PromptWorkspaceError(
@@ -694,7 +729,7 @@ def workspace_document(
                     "problemMatcher": [],
                 },
                 {
-                    "label": "Task Implementer: Show Pending Lane Changes",
+                    "label": "Task Implementer: Show Lane Status",
                     "type": "process",
                     "command": str(python_executable),
                     "args": [
@@ -702,9 +737,16 @@ def workspace_document(
                         "lane-report",
                         "--workspace",
                         str(manifest_path),
-                        "--json",
                     ],
                     "problemMatcher": [],
+                    "presentation": {
+                        "echo": False,
+                        "reveal": "always",
+                        "focus": False,
+                        "panel": "dedicated",
+                        "showReuseMessage": False,
+                        "clear": True,
+                    },
                 },
             ],
             "inputs": [
@@ -736,8 +778,10 @@ def previous_workspace_document(
     document = workspace_document(
         manifest_path, source_root, helper_path, python_executable
     )
-    document["folders"][0]["name"] = "CODE"
-    document["tasks"]["tasks"] = document["tasks"]["tasks"][:3]
+    status_task = document["tasks"]["tasks"][3]
+    status_task["label"] = "Task Implementer: Show Pending Lane Changes"
+    status_task["args"].append("--json")
+    del status_task["presentation"]
     return document
 
 
@@ -781,7 +825,7 @@ def classify_generated_workspace(manifest_path: Path) -> str:
     if document == previous:
         return "previous"
 
-    # The previous three-task shape may retain one now-removed package-manager
+    # The previous four-task shape may retain one now-removed package-manager
     # Python executable. It is accepted only as inert migration input: helper,
     # arguments, task count, and every other byte still come from the trusted
     # running implementation, and init rewrites it before any command executes.
@@ -793,7 +837,7 @@ def classify_generated_workspace(manifest_path: Path) -> str:
         tasks = []
         commands = set()
         helpers = set()
-    if len(tasks) == 3 and len(commands) == 1 and helpers == {str(trusted_helper)}:
+    if len(tasks) == 4 and len(commands) == 1 and helpers == {str(trusted_helper)}:
         stale_text = next(iter(commands))
         stale = Path(stale_text)
         stale_shape = previous_workspace_document(
@@ -1025,7 +1069,9 @@ def required_string(value: dict[str, object], key: str, label: str) -> str:
     return result
 
 
-def verify_workspace(manifest_path: Path) -> dict[str, object]:
+def verify_workspace(
+    manifest_path: Path, *, git_environment: dict[str, str] | None = None
+) -> dict[str, object]:
     requested = manifest_path.expanduser()
     if requested.is_symlink():
         raise PromptWorkspaceError(
@@ -1048,7 +1094,7 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace Git root is not canonical"
         )
-    if canonical_git_root(root) != root:
+    if canonical_git_root(root, git_environment=git_environment) != root:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace Git root no longer resolves canonically"
         )
@@ -1059,7 +1105,7 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         source_branch,
         current_branch,
         current_lane_id,
-    ) = workspace_git_identity(root)
+    ) = workspace_git_identity(root, git_environment=git_environment)
     if (
         required_string(manifest, "primary_root", "workspace manifest") != str(primary)
         or required_string(manifest, "common_dir", "workspace manifest")
@@ -1143,7 +1189,7 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace path does not match its generated identity"
         )
-    if enclosing_git_storage(state_root) is not None:
+    if enclosing_git_storage(state_root, git_environment=git_environment) is not None:
         raise PromptWorkspaceError(
             "WORKSPACE_PATH_INVALID", "private workspace is inside Git storage"
         )
@@ -1242,7 +1288,10 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
 
 
 def verify_workspace_for_removal(
-    manifest_path: Path, project_path: Path
+    manifest_path: Path,
+    project_path: Path,
+    *,
+    git_environment: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Verify stable workspace identity even after its lane path is absent."""
 
@@ -1259,8 +1308,12 @@ def verify_workspace_for_removal(
             "workspace remove requires workspace-v2 lane state",
         )
     requested = project_path.expanduser().resolve()
-    root, source_root, scope = repo_and_scope(requested, str(requested))
-    common_dir, primary, source_ref, source_branch, _, _ = workspace_git_identity(root)
+    root, source_root, scope = repo_and_scope(
+        requested, str(requested), git_environment=git_environment
+    )
+    common_dir, primary, source_ref, source_branch, _, _ = workspace_git_identity(
+        root, git_environment=git_environment
+    )
     project_id, scope_id, scope_slug = workspace_identity(
         root,
         source_root,

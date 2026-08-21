@@ -1,6 +1,6 @@
 ---
 name: config-codex
-description: Configure or recover a public-safe Codex home setup for a developer machine, including a missing config.toml, global AGENTS.md policy, features and MCP servers, hooks, task-state layout, custom read-only agents, optional private task-implementer workspace access, and validation. Use when a user wants Codex configured similarly to this repo's global context-management workflow without copying personal paths, private state, or secrets.
+description: "Use only when explicitly asked to configure or recover a public-safe Codex home: config, global policy, MCP, hooks, task state, read-only agents, workspace access, and validation. Never copy private state or secrets."
 ---
 
 # Config Codex

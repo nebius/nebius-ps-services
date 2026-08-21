@@ -281,7 +281,7 @@ def test_vm_ha_member_snapshot_change_blocks_first_cloud_mutation(
         ("get_ha_instance", ("instance-old",)),
         ("stop_ha_instance", ("instance-old",)),
         ("get_ha_allocation", ("private-1",)),
-        ("set_ha_private_allocation", ("instance-new", "eth0", "private-1")),
+        ("set_ha_private_alias", ("instance-new", "eth0", "private-1", True)),
     ],
 )
 def test_vm_ha_cloud_operations_never_use_scaffold_mode(

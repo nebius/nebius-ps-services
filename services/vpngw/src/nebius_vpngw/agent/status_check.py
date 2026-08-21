@@ -10,6 +10,8 @@ import shutil
 import subprocess
 from typing import Any
 
+from .routing_guard import has_table_220_rule, table_220_routes_from_all_json
+
 
 def check_routing_health() -> dict[str, Any]:
     """Check routing table health and invariants.
@@ -30,9 +32,21 @@ def check_routing_health() -> dict[str, Any]:
         "overall_status": "healthy",
     }
 
-    # Check if table 220 exists
+    # Check both policy-rule and route-only table 220 state.
     result = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
-    if "220" in result.stdout:
+    all_routes = subprocess.run(
+        ["ip", "-j", "-4", "route", "show", "table", "all"],
+        capture_output=True,
+        text=True,
+    )
+    table_routes = (
+        table_220_routes_from_all_json(all_routes.stdout)
+        if all_routes.returncode == 0
+        else None
+    )
+    if result.returncode != 0 or table_routes is None:
+        health["overall_status"] = "error"
+    elif has_table_220_rule(result.stdout) or table_routes:
         health["table_220_exists"] = True
         health["overall_status"] = "error"
 
@@ -40,7 +54,9 @@ def check_routing_health() -> dict[str, Any]:
     result = subprocess.run(
         ["ip", "route", "show", "169.254.0.0/16"], capture_output=True, text=True
     )
-    if result.stdout.strip():
+    if result.returncode != 0:
+        health["overall_status"] = "error"
+    elif result.stdout.strip():
         health["broad_apipa_exists"] = True
         health["overall_status"] = "error"
 

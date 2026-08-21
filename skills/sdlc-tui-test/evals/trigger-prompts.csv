@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-tui-positive-01,true,"Evaluate this terminal wizard against the active Agentic SDLC acceptance criteria."
+sdlc-tui-positive-02,true,"Use Pexpect-style interaction to capture this SDLC CLI flow and side effects."
+sdlc-tui-positive-03,true,"Run the declared TUI harness for this feature's acceptance test."
+sdlc-tui-negative-01,false,"Run browser-based GUI acceptance tests."
+sdlc-tui-negative-02,false,"Execute a noninteractive CLI unit test suite."
+sdlc-tui-negative-03,false,"Use this terminal application outside Agentic SDLC for routine work."

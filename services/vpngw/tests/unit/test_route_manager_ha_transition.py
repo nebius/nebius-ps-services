@@ -5,28 +5,37 @@ import json
 from collections import deque
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
+from grpc import StatusCode
+from nebius.aio.service_error import RequestError
 
 from nebius_vpngw.agent.vm_ha.models import StateValidationError
+from nebius_vpngw.agent.vm_ha.runtime import RuntimeStateStore
 from nebius_vpngw.agent.vm_ha.store import AtomicGenerationStore, CorruptStateError
-from nebius_vpngw.deploy.route_manager import RouteManager
-from nebius_vpngw.deploy.vm_ha_cloud import AmbiguousHACloudError
+from nebius_vpngw.deploy.route_manager import NebiusSDKRouteBackend, RouteManager
+from nebius_vpngw.deploy.vm_ha_cloud import AmbiguousHACloudError, vm_ha_request_kwargs
 from nebius_vpngw.deploy.vm_ha_routes import (
+    AcceptedRouteOperation,
     BGPRouteReadiness,
     LogicalStaticRouteManifest,
     ManagedRouteKind,
     ManagedRouteOwnership,
     ManagedRouteSnapshot,
+    RouteMutation,
     RouteMutationKind,
+    RouteMutationPhase,
     RouteOccupancySnapshot,
     RouteReconciliationContext,
+    RouteReplacementCompensated,
+    RouteRollbackSnapshot,
     RouteTransitionState,
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
     execute_route_plan,
 )
-from nebius_vpngw.schema import VMHARouteTarget
+from nebius_vpngw.schema import VMHAMigrationRouteBinding, VMHARouteTarget
 
 
 def _target(suffix: str = "a") -> VMHARouteTarget:
@@ -127,6 +136,985 @@ def _reconciler(*, hold_down: float = 30, observations: int = 2) -> VMHARouteRec
         withdrawal_stability_observations=observations,
         route_targets=(_target(),),
     )
+
+
+def test_sdk_reproves_every_approval_bound_migration_route_field(monkeypatch) -> None:
+    target = _target()
+    route = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="route-old",
+            name="vpngw-10.20.0.0-16",
+            resource_version="7",
+        ),
+        spec=SimpleNamespace(
+            destination=SimpleNamespace(cidr="10.20.0.0/16"),
+            next_hop=SimpleNamespace(allocation=SimpleNamespace(id="primary-allocation")),
+        ),
+    )
+    binding = VMHAMigrationRouteBinding(
+        route_id="route-old",
+        name="vpngw-10.20.0.0-16",
+        prefix="10.20.0.0/16",
+        allocation_id="primary-allocation",
+        resource_revision="7",
+        route_target=target,
+    )
+    backend = NebiusSDKRouteBackend(object())
+    verify_target = MagicMock()
+    monkeypatch.setattr(backend, "verify_target", verify_target)
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (route,))
+
+    assert backend.verify_migration_route(binding) is True
+    verify_target.assert_called_once_with(target)
+
+    route.metadata.resource_version = "8"
+    assert backend.verify_migration_route(binding) is False
+
+
+def _sdk_route_with_labels(labels: dict[str, str]) -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="route-shared",
+            name="vpngw-ha-managed",
+            labels=labels,
+            parent_id="route-table-a",
+            resource_version="7",
+        ),
+        spec=SimpleNamespace(
+            description="",
+            destination=SimpleNamespace(cidr="10.20.0.0/16"),
+            next_hop=SimpleNamespace(
+                allocation=SimpleNamespace(id="shared-allocation")
+            ),
+        ),
+    )
+
+
+def test_sdk_cloud_authority_labels_are_a_shared_two_node_ledger(monkeypatch) -> None:
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_targets=(target,),
+    )
+    labels = backend._authority_labels(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_target=target,
+        route_kind=ManagedRouteKind.STATIC,
+    )
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (_sdk_route_with_labels(labels),))
+
+    observed = backend.list_routes(target, {})
+
+    assert observed == (
+        ManagedRouteSnapshot(
+            route_id="route-shared",
+            prefix="10.20.0.0/16",
+            allocation_id="shared-allocation",
+            ownership=ManagedRouteOwnership(
+                cluster_id="cluster-a",
+                kind=ManagedRouteKind.STATIC,
+                route_target=target,
+            ),
+            rollback=RouteRollbackSnapshot(
+                route_id="route-shared",
+                resource_version="7",
+                name="vpngw-ha-managed",
+                labels=tuple(sorted(labels.items())),
+                description="",
+                prefix="10.20.0.0/16",
+                allocation_id="shared-allocation",
+                route_target=target,
+            ),
+        ),
+    )
+
+
+def test_sdk_cloud_authority_supersedes_only_the_exact_migration_revision(
+    monkeypatch,
+) -> None:
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_targets=(target,),
+    )
+    ownership = ManagedRouteOwnership(
+        cluster_id="cluster-a",
+        kind=ManagedRouteKind.STATIC,
+        route_target=target,
+    )
+    labels = backend._authority_labels(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_target=target,
+        route_kind=ManagedRouteKind.STATIC,
+    )
+    route = _sdk_route_with_labels(labels)
+    route.metadata.name = "vpngw-10.20.0.0-16"
+    binding = VMHAMigrationRouteBinding(
+        route_id="route-shared",
+        name="vpngw-10.20.0.0-16",
+        prefix="10.20.0.0/16",
+        allocation_id="shared-allocation",
+        resource_revision="6",
+        route_target=target,
+    )
+    monkeypatch.setattr(backend, "verify_target", MagicMock())
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (route,))
+
+    assert backend.verify_migration_successor(binding, ownership) is True
+
+    route.metadata.labels = {backend._AUTHORITY_MANAGED_LABEL: "vm-ha-v1"}
+    assert backend.verify_migration_successor(binding, ownership) is False
+
+
+def test_sdk_foreign_or_partial_cloud_authority_labels_remain_read_only(monkeypatch) -> None:
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_targets=(target,),
+    )
+    route = _sdk_route_with_labels(
+        {
+            backend._AUTHORITY_MANAGED_LABEL: "vm-ha-v1",
+            backend._AUTHORITY_CLUSTER_LABEL: "foreign",
+        }
+    )
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (route,))
+
+    observed = backend.list_routes(target, {})
+
+    assert observed == (
+        RouteOccupancySnapshot(
+            route_id="route-shared",
+            prefix="10.20.0.0/16",
+            next_hop="allocation:shared-allocation",
+            route_target=target,
+        ),
+    )
+
+
+def test_sdk_owner_publishes_legacy_local_ledger_without_overwriting_conflicts(
+    monkeypatch,
+) -> None:
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_targets=(target,),
+    )
+    route = _sdk_route_with_labels({"owner": "customer"})
+    monkeypatch.setattr(backend, "verify_target", MagicMock())
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (route,))
+    publish = MagicMock()
+    monkeypatch.setattr(backend, "_write_authority_labels", publish)
+    ledger = {
+        "route-shared": ManagedRouteOwnership(
+            cluster_id="cluster-a",
+            kind=ManagedRouteKind.STATIC,
+            route_target=target,
+        )
+    }
+
+    backend.synchronize_authority_labels(ledger)
+
+    expected = backend._authority_labels(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_target=target,
+        route_kind=ManagedRouteKind.STATIC,
+    )
+    publish.assert_called_once_with(route, target, {"owner": "customer", **expected})
+
+    route.metadata.labels = {backend._AUTHORITY_MANAGED_LABEL: "foreign"}
+    with pytest.raises(RuntimeError, match="conflicting cloud authority labels"):
+        backend.synchronize_authority_labels(ledger)
+
+
+def test_sdk_identifies_only_stably_absent_ledger_routes(monkeypatch) -> None:
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_targets=(target,),
+    )
+    route = _sdk_route_with_labels({})
+    route.metadata.id = "route-present"
+    verify_target = MagicMock()
+    monkeypatch.setattr(backend, "verify_target", verify_target)
+    observations = iter(((route,), (route,)))
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: next(observations))
+    ownership = ManagedRouteOwnership(
+        cluster_id="cluster-a",
+        kind=ManagedRouteKind.STATIC,
+        route_target=target,
+    )
+
+    absent = backend.stably_absent_ledger_route_ids(
+        {
+            "route-present": ownership,
+            "route-obsolete": ownership,
+        }
+    )
+
+    assert absent == frozenset({"route-obsolete"})
+    assert verify_target.call_args_list == [((target,),), ((target,),)]
+
+
+def test_sdk_refuses_to_retire_ledger_routes_across_an_unstable_reread(
+    monkeypatch,
+) -> None:
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_targets=(target,),
+    )
+    route = _sdk_route_with_labels({})
+    route.metadata.id = "route-reappeared"
+    monkeypatch.setattr(backend, "verify_target", MagicMock())
+    observations = iter(((), (route,)))
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: next(observations))
+    ownership = ManagedRouteOwnership(
+        cluster_id="cluster-a",
+        kind=ManagedRouteKind.STATIC,
+        route_target=target,
+    )
+
+    with pytest.raises(RuntimeError, match="changed during stable reread"):
+        backend.stably_absent_ledger_route_ids({"route-obsolete": ownership})
+
+
+def test_sdk_authority_label_update_preserves_the_complete_route_spec() -> None:
+    request = NebiusSDKRouteBackend._authority_label_update_request(
+        route_id="route-shared",
+        parent_id="route-table-a",
+        name="vpngw-ha-managed",
+        resource_version=7,
+        labels={"owner": "customer", "nebius-vpngw-managed": "vm-ha-v1"},
+        description="customer description",
+        prefix="10.20.0.0/16",
+        allocation_id="shared-allocation",
+    )
+
+    assert request.metadata.id == "route-shared"
+    assert request.metadata.parent_id == "route-table-a"
+    assert request.metadata.name == "vpngw-ha-managed"
+    assert request.metadata.resource_version == 7
+    assert dict(request.metadata.labels) == {
+        "owner": "customer",
+        "nebius-vpngw-managed": "vm-ha-v1",
+    }
+    assert request.spec.description == "customer description"
+    assert request.spec.destination.cidr == "10.20.0.0/16"
+    assert request.spec.next_hop.allocation.id == "shared-allocation"
+
+
+def test_sdk_authority_label_update_rejects_an_incomplete_route_spec() -> None:
+    with pytest.raises(RuntimeError, match="lacks the exact route spec"):
+        NebiusSDKRouteBackend._authority_label_update_request(
+            route_id="route-shared",
+            parent_id="route-table-a",
+            name="vpngw-ha-managed",
+            resource_version=7,
+            labels={},
+            description="",
+            prefix="",
+            allocation_id="shared-allocation",
+        )
+
+
+def test_sdk_route_replace_restores_original_route_when_new_create_fails(monkeypatch) -> None:
+    original = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="route-old",
+            name="customer-route",
+            labels={"owner": "customer"},
+            resource_version="11",
+        ),
+        spec=SimpleNamespace(
+            description="customer description",
+            destination=SimpleNamespace(cidr="10.20.0.0/16"),
+            next_hop=SimpleNamespace(allocation=SimpleNamespace(id="old-allocation")),
+        ),
+    )
+
+    class Operation:
+        resource_id = ""
+
+        def sync_wait(self, **_kwargs) -> None:
+            return None
+
+        def successful(self) -> bool:
+            return True
+
+    class Pending:
+        def wait(self) -> Operation:
+            return Operation()
+
+    class Client:
+        def delete(self, request, **_kwargs) -> Pending:
+            assert request == {"id": "route-old"}
+            return Pending()
+
+    backend = NebiusSDKRouteBackend(object())
+    observations = deque(((original,), (original,), ()))
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: observations.popleft())
+    monkeypatch.setattr(
+        backend,
+        "_client_types",
+        lambda: (lambda _sdk: Client(), object, object, lambda **kwargs: kwargs, *([object] * 5)),
+    )
+
+    class FailedOperation:
+        def sync_wait(self, **_kwargs) -> None:
+            return None
+
+        def successful(self) -> bool:
+            return False
+
+    monkeypatch.setattr(
+        backend,
+        "_create_operation",
+        lambda _mutation: (FailedOperation(), None),
+    )
+    monkeypatch.setattr(backend, "_observe_desired_route", lambda _mutation: None)
+    restored: list[tuple[RouteRollbackSnapshot, RouteMutation]] = []
+
+    def restore(
+        rollback: RouteRollbackSnapshot,
+        *,
+        mutation: RouteMutation,
+    ) -> str:
+        restored.append((rollback, mutation))
+        return "route-restored"
+
+    monkeypatch.setattr(
+        backend,
+        "_restore_raw_route",
+        restore,
+    )
+    mutation = RouteMutation(
+        kind=RouteMutationKind.REPLACE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+        route_id="route-old",
+    )
+
+    with pytest.raises(RouteReplacementCompensated):
+        backend.apply_mutation(mutation)
+
+    assert len(restored) == 1
+    rollback, compensated_mutation = restored[0]
+    assert rollback == RouteRollbackSnapshot(
+        route_id="route-old",
+        resource_version="11",
+        name="customer-route",
+        labels=(("owner", "customer"),),
+        description="customer description",
+        prefix="10.20.0.0/16",
+        allocation_id="old-allocation",
+        route_target=_target(),
+    )
+    assert compensated_mutation.rollback == rollback
+
+
+def test_sdk_route_create_timeout_accepts_one_authoritative_desired_outcome(
+    monkeypatch,
+) -> None:
+    backend = NebiusSDKRouteBackend(object())
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    class TimedOutOperation:
+        def sync_wait(self, **_kwargs) -> None:
+            raise TimeoutError("accepted but timed out")
+
+    monkeypatch.setattr(
+        backend,
+        "_create_operation",
+        lambda _mutation: (TimedOutOperation(), None),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_observe_desired_route",
+        lambda _mutation: "route-created",
+    )
+
+    assert backend.apply_mutation(mutation) == "route-created"
+
+
+def test_sdk_route_timeout_rejects_foreign_same_signature_outcome(monkeypatch) -> None:
+    backend = NebiusSDKRouteBackend(object())
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    foreign = SimpleNamespace(
+        metadata=SimpleNamespace(id="route-foreign", name="customer-managed-route"),
+        spec=SimpleNamespace(
+            destination=SimpleNamespace(cidr=mutation.prefix),
+            next_hop=SimpleNamespace(
+                allocation=SimpleNamespace(id=mutation.allocation_id)
+            ),
+        ),
+    )
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (foreign,))
+
+    with pytest.raises(RuntimeError, match="conflicting outcome"):
+        backend.recover_created_route(mutation)
+
+
+def test_sdk_route_deleted_recovery_is_observation_only(monkeypatch) -> None:
+    backend = NebiusSDKRouteBackend(object())
+    mutation = RouteMutation(
+        kind=RouteMutationKind.DELETE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+        route_id="route-old",
+    )
+    original = SimpleNamespace(metadata=SimpleNamespace(id="route-old"))
+    delete = MagicMock()
+    monkeypatch.setattr(backend, "_delete_exact_route", delete)
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (original,))
+
+    assert backend.recover_deleted_route(mutation) is False
+    delete.assert_not_called()
+
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: ())
+    assert backend.recover_deleted_route(mutation) is True
+    delete.assert_not_called()
+
+
+def test_sdk_route_duplicate_timeout_outcome_blocks_without_compensation(
+    monkeypatch,
+) -> None:
+    backend = NebiusSDKRouteBackend(object())
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    class TimedOutOperation:
+        def sync_wait(self, **_kwargs) -> None:
+            raise TimeoutError("accepted but timed out")
+
+    monkeypatch.setattr(
+        backend,
+        "_create_operation",
+        lambda _mutation: (TimedOutOperation(), None),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_observe_desired_route",
+        lambda _mutation: (_ for _ in ()).throw(
+            RuntimeError("duplicate desired outcomes")
+        ),
+    )
+    restore = MagicMock()
+    monkeypatch.setattr(backend, "_restore_raw_route", restore)
+
+    with pytest.raises(RuntimeError, match="duplicate desired outcomes"):
+        backend.apply_mutation(mutation)
+    restore.assert_not_called()
+
+
+def test_sdk_route_idempotency_keys_are_stable_and_domain_separated() -> None:
+    backend = NebiusSDKRouteBackend(object())
+    backend.set_reconciliation_operation_id("controller-operation")
+
+    first = backend._action_operation_id("create", "mutation-a")
+    replay = backend._action_operation_id("create", "mutation-a")
+    compensation = backend._action_operation_id("restore", "mutation-a")
+
+    assert first == replay
+    assert first != compensation
+
+
+def test_sdk_route_resumes_accepted_create_without_resubmit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStateStore(tmp_path / "state")
+    backend = NebiusSDKRouteBackend(object())
+    context = _context(operation_id="route-op")
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    backend.set_reconciliation_operation_id(context.operation_id)
+    store.save_pending_mutation(mutation, context)
+    initial = store.load_pending_mutation()
+    assert initial is not None
+    accepted = AcceptedRouteOperation(
+        action_operation_id=backend._action_operation_id("create", mutation.operation_id),
+        action="create",
+        cloud_operation_id="cloud-operation-a",
+    )
+    store.checkpoint_pending_mutation(
+        initial,
+        phase=RouteMutationPhase.CREATE_ACCEPTED,
+        rollback=None,
+        accepted_operation=accepted,
+    )
+    backend.set_mutation_checkpoint(store)
+
+    class Operation:
+        def sync_wait(self, **_kwargs) -> None:
+            return None
+
+        def successful(self) -> bool:
+            return True
+
+    class Client:
+        def create(self, *_args, **_kwargs):
+            raise AssertionError("an accepted route operation must not be resubmitted")
+
+    monkeypatch.setattr(
+        backend,
+        "_client_types",
+        lambda: (lambda _sdk: Client(), object, *([lambda **kwargs: kwargs] * 7)),
+    )
+    monkeypatch.setattr(backend, "_resume_operation", lambda operation_id: Operation())
+    observations = iter((None, "route-created"))
+    monkeypatch.setattr(
+        backend,
+        "_observe_desired_route",
+        lambda _mutation: next(observations),
+    )
+
+    assert backend.apply_mutation(mutation) == "route-created"
+    pending = store.load_pending_mutation()
+    assert pending is not None
+    assert pending.phase is RouteMutationPhase.DESIRED_PRESENT
+    assert pending.accepted_operation is None
+
+
+def test_sdk_route_replays_same_idempotent_create_when_lookup_is_unsupported(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStateStore(tmp_path / "state")
+    backend = NebiusSDKRouteBackend(object())
+    context = _context(operation_id="route-op")
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    backend.set_reconciliation_operation_id(context.operation_id)
+    store.save_pending_mutation(mutation, context)
+    initial = store.load_pending_mutation()
+    assert initial is not None
+    accepted = AcceptedRouteOperation(
+        action_operation_id=backend._action_operation_id("create", mutation.operation_id),
+        action="create",
+        cloud_operation_id="cloud-operation-a",
+    )
+    store.checkpoint_pending_mutation(
+        initial,
+        phase=RouteMutationPhase.CREATE_ACCEPTED,
+        rollback=None,
+        accepted_operation=accepted,
+    )
+    backend.set_mutation_checkpoint(store)
+
+    class Operation:
+        id = accepted.cloud_operation_id
+
+        def sync_wait(self, **_kwargs) -> None:
+            return None
+
+        def successful(self) -> bool:
+            return True
+
+    create = MagicMock(return_value=SimpleNamespace(wait=lambda: Operation()))
+    client = SimpleNamespace(create=create)
+    monkeypatch.setattr(
+        backend,
+        "_client_types",
+        lambda: (lambda _sdk: client, object, *([lambda **kwargs: kwargs] * 7)),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_resume_operation",
+        lambda _operation_id: (_ for _ in ()).throw(
+            RequestError(SimpleNamespace(code=StatusCode.UNIMPLEMENTED))  # type: ignore[arg-type]
+        ),
+    )
+    observations = iter((None, "route-created"))
+    monkeypatch.setattr(
+        backend,
+        "_observe_desired_route",
+        lambda _mutation: next(observations),
+    )
+
+    assert backend.apply_mutation(mutation) == "route-created"
+    create.assert_called_once()
+    assert create.call_args.kwargs["metadata"] == (
+        ("x-idempotency-key", accepted.action_operation_id),
+    )
+
+
+def test_sdk_route_retains_accepted_create_when_wait_and_observation_are_ambiguous(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStateStore(tmp_path / "state")
+    backend = NebiusSDKRouteBackend(object())
+    context = _context(operation_id="route-op")
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    backend.set_reconciliation_operation_id(context.operation_id)
+    store.save_pending_mutation(mutation, context)
+    initial = store.load_pending_mutation()
+    assert initial is not None
+    accepted = AcceptedRouteOperation(
+        action_operation_id=backend._action_operation_id("create", mutation.operation_id),
+        action="create",
+        cloud_operation_id="cloud-operation-a",
+    )
+    retained = store.checkpoint_pending_mutation(
+        initial,
+        phase=RouteMutationPhase.CREATE_ACCEPTED,
+        rollback=None,
+        accepted_operation=accepted,
+    )
+    backend.set_mutation_checkpoint(store)
+
+    class Operation:
+        def sync_wait(self, **_kwargs) -> None:
+            raise TimeoutError("poll interrupted")
+
+    monkeypatch.setattr(
+        backend,
+        "_client_types",
+        lambda: (lambda _sdk: object(), object, *([lambda **kwargs: kwargs] * 7)),
+    )
+    monkeypatch.setattr(backend, "_resume_operation", lambda operation_id: Operation())
+    monkeypatch.setattr(backend, "_observe_desired_route", lambda _mutation: None)
+
+    with pytest.raises(TimeoutError, match="poll interrupted"):
+        backend.apply_mutation(mutation)
+
+    assert store.load_pending_mutation() == retained
+
+
+def test_sdk_route_rejects_mismatched_accepted_operation(tmp_path, monkeypatch) -> None:
+    store = RuntimeStateStore(tmp_path / "state")
+    backend = NebiusSDKRouteBackend(object())
+    context = _context(operation_id="route-op")
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    backend.set_reconciliation_operation_id(context.operation_id)
+    store.save_pending_mutation(mutation, context)
+    initial = store.load_pending_mutation()
+    assert initial is not None
+    store.checkpoint_pending_mutation(
+        initial,
+        phase=RouteMutationPhase.CREATE_ACCEPTED,
+        rollback=None,
+        accepted_operation=AcceptedRouteOperation(
+            action_operation_id="different-action-operation",
+            action="create",
+            cloud_operation_id="cloud-operation-a",
+        ),
+    )
+    backend.set_mutation_checkpoint(store)
+    monkeypatch.setattr(
+        backend,
+        "_client_types",
+        lambda: (lambda _sdk: object(), object, *([lambda **kwargs: kwargs] * 7)),
+    )
+    monkeypatch.setattr(backend, "_observe_desired_route", lambda _mutation: None)
+
+    with pytest.raises(RuntimeError, match="different accepted"):
+        backend.apply_mutation(mutation)
+
+
+def test_sdk_route_legacy_replace_fails_closed_when_both_outcomes_are_absent(
+    monkeypatch,
+) -> None:
+    backend = NebiusSDKRouteBackend(object())
+    mutation = RouteMutation(
+        kind=RouteMutationKind.REPLACE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+        route_id="route-old",
+    )
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: ())
+    monkeypatch.setattr(backend, "_observe_desired_route", lambda _mutation: None)
+
+    with pytest.raises(RuntimeError, match="lost both original and desired"):
+        backend.apply_mutation(mutation)
+
+
+def test_sdk_route_restart_advances_accepted_delete_from_observed_absence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStateStore(tmp_path / "state")
+    backend = NebiusSDKRouteBackend(object())
+    context = _context(operation_id="route-op")
+    rollback = RouteRollbackSnapshot(
+        route_id="route-old",
+        resource_version="11",
+        name="customer-route",
+        labels=(),
+        description="",
+        prefix="10.20.0.0/16",
+        allocation_id="old-allocation",
+        route_target=_target(),
+    )
+    mutation = RouteMutation(
+        kind=RouteMutationKind.REPLACE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+        route_id="route-old",
+        rollback=rollback,
+    )
+    backend.set_reconciliation_operation_id(context.operation_id)
+    store.save_pending_mutation(mutation, context)
+    initial = store.load_pending_mutation()
+    assert initial is not None
+    store.checkpoint_pending_mutation(
+        initial,
+        phase=RouteMutationPhase.DELETE_ACCEPTED,
+        rollback=rollback,
+        accepted_operation=AcceptedRouteOperation(
+            backend._action_operation_id("delete", mutation.operation_id),
+            "delete",
+            "cloud-delete-operation",
+        ),
+    )
+    backend.set_mutation_checkpoint(store)
+
+    class Operation:
+        def sync_wait(self, **_kwargs) -> None:
+            return None
+
+        def successful(self) -> bool:
+            return True
+
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: ())
+    observations = iter((None, "route-created"))
+    monkeypatch.setattr(
+        backend,
+        "_observe_desired_route",
+        lambda _mutation: next(observations),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_resume_operation",
+        lambda _operation_id: (_ for _ in ()).throw(
+            AssertionError("observed delete completion must not be polled again")
+        ),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_create_operation",
+        lambda _mutation: (Operation(), None),
+    )
+
+    assert backend.apply_mutation(mutation) == "route-created"
+    pending = store.load_pending_mutation()
+    assert pending is not None
+    assert pending.phase is RouteMutationPhase.DESIRED_PRESENT
+    assert pending.accepted_operation is None
+
+
+def test_sdk_route_restart_resumes_accepted_restore_without_creating_desired_route(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStateStore(tmp_path / "state")
+    backend = NebiusSDKRouteBackend(object())
+    context = _context(operation_id="route-op")
+    rollback = RouteRollbackSnapshot(
+        route_id="route-old",
+        resource_version="11",
+        name="customer-route",
+        labels=(("owner", "customer"),),
+        description="customer description",
+        prefix="10.20.0.0/16",
+        allocation_id="old-allocation",
+        route_target=_target(),
+    )
+    mutation = RouteMutation(
+        kind=RouteMutationKind.REPLACE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+        route_id="route-old",
+        rollback=rollback,
+    )
+    backend.set_reconciliation_operation_id(context.operation_id)
+    store.save_pending_mutation(mutation, context)
+    initial = store.load_pending_mutation()
+    assert initial is not None
+    store.checkpoint_pending_mutation(
+        initial,
+        phase=RouteMutationPhase.RESTORE_ACCEPTED,
+        rollback=rollback,
+        accepted_operation=AcceptedRouteOperation(
+            backend._action_operation_id("restore", mutation.operation_id),
+            "restore",
+            "cloud-restore-operation",
+        ),
+    )
+    backend.set_mutation_checkpoint(store)
+
+    class Operation:
+        def sync_wait(self, **_kwargs) -> None:
+            return None
+
+        def successful(self) -> bool:
+            return True
+
+    class Client:
+        def create(self, *_args, **_kwargs):
+            raise AssertionError("an accepted rollback must not be resubmitted")
+
+    monkeypatch.setattr(
+        backend,
+        "_client_types",
+        lambda: (lambda _sdk: Client(), object, *([lambda **kwargs: kwargs] * 7)),
+    )
+    monkeypatch.setattr(backend, "_resume_operation", lambda _operation_id: Operation())
+    monkeypatch.setattr(backend, "_observe_rollback_route", lambda _rollback: "restored-route")
+
+    with pytest.raises(RouteReplacementCompensated):
+        backend.apply_mutation(mutation)
+
+    pending = store.load_pending_mutation()
+    assert pending is not None
+    assert pending.phase is RouteMutationPhase.RESTORED
+    assert pending.accepted_operation is None
+
+
+def test_sdk_route_rollback_observation_requires_exact_metadata(monkeypatch) -> None:
+    backend = NebiusSDKRouteBackend(object())
+    rollback = RouteRollbackSnapshot(
+        route_id="route-old",
+        resource_version="11",
+        name="customer-route",
+        labels=(("owner", "customer"),),
+        description="customer description",
+        prefix="10.20.0.0/16",
+        allocation_id="old-allocation",
+        route_target=_target(),
+    )
+    changed = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="restored-route",
+            name=rollback.name,
+            labels={"owner": "different"},
+        ),
+        spec=SimpleNamespace(
+            description=rollback.description,
+            destination=SimpleNamespace(cidr=rollback.prefix),
+            next_hop=SimpleNamespace(
+                allocation=SimpleNamespace(id=rollback.allocation_id)
+            ),
+        ),
+    )
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (changed,))
+
+    with pytest.raises(RuntimeError, match="conflicting outcome"):
+        backend._observe_rollback_route(rollback)
+
+
+def test_sdk_route_create_uses_canonical_bounded_request_kwargs(monkeypatch) -> None:
+    backend = NebiusSDKRouteBackend(object())
+    backend.set_reconciliation_operation_id("route-op")
+    mutation = RouteMutation(
+        kind=RouteMutationKind.CREATE,
+        prefix="10.20.0.0/16",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="shared-allocation",
+        cluster_id="cluster-a",
+        route_target=_target(),
+    )
+    observed: dict[str, object] = {}
+
+    class Request:
+        def wait(self):
+            return SimpleNamespace(id="cloud-operation-a")
+
+    class Client:
+        def create(self, request, **kwargs):
+            observed["request"] = request
+            observed["kwargs"] = kwargs
+            return Request()
+
+    def constructor(**kwargs):
+        return kwargs
+    monkeypatch.setattr(
+        backend,
+        "_client_types",
+        lambda: (lambda _sdk: Client(), object, *([constructor] * 7)),
+    )
+
+    operation, accepted = backend._create_operation(mutation)
+
+    action_id = backend._action_operation_id("create", mutation.operation_id)
+    assert operation.id == "cloud-operation-a"
+    assert accepted is None
+    assert observed["kwargs"] == vm_ha_request_kwargs(action_id)
 
 
 def test_committed_static_manifest_rejects_digest_mismatch() -> None:
@@ -337,12 +1325,26 @@ def test_bgp_readiness_requires_sessions_policy_prefixes_and_xfrm() -> None:
 
     assert not readiness.promotion_ready
     assert readiness.blocked_reasons == (
-        "configured-bgp-sessions-not-established",
         "bgp-import-policy-mismatch",
         "required-bgp-prefixes-not-learned",
         "required-bgp-prefixes-lack-usable-xfrm-next-hop",
     )
     assert readiness.missing_optional_prefixes == {"10.22.0.0/16"}
+
+
+def test_bgp_readiness_accepts_redundant_peer_loss_with_complete_prefix_coverage() -> None:
+    readiness = BGPRouteReadiness.normalize(
+        configured_sessions=("peer-a", "peer-b"),
+        established_sessions=("peer-a",),
+        required_prefixes=("10.20.0.0/16",),
+        learned_prefixes=("10.20.0.0/16",),
+        usable_xfrm_prefixes=("10.20.0.0/16",),
+        observed_import_policy_digest="current",
+        committed_import_policy_digest="current",
+    )
+
+    assert readiness.promotion_ready
+    assert readiness.eligible_prefixes == {"10.20.0.0/16"}
 
 
 def test_stale_import_policy_cannot_make_learned_route_eligible() -> None:

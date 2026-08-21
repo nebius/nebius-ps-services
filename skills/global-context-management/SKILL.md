@@ -1,6 +1,6 @@
 ---
 name: global-context-management
-description: "Use for complex Codex work: planning, implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, or multi-file tasks. Keep parent context concise with durable task state, targeted read-only subagents when useful, focused validation, and final risk review."
+description: "Manage complex Codex planning, implementation, debugging, refactoring, migration, review, testing, CI, or multi-file work with concise parent context, durable task state, bounded read-only helpers, focused validation, and risk review."
 ---
 
 # Global Context Management

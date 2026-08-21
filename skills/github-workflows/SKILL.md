@@ -1,6 +1,6 @@
 ---
 name: github-workflows
-description: "Use for GitHub Actions workflow work: create, review, or standardize PR/merge CI, bot-safe merge automation, reusable workflows, permissions, service-scoped checks, and release/image workflow YAML. For full project-specific release, image, or Helm publication flows with scripts or changelogs, use the matching publish-* skill."
+description: "Create, review, or standardize GitHub Actions for PR/merge CI, bot-safe automation, reusable workflows, permissions, scoped checks, or release/image jobs. Use publish-* for complete publication flows."
 ---
 
 # GitHub Workflows

@@ -1,6 +1,6 @@
 ---
 name: ai-stack
-description: "Use for selecting, reviewing, simplifying, or modernizing an effective, efficient AI technology stack when AI-specific layers are undecided or under review. Classify capabilities as direct model calls, deterministic workflows containing model calls, or agents; then select model access, SDKs, Codex engineering specialists, training, inference, agent and durable execution, MCP/A2A, retrieval/RAG, evaluation, safety, and operations. Freeze workload contracts, choose the least-agentic sufficient architecture, classify every component and evidence claim, and verify volatile choices with official sources. Do not use for a generic application stack, isolated one-technology research, a complete solution design or `/plan`, or implementation when the AI stack is already fixed."
+description: "Select or review an undecided AI stack across models, agents/workflows, training/inference, interoperability, retrieval, evals, safety, and operations. Use app-stack for non-AI layers, research for one technology, and design for whole solutions."
 ---
 
 # AI Stack
@@ -96,6 +96,9 @@ Read only the references that match the request:
   workload-controlled benchmarks.
 - `references/agent-application-stack.md` for agent frameworks, state,
   durability, tools, and UI.
+- `references/provider-agnostic-agent-platform.md` for a Pydantic AI-first
+  portable runtime, application-owned facade, routing, state, tools,
+  specialists, and provider-native escape decisions.
 - `references/model-provider-contract.md` when multiple providers, routing,
   evaluated fallback, self-hosting, regional policy, or a shared model platform
   is in scope.
@@ -138,14 +141,25 @@ predictability is a hard requirement, prefer a direct call or deterministic
 workflow unless it fails a representative acceptance gate. One application
 may contain all three levels.
 
-Map the selected level to the smallest supported runtime:
+Map the selected level to the smallest supported runtime. Control-flow
+classification and framework primitive are separate decisions:
 
-- Direct OpenAI text or reasoning generation supported by Responses: official
-  OpenAI SDK plus Responses API. For embeddings, transcription, realtime
-  speech, and other direct workloads, use the official task-specific API.
-- Intentionally OpenAI-native agent: OpenAI Agents SDK.
-- Python agent using Anthropic, Gemini, another non-OpenAI provider, or a
-  provider-neutral typed boundary: Pydantic AI by default.
+- Portable Python direct request: use Pydantic AI's low-level direct model API
+  when the caller wants `ModelResponse` control and no agent services. Use a
+  no-tools, single-request Pydantic AI `Agent` when typed output parsing,
+  validation retries, typed dependencies, or other agent request services are
+  required. The latter remains direct-call behavior because the model does not
+  own continuation. An intentionally provider-specific workload may instead
+  use the provider's official task API when portability is not a requirement.
+- Portable Python agent across OpenAI, Anthropic, Google, an OpenAI-compatible
+  endpoint, or another supported provider: Pydantic AI `Agent` by default.
+- Portable specialist needing reusable context, tools, lifecycle, or
+  delegation: a bounded Pydantic AI capability or Harness when its additional
+  semantics pass the workload gates.
+- Provider-native agent harness: a separate specialized runtime only after a
+  named unique harness requirement defeats the portable path. Keep it behind
+  the application-owned facade and retain platform policy, state, tools,
+  budgets, observability, and evaluation.
 - Coding-focused engineering specialist: Codex SDK. Add Codex app-server only
   for deep product integration that needs authentication, conversation
   history, approvals, or streamed agent events; SDK-based CI and job
@@ -235,11 +249,17 @@ required. Optimize cost per accepted outcome, not a vendor headline metric.
 
 ### 5. Define Replaceable Boundaries
 
-Define the narrow interface and owner for each required layer. Use a small
-application-local provider seam for one intentionally selected provider. Use a
-full capability-aware `ModelProvider` contract only when multiple providers,
-routing, fallback, self-hosting, regional/data policy, or platform ownership
-creates real semantic portability requirements.
+Define the narrow interface and owner for each required layer. For the portable
+Python path, use Pydantic AI `Model`, `Provider`, resolved profiles, settings,
+messages, and tools instead of creating a parallel framework-neutral protocol.
+Add an application-owned logical runtime facade over run, stream, resume,
+cancel, and normalized events. Keep it in-process until shared ownership, load
+isolation, or policy centralization justifies a service.
+
+Supplement resolved model profiles with versioned application metadata for
+operational health and governance eligibility. Use a custom cross-runtime
+`ModelProvider` contract only when non-Pydantic runtimes or shared direct-call
+consumers create a proven semantic boundary that Pydantic AI cannot own.
 
 Treat automatic fallback as an evaluated deployment route, not a retry. Verify
 the exact provider, endpoint, model, revision, region, adapter, protocol, and
@@ -248,15 +268,20 @@ capability combination.
 ### 6. Resolve Agent And Interoperability Boundaries
 
 Choose one primary agent kernel only for capabilities already classified as
-agents. For intentionally OpenAI-native agents, start with the OpenAI Agents
-SDK. For Python-first typed agents using Anthropic, Gemini, another non-OpenAI
-provider, or a provider-neutral boundary, start with Pydantic AI. Only switch
-to selected LangChain integrations or `create_agent` for a conventional bounded
-tool loop when required maintained integrations measurably reduce total
-complexity. Use LangGraph directly only for explicit graph semantics.
-Use Temporal around the selected direct, deterministic, agentic, or mixed
-control flow when durable timers, long approvals, external side effects,
-compensation, or cross-service recovery are required.
+agents. Start portable Python agent workloads on Pydantic AI regardless of the
+selected supported provider. Keep provider-specific model settings explicit.
+Use Pydantic AI capabilities or Harness conditionally for portable specialists.
+Select OpenAI Agents SDK, Anthropic-managed or native harnesses, or another
+provider runtime only when a documented unique harness feature is required and
+the portable path fails that gate. Never stack that native runtime inside
+Pydantic AI. Only switch to selected LangChain integrations or `create_agent`
+when maintained integrations measurably reduce total complexity. Use LangGraph
+directly only for explicit graph semantics.
+Select one qualified durable workflow owner around the direct, deterministic,
+agentic, or mixed control flow when durable timers, long approvals, external
+side effects, compensation, or cross-service recovery are required. Compare
+Temporal, DBOS, Prefect, Restate, and any existing qualified owner against the
+workload instead of mandating one engine.
 
 Route coding-focused engineering work to Codex instead of treating it as a
 general service agent. Use the Codex SDK for coding threads and programmatic
@@ -269,6 +294,13 @@ Record MCP core revision, exact SDK and framework versions, transport,
 extensions, host, and gateway. Never call an MCP date-based revision "V2".
 Keep MCP Tasks conditional while the selected revision is Draft. Use A2A only
 for an independently owned remote-agent boundary.
+
+Keep canonical conversation, run, approval, artifact, and side-effect state in
+application-owned stores. Treat provider sessions, caches, and compaction as
+optional optimizations. Put meaningful tools behind typed domain APIs or a
+policy gateway; Pydantic AI decorators and authenticated MCP connections are
+not authorization boundaries. Separate pre-execution routing from classified,
+replay-safe fallback and assign one retry owner per failure class.
 
 ### 7. Close Evaluation, Safety, And Ownership
 
@@ -304,6 +336,11 @@ the work.
 - Do not introduce Kubernetes, distributed training, a vector database,
   long-term memory, multi-agent topology, a gateway, or a workflow engine
   without a current trigger and owner.
+- Do not make a distributed agent platform, separate registry, queue, cache,
+  or multi-store persistence topology mandatory for a small application.
+- Do not make provider-side sessions canonical state, duplicate Pydantic AI's
+  model abstractions by default, or replay a side effect across providers
+  without domain-owned idempotency evidence.
 - Preserve no legacy compatibility layer unless the user explicitly requires
   one.
 
@@ -342,6 +379,8 @@ Return:
   acceptance gate, and revisit trigger;
 - compatibility, security, data, reliability, recovery, observability, and
   cost decisions;
+- portable runtime boundary, provider-extension policy, route plan, canonical
+  state owner, and any provider-native escape decision;
 - rejected alternatives and reasons;
 - validation and benchmark plan;
 - logical-only implementation handoff when requested;

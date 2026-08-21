@@ -44,6 +44,18 @@ class RouteMutationKind(str, Enum):
     DELETE = "delete"
 
 
+class RouteMutationPhase(str, Enum):
+    """Durable progress for one route mutation across process restarts."""
+
+    INTENT = "intent"
+    DELETE_ACCEPTED = "delete-accepted"
+    ORIGINAL_ABSENT = "original-absent"
+    CREATE_ACCEPTED = "create-accepted"
+    DESIRED_PRESENT = "desired-present"
+    RESTORE_ACCEPTED = "restore-accepted"
+    RESTORED = "restored"
+
+
 @dataclass(frozen=True)
 class VerifiedAllocationOwnership:
     """One authoritative allocation-owner observation from the cloud adapter."""
@@ -170,7 +182,7 @@ class BGPRouteReadiness:
     def eligible_prefixes(self) -> frozenset[str]:
         if (
             not self.configured_sessions
-            or not self.configured_sessions.issubset(self.established_sessions)
+            or not (self.configured_sessions & self.established_sessions)
             or not self.observed_import_policy_digest
             or not self.committed_import_policy_digest
             or self.observed_import_policy_digest != self.committed_import_policy_digest
@@ -183,8 +195,7 @@ class BGPRouteReadiness:
         reasons: list[str] = []
         if not self.configured_sessions:
             reasons.append("no-configured-bgp-sessions")
-        missing_sessions = self.configured_sessions - self.established_sessions
-        if missing_sessions:
+        if not (self.configured_sessions & self.established_sessions):
             reasons.append("configured-bgp-sessions-not-established")
         if (
             not self.observed_import_policy_digest
@@ -224,6 +235,7 @@ class ManagedRouteSnapshot:
     prefix: str
     allocation_id: str
     ownership: ManagedRouteOwnership
+    rollback: RouteRollbackSnapshot | None = None
 
     def __post_init__(self) -> None:
         normalized = _normalized_prefixes((self.prefix,))
@@ -232,6 +244,87 @@ class ManagedRouteSnapshot:
     @property
     def route_target(self) -> VMHARouteTarget:
         return self.ownership.route_target
+
+
+@dataclass(frozen=True)
+class RouteRollbackSnapshot:
+    """Normalized restorable content captured before replacing an owned route."""
+
+    route_id: str
+    resource_version: str
+    name: str
+    labels: tuple[tuple[str, str], ...]
+    description: str
+    prefix: str
+    allocation_id: str
+    route_target: VMHARouteTarget
+
+    def __post_init__(self) -> None:
+        normalized = _normalized_prefixes((self.prefix,))
+        object.__setattr__(self, "prefix", next(iter(normalized)))
+        if not all((self.route_id, self.resource_version, self.name, self.allocation_id)):
+            raise ValueError("VM-HA route rollback identity is incomplete")
+        if not self.resource_version.isdecimal() or int(self.resource_version) <= 0:
+            raise ValueError("VM-HA route rollback revision must be positive")
+        if self.labels != tuple(sorted(set(self.labels))) or any(
+            not isinstance(key, str)
+            or not key
+            or not isinstance(value, str)
+            for key, value in self.labels
+        ):
+            raise ValueError("VM-HA route rollback labels are not canonical")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "allocation_id": self.allocation_id,
+            "description": self.description,
+            "labels": {key: value for key, value in self.labels},
+            "name": self.name,
+            "prefix": self.prefix,
+            "resource_version": self.resource_version,
+            "route_id": self.route_id,
+            "route_target": self.route_target.model_dump(mode="json"),
+        }
+
+    @classmethod
+    def from_mapping(cls, value: object) -> RouteRollbackSnapshot:
+        if not isinstance(value, Mapping) or set(value) != {
+            "allocation_id",
+            "description",
+            "labels",
+            "name",
+            "prefix",
+            "resource_version",
+            "route_id",
+            "route_target",
+        }:
+            raise ValueError("VM-HA route rollback snapshot is malformed")
+        labels = value.get("labels")
+        if not isinstance(labels, Mapping) or any(
+            not isinstance(key, str) or not isinstance(item, str)
+            for key, item in labels.items()
+        ):
+            raise ValueError("VM-HA route rollback labels are malformed")
+        string_fields = (
+            "allocation_id",
+            "description",
+            "name",
+            "prefix",
+            "resource_version",
+            "route_id",
+        )
+        if any(not isinstance(value.get(field), str) for field in string_fields):
+            raise ValueError("VM-HA route rollback snapshot fields are malformed")
+        return cls(
+            route_id=value["route_id"],
+            resource_version=value["resource_version"],
+            name=value["name"],
+            labels=tuple(sorted(labels.items())),
+            description=value["description"],
+            prefix=value["prefix"],
+            allocation_id=value["allocation_id"],
+            route_target=VMHARouteTarget.model_validate(value["route_target"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -261,6 +354,18 @@ class RouteMutation:
     cluster_id: str
     route_target: VMHARouteTarget
     route_id: str | None = None
+    rollback: RouteRollbackSnapshot | None = None
+
+    def __post_init__(self) -> None:
+        normalized = _normalized_prefixes((self.prefix,))
+        object.__setattr__(self, "prefix", next(iter(normalized)))
+        if self.rollback is not None and (
+            self.kind is not RouteMutationKind.REPLACE
+            or self.route_id != self.rollback.route_id
+            or self.prefix != self.rollback.prefix
+            or self.route_target != self.rollback.route_target
+        ):
+            raise ValueError("VM-HA route rollback snapshot does not match its replacement")
 
     @property
     def operation_id(self) -> str:
@@ -269,6 +374,77 @@ class RouteMutation:
             f"{self.kind.value}:{self.route_target.route_table_id}:{target}:"
             f"{self.route_kind.value}:{self.allocation_id}"
         )
+
+
+@dataclass(frozen=True)
+class AcceptedRouteOperation:
+    action_operation_id: str
+    action: str
+    cloud_operation_id: str
+
+    def __post_init__(self) -> None:
+        if self.action not in {"create", "delete", "restore"} or not all(
+            (self.action_operation_id, self.cloud_operation_id)
+        ):
+            raise ValueError("VM-HA accepted route operation identity is invalid")
+
+
+@dataclass(frozen=True)
+class PendingRouteMutation:
+    mutation: RouteMutation
+    context: RouteReconciliationContext
+    phase: RouteMutationPhase = RouteMutationPhase.INTENT
+    accepted_operation: AcceptedRouteOperation | None = None
+    record_version: int = 2
+
+    def __post_init__(self) -> None:
+        if self.record_version not in {1, 2}:
+            raise ValueError("VM-HA route mutation intent version is invalid")
+        if self.record_version == 1 and (
+            self.mutation.rollback is not None
+            or self.phase is not RouteMutationPhase.INTENT
+            or self.accepted_operation is not None
+        ):
+            raise ValueError("VM-HA legacy route mutation intent is not byte-compatible")
+        if (
+            self.record_version == 2
+            and self.mutation.kind is RouteMutationKind.REPLACE
+            and self.mutation.rollback is None
+        ):
+            raise ValueError("VM-HA replacement intent requires an exact rollback snapshot")
+        allowed_phases = {
+            RouteMutationKind.CREATE: {
+                RouteMutationPhase.INTENT,
+                RouteMutationPhase.CREATE_ACCEPTED,
+                RouteMutationPhase.DESIRED_PRESENT,
+            },
+            RouteMutationKind.DELETE: {
+                RouteMutationPhase.INTENT,
+                RouteMutationPhase.DELETE_ACCEPTED,
+                RouteMutationPhase.ORIGINAL_ABSENT,
+            },
+            RouteMutationKind.REPLACE: set(RouteMutationPhase),
+        }[self.mutation.kind]
+        if self.phase not in allowed_phases:
+            raise ValueError("VM-HA route mutation phase does not match its action")
+        expected_action = {
+            RouteMutationPhase.DELETE_ACCEPTED: "delete",
+            RouteMutationPhase.CREATE_ACCEPTED: "create",
+            RouteMutationPhase.RESTORE_ACCEPTED: "restore",
+        }.get(self.phase)
+        if (self.accepted_operation is None) != (expected_action is None) or (
+            self.accepted_operation is not None
+            and self.accepted_operation.action != expected_action
+        ):
+            raise ValueError("VM-HA accepted route operation does not match its phase")
+
+
+class RouteReplacementCompensated(RuntimeError):
+    """The desired replacement failed terminally and the original was restored."""
+
+    def __init__(self, restored_route_id: str) -> None:
+        super().__init__("VM-HA route replacement failed and was exactly compensated")
+        self.restored_route_id = restored_route_id
 
 
 @dataclass(frozen=True)
@@ -668,6 +844,7 @@ class VMHARouteReconciler:
                             cluster_id=self.cluster_id,
                             route_target=route_target,
                             route_id=existing.route_id,
+                            rollback=existing.rollback,
                         )
                     )
 
@@ -869,6 +1046,7 @@ def route_observation_snapshots(
     route_prefix: Callable[[object], str | None],
     route_allocation_id: Callable[[object], str | None],
     route_next_hop: Callable[[object], str],
+    route_rollback: Callable[[object, VMHARouteTarget], RouteRollbackSnapshot],
     route_target: VMHARouteTarget,
 ) -> tuple[ManagedRouteSnapshot | RouteOccupancySnapshot, ...]:
     """Normalize every route as mutable ledger ownership or read-only occupancy."""
@@ -900,6 +1078,7 @@ def route_observation_snapshots(
                 prefix=prefix,
                 allocation_id=allocation_id,
                 ownership=ownership,
+                rollback=route_rollback(route, route_target),
             )
         )
     return tuple(sorted(snapshots, key=lambda item: (item.prefix, item.route_id)))

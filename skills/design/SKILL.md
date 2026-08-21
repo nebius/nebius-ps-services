@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation, including evidence-backed `troubleshoot` handoffs for proven system-contract changes: understand requirements and existing or greenfield systems, classify AI behavior as direct model calls, deterministic workflows, or agents, route missing due diligence through `research`, undecided application layers through `app-stack`, undecided AI layers through `ai-stack`, apply `system-design-rules`, design vertical slices, compare alternatives, and create a `/plan` handoff. Use for new features, major changes, architecture docs, ADR-like decisions, new applications, and proven remediations that change topology, boundaries, public interfaces, data ownership, migrations, or cross-component workflows. Do not use for brainstorming, unknown failure diagnosis, complex repairs inside one private boundary, stack-only selection, checklist-only review, Agentic SDLC-owned artifacts, or immediate implementation."
+description: "Design non-SDLC features, architectures, ADRs, or proven contract-changing remediations before implementation. Produce a plan; route due diligence to research, stack choices to app-stack/ai-stack, unknown failures to troubleshoot, and checklist-only ADR/design review to system-design-rules."
 ---
 
 # Design
@@ -357,4 +357,4 @@ short answer is explicitly requested:
   brownfield and greenfield paths, `research`, `app-stack`, and `ai-stack`
   handoff guidance, `system-design-rules` decision review guidance, and `/plan`
   handoff template.
-- Use `evals/trigger-prompts.md` when reviewing or tuning trigger readiness.
+- Use `evals/trigger-prompts.csv` when reviewing or tuning trigger readiness.

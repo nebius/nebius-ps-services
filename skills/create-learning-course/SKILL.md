@@ -1,6 +1,6 @@
 ---
 name: create-learning-course
-description: "Use only when explicitly invoked for creating or revising public-safe learning courses, lesson plans, curricula, course workspaces, syllabi, exercises, glossaries, and learner progress records from a learner mission and trusted sources. Use when Codex needs to turn a topic, audience, resource set, or existing notes into a structured course with lessons, retrieval practice, citations, and publication/security review."
+description: "Use only when explicitly invoked to build or revise public-safe courses, curricula, lessons, exercises, workspaces, or progress records from learner goals and trusted sources, with citations and publication/security review."
 ---
 
 # Create Learning Course
@@ -93,7 +93,7 @@ course-creation requests, because it can create or revise many local files.
   course is ready to share.
 - Use `assets/course-workspace-template/` when creating a new course workspace
   or when an existing workspace is missing core files.
-- Use `evals/trigger-prompts.md` when reviewing or tuning trigger behavior.
+- Use `evals/trigger-prompts.csv` when reviewing or tuning trigger behavior.
 
 ## Writes
 
@@ -260,4 +260,4 @@ Return:
 - `references/publication-safety.md`: public-safe course creation rules,
   redaction guidance, secret handling, and final review checklist.
 - `assets/course-workspace-template/`: starter workspace files for new courses.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.

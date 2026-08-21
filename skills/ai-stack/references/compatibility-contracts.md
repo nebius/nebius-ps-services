@@ -41,7 +41,9 @@ At minimum, evaluate the edges that exist in the selected design:
 source data -> transformation -> tokenizer/template -> training
 base model -> adapter -> merged or composed model -> quantization
 training checkpoint -> serving artifact -> inference runtime -> hardware
-model provider -> adapter -> agent framework -> tool schema
+model provider -> Pydantic AI Model/Provider/profile -> runtime facade
+provider-native runtime -> runtime facade -> normalized application events
+runtime facade -> typed tool adapter -> policy gateway -> domain service
 embedding model -> dimensions/normalization -> index -> retrieval policy
 agent state -> graph checkpoint -> durable workflow state -> side effects
 MCP server -> SDK/framework -> transport -> client/host -> extensions
@@ -204,6 +206,10 @@ Record the owner of:
 Assign each responsibility to one layer. Reject designs where the agent kernel,
 graph, Temporal workflow, queue, and provider client independently retry the
 same non-idempotent action.
+
+Treat provider sessions, response IDs, caches, and native compaction as
+optimizations. Reject a design that cannot reconstruct required conversation,
+approval, workflow, or side-effect state from application-owned records.
 
 ### Registry, Deployment, And Evaluation
 

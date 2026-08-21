@@ -8,6 +8,8 @@ import pytest
 from nebius_cxcli.nebius_api_helpers import (
     bounded_nebius_request_kwargs,
     nebius_operation_id,
+    sdk_message_to_mapping,
+    sdk_parse_message,
     wait_nebius_operation,
 )
 
@@ -73,6 +75,42 @@ def test_bounded_nebius_request_waits_for_due_token_renewal() -> None:
         },
         "retries": 0,
     }
+
+
+def test_sdk_direct_messages_round_trip_through_protojson_mapping() -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.mk8s.v1 import NodeGroup, NodeGroupSpec
+
+    node_group = NodeGroup(
+        metadata=ResourceMetadata(
+            id="nodegroup-123",
+            parent_id="cluster-123",
+            name="worker",
+            resource_version=17,
+        ),
+        spec=NodeGroupSpec(version="1.32", fixed_node_count=3),
+    )
+
+    assert sdk_message_to_mapping(node_group) == {
+        "metadata": {
+            "id": "nodegroup-123",
+            "parent_id": "cluster-123",
+            "name": "worker",
+            "resource_version": "17",
+        },
+        "spec": {"version": "1.32", "fixed_node_count": "3"},
+    }
+    parsed = sdk_parse_message(
+        NodeGroupSpec,
+        {"version": "1.33", "fixed_node_count": 4},
+    )
+    assert parsed.version == "1.33"
+    assert parsed.fixed_node_count == 4
+
+
+def test_sdk_message_to_mapping_rejects_unsupported_values() -> None:
+    with pytest.raises(TypeError, match="Nebius SDK direct message"):
+        sdk_message_to_mapping(object())
 
 
 def test_wait_nebius_operation_rejects_failed_operation() -> None:

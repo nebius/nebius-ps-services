@@ -138,12 +138,49 @@ non-exhausted Stop:
 - the hook does not request another agent turn, deny later tools, or emit a
   generated fallback for ordinary report quality.
 
+Prefer local evidence labels as plain inline-code repository-relative slash
+paths with an optional positive line suffix. Inline code and Markdown targets
+may use repository-relative, platform-native absolute, home-relative, or local
+`file:` syntax only when their decoded canonical destination remains inside the
+Git repository root derived from the event working directory. This root, not a
+selected subproject, is the boundary, so sibling-project evidence is valid.
+If no Git root can be proven, absolute, home-relative, and local `file:` forms
+are unsafe because their containment boundary is indeterminate.
+
+For `file:`, require an empty authority and an absolute local path. Reject
+credentials, query or fragment components, control bytes, malformed or
+residual encoded traversal and separators, UNC or remote targets, non-native
+separators or path syntax, parent traversal, and symlink escape. Parse balanced
+or escaped Markdown destinations and optional titles; treat ambiguous link
+syntax and renderer-active schemes as unsafe. Resolve existing symlinks; use
+lexical containment beneath the deepest existing ancestor for a nonexistent
+target. A proven-contained target span may be excluded from the generic
+home-path check, but its raw and decoded target, label, surrounding prose, and
+all other content remain subject to secret, private-host, private-IP, and
+credential checks. Containment validates the address only and never certifies
+referenced file content as safe.
+
+A safe target may be delivered. A contained wrapper or authoring defect is
+`advisory_incomplete`; ordinary dotted words, slash commands, and route-like
+prose are not references. An outside-root target, escape, unsafe URI, or
+independently sensitive value is terminal. Strict exhausted-report fallback
+uses the same resolver but normalizes contained absolute, home-relative, and
+URI targets to repository-relative form and redacts unsafe or indeterminate
+values. It replaces over-limit Markdown, inline-code, or URL values atomically
+instead of truncating through their syntax. Public HTTPS links remain subject
+to private-host checks.
+
 A report containing a secret, private endpoint, internal hostname, customer
-data, or local user path may receive one bounded redaction correction. If it
-remains sensitive, the hook emits a concise redacted safety fallback and
-stops. Invalid trusted coordination state, missing authority, exact
-remediation-budget exhaustion, and independent peer Stop policy remain
-fail-closed.
+data, uncontained local user path, or unsafe reference atomically records
+`sensitive_detected` and stops with one generic non-report warning. The hook
+requests no automatic replacement report and emits no second warning on
+repeated evaluation. This is terminal detection, not sanitization or
+suppression of output already rendered by the host. Invalid trusted
+coordination state, missing authority, exact remediation-budget exhaustion,
+and independent peer Stop policy remain fail-closed.
+A valid report finalization failure after a peer terminal preserves that first
+terminal result and adds one generic trusted-state warning without reflecting
+the finalizer result.
 
 ## Exhaustion Additions
 

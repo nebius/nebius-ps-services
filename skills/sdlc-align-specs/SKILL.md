@@ -1,6 +1,6 @@
 ---
 name: sdlc-align-specs
-description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
+description: "Use only as part of the Agentic SDLC workflow; reconcile requirements, design, plans, tests, implementation, docs, and end-to-end evidence for consistency. Use align for general project alignment."
 ---
 
 # Align Specs
@@ -124,12 +124,15 @@ evidence tell one consistent story.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md`, `docs/design.md`, and any
-  ownership-receipted v2 selected-project `AGENTS.md` as committed project
+  ownership-receipted v3 selected-project `AGENTS.md` as committed project
   truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`; only `project-agent-instructions` creates, refreshes,
-  adopts, or retires its v2-managed selected-project `AGENTS.md`. Other skills
-  route changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner. Only
+  `project-agent-instructions` creates, attaches, refreshes, adopts, or retires
+  its v3-managed selected-project `AGENTS.md` tail.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

@@ -2,6 +2,9 @@
 
 Use these cases to evaluate the terminal semantic review. The hook records only
 material-write evidence; the agent owns every classification.
+`trigger-prompts.csv` is the sole canonical trigger authority; these are
+post-routing process cases. Contract tests remain required for lifecycle and
+output assertions; canonical CSV validation does not replace them.
 
 ## Requirements only
 

@@ -1,6 +1,6 @@
 ---
 name: nosleep4mac
-description: "Use only when the user explicitly requests $nosleep4mac to install, converge, verify, or repair a per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power with `/usr/bin/caffeinate -s`, including while the screen is locked. Do not use for temporary caffeinate sessions, display-sleep prevention, battery sleep changes, closed-lid promises, or system-wide daemons."
+description: "Use only when the user explicitly requests a per-user macOS LaunchAgent that keeps the Mac awake on AC with caffeinate -s. Not for temporary sessions, display/battery policy, closed-lid promises, or system daemons."
 ---
 
 # No Sleep for Mac

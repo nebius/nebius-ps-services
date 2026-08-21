@@ -259,7 +259,7 @@ class CodeReviewContractTest(unittest.TestCase):
         metadata = self.read(CODE_REVIEW / "agents" / "openai.yaml")
         skill = self.normalized(CODE_REVIEW / "SKILL.md")
         readme = self.normalized(CODE_REVIEW / "README.md")
-        evals = self.normalized(CODE_REVIEW / "evals" / "trigger-prompts.md")
+        evals = self.normalized(CODE_REVIEW / "evals" / "process-cases.md")
 
         self.assertIn("allow_implicit_invocation: true", metadata)
         self.assertIn("fix only safe in-scope findings", metadata)

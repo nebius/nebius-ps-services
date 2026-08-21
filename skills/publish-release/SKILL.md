@@ -1,6 +1,6 @@
 ---
 name: publish-release
-description: "Use to publish GitHub Releases end to end from the current project: collect package inputs, optionally set up changelog/helper/workflow assets, prep the release branch, create and merge a PR, tag from the default branch, wait for the release workflow, verify the GitHub Release assets, and report the result. Also supports explicit setup-only guidance."
+description: "Use only when explicitly asked to publish GitHub Releases end to end: collect package inputs, set up optional assets, prepare/merge a PR, tag, wait, verify assets, and report. Also supports setup-only guidance."
 ---
 
 # Publish Release

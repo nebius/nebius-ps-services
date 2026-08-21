@@ -23,10 +23,10 @@ $(VENV_STAMP): pyproject.toml Makefile | $(VENV_PYTHON)
 	touch $(VENV_STAMP)
 
 fmt: $(VENV_STAMP)
-	$(VENV_PYTHON) -m ruff format src tests
+	$(VENV_PYTHON) -m ruff format src tests misc/gcp_vpngw_vm_ha.py misc/gcp_vpngw_classic_vm_ha.py
 
 lint: $(VENV_STAMP)
-	$(VENV_PYTHON) -m ruff check src tests
+	$(VENV_PYTHON) -m ruff check src tests misc/gcp_vpngw_vm_ha.py misc/gcp_vpngw_classic_vm_ha.py
 
 typecheck: $(VENV_STAMP)
 	$(VENV_PYTHON) -m mypy

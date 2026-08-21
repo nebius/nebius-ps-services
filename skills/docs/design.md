@@ -79,7 +79,7 @@ activation boundary agree without a duplicate installed skill tree.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002,REQ-003 status=ready priority=P0 version=6 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002,REQ-003 status=ready priority=P0 version=7 -->
 ### FEAT-002: Receipt-bound project lifecycle and coordinator trust
 
 #### Requirements Covered
@@ -102,6 +102,10 @@ worktree, empty-marker behavior, global-policy isolation, human and override
 targets, current-turn compatibility rendering, and terminal reload outcomes.
 The owner reconciliation cases cover explicit and ambiguous paraphrases of
 existing-user compatibility intent.
+Retained lifecycle evidence also shows that rendering an inapplicable
+`existing-sufficient` decision for a managed target could publish empty private
+rules, while the corrected `needed` decision then failed with `UNSAFE_TARGET`
+because the renderer accepted only byte-identical reuse of that owned path.
 
 #### Design Details
 
@@ -160,6 +164,35 @@ byte-identical. Ambiguous impact remains unsealed. In every outcome, validation
 and planning advance `planned_write_epoch` to the current `write_epoch` before
 the terminal project-instructions apply, verify, and seal sequence.
 
+Preflight the selected disposition against the fresh inspected target before
+creating or updating private rendered rules. In particular,
+`existing-sufficient` is renderable only when the active instruction is the
+human-owned target or active human-owned override/fallback accepted by the
+apply contract; a managed target fails before render publication.
+
+Treat a current-session render revision as a compare-and-swap transition over
+private evidence. Hold one nonblocking OS lock across fresh-manifest replay,
+decision preflight, predecessor validation, rules replacement, and state
+publication; an overlapping renderer fails without writing. Byte-identical
+output remains idempotent. Changed output may atomically replace the canonical
+mode-`0600` rules file only when the canonical mode-`0600` render state has the
+exact schema, project and path ownership bindings, and digest for the bytes
+still at that path. Recheck the predecessor file identity and bytes before
+replacement, sync the replacement and directory, then publish the matching new
+render state. If state publication fails after replacement, the old state and
+new exact decision-rendered rules form a fail-closed recovery boundary: a
+rerun under the same lock recognizes the already-published exact rules and
+finishes state publication without repeating a repository effect.
+
+Historical spec and decision digests describe the generation that owns the
+predecessor rules; they need not equal a later reconciled generation. Require
+their canonical shape and exact project/path/rules ownership bindings, while
+freshly replaying the current manifest and decision before replacement and
+letting lifecycle planning independently validate the new full spec digests.
+Missing, malformed, ownership-mismatched, symlinked, hard-linked,
+permission-unsafe, or concurrently changing predecessor evidence fails closed.
+This transition grants no repository mutation or coordinator authority.
+
 Treat plain-language user-dependence intent semantically rather than through a
 keyword trigger. A statement that real users rely on the project and future
 code or interface changes must remain safe is explicit compatibility intent,
@@ -207,7 +240,11 @@ before requesting reconciliation instead of depending on another hook event.
 Bind terminal decision evidence to the canonical current-session private
 bundle, and let late successful write accounting invalidate later planning or
 sealing evidence. Keep the existing fail-closed command contract and phase
-machine. Make explicit user-dependence intent durable through a `needed`
+machine. Reject inapplicable decisions before rendering, and permit revised
+private rules only through a compare-and-swap that revalidates the exact state
+and rules predecessors at the final replacement boundary. Give only a proven
+matching-state publication I/O failure a distinct exact-rerun result. Make
+explicit user-dependence intent durable through a `needed`
 project rule unless an active selected-project instruction is already
 sufficient, and derive the instruction chain from the nearest effective marker
 ancestor without changing the selected-project target.
@@ -228,7 +265,9 @@ semantics outside the selected project. Relying on `UserPromptSubmit` after a
 Stop continuation preserves the observed deadlock, while admitting canonical
 spec edits throughout `implementation-open` weakens the phase boundary. A
 Task Implementer-only retry or bypass would leave the lifecycle defect in every
-other long-running consumer.
+other long-running consumer. Requiring byte identity forever strands corrected
+decisions, while deleting or blindly overwriting the old render would discard
+ownership evidence and weaken the fail-closed boundary.
 
 #### Implementation Boundaries
 
@@ -241,7 +280,10 @@ runtime instructions, root installation guidance, and changelog. Canonical
 owner schemas, lifecycle phases, receipts, decision dispositions, and public
 coordinator commands remain unchanged. The public coordinator retains bounded
 receipt persistence and an opaque turn-token input while preserving raw turn
-IDs for direct owner tests.
+IDs for direct owner tests. The project-instructions renderer owns disposition
+preflight, dual-predecessor validation, atomic private rules replacement,
+matching render-state publication, and the bounded publication-incomplete
+result; hooks do not order or perform that repair.
 
 #### Test-First Success Criteria
 
@@ -287,12 +329,31 @@ IDs for direct owner tests.
   `reconciliation-required`, leaves the write epoch unchanged, clears stale
   planning evidence, and admits the canonical spec patch without an intervening
   `UserPromptSubmit`; recursive Stop still terminates fail-closed.
+- TDD-016: A managed target plus `existing-sufficient` fails during render
+  before creating or updating rules or render state.
+- TDD-017: A current-session revision from exactly owned empty rules to needed
+  nonempty rules atomically updates the rules and their render-state digests,
+  remains repository-read-only, and is admitted by lifecycle planning.
+- TDD-018: Missing, malformed, mismatched, unsafe, hard-linked, or tampered
+  predecessor evidence blocks a changed rerender without altering either
+  private rules or repository state. A state replacement or content change
+  after initial validation but before the final compare-and-swap is detected
+  before rules replacement.
+- TDD-019: An overlapping renderer loses the nonblocking bundle lock and
+  writes nothing. An injected private I/O failure during matching-state
+  publication returns `RENDER_STATE_PUBLICATION_INCOMPLETE`; one exact CLI
+  rerun publishes matching state and re-syncs its parent directory when a
+  prior replacement completed before directory sync failed. Unsafe ownership,
+  mode, link, or schema failures remain `UNSAFE_TARGET`. Lock creation or
+  metadata failures return one bounded structured blocker without exposing
+  private paths or writing render artifacts.
 
 #### Validation Plan
 
 Run focused hook and owner coordinator tests, semantic reconciliation evals,
-syntax and lint checks, changed-scope review, security review, installer
-refresh tests, and alignment before installation.
+render revision and adversarial ownership tests, syntax and lint checks,
+changed-scope review, security review, installer refresh tests, and alignment
+before installation.
 
 #### Test Plan
 
@@ -305,7 +366,11 @@ compatibility-intent paraphrases, global-policy isolation, missing and
 human-owned targets, same-directory overrides, nearest-marker nested discovery,
 empty marker configuration, current-session injection, terminal apply/verify,
 reload reporting, and the Stop-to-reconciliation transition without a prompt
-event.
+event. Cover managed-target disposition preflight, owned empty-to-nonempty
+rerender, idempotent identical output, stale state, digest mismatch, unsafe
+metadata, hard links, concurrent lock contention, interrupted state
+publication recovery, concurrent predecessor change, and lifecycle-plan
+admission of the revised bundle.
 
 #### Evaluation Plan
 
@@ -320,7 +385,10 @@ host-rendered hook-completion row as a runtime observation, not source proof.
 Also confirm that user-dependence intent yields the compatibility rules without
 requiring prescribed words, that the rules are present during the current
 implementation plan, and that terminal persistence is reported separately from
-fresh-session instruction discovery.
+fresh-session instruction discovery. Reproduce the retained empty-render
+deadlock in a disposable bundle and confirm the corrected source rejects the
+invalid first decision or atomically admits an exactly owned revised render;
+do not alter the retained failed-session evidence.
 
 #### Rollout And Rollback
 
@@ -333,6 +401,9 @@ exact backup if the fresh probe fails before accepting further project writes.
 The lifecycle reaches a receipt-bound terminal state using canonical installed
 coordinators, repeated writes stay silently accounted, semantic reconciliation
 occurs once at Stop, unchanged specs can seal after current-epoch validation,
+invalid dispositions cannot publish render evidence, exactly owned decision
+revisions cannot deadlock on their own private rules, unowned changes remain
+blocked,
 explicit compatibility intent governs the current change and future sessions,
 nested selected projects follow effective Codex root discovery without changing
 their target scope, and noncanonical commands still fail closed.
@@ -748,29 +819,42 @@ operation without teaching or using a bypass.
 
 <!-- /FEATURE: FEAT-006 -->
 
-<!-- FEATURE: FEAT-007 reqs=REQ-008 status=ready priority=P0 version=4 -->
-### FEAT-007: Advisory concise troubleshoot report obligation
+<!-- FEATURE: FEAT-007 reqs=REQ-008 status=ready priority=P0 version=6 -->
+### FEAT-007: Single-report troubleshoot safety obligation
 
 #### Requirements Covered
 
-- REQ-008: Require a concise, accurate outcome report without making ordinary report quality a workflow blocker.
+- REQ-008: Require a concise, accurate outcome report without making ordinary report quality a workflow blocker or requesting an automatic duplicate after sensitive output.
 
 #### Context Evidence
 
-The version-3 hook made a 13-section, four-table report a hard Stop condition.
-An ordinary incomplete report requested another agent turn, the next Stop
-could emit a large generated fallback, and a pending correction denied later
-tools. Field validation also treated concise values such as `Confidence: High`
-as non-substantive. The outcome vocabulary could not distinguish a proven and
-tested source repair from full installed or live activation, so successful
-code repair was reported as `DIAGNOSED_NOT_FIXED`.
+The advisory v4 contract fixed ordinary report-format loops, but its sensitive
+report branch still returned `decision: block` and asked the model to rewrite
+the whole response. The host had already recorded the first assistant message,
+so the feedback created a second assistant response. A non-sensitive but still
+malformed rewrite then fell through to `advisory_incomplete`, leaving two
+partially similar reports and no transactionally delivered valid report.
+Source and installed payloads matched and only one shared Stop arbiter was
+registered, localizing the failure to the source contract rather than install
+drift or duplicate registration.
+
+The subsequent strict local-reference rule also treated proven-contained
+Markdown destinations, absolute or home-relative paths, local `file:` URIs,
+and unrelated prose such as dotted names or slash commands as the same fatal
+safety class as secrets and containment escape. The selected correction uses
+the resolved Git repository root as the single authorization boundary and
+separates harmless format defects from unsafe destinations.
 
 #### Design Details
 
 At `UserPromptSubmit`, every explicit `$troubleshoot` invocation keeps the
 session-private, turn-bound `troubleshoot-report-obligation.json` sidecar. The
 sidecar is an invocation marker and transactional delivery record; it is not a
-general workflow lock. Normal output has one canonical compact shape:
+general workflow lock. Schema v3 contains exactly `schema`, `workspace_hash`,
+`session_hash`, `turn_hash`, and `status`. Its statuses are `active`,
+`delivered`, `advisory_incomplete`, `sensitive_detected`, and `fallback`.
+There is no correction counter or report-correction tool gate. Normal output
+has one canonical compact shape:
 
 1. `Outcome`: classification, confidence, fixed scope, and current state.
 2. `Root Cause And Fix`: root cause and changes made.
@@ -789,6 +873,46 @@ end-to-end proof and no material unverified item in the declared scope.
 `DIAGNOSED_NOT_FIXED` remains the diagnosed-but-unrepaired outcome. Do not add
 an underscore alias or a second parser path.
 
+The compact authoring notice must fit inside the existing 800-character hook
+context limit together with every supported profile and pending-message
+combination. It states the four sections, every required field, the current six
+classifications, the no-secret rule, and the local-reference grammar before the
+model responds.
+Prefer local file labels as plain inline-code repository-relative paths using
+`/`, optionally followed by a positive `:line`. Use one typed local-target
+classifier for inline and Markdown references. It accepts a
+repository-relative, platform-native absolute, home-relative, or local `file:`
+target only when decoding and canonical resolution keep the destination inside
+the Git repository root derived from the event working directory. Existing
+candidates resolve symlinks; nonexistent candidates use lexical containment
+beneath the deepest existing ancestor. Without a proven Git root, absolute,
+home-relative, and local `file:` forms remain indeterminate and fatal. Parse
+balanced or escaped Markdown destinations and optional titles before
+classification; ambiguous link syntax and renderer-active schemes remain
+fatal. A local `file:` URI requires an empty authority and forbids credentials,
+queries, fragments, control bytes, ambiguous or residual encoded traversal and
+separators, and non-native path syntax. Parent or symlink escape, outside-root
+targets, UNC or remote targets, and ambiguous destinations remain fatal.
+
+Classify references internally as safe repository-local, format-only, or
+unsafe private/escape without changing sidecar schema v3. Safe references can
+be delivered. A contained wrapper or authoring defect becomes the existing
+`advisory_incomplete` outcome. Only the unsafe class and independent sensitive
+content become `sensitive_detected`. Ordinary dotted words, slash commands,
+and route-like prose are not local references. Exempt only the exact span of a
+parsed, contained target from generic home-path detection; continue scanning
+its raw and decoded target, label, surrounding prose, and all other fields for
+secrets, private hosts, private IPs, and credentials. Repository containment
+never certifies referenced file content as safe.
+
+Apply the same resolver to strict exhausted-report validation, but normalize a
+contained absolute, home-relative, or URI value to repository-relative form in
+generated fallback output and redact anything unsafe or indeterminate. Replace
+an over-limit Markdown, inline-code, or URL value atomically rather than
+truncate through its syntax. Public HTTPS targets remain subject to
+private-host checks. Public HTTP or another nonprivate wrapper defect is
+advisory rather than sensitive.
+
 For an ordinary non-exhausted Stop, valid concise output becomes delivered.
 Malformed, incomplete, unsupported, `FAIL`, or `UNKNOWN` content records
 `advisory_incomplete` and returns `continue: true`; it requests no correction,
@@ -799,64 +923,103 @@ internal architecture, component, timeline, log, hypothesis, code, and
 completion ledgers when requested or decision-relevant, but it is never a
 normal completeness prerequisite.
 
-Hard boundaries remain separate. Exact remediation-budget exhaustion uses a
-strict marker-bound concise report and disallows `DIAGNOSED-FIXED`; one bounded
-correction and a concise terminal fallback prevent infinite continuation.
-Sensitive report content may similarly receive one redaction correction, and
-its fallback must omit the sensitive value. Invalid trusted coordination
-state, missing authority, and peer Stop policy stay fail-closed. A valid report
-is finalized only after the shared arbiter proves that no peer still requires
-continuation. If the host terminates before Stop, no local hook can synthesize
-an assistant response; a resumed turn reports only the interruption evidence
-it can actually prove.
+Sensitive or unsafe ordinary output atomically closes as `sensitive_detected`
+and returns `continue: false` with one compact, non-report system warning that
+echoes none of the response. It never returns `decision: block` and never asks
+the model for a replacement report. Repeated Stop evaluation emits no second
+warning. A close-write failure returns a generic terminal state warning without
+reflecting the report. This is post-generation terminal detection, not
+sanitization or suppression: the host may already have rendered the assistant
+message, so prevention depends on the upfront authoring contract.
+
+Hard boundaries remain separate. Exact remediation-budget exhaustion keeps its
+strict marker-bound concise report, one bounded correction, terminal fallback,
+and `DIAGNOSED-FIXED` prohibition. `fallback` is not reused for ordinary
+sensitive detection. Invalid trusted coordination state, missing authority,
+and peer Stop policy stay fail-closed. A v2 sidecar is never rewritten or
+migrated: resumed use fails closed with a fresh-session instruction, and
+activation preflight aborts while any active v2 obligation exists.
+
+The shared Stop arbiter evaluates every delegate even after one returns a
+terminal result so project-spec, SDLC, and prompt-session transitions still
+run. It retains the first terminal result in delegate order, gives terminal
+results precedence over blockers, never replaces an earlier terminal with a
+later result or failure, and finalizes a ready troubleshoot report exactly
+once after delegate evaluation. Every byte-identical owner copy carries this
+same composition logic.
+If valid-report finalization fails after a peer already returned terminal, keep
+that first terminal result and append only a generic trusted-state warning; do
+not expose the finalizer result or silently claim delivery. Only the guard's
+explicit internal finalization acknowledgement counts as success; a pass-shaped
+result without that acknowledgement fails closed even when no peer is terminal.
 
 #### Selected Option
 
-Retain the session-private sidecar and shared Stop delegate, but narrow the hook
-to transactional delivery plus hard-boundary enforcement. Keep persistence and
-investigative decisions in the skill rather than turning report formatting into
-hook-owned orchestration.
+Retain the session-private sidecar and shared Stop delegate, but make report
+authoring prevention explicit and make sensitive-output handling deterministic
+and terminal. Troubleshooting reasoning remains agentic; report validation,
+state transitions, and Stop composition remain deterministic workflows.
 
 #### Alternatives Considered
 
-Retaining the version-3 full-schema blocker would optimize for report ceremony
-instead of repair and reproduce the observed loop. Removing the hook entirely
-would lose transactional peer composition and strict exhaustion/redaction
-handling. Supporting both old and new report shapes would create two canonical
-paths and contradict the fail-fast migration policy.
+Keeping the model-authored correction reproduces duplicate user-visible
+responses. Falling back only after a malformed correction fixes final state but
+does not remove the duplicate. Removing the hook loses transactional peer
+composition and strict exhaustion handling. A host-level pre-display filter
+could guarantee suppression, but the current Stop interface cannot; revisit
+that option only if the host adds a documented pre-render interception point.
+Supporting both v2 and v3 state would create two canonical paths and contradict
+the fail-fast migration policy. A persistent local/private mode or additional
+allowed-root list would create mode confusion and is unnecessary when the
+resolved Git root is the single containment boundary.
 
 #### Implementation Boundaries
 
 Owned surfaces are troubleshoot skill/report contracts, the remediation guard,
-hook documentation, process evals, and installer registration validation. The
-shared arbiter needs no semantic change when the ordinary delegate stops
-returning blocking decisions. Hosted-process termination remains outside local
-hook control.
+shared arbiter copies, hook documentation, process evals, and installer and
+byte-parity validation. Hook registrations and status messages remain
+unchanged. Hosted-process termination and pre-render suppression remain outside
+local hook control.
 
 #### Test-First Success Criteria
 
 - TDD-001: Exact `DIAGNOSED-FIXED` output accepts concise confidence and a
-  source-fixed/runtime-pending scope without requiring legacy sections or
-  tables.
+  source-fixed/runtime-pending scope, the current classification vocabulary,
+  and safe repository-contained relative, absolute, home-relative, and local
+  URI references without requiring legacy sections.
 - TDD-002: Ordinary incomplete, malformed, tool-error, partial, `FAIL`, and
   `UNKNOWN` reports return `continue: true`, record `advisory_incomplete`, emit
   no fallback, and do not deny later tools.
-- TDD-003: Sensitive content still follows a bounded redaction path; exact
-  attempt/time exhaustion remains terminal, disallows `DIAGNOSED-FIXED`, and
-  preserves the configured 5/120 defaults and 10/180 maxima.
-- TDD-004: A valid concise report is finalized before a later terminal peer
-  result, while an advisory report never competes with peer arbitration.
+- TDD-003: Sensitive or unsafe ordinary output closes once as
+  `sensitive_detected`, returns one terminal non-report warning, never requests
+  continuation, never denies a later tool, and remains idempotent across a
+  repeated Stop or state-write failure.
+- TDD-004: Exact attempt/time exhaustion remains terminal, disallows
+  `DIAGNOSED-FIXED`, and preserves the configured 5/120 defaults and 10/180
+  maxima.
+- TDD-005: All Stop delegates run for state effects, first-terminal precedence
+  is deterministic, a valid report finalizes exactly once, and an advisory
+  report never competes with peer arbitration. A finalization failure preserves
+  the first peer terminal while surfacing one generic state warning.
+- TDD-006: v2 resume fails with a fresh-session instruction, all prompt-context
+  paths include every required field and fit 800 characters, and the
+  safe-reference matrix covers nested working directories, sibling projects,
+  ordinary and exhausted-fallback containment, local Markdown links,
+  absolute/home/file URI targets, encoded and symlink escape, public URLs,
+  nonreference prose, and API routes.
 
 #### Validation Plan
 
 Run focused hook, arbiter-composition, skill-contract, process-eval, installer
-registration, syntax, lint, security, and adversarial redaction checks.
+registration, syntax, lint, security, changed-scope review, alignment, and
+adversarial reference and sensitive-content checks.
 
 #### Test Plan
 
 Use disposable task-state roots and synthetic turn IDs for every classification,
 valid short confidence, source-fixed/runtime-pending proof, missing fields,
-ordinary advisory behavior, sensitive output, exhaustion details, inclusive
+ordinary advisory behavior, sensitive output, safe and unsafe references, v2
+resume, state-write failure, context bounds, exhaustion details, inclusive
 limits, interruption, and other Stop delegates.
 
 #### Evaluation Plan
@@ -864,21 +1027,32 @@ limits, interruption, and other Stop delegates.
 Recreate a no-marker ordinary turn and confirm Stop never requests continuation
 for report quality alone. Recreate the installed-runtime-pending case and
 confirm the source repair is reported as `DIAGNOSED-FIXED` with a concise exact
-activation action.
+activation action. In a disposable fresh session, force fake sensitive content
+and verify the original may remain visible but no synthetic continuation or
+second assistant report is created and peer lifecycle cleanup still occurs.
 
 #### Rollout And Rollback
 
-Land and validate source first. A separately authorized installation must use
-the existing recoverable hook backup, verify source/installed parity and trust,
-restart Codex, and run a fresh disposable session. If activation fails, restore
-only the exact installed payload without weakening the reviewed source
-contract.
+Land and validate source first. Before activation, run the bounded read-only
+preflight script, which prints schema/status counts only. It preserves
+recognized terminal v1/v2 history and aborts for active legacy, unknown schemas,
+unsupported statuses, unreadable, or malformed sidecars. Preserve the root-source
+identity of an existing installed skill, create an exact private skill backup,
+then perform a targeted sync that leaves its ownership marker unchanged.
+Install the hook payload through the hook installer, retain its generated
+backup, verify source/installed parity and one registered shared Stop arbiter,
+restart Codex, review `/hooks`, and use a fresh disposable session. Rollback
+restores the exact paired skill and hook backups, restarts Codex, and also
+requires a fresh session; it never rewrites private obligation state.
 
 #### Done Definition
 
-Successful source repair is reported accurately and concisely, ordinary report
-gaps never block safe troubleshooting, strict safety and budget boundaries
-remain enforced, and source proof is kept separate from runtime activation.
+Successful source repair is reported accurately and concisely, repository-
+contained local references remain useful without weakening secret or escape
+protection, ordinary report gaps never block safe troubleshooting, sensitive
+output never causes an automatic replacement report, peer delegates retain
+their state effects, strict budget boundaries remain enforced, and source
+proof remains separate from installed and fresh-runtime activation.
 
 <!-- /FEATURE: FEAT-007 -->
 
@@ -2663,126 +2837,162 @@ coordinators remain rejected.
 
 <!-- /FEATURE: FEAT-017 -->
 
-<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready priority=P0 version=1 -->
-### FEAT-018: Three-level AI application control-flow selection
+<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready priority=P0 version=3 -->
+### FEAT-018: PydanticAI-first portable agent application architecture
 
 #### Requirements Covered
 
-- REQ-019: Select direct model calls, deterministic model workflows, and agents by required control-flow semantics, then bind the choice to the appropriate provider or Codex integration.
+- REQ-019: Select the least-agentic sufficient architecture and use a PydanticAI-first portable runtime without surrendering application-owned controls.
 
 #### Context Evidence
 
-`design/SKILL.md` owns cross-layer architecture synthesis and already routes
-undecided AI layers to `ai-stack`. `ai-stack/SKILL.md` and its architecture and
-agent references already use escalation ladders, but their current ordering
-does not make the direct-call, known-workflow, and dynamic-agent test the
-primary decision. The existing coding-agent pattern also omits Codex.
+`ai-stack` already applies the least-agentic ladder, typed boundaries, hard
+gates, replaceability, and conditional infrastructure. Its existing vendor
+mapping, however, treats Pydantic AI mainly as the non-OpenAI agent option and
+maps OpenAI-native agents directly to a provider runtime. That fragments the
+default application model and understates Pydantic AI's current direct model,
+provider profile, capability, Agent Spec, Harness, durable execution,
+instrumentation, MCP, and evaluation surfaces.
 
-Current official OpenAI documentation uses the Responses API through an
-official OpenAI SDK for direct text and reasoning generation supported by
-Responses, while embeddings, audio, realtime, and other direct workloads use
-their documented task-specific APIs. It describes the Agents SDK as the
-higher-level runtime for managed turns, tools, handoffs, guardrails, and
-sessions, recommends the Codex SDK for coding-focused threads, and reserves
-Codex app-server for deep embedded clients. Current Pydantic AI documentation
-describes a typed Python agent framework with Anthropic, Gemini, OpenAI, and
-other provider integrations.
+Current official Pydantic AI documentation describes model-agnostic access
+over provider SDKs, a direct model request API, typed agents and dependencies,
+model profiles, capabilities, MCP, fallback and concurrency primitives,
+declarative Agent Specs, optional Harness specialists, durable workflow
+integrations, OpenTelemetry instrumentation, and Pydantic Evals. Current
+OpenAI Agents SDK and Anthropic managed-agent documentation describe
+higher-level provider harnesses, supporting their classification as
+specialized runtimes rather than ordinary model adapters.
 
 #### Design Details
 
-`design` applies one architecture rule before assigning AI components:
-deterministic where possible, agentic where necessary. It asks whether one
-model call is sufficient, then whether application code knows the steps, and
-only then whether the model must choose actions or the next step from observed
-results. This classification applies per capability, so one application can
-combine deterministic code, direct model calls, deterministic workflows with
-model steps, and bounded agents without making the application itself one
-unconstrained agent. Unknown iteration count is not an agent signal when code
-owns a deterministic continuation condition such as cursor exhaustion.
+Keep direct calls, deterministic workflows containing model calls, and agents
+as separate capability-level choices. A direct call describes one-request
+control flow, not a prohibition on the Pydantic AI `Agent` primitive. For
+portable Python direct calls, use the low-level direct model API when the
+caller needs `ModelResponse` control, or a no-tools single-request `Agent` when
+typed output parsing, validation retries, typed dependencies, or similar
+request services are required. Use a Pydantic AI model-directed `Agent` loop
+for portable agent behavior. Intentionally provider-specific task APIs remain
+valid for specialized direct workloads. Provider-specific model settings are
+adapter-owned extensions and must not change domain tool contracts or
+authorization semantics.
 
-`ai-stack` owns the detailed matrix and runtime mapping. Direct OpenAI text or
-reasoning generation supported by Responses uses an official OpenAI SDK and
-the Responses API; other direct workloads use the official task-specific API.
-Intentionally OpenAI-native agent loops use the OpenAI Agents SDK. Python
-agents using Anthropic, Gemini, or a provider-neutral typed boundary use
-Pydantic AI by default. Known sequences remain ordinary application workflows
-and call models only at explicit steps; an agent runtime is not introduced
-merely because the workflow contains tools or several model calls.
+Put Pydantic AI behind a small application-owned `AgentRuntime` facade for
+run, stream, resume, cancel, and normalized events. Treat the facade as a
+logical library boundary by default, not an automatically separate platform
+service. The application owns canonical state, identities, prompts and agent
+versions, tools, authorization, budgets, routing governance, telemetry,
+evaluation, and release records. Pydantic AI owns portable provider
+translation and the model/tool interaction loop. Resume and cancel accept
+typed mutation requests containing verified principal and tenant context, run
+identity, expected state version, and idempotency identity. Resume additionally
+binds the exact approval receipt or external event when applicable; the facade
+reauthorizes and uses compare-and-swap state transitions.
 
-Control-flow autonomy is orthogonal to orchestration and durability. LangGraph,
-Temporal, or another explicit orchestration layer may wrap a direct call,
-deterministic workflow, bounded agent, or mixed workflow. Fixed branches,
-checkpoints, timers, approvals, retries, and compensation remain deterministic
-unless the model chooses actions, continuation, or next steps.
+Use Pydantic AI `Model`, provider implementations, and resolved model profiles
+as the execution contract. Supplement them with platform-owned functional,
+operational, and governance metadata. Hard policy filters run before scoring,
+and the complete primary/fallback route plan is persisted. Do not build a
+parallel custom provider/message/tool protocol unless a proven cross-runtime
+contract requires it.
 
-Engineering work is a separate specialist lane. Use the Codex SDK for local
-coding-focused threads and add Codex app-server when a product needs its deeper
-client protocol for authentication, conversation history, approvals, and
-streamed events. Keep PostgreSQL, APIs, RBAC, approval state, tool
-authorization, and other business controls outside model discretion.
+All meaningful tools pass through typed domain APIs or a tool gateway that
+enforces authorization, approval, idempotency, audit, time and output bounds,
+and side-effect rules. MCP remains an allowlisted interoperability boundary.
+Routing, retry, and fallback have distinct owners; fallback occurs only for
+classified replay-safe failures and never repeats an irreversible side effect
+without durable idempotency evidence.
+
+Pydantic AI capabilities and Harness are conditional options for portable
+specialists that need reusable context, tools, lifecycle hooks, or delegation.
+Each specialist receives a bounded schema, toolset, security scope, cost and
+step budget, and evaluation suite. Codex remains the preferred coding-focused
+specialist when its coding harness is the requirement. OpenAI Agents SDK,
+Anthropic managed agents, and other provider-native harnesses are admitted only
+through a written escape decision and retain the same platform controls.
+
+Control-flow autonomy remains orthogonal to graphs and durability. A graph or
+durable workflow may wrap direct calls, deterministic steps, agents, or native
+runtime activities. PostgreSQL, Redis, vector search, object storage,
+gateways, workflow engines, Kubernetes, and multi-agent topologies are
+conditional components selected only by workload and operational triggers.
+When a durable workflow is required, select one qualified owner from Temporal,
+DBOS, Prefect, Restate, or an existing engine based on workload and operational
+evidence.
 
 #### Selected Option
 
-Make the three-level decision rule mandatory in `design`, keep its detailed
-table and vendor choices in `ai-stack`, and update focused runtime references,
-trigger evaluations, metadata, READMEs, official source links, root catalog,
-and changelog together.
+Adopt Pydantic AI as the default portable Python execution boundary while
+preserving the least-agentic ladder and application ownership above it. Add a
+focused provider-agnostic runtime reference, then align the skill core,
+architecture, provider, baseline, evaluation, metadata, README, source map,
+root catalog, project specs, and changelog.
 
 #### Alternatives Considered
 
-Putting every rule only in `design` would duplicate AI framework selection and
-vendor evidence outside `ai-stack`. Putting everything only in `ai-stack`
-would let complete solution designs omit the architecture classification.
-Treating every AI feature as an agent is rejected because it obscures known
-control flow and weakens latency, cost, testing, authorization, and recovery
-predictability.
+A provider-agent-SDK-per-vendor abstraction was rejected because different
+harnesses own incompatible loop, state, tool, event, and delegation semantics.
+Making the Pydantic AI abstraction the business application model was rejected
+because state, policy, and domain logic must remain replaceable. A mandatory
+network facade, gateway, durable engine, and four-store persistence topology
+was rejected because small applications can satisfy the same contracts
+in-process. A lowest-common-denominator model API was rejected because explicit
+provider extensions preserve useful differentiated capabilities.
 
 #### Implementation Boundaries
 
-Owned surfaces are `design/SKILL.md`, its focused workflow reference, README,
-metadata, and evals; `ai-stack/SKILL.md`, its architecture, agent, baseline,
-workload-contract, source-map, README, metadata, and evals; the root README,
-canonical specs, and the `[Unreleased]` changelog. No runtime installation or
-external product mutation is part of this source change.
+Owned surfaces are `ai-stack/SKILL.md`, its focused architecture, provider,
+baseline, compatibility, evaluation, source-map, README, metadata, and eval
+references; the root README; canonical specs; and the `[Unreleased]`
+changelog. No provider, service, infrastructure, credential, or production
+mutation is part of this source change.
 
 #### Test-First Success Criteria
 
-- TDD-001: A single-request prompt selects a direct model call and OpenAI
-  examples map to an official SDK plus the Responses API.
-- TDD-002: A known multi-step process remains a deterministic workflow even
-  when several steps call a model or tools.
-- TDD-003: Dynamic tool choice, observation-driven next-step choice,
-  model-controlled continuation for an unknown step count, or a model-driven
-  observe-act-observe loop selects an agent candidate.
-- TDD-004: OpenAI-native agents map to the OpenAI Agents SDK; Anthropic,
-  Gemini, or provider-neutral Python agents map to Pydantic AI by default.
-- TDD-005: A coding specialist maps to the Codex SDK and adds app-server only
-  for the documented deep-client integration needs.
-- TDD-006: Cursor-driven pagination and fixed durable approval workflows remain
-  deterministic even when their iteration count or elapsed duration is not
-  known beforehand; graph and durability runtimes do not force an agent.
-- TDD-007: A direct non-text OpenAI workload selects its official task-specific
-  API instead of inheriting the Responses default for text and reasoning.
+- TDD-001: A provider-neutral direct request uses the Pydantic AI direct API
+  for low-level response control or a no-tools single-request `Agent` for typed
+  parsing, validation retries, or typed dependencies; neither primitive makes
+  a known sequence agentic.
+- TDD-002: Portable OpenAI, Anthropic, Google, and compatible-model agent
+  scenarios select Pydantic AI by default and keep provider settings explicit.
+- TDD-003: A native runtime is selected only when a named harness feature is a
+  requirement and remains behind the runtime, state, policy, and tool facade.
+- TDD-004: Router tests separate hard eligibility from scoring, persist route
+  reasons, and distinguish pre-execution routing from replay-safe fallback.
+- TDD-005: Tool tests prove model-visible adapters cannot bypass authorization,
+  approval, idempotency, output bounds, or exact approved arguments.
+- TDD-006: A portable specialist uses bounded Pydantic AI capability or Harness
+  contracts; a coding-harness requirement may select Codex explicitly.
+- TDD-007: Small-app scenarios keep state and the runtime facade in-process;
+  scale, durability, retrieval, or team boundaries trigger extra components.
+- TDD-008: Provider-side sessions, caches, and compaction are optional
+  optimizations and never the sole canonical workflow representation.
+- TDD-009: Resume and cancel reject a wrong tenant or principal, a stale
+  expected state version, a duplicate or conflicting idempotency identity, and
+  a mismatched approval receipt before changing canonical run state.
 
 #### Validation Plan
 
-Run focused skill structure validation, project-spec validation, Markdown lint,
-static trigger and metadata inspection, changed-scope code review, security
-review, and final cross-surface alignment. Verify volatile vendor claims from
-current official OpenAI and Pydantic sources.
+Run focused skill-structure and project-spec validation, Markdown lint, static
+trigger and metadata inspection, changed-scope review, security review, and
+final cross-surface alignment. Verify volatile vendor claims from current
+official Pydantic, OpenAI, Anthropic, Google, MCP, and durable-runtime sources.
 
 #### Test Plan
 
-Add representative decision scenarios to both skills' trigger/evaluation
-references. Check the source for contradictory unconditional agent defaults,
-stale coding-agent framework lists, missing source-map links, and drift between
-runtime instructions and human-facing READMEs.
+Add representative scenarios for portable direct access, a portable agent, a
+provider-native escape, a bounded specialist, router/fallback separation, tool
+authorization, and small-to-large platform escalation. Check for stale
+provider-native defaults, duplicated provider abstractions, mandatory optional
+infrastructure, missing source-map links, and README or metadata drift.
 
 #### Evaluation Plan
 
-Walk a mixed application through the decision tree and confirm deterministic
-logic, general AI tasks, and engineering tasks route to explicit owners while
-sharing ordinary APIs, data, authorization, approval, and operational controls.
+Walk a multi-provider application with read tools, side effects, approvals,
+durable waits, and specialist agents through the decision tree. Confirm the
+portable path can change providers without changing domain contracts, native
+escapes remain deliberate, and all selected optional infrastructure has an
+owner, trigger, acceptance gate, and rollback plan.
 
 #### Rollout And Rollback
 
@@ -2793,84 +3003,378 @@ partial vendor mapping.
 
 #### Done Definition
 
-Both skills select the least-agentic sufficient architecture consistently,
-their detailed and summary surfaces agree, provider and Codex choices match
-current official documentation, and validation distinguishes source readiness
-from installed or fresh-runtime behavior.
+The skill selects the least-agentic sufficient architecture, uses Pydantic AI
+as its portable Python default, preserves differentiated provider features,
+keeps application controls and state outside provider runtimes, justifies every
+specialist or native escape, and distinguishes source readiness from installed
+or fresh-runtime behavior.
 
 <!-- /FEATURE: FEAT-018 -->
 
-<!-- FEATURE: FEAT-019 reqs=REQ-020 status=ready priority=P0 version=1 -->
-### FEAT-019: Immutable Task Implementer completion reporting and lane visibility
+<!-- FEATURE: FEAT-019 reqs=REQ-020 status=ready priority=P0 version=2 -->
+### FEAT-019: Concise zero-write Task Implementer lane status
 
 #### Requirements Covered
 
-- REQ-020: Produce crash-safe machine completion evidence and a read-only
-  persistent-lane report without expanding public or mutation interfaces.
+- REQ-020: Preserve crash-safe completion evidence while projecting concise persistent-lane and current-run progress without file disclosure or mutation.
+
+#### Context Evidence
+
+`prompt_workspace_reporting.lane_report()` currently computes a full
+source-to-lane Git comparison and returns every changed path. The generated
+`Task Implementer: Show Pending Lane Changes` task forces `--json`, while the
+generic emitter serializes the complete nested payload on one terminal line.
+The same function already reads the Worktree lane anchor, generation receipts,
+interop state, sealed summaries, and safe Git cleanliness through
+`--no-optional-locks`.
+
+Coordinator-v7 owns the immutable wave plan and machine run status. Wave-v4
+owns task indexes, active batches, promotion heads, and cleanup state, while
+task-plane-v5 owns assignment, dispatch, heartbeat, result, and task state.
+The canonical human projection already treats planned work as pending,
+assigned/running/committed/merged work as in progress, failed work as blocked,
+and tasks as done only after their wave promotes. Worktree lane state owns
+released, integrated, pending, and active generation identity.
+
+Existing lease-resource inspection is not a strict read: its Worktree path
+re-records manifest lease state. The scope lock may create or chmod its file.
+Neither is suitable for a zero-write status command. All relevant private JSON
+writers use atomic replacement, so two matching complete observations can
+prove a stable read without acquiring those mutation-adjacent interfaces.
 
 #### Design Details
 
-A narrow Task Implementer reporting module owns `run-summary-v1`, source-open
-observations, bounded Git diff parsing, exact summary bytes, finalization phase,
-queue-head replay binding, handoff rendering, and lane inspection. Coordinator
-and Worktree schemas remain unchanged. Source observation is a separate
-run-owned artifact so current coordinator-v7 stays canonical and older runs are
-explicitly `unknown_legacy`.
+A narrow Task Implementer reporting module continues to own `run-summary-v1`,
+source observations, finalization, handoff rendering, and lane inspection.
+Completion evidence and its existing detailed change statistics remain
+unchanged. Lane visibility becomes the separate hard-cut
+`task-implementer/lane-report-v2` projection and never embeds a sealed summary
+or invokes Git diff/statistics parsing.
 
-Finalization is a forward-only sequence: prepare stable bytes and digest, call
-the existing Worktree generation release, seal the prepared bytes, publish the
-human projection, activate only the bound queue head, then mark completion.
-Every step is replayable. Released-but-unsealed state remains active for intake
-and queue purposes. `ALREADY_COMPLETE` loads the sealed file; it never reruns
-Git. The public payload contains commits and project paths needed for action but
-omits private identities, state paths, prompts, raw diffs, and recovery data.
+Select exactly one current run from validated run, interop, and finalization
+state. If none is active, use only the latest sealed pending summary; if no
+current coordinator or sealed summary exists, render planning or unavailable
+totals explicitly. Never aggregate legacy generations whose immutable work
+totals do not exist. Lane generation totals remain independent of current-run
+task, worker, and wave progress.
 
-Git statistics validate commit objects and require ancestry only for the
-run-local range. Name-status and numstat are separate NUL streams with pinned
-Myers/rename/copy options, disabled external diff/textconv, byte escaping, and
-bounded subprocess output/time. Full-repository totals are authoritative;
-selected, outside, and cross-scope counts explain a full-repository promotion.
+Derive task and worker counts from task-plane-v5 with wave-promotion precedence.
+One indexed task is one planned logical worker slot. Assignment creation,
+dispatch arming, running, accepted result, failure, and supersession map to
+created, queued, active, finished, failed, and superseded worker counts. A task
+becomes promoted only when its wave has a valid promotion head; committed or
+merged tasks remain in progress. Wave totals and active identity come from the
+coordinator index, and promotion totals come from validated promotion heads.
 
-The generated VS Code document gains only a managed-lane label and one internal
-read-only task. Its preflight compares trusted current and exact previous
-generator outputs; a consistently recorded missing interpreter is inert
-migration input only. Init/run may rewrite previous, reuse cannot, and tampered
-documents fail before the existing lane ensure boundary. Lane inspection uses
-the existing read-only anchor plus Git/ref and sealed receipt reads; it never
-calls a Worktree mutator or broadens lifecycle hook allowlists.
+Observe the anchor and every selected private artifact twice, including the
+complete relevant file set and stable byte digests. Emit only when both bounded
+observations match and cross-file identities validate. Retry once; continued
+movement returns `WORKSPACE_BUSY` without partial output. Do not acquire the
+scope lock or call live lease-resource inspection. Use the existing bounded
+`--no-optional-locks` Git wrapper only for source/lane cleanliness needed by
+the next-action decision.
+
+The generated workspace task becomes `Task Implementer: Show Lane Status`,
+invokes the human renderer by default, clears and reuses a dedicated terminal,
+suppresses command echo and reuse messaging, and does not steal focus. Explicit
+`--json` returns the same concise v2 data. The current four-task generated
+document is the sole previous shape accepted for migration; older shapes and
+all arbitrary differences fail closed.
+
+#### Selected Option
+
+Use one derived lane-report-v2 read model over existing authoritative schemas,
+with optimistic two-pass consistency and separate human and JSON renderers.
+Keep run-summary-v1 and all mutation owners unchanged.
+
+#### Alternatives Considered
+
+Filtering only the terminal rendering was rejected because the command would
+still compute, retain, and expose the large file-level payload to JSON callers.
+A new public status action was rejected because it would expand the exact
+five-action interface. Reusing live lease-resource inspection or the scope lock
+was rejected because those paths may write metadata. Aggregating every pending
+generation was rejected because legacy generations lack immutable totals.
+
+#### Implementation Boundaries
+
+Task Implementer reporting owns snapshot selection, validation, progress
+derivation, schema-v2 output, and human rendering. The generated workspace owns
+only the task label, invocation, presentation, and exact previous-shape
+migration. Coordinator, wave, task-plane, run-summary, Worktree, lease, hook,
+and five-action public schemas remain unchanged. No process-liveness or
+physical-resource claim is added.
 
 #### Test-First Success Criteria
 
-- TDD-001: Identical evidence produces identical prepared, sealed, and replayed
-  summary bytes, including no-change runs and two overlapping generations.
-- TDD-002: Git tests cover add/modify/delete/rename/copy/type/binary and unsafe
-  paths, cross-scope movement, ancestry rejection, and bounds.
-- TDD-003: Faults at preparation, release, seal, handoff, and queue boundaries
-  recover forward without recomputation or double activation.
-- TDD-004: Source movement is reported as moved and changes readiness wording.
-- TDD-005: Workspace previous-shape migration succeeds, reuse requests upgrade,
-  and every tamper fails with zero lane/Git/private-state mutation.
-- TDD-006: Lane reports are byte-neutral before/after inspection and remain
-  meaningful before integration, after integration, and after removal.
-- TDD-007: Contract and hook checks retain five public actions and prove
-  `lane-report` has no coordinator privilege.
+- TDD-001: Every task/wave state and worker arm/start boundary maps to exact,
+  deterministic counts; committed and merged work stays unpromoted.
+- TDD-002: Planning, active, blocked, finalizing, complete, legacy-only, idle,
+  integrated, and removed lanes render bounded useful status.
+- TDD-003: Two matching observations emit one report; changing artifacts or
+  anchors retry once and then return `WORKSPACE_BUSY` without partial counts.
+- TDD-004: Report execution leaves private files, lock metadata, Git state,
+  Worktree lane state, and lease state byte-identical and never calls a diff,
+  mutation, or lease-resource inspection helper.
+- TDD-005: Human and JSON output contain no change statistics, paths, commits,
+  branches, private IDs, prompt content, or embedded summaries.
+- TDD-006: The exact current four-task workspace migrates to the human status
+  task; reuse requests upgrade and every other difference remains tampering.
+- TDD-007: Existing run-summary finalization/replay tests remain unchanged and
+  the public interface still contains exactly five actions.
+
+#### Validation Plan
+
+Run focused reporting, workspace, resume, wave, interoperability, Worktree,
+lifecycle-hook, and contract tests. Run Python and Markdown lint, changed-scope
+review, security review of path/snapshot/zero-write boundaries, skill alignment,
+and final cross-surface alignment.
+
+#### Test Plan
+
+Add table-driven projection tests for every state vocabulary and mixed
+multi-wave progress. Add real disposable-repository tests for source/lane
+cleanliness, pending generation transitions, integration, removal, exact
+workspace migration, tampering, concurrent snapshot movement, missing or
+unsafe state, serialized forbidden fields, size bounds, and complete before/
+after fingerprints of private and Git-owned state.
+
+#### Evaluation Plan
+
+Run a disposable multi-wave Task Implementer workflow and inspect it while
+workers are queued/running, after results commit and merge, after each wave
+promotes, during finalization, after generation release, after source
+integration, and after lane removal. Confirm each report is short, actionable,
+and truthful without displaying changed files or interfering with execution.
 
 #### Rollout And Rollback
 
 Validate source and all focused/broad suites first. Install only the updated
 Task Implementer skill through the repository installer, verify source/install
-parity, and smoke-test a fresh session. Do not install or register hooks because
-their runtime contract is unchanged. Roll back the reporting and generated
-workspace change together; do not run an older finalizer over a prepared new
-summary.
+parity, and smoke-test a freshly generated or migrated workspace in a fresh
+session. Do not install or register hooks because their runtime contract is
+unchanged. Roll back lane-report-v2, its renderer, and the generated workspace
+shape together; run-summary-v1 needs no rollback or migration.
 
 #### Done Definition
 
-Completion and lane visibility derive only from immutable or live read-only
-evidence, interrupted finalization is idempotent, migrations are explicit and
-fail closed, the five public actions remain unchanged, and source, installed,
-and fresh-session proof are reported separately.
+The lane task renders bounded current progress, promoted and remaining work,
+generation backlog, and the next public action without changed-file data;
+machine and human counts agree; repeated or concurrent inspection is
+zero-write and fail-closed; migrations are exact; run-summary-v1 and the five
+public actions remain unchanged; and source, installed, and fresh-session proof
+are reported separately.
 
 <!-- /FEATURE: FEAT-019 -->
+
+<!-- FEATURE: FEAT-020 reqs=REQ-021 status=ready priority=P0 version=2 -->
+### FEAT-020: Incremental lean-skill alignment and evaluation evidence
+
+#### Requirements Covered
+
+- REQ-021: Align skills with lean authoring and target-specific evaluations.
+
+#### Context Evidence
+
+`align-skill` already owns skill authoring, progressive disclosure, review
+lanes, and structural validation. Its validator recognizes `evals/` but does
+not parse evaluation content, while many existing source skills have no eval
+directory. Existing trigger suites use both Markdown and CSV, and the current
+real-catalog regression requires basic validation to remain compatible with
+that catalog. Official OpenAI guidance makes `SKILL.md` plus name and
+description the portable minimum, recommends progressive disclosure,
+imperative steps, one focused job, and scripts for deterministic behavior. The
+open Agent Skills guidance recommends a lean main file, focused references,
+realistic trigger cases, and output comparison against a prior or no-skill
+baseline.
+
+#### Design Details
+
+Keep semantic authoring judgment in the workflow and rubric. Review each
+description for its job, outcome, trigger intent, routing-relevant operating
+mode, and adjacent negative boundary without keyword scoring. Define removable
+no-op guidance as text whose deletion cannot change a decision, constraint,
+route, validation, safety outcome, or output. Classify workflow blocks as
+flexible, bounded-judgment, or deterministic without requiring annotations in
+target skills. Keep decision-changing rationale and use exact scripts only
+where deterministic reliability warrants their maintenance cost.
+
+Make `evals/trigger-prompts.csv` the single trigger authority for every
+authorized writable target that successfully completes alignment. Its exact
+columns are `id,should_trigger,prompt`; values are non-empty, IDs and prompts
+are unique, labels are lowercase `true` or `false`, and each label has at least
+three cases. Near-miss negatives must exercise adjacent routing boundaries.
+Broader or ambiguous skills should grow toward roughly twenty cases, but the
+validator enforces only the six-case floor.
+
+Add `--require-evals` independently of the existing validation profile. Basic
+validation continues to accept a missing eval suite so the source catalog can
+migrate only when each skill is next aligned. Any canonical CSV that exists is
+validated in every mode. Strict validation requires it, rejects a simultaneous
+legacy `trigger-prompts.md`, and does not treat Markdown-only coverage as
+canonical. The validator emits a warning above 500 `SKILL.md` lines; the
+alignment workflow must reduce the file through progressive disclosure or
+record why the remaining core instructions are justified.
+
+Treat the canonical CSV as target-owned input. Before opening it, reject a
+symlink at either the `evals/` directory or file component and require the
+resolved file to remain beneath the resolved skill root. Report malformed or
+duplicate cases by row number only; do not include raw IDs or prompts in
+terminal or CI diagnostics.
+
+When that warning fires, or when semantic review finds an overloaded entry
+point, load one focused long-skill refactoring reference. Classify every block
+as always-needed core, conditional reference material, deterministic scripted
+work, reusable asset or example content, removable behavior-neutral or
+duplicated prose, or an independently triggered job. Before changing
+ownership, record the destination of safety constraints, decision-changing
+rationale, non-obvious gotchas, preconditions, failure and retry behavior, stop
+conditions, validation, and output contracts. Extracted references stay one
+level deep and receive exact conditional read directives; do not summarize
+sections mechanically.
+
+Record `SKILL.md` logical lines before and after every long-skill refactor with
+the validator-compatible `splitlines()` method. Record token cost only when the
+same compatible tokenizer or runner can measure both
+versions, including its method; otherwise use `UNAVAILABLE`. Keep both metrics
+informational. Do not add a tokenizer dependency, token threshold, or hard size
+failure. A target may remain above 500 lines only with a specific explanation
+of why the retained blocks are always needed or safety-critical and with
+non-regression evidence proportionate to the change.
+
+Store the working-byte baseline only in an owner-only task temporary tree.
+After comparison and rollback needs end, remove the exact validated task-owned
+tree with scoped cleanup. If policy requires retention, record the reason,
+owner-only permissions, cleanup owner, and deadline. Never transmit private
+target contents to an external tokenizer or runner without authorization.
+
+Recommend a separate skill only when a block has an independent trigger and
+outcome, not merely because the entry point is long. Existing sibling skills
+may be aligned when already authorized; creating a new skill continues through
+`skill-creator` rather than turning `align-skill` into a second scaffolder.
+
+For material workflow or output changes, use `evals/evals.json` with at least
+two realistic cases, expected outputs, optional input files, and concrete
+assertions, unless deterministic target tests fully verify the outcome.
+Capture the current target working bytes in a task-owned temporary snapshot
+before editing so a dirty worktree baseline is not silently replaced by
+`HEAD`. Keep generated benchmark workspaces outside the reusable skill folder.
+
+Report evidence as separate lanes: `STATIC_PASS` for schema and definition
+checks, `RUNTIME_PASS` for observed fresh-surface routing, `QUALITY_PASS` for
+assertion-backed baseline comparison, plus `NOT_RUN`, `UNAVAILABLE`, and
+`FAIL`. Run fresh trigger checks after invocation changes when a runnable
+surface exists and quality comparison after material behavior changes when a
+baseline and runner exist. Missing higher-tier evidence remains explicit; any
+executed applicable failure blocks completion.
+
+#### Selected Option
+
+Adopt a target-scoped strict evaluation contract with deterministic structural
+validation and semantic rubric review. Preserve default catalog compatibility,
+use a soft line-budget warning, and require higher-cost runtime or quality
+evidence only when the changed behavior and available runner justify it.
+
+#### Alternatives Considered
+
+A documentation-only recommendation was rejected because aligned targets could
+still omit evaluation coverage. Making evals mandatory in basic validation was
+rejected because it would break unrelated legacy skills and create a broad
+migration. Hard semantic regex checks and a hard 500-line cap were rejected as
+easy to game and harmful to complex but justified workflow skills. Mandatory
+live benchmarks for every edit were rejected because they add cost without
+useful evidence for deterministic or metadata-only changes.
+
+#### Implementation Boundaries
+
+`align-skill/SKILL.md` owns the mandatory target workflow and evidence claims.
+Focused references own authoring, evaluation, triggering, and structure detail.
+The conditional long-skill reference owns block classification, preservation,
+cost measurement, split decisions, and justified exceptions without loading on
+ordinary alignment tasks.
+The Python validator owns only machine-verifiable CSV structure, strict-mode
+presence, target-owned path containment, privacy-preserving diagnostics,
+dual-authority rejection, and the line-count warning. Templates own plan/report
+evidence fields. The root catalog, changelog, canonical specs, and skill
+metadata remain aligned. Installation, global CI enforcement, and
+repository-wide eval migration are outside this change.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing evals pass basic validation and fail strict validation;
+  valid three-positive/three-negative CSV coverage passes both.
+- TDD-002: Invalid headers or labels, blanks, duplicate IDs or prompts, and
+  insufficient label counts fail with actionable messages.
+- TDD-003: Markdown-only coverage fails strict validation, dual Markdown/CSV
+  authorities fail, and malformed present CSV fails even in basic mode.
+- TDD-004: A 500-line `SKILL.md` produces no budget warning, a 501-line file
+  does, and warnings do not become validation failures.
+- TDD-005: `--require-evals` composes with the stateful-workflow profile and
+  the existing real-source catalog still has zero basic validation failures.
+- TDD-006: `align-skill` has its own canonical positive and negative trigger
+  suite and passes strict and portable structural validation.
+- TDD-007: A mixed 700-line quality case requires six-way block
+  classification against a concrete line-range fixture, exact conditional
+  reference routing, preservation of safety rationale and a rare gotcha, and
+  before-and-after size evidence without converting token unavailability into
+  failure.
+- TDD-008: A safety-critical quality case may remain above 500 lines only with
+  a specific core-content justification and non-regression evidence against a
+  concrete line-range fixture; it rejects mechanical summaries, length-only
+  splitting, and generic complexity claims.
+- TDD-009: External file and directory symlinks fail before CSV parsing, and
+  duplicate diagnostics report row numbers without reproducing the private
+  sentinel ID or prompt.
+
+#### Validation Plan
+
+Run validator fixture tests, strict target validation, default catalog
+validation, upstream quick validation, no-write Python compilation, scoped
+Ruff and Markdownlint, project-spec validation, code review, security review,
+final alignment, and `git diff --check`. Treat source validation, installed
+parity, restart, and fresh-session behavior as separate proof levels.
+
+#### Test Plan
+
+Add table-driven temporary-fixture coverage for strict presence, the canonical
+CSV schema, label counts, duplicates, blanks, dual trigger authorities, and
+500/501-line warning behavior. Exercise strict evaluation together with the
+stateful-workflow profile, retain the real-source default-validation
+regression, and give `align-skill` at least three positive and three adjacent
+negative trigger cases. Keep the existing 500/501 validator boundary as the
+complete deterministic test of the generic warning predicate; exercise
+700-line classification and justified exceptions as semantic quality cases
+rather than duplicate fixtures or brittle keyword checks.
+
+#### Evaluation Plan
+
+Review the canonical trigger cases for realistic positive intent and adjacent
+negative routing. If a fresh runnable Codex surface and baseline runner are
+available, observe trigger routing and compare material output behavior with
+the captured pre-edit snapshot; otherwise record runtime and quality evidence
+as unavailable without weakening the static acceptance gate. For long-skill
+cases, deterministically protect fixture paths, 700-line counts, and semantic
+anchor ranges, then use the captured working bytes as the baseline and compare
+preservation, reference routing, exception quality, line counts, and compatible
+token cost when exposed by the same runner.
+
+#### Rollout And Rollback
+
+Apply the strict contract only to writable targets selected for alignment. Do
+not run the repository installer from a dirty multi-skill tree. If later
+authorized from a clean or scoped source, install through the repository-owned
+workflow, verify source/install parity, restart only when needed, and then run
+fresh-session trigger checks. Roll back the validator flag, canonical eval
+files, and aligned guidance together rather than retaining dual formats.
+
+#### Done Definition
+
+`align-skill` makes writable targets lean, bounded, and independently
+evaluable; its own strict evaluation contract passes; basic validation remains
+compatible with unrelated legacy skills; higher-cost evidence is reported
+truthfully; long skills are classified rather than blindly summarized; and no
+installation or broad migration is implied by source proof.
+
+<!-- /FEATURE: FEAT-020 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

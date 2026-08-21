@@ -805,40 +805,6 @@ class GatewaySubnetConfig(BaseModel):
         return validate_private_ipv4_cidr(v)
 
 
-class VMHACredentialSourceReferences(BaseModel):
-    """Operator-local credential files for one VM-HA member."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
-
-    certificate_authority: str
-    certificate: str
-    private_key: str
-    nebius_credentials: str
-
-    @field_validator("certificate_authority", "certificate", "private_key", "nebius_credentials")
-    @classmethod
-    def require_absolute_source(cls, value: str) -> str:
-        if not value.startswith("/"):
-            raise ValueError("VM-HA credential source references must be absolute paths")
-        return value
-
-    @model_validator(mode="after")
-    def require_distinct_sources(self) -> VMHACredentialSourceReferences:
-        if (
-            len(
-                {
-                    self.certificate_authority,
-                    self.certificate,
-                    self.private_key,
-                    self.nebius_credentials,
-                }
-            )
-            != 4
-        ):
-            raise ValueError("VM-HA credential source references must name four distinct files")
-        return self
-
-
 class VMHAMemberConfig(BaseModel):
     """Stable identity and initial ownership role for one VM-HA node."""
 
@@ -853,10 +819,30 @@ class VMHAMemberConfig(BaseModel):
     )
     instance_index: int = Field(..., ge=0, le=1, description="Gateway VM index (0 or 1)")
     role: VMHARole = Field(..., description="Initial VM ownership role")
-    credential_sources: VMHACredentialSourceReferences = Field(
+    nebius_credentials_path: str = Field(
         ...,
-        description="Operator-local files installed separately from node manifests",
+        description=(
+            "Absolute operator-local Nebius service-account credential JSON path; "
+            "managed mTLS keys are generated on the VM"
+        ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_removed_tls_sources(cls, value: t.Any) -> t.Any:
+        if isinstance(value, dict) and "credential_sources" in value:
+            raise ValueError(
+                "vm_ha member credential_sources was removed; set the member's "
+                "nebius_credentials_path only because apply now manages mTLS on each VM"
+            )
+        return value
+
+    @field_validator("nebius_credentials_path")
+    @classmethod
+    def require_absolute_nebius_credentials_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("VM-HA nebius_credentials_path must be an absolute path")
+        return value
 
 
 class VMHAConfig(BaseModel):
@@ -901,32 +887,11 @@ class VMHAConfig(BaseModel):
         if roles.count(VMHARole.ACTIVE) != 1 or roles.count(VMHARole.PASSIVE) != 1:
             raise ValueError("vm_ha members must define exactly one active and one passive role")
 
-        for field_name in ("certificate", "private_key", "nebius_credentials"):
-            paths = [str(getattr(member.credential_sources, field_name)) for member in self.members]
-            if len(set(paths)) != 2:
-                raise ValueError(
-                    f"vm_ha member credential_sources.{field_name} values must be node-scoped"
-                )
+        credential_paths = [member.nebius_credentials_path for member in self.members]
+        if len(set(credential_paths)) != 2:
+            raise ValueError("vm_ha member nebius_credentials_path values must be node-scoped")
 
         return self
-
-
-class VMHACredentialReferences(BaseModel):
-    """Absolute target-local references to mTLS material, never credential bytes."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
-
-    certificate_authority: str
-    certificate: str
-    private_key: str
-    nebius_credentials: str = "/etc/nebius-vpngw/vm-ha/nebius-credentials.json"
-
-    @field_validator("certificate_authority", "certificate", "private_key", "nebius_credentials")
-    @classmethod
-    def require_absolute_reference(cls, value: str) -> str:
-        if not value.startswith("/"):
-            raise ValueError("VM-HA credential references must be absolute paths")
-        return value
 
 
 class VMHARuntimeNodeBinding(BaseModel):
@@ -939,7 +904,14 @@ class VMHARuntimeNodeBinding(BaseModel):
     compute_id: str
     network_interface_name: str
     peer_endpoint: str
-    credentials: VMHACredentialReferences
+    nebius_credentials_path: str = "/etc/nebius-vpngw/vm-ha/nebius-credentials.json"
+
+    @field_validator("nebius_credentials_path")
+    @classmethod
+    def require_absolute_nebius_credentials_reference(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("VM-HA Nebius credential reference must be an absolute path")
+        return value
 
 
 class VMHARouteTarget(BaseModel):
@@ -953,6 +925,38 @@ class VMHARouteTarget(BaseModel):
     route_table_id: str = Field(..., min_length=1)
 
 
+class VMHAMigrationRouteBinding(BaseModel):
+    """One approval-bound exact route eligible for HA ownership adoption."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    route_id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    prefix: str = Field(..., min_length=1)
+    allocation_id: str = Field(..., min_length=1)
+    resource_revision: str = Field(..., min_length=1)
+    route_target: VMHARouteTarget
+
+    @model_validator(mode="after")
+    def validate_exact_route(self) -> VMHAMigrationRouteBinding:
+        try:
+            network = ipaddress.ip_network(self.prefix, strict=True)
+        except ValueError as error:
+            raise ValueError("VM-HA migration route prefix is invalid") from error
+        if not isinstance(network, ipaddress.IPv4Network):
+            raise ValueError("VM-HA migration route prefix must be IPv4")
+        canonical_prefix = str(network)
+        if self.prefix != canonical_prefix:
+            raise ValueError("VM-HA migration route prefix must be canonical")
+        legacy_name = f"vpngw-{canonical_prefix.replace('/', '-')}"[:63]
+        managed_name = re.fullmatch(r"vpngw-ha-[0-9a-f]{24}", self.name)
+        if self.name != legacy_name and managed_name is None:
+            raise ValueError("VM-HA migration route name is not canonical")
+        if not self.resource_revision.isdecimal() or int(self.resource_revision) <= 0:
+            raise ValueError("VM-HA migration route revision must be positive")
+        return self
+
+
 class VMHARuntimeBinding(BaseModel):
     """Secret-free authoritative inputs required by the VM-HA service shell."""
 
@@ -962,6 +966,7 @@ class VMHARuntimeBinding(BaseModel):
     shared_allocation_id: str
     nodes: tuple[VMHARuntimeNodeBinding, VMHARuntimeNodeBinding]
     route_targets: tuple[VMHARouteTarget, ...]
+    migration_routes: tuple[VMHAMigrationRouteBinding, ...] = ()
     route_runtime_id: str
     generation_id: str
     configuration_digest: str
@@ -1019,6 +1024,26 @@ class VMHARuntimeBinding(BaseModel):
             or len({target.network_id for target in self.route_targets}) != 1
         ):
             raise ValueError("VM-HA route targets must share one project and network")
+        canonical_migration_routes = tuple(
+            sorted(
+                self.migration_routes,
+                key=lambda route: (
+                    route.route_target.route_table_id,
+                    route.prefix,
+                    route.route_id,
+                ),
+            )
+        )
+        if self.migration_routes != canonical_migration_routes:
+            raise ValueError("VM-HA migration routes must be canonically sorted")
+        if len({route.route_id for route in self.migration_routes}) != len(
+            self.migration_routes
+        ) or len({(route.route_target, route.prefix) for route in self.migration_routes}) != len(
+            self.migration_routes
+        ):
+            raise ValueError("VM-HA migration routes must have unique identities and prefixes")
+        if any(route.route_target not in self.route_targets for route in self.migration_routes):
+            raise ValueError("VM-HA migration route has an undeclared route target")
         expected_route_runtime_id = self.derive_route_runtime_id(
             self.cluster_id, self.shared_allocation_id, self.route_targets
         )

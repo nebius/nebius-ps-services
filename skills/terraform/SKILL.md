@@ -1,6 +1,6 @@
 ---
 name: terraform
-description: "Use for Terraform repo/module hardening: scaffold, standardize, or improve Terraform project structure, state/backends, environment roots, module interfaces, validation/test strategy, security controls, CI checks, and Terraform best practices. Do not use for nebius-cxcli wizard, validation, status, or component-catalog wiring unless the task is Terraform module structure."
+description: "Scaffold, standardize, or harden Terraform repos/modules: structure, state/backends, environments, interfaces, tests, security, and CI. Not for nebius-cxcli wizard/status/catalog work unless changing Terraform modules."
 ---
 
 # Terraform

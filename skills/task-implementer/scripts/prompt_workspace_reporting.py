@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -19,14 +20,21 @@ from prompt_workspace_core import (
     PromptWorkspaceError,
     RUN_ID_RE,
     RUN_SCHEMA,
+    TERMINAL_RUN_STATUSES,
     load_json_object,
+    read_only_git_environment,
     require_mode,
     required_string,
     stable_json,
     write_atomic,
     write_exclusive,
 )
-from prompt_workspace_execution import SHA_RE, orchestration_dir
+from prompt_workspace_execution import (
+    SHA_RE,
+    load_coordinator_state,
+    orchestration_dir,
+    sha256_json,
+)
 
 
 SUMMARY_SCHEMA = "task-implementer/run-summary-v1"
@@ -42,7 +50,9 @@ DIFF_RENAME_LIMIT = 32767
 SUMMARY_BYTES_LIMIT = 8 * 1024 * 1024
 LANE_REPORT_BYTES_LIMIT = 16 * 1024 * 1024
 PENDING_GENERATIONS_LIMIT = 1024
-LANE_BRANCH_DISPLAY = "managed persistent lane (private branch redacted)"
+LANE_REPORT_SCHEMA = "task-implementer/lane-report-v2"
+LANE_REPORT_MAX_STATE_FILES = 4096
+LANE_REPORT_HUMAN_BYTES_LIMIT = 4096
 _DISCOVERED_GIT = shutil.which("git")
 GIT_EXECUTABLE = (
     Path(_DISCOVERED_GIT).resolve() if _DISCOVERED_GIT is not None else None
@@ -113,18 +123,7 @@ def _git_bytes(
         str(repo),
         *arguments,
     ]
-    environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
-    }
-    environment.update(
-        {
-            "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "LANG": "C",
-            "LC_ALL": "C",
-        }
-    )
+    environment = read_only_git_environment()
     try:
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
             process = subprocess.Popen(
@@ -1475,11 +1474,709 @@ def pending_finalization_generations(
     return pending
 
 
-def lane_report(manifest_path: Path) -> dict[str, object]:
-    """Inspect the managed lane and pending generations without mutating them."""
+class _LaneReportUnstable(RuntimeError):
+    """Internal signal that a zero-write observation crossed a state transition."""
 
+
+def _read_lane_evidence(path: Path, remaining: int) -> bytes:
+    """Read one regular evidence file without following links or exceeding bounds."""
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "lane status evidence could not be read safely"
+        ) from exc
+    try:
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode) or details.st_size > remaining:
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "lane status evidence exceeded its bound"
+                )
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                raw = handle.read(remaining + 1)
+        except OSError as exc:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "lane status evidence could not be read safely"
+            ) from exc
+    finally:
+        os.close(descriptor)
+    if len(raw) > remaining:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "lane status evidence exceeded its bound"
+        )
+    return raw
+
+
+def _bounded_lane_directory(
+    directory: Path, remaining: int
+) -> tuple[list[tuple[Path, bool]], int]:
+    """List one directory without following links or exceeding the entry bound."""
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(directory, flags)
+    except OSError as exc:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "lane status state directory is unsafe"
+        ) from exc
+    try:
+        try:
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "lane status state directory is unsafe"
+                )
+            entries: list[tuple[Path, bool]] = []
+            with os.scandir(descriptor) as iterator:
+                for entry in iterator:
+                    if remaining <= 0:
+                        raise PromptWorkspaceError(
+                            "RUN_STATE_INVALID",
+                            "lane status evidence exceeded its bound",
+                        )
+                    remaining -= 1
+                    details = entry.stat(follow_symlinks=False)
+                    if stat.S_ISLNK(details.st_mode):
+                        raise PromptWorkspaceError(
+                            "RUN_STATE_INVALID",
+                            "lane status state directory is unsafe",
+                        )
+                    if stat.S_ISDIR(details.st_mode):
+                        is_directory = True
+                    elif stat.S_ISREG(details.st_mode):
+                        is_directory = False
+                    else:
+                        raise PromptWorkspaceError(
+                            "RUN_STATE_INVALID",
+                            "lane status state directory is unsafe",
+                        )
+                    entries.append((directory / entry.name, is_directory))
+        except OSError as exc:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "lane status state directory is unsafe"
+            ) from exc
+    finally:
+        os.close(descriptor)
+    return sorted(entries, key=lambda item: item[0].name), remaining
+
+
+def _lane_state_digest(runs_root: Path) -> str:
+    """Digest only bounded machine state that can affect the lane projection."""
+
+    records: list[dict[str, object]] = []
+    total_bytes = 0
+    run_entries, remaining_entries = _bounded_lane_directory(
+        runs_root, LANE_REPORT_MAX_STATE_FILES
+    )
+    for run_dir, is_run_directory in run_entries:
+        if not is_run_directory:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "runs root contains an unsafe entry"
+            )
+        if RUN_ID_RE.fullmatch(run_dir.name) is None:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "runs root contains an unknown entry"
+            )
+        orchestration = orchestration_dir(run_dir)
+        run_contents, remaining_entries = _bounded_lane_directory(
+            run_dir, remaining_entries
+        )
+        candidates = [
+            path
+            for path, is_directory in run_contents
+            if not is_directory
+            and (path.suffix == ".json" or path.name == "handoff.md")
+        ]
+        orchestration_entries = [
+            is_directory
+            for path, is_directory in run_contents
+            if path == orchestration
+        ]
+        if orchestration_entries:
+            if orchestration_entries != [True]:
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "run orchestration directory is unsafe"
+                )
+            orchestration_contents, remaining_entries = _bounded_lane_directory(
+                orchestration, remaining_entries
+            )
+            candidates.extend(
+                path
+                for path, is_directory in orchestration_contents
+                if not is_directory and path.suffix == ".json"
+            )
+            for state_root in (
+                orchestration / "waves",
+                orchestration / "tasks",
+            ):
+                state_entries = [
+                    is_directory
+                    for path, is_directory in orchestration_contents
+                    if path == state_root
+                ]
+                if not state_entries:
+                    continue
+                if state_entries != [True]:
+                    raise PromptWorkspaceError(
+                        "RUN_STATE_INVALID",
+                        "lane status state directory is unsafe",
+                    )
+                pending_directories = [state_root]
+                while pending_directories:
+                    directory = pending_directories.pop()
+                    contents, remaining_entries = _bounded_lane_directory(
+                        directory, remaining_entries
+                    )
+                    pending_directories.extend(
+                        path
+                        for path, is_directory in reversed(contents)
+                        if is_directory
+                    )
+                    candidates.extend(
+                        path
+                        for path, is_directory in contents
+                        if not is_directory and path.suffix == ".json"
+                    )
+        for path in sorted(set(candidates)):
+            if path.is_symlink() or not path.is_file():
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "lane status evidence contains an unsafe path"
+                )
+            raw = _read_lane_evidence(path, LANE_REPORT_BYTES_LIMIT - total_bytes)
+            total_bytes += len(raw)
+            records.append(
+                {
+                    "run": run_dir.name,
+                    "path": path.relative_to(run_dir).as_posix(),
+                    "bytes": len(raw),
+                    "sha256": _sha256(raw),
+                }
+            )
+    return _sha256(stable_json(records))
+
+
+def _clean_evidence(repo: Path) -> tuple[bool, str]:
+    raw = _git_bytes(
+        repo,
+        ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+        "inspect checkout cleanliness",
+    )[1]
+    return not raw, _sha256(raw)
+
+
+def _report_run_metadata(
+    workspace: dict[str, object],
+    run_dir: Path,
+    manifest: dict[str, object],
+) -> dict[str, object]:
+    """Validate only run metadata needed by lane status, never prompt snapshots."""
+
+    from prompt_workspace_resume import effective_run_status
+    from prompt_workspace_runs import (
+        handoff_field,
+        manifest_revisions,
+        markdown_section,
+        pending_steering_revisions,
+        read_handoff_text,
+        run_status,
+    )
+
+    if (
+        manifest.get("project_id") != workspace.get("project_id")
+        or manifest.get("scope_id") != workspace.get("scope_id")
+    ):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "run metadata belongs to another workspace"
+        )
+    revisions = manifest_revisions(manifest)
+    for number, revision in enumerate(revisions, start=1):
+        if (
+            revision.get("revision") != f"r{number:04d}"
+            or re.fullmatch(r"[0-9a-f]{64}", str(revision.get("sha256") or ""))
+            is None
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "run revision metadata is invalid"
+            )
+    latest = revisions[-1]
+    bound = latest
+    handoff_text = read_handoff_text(run_dir)
+    if handoff_text is not None:
+        run_section = markdown_section(handoff_text, "Run")
+        if (
+            handoff_field(run_section, "Run ID") != run_dir.name
+            or handoff_field(run_section, "Prompt ID")
+            != str(manifest.get("prompt_id"))
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "run handoff metadata is invalid"
+            )
+        bound_revision = handoff_field(run_section, "Bound revision")
+        bound_digest = handoff_field(run_section, "Bound SHA-256")
+        matches = [
+            revision
+            for revision in revisions
+            if revision.get("revision") == bound_revision
+            and revision.get("sha256") == bound_digest
+        ]
+        if len(matches) != 1:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "run handoff revision is invalid"
+            )
+        bound = matches[0]
+    pending = pending_steering_revisions(run_dir, revisions)
+    return {
+        "status": effective_run_status(run_dir, run_status(run_dir)),
+        "reconciliation_pending": bound["revision"] != latest["revision"],
+        "steering_pending": bool(pending),
+    }
+
+
+def _current_run(
+    workspace: dict[str, object], runs_root: Path
+) -> dict[str, object] | None:
+    """Select the sole unfinished current-incarnation run without changing it."""
+
+    from prompt_workspace_interop import load_interop
+    from prompt_workspace_runs import load_run_manifests
+
+    active: list[dict[str, object]] = []
+    try:
+        for run_dir, manifest in load_run_manifests(runs_root):
+            verified = _report_run_metadata(workspace, run_dir, manifest)
+            coordinator = load_coordinator_state(run_dir)
+            interop = load_interop(run_dir, required=False)
+            phase = summary_phase(run_dir)
+            if interop is not None and not _run_matches_workspace_incarnation(
+                workspace, run_dir, interop
+            ):
+                if interop.get("released") is False:
+                    raise PromptWorkspaceError(
+                        "RUN_STATE_INVALID", "active run has mismatched lane identity"
+                    )
+                continue
+            unfinished = (
+                str(verified["status"]) not in TERMINAL_RUN_STATUSES
+                or bool(verified["steering_pending"])
+                or bool(verified["reconciliation_pending"])
+                or (
+                    coordinator is not None
+                    and coordinator.get("status") in {"running", "blocked"}
+                )
+                or (
+                    interop is not None
+                    and interop.get("mode") == "lane"
+                    and interop.get("released") is False
+                )
+                or phase in {"prepared", "sealed", "handoff_published"}
+            )
+            if unfinished:
+                active.append(
+                    {
+                        "run_dir": run_dir,
+                        "verified": verified,
+                        "coordinator": coordinator,
+                        "interop": interop,
+                        "summary_phase": phase,
+                    }
+                )
+    except PromptWorkspaceError as exc:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "lane status run evidence is invalid"
+        ) from exc
+    if len(active) > 1:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "workspace has multiple unfinished runs"
+        )
+    return active[0] if active else None
+
+
+def _coordinator_progress(
+    run_dir: Path, coordinator: dict[str, object]
+) -> tuple[dict[str, object], str]:
+    """Project validated coordinator/wave/task state into concise progress."""
+
+    from prompt_workspace_waves import _load_task_plane, _load_wave
+
+    indexed = coordinator["waves"]
+    if coordinator.get("plan_sha256") != sha256_json(
+        [entry.get("tasks") for entry in indexed if isinstance(entry, dict)]
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "coordinator plan digest is invalid"
+        )
+    waves: list[dict[str, object]] = []
+    planes: list[tuple[dict[str, object], bool]] = []
+    wave_ids: list[str] = []
+    for entry in indexed:
+        if not isinstance(entry, dict) or not isinstance(entry.get("wave_id"), str):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "coordinator wave entry is invalid"
+            )
+        wave_id = str(entry["wave_id"])
+        wave_ids.append(wave_id)
+        wave = _load_wave(run_dir, wave_id)
+        planned_tasks = entry.get("tasks")
+        if (
+            not isinstance(planned_tasks, list)
+            or [
+                item.get("task_id")
+                for item in planned_tasks
+                if isinstance(item, dict)
+            ]
+            != wave["task_ids"]
+            or entry.get("batches") != wave["batches"]
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "coordinator and wave plans differ"
+            )
+        promoted_head = wave.get("promoted_head")
+        promoted = promoted_head is not None
+        if promoted and (
+            not isinstance(promoted_head, str)
+            or SHA_RE.fullmatch(promoted_head) is None
+            or wave.get("status") not in {"promoted", "cleanup", "done"}
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "wave promotion evidence is invalid"
+            )
+        if wave.get("status") in {"promoted", "cleanup", "done"} and not promoted:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "promoted wave has no promotion evidence"
+            )
+        for task_id in wave["task_ids"]:
+            plane = _load_task_plane(run_dir, wave_id, str(task_id))
+            if plane.get("state") != wave["task_states"].get(task_id):
+                raise PromptWorkspaceError(
+                    "EXECUTION_STATE_INVALID", "wave and task-plane state differ"
+                )
+            planes.append((plane, promoted))
+        waves.append(wave)
+    if len(wave_ids) != len(set(wave_ids)):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "coordinator wave IDs are duplicated"
+        )
+    active_wave = coordinator.get("active_wave")
+    if active_wave is not None and active_wave not in wave_ids:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "coordinator active wave is not indexed"
+        )
+
+    total_tasks = len(planes)
+    promoted_tasks = sum(
+        1
+        for plane, promoted in planes
+        if promoted and plane["state"] != "superseded"
+    )
+    pending_tasks = sum(
+        1
+        for plane, promoted in planes
+        if not promoted and plane["state"] == "planned"
+    )
+    in_progress_tasks = sum(
+        1
+        for plane, promoted in planes
+        if not promoted
+        and plane["state"] in {"assigned", "running", "committed", "merged"}
+    )
+    blocked_tasks = sum(
+        1
+        for plane, promoted in planes
+        if not promoted and plane["state"] == "failed"
+    )
+    superseded_tasks = sum(
+        1 for plane, _promoted in planes if plane["state"] == "superseded"
+    )
+    promoted_waves = sum(1 for wave in waves if wave["promoted_head"] is not None)
+    worker_planned = sum(
+        1 for plane, _promoted in planes if plane["state"] == "planned"
+    )
+    worker_created = sum(
+        1
+        for plane, _promoted in planes
+        if plane["state"] == "assigned" and plane["dispatched_at"] is None
+    )
+    worker_queued = sum(
+        1
+        for plane, _promoted in planes
+        if plane["state"] == "assigned" and plane["dispatched_at"] is not None
+    )
+    worker_active = sum(
+        1 for plane, _promoted in planes if plane["state"] == "running"
+    )
+    worker_finished = sum(
+        1
+        for plane, _promoted in planes
+        if plane["state"] in {"committed", "merged"}
+    )
+    worker_failed = sum(
+        1 for plane, _promoted in planes if plane["state"] == "failed"
+    )
+    worker_superseded = sum(
+        1 for plane, _promoted in planes if plane["state"] == "superseded"
+    )
+
+    coordinator_status = str(coordinator["status"])
+    if coordinator_status == "blocked":
+        phase = "blocked"
+    elif coordinator_status == "done":
+        phase = "finalizing"
+    else:
+        active = next(wave for wave in waves if wave["wave_id"] == active_wave)
+        wave_status = str(active["status"])
+        if wave_status == "planned":
+            phase = "planning"
+        elif wave_status == "preparing":
+            phase = "preparing_wave"
+        elif wave_status == "running":
+            phase = "workers_running" if worker_active else "workers_queued"
+        elif wave_status == "integrating":
+            phase = "integrating"
+        elif wave_status == "promotion_pending":
+            phase = "promotion_pending"
+        elif wave_status in {"promoted", "cleanup", "done"}:
+            phase = "promoted_cleanup"
+        else:
+            phase = "blocked"
+    return (
+        {
+            "tasks": {
+                "total": total_tasks,
+                "promoted": promoted_tasks,
+                "pending": pending_tasks,
+                "in_progress": in_progress_tasks,
+                "blocked": blocked_tasks,
+                "superseded": superseded_tasks,
+                "remaining": total_tasks - promoted_tasks - superseded_tasks,
+            },
+            "workers": {
+                "total": total_tasks,
+                "planned": worker_planned,
+                "created": worker_created,
+                "queued": worker_queued,
+                "active": worker_active,
+                "finished": worker_finished,
+                "failed": worker_failed,
+                "superseded": worker_superseded,
+            },
+            "waves": {
+                "total": len(waves),
+                "promoted": promoted_waves,
+                "active": 1 if isinstance(active_wave, str) else 0,
+                "active_ordinal": (
+                    wave_ids.index(active_wave) + 1
+                    if isinstance(active_wave, str)
+                    else None
+                ),
+                "remaining": len(waves) - promoted_waves,
+            },
+        },
+        phase,
+    )
+
+
+def _active_run_projection(active: dict[str, object]) -> dict[str, object]:
+    coordinator = active["coordinator"]
+    if not isinstance(coordinator, dict):
+        return {"status": "planning", "phase": "planning", "progress": None}
+    progress, phase = _coordinator_progress(Path(active["run_dir"]), coordinator)
+    interop = active["interop"]
+    finalization_phase = active["summary_phase"]
+    if coordinator["status"] == "blocked":
+        status = "blocked"
+    elif coordinator["status"] == "done":
+        status = (
+            "complete"
+            if isinstance(interop, dict)
+            and interop.get("released") is True
+            and finalization_phase == "complete"
+            else "finalizing"
+        )
+        phase = "complete" if status == "complete" else "finalizing"
+    else:
+        status = "running"
+    return {"status": status, "phase": phase, "progress": progress}
+
+
+def _sealed_run_projection(summary: dict[str, object]) -> dict[str, object]:
+    work = summary["work"]
+    tasks = int(work["tasks"]["total"])
+    workers = int(work["temporary_worker_worktrees"])
+    waves = int(work["waves"])
+    return {
+        "status": "complete",
+        "phase": "complete",
+        "source_status": str(summary["source_observation"]["status"]),
+        "progress": {
+            "tasks": {
+                "total": tasks,
+                "promoted": tasks,
+                "pending": 0,
+                "in_progress": 0,
+                "blocked": 0,
+                "superseded": 0,
+                "remaining": 0,
+            },
+            "workers": {
+                "total": workers,
+                "planned": 0,
+                "created": 0,
+                "queued": 0,
+                "active": 0,
+                "finished": workers,
+                "failed": 0,
+                "superseded": 0,
+            },
+            "waves": {
+                "total": waves,
+                "promoted": waves,
+                "active": 0,
+                "active_ordinal": None,
+                "remaining": 0,
+            },
+        },
+    }
+
+
+_CURRENT_STEPS = {
+    "planning": "Preparing the immutable task and wave plan.",
+    "preparing_wave": "Preparing the active wave.",
+    "workers_queued": "Temporary workers are queued for the active wave.",
+    "workers_running": "Temporary workers are executing the active wave.",
+    "integrating": "Integrating accepted worker results.",
+    "promotion_pending": "Validating and promoting the active wave.",
+    "promoted_cleanup": "Cleaning resources after persistent-lane promotion.",
+    "blocked": "The current run is blocked and requires correction.",
+    "finalizing": "Finalizing and releasing the active lane generation.",
+    "complete": "The latest run is complete in the persistent lane.",
+    "unavailable": "Detailed progress is unavailable for this legacy generation.",
+}
+
+
+def _count_label(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
+def _remaining_steps(
+    status: str,
+    current_run: dict[str, object] | None,
+    generations: dict[str, int],
+) -> list[str]:
+    if status == "removed":
+        return ["Initialize the managed workspace"]
+    steps: list[str] = []
+    if current_run is not None:
+        progress = current_run.get("progress")
+        if current_run["status"] == "blocked":
+            steps.append("Resolve the current blocker")
+        if isinstance(progress, dict):
+            task_remaining = int(progress["tasks"]["remaining"])
+            wave_remaining = int(progress["waves"]["remaining"])
+            if task_remaining:
+                steps.append(f"Finish {_count_label(task_remaining, 'remaining task')}")
+            if wave_remaining:
+                steps.append(f"Promote {_count_label(wave_remaining, 'remaining wave')}")
+        if current_run["status"] not in {"complete", "blocked"}:
+            steps.append("Finalize the active generation")
+    if generations["active"] or generations["pending_integration"]:
+        steps.append("Integrate pending generations into the source branch")
+    if not steps:
+        steps.append("Start the next Task Implementer run")
+    return steps[:4]
+
+
+def _next_action(
+    *,
+    status: str,
+    project: Path,
+    primary: Path,
+    lane_root: Path,
+    active: dict[str, object] | None,
+    current_run: dict[str, object] | None,
+    generations: dict[str, int],
+) -> tuple[dict[str, str], dict[str, str]]:
+    evidence: dict[str, str] = {}
+    if status == "removed":
+        return (
+            {
+                "action": "workspace init",
+                "readiness": "ready",
+                "invocation": f"$task-implementer workspace init {_quoted_path(project)}",
+                "instruction": "Create a managed persistent lane before another run.",
+            },
+            evidence,
+        )
+    if active is not None or generations["active"] or generations["finalization_pending"]:
+        blocked = current_run is not None and current_run["status"] == "blocked"
+        finalizing = (
+            generations["finalization_pending"] > 0
+            or (current_run is not None and current_run["status"] == "finalizing")
+        )
+        return (
+            {
+                "action": "run",
+                "readiness": (
+                    "blocked" if blocked else "finalization_pending" if finalizing else "in_progress"
+                ),
+                "invocation": '$task-implementer run "<prompt-file>"',
+                "instruction": (
+                    "Resolve the current blocker in the same prompt, then run Task Implementer again."
+                    if blocked
+                    else "Continue the active Task Implementer run."
+                ),
+            },
+            evidence,
+        )
+    if generations["pending_integration"]:
+        source_clean, source_digest = _clean_evidence(primary)
+        lane_clean, lane_digest = _clean_evidence(lane_root)
+        evidence = {"source_status": source_digest, "lane_status": lane_digest}
+        invocation = _quoted_invocation(project)
+        if not source_clean:
+            readiness = "commit_primary_first"
+            instruction = f'Invoke $commit in "{project}" first, then {invocation}'
+        elif not lane_clean:
+            readiness = "lane_not_ready"
+            instruction = "Resolve managed lane changes before integration."
+        else:
+            readiness = "ready"
+            instruction = invocation
+        if current_run is not None and current_run.get("source_status") == "moved":
+            instruction += (
+                " Source moved while workers were active; integration will rebuild "
+                "and revalidate its candidate."
+            )
+        return (
+            {
+                "action": "integrate",
+                "readiness": readiness,
+                "invocation": invocation,
+                "instruction": instruction,
+            },
+            evidence,
+        )
+    return (
+        {
+            "action": "run",
+            "readiness": "ready",
+            "invocation": '$task-implementer run "<prompt-file>"',
+            "instruction": "The managed lane has no pending generation.",
+        },
+        evidence,
+    )
+
+
+def _lane_report_once(manifest_path: Path) -> tuple[dict[str, object], str]:
     from prompt_workspace_core import verify_workspace, verify_workspace_for_removal
-    from prompt_workspace_interop import inspect_anchor, load_interop
+    from prompt_workspace_interop import inspect_anchor
 
     manifest = load_json_object(manifest_path, "workspace manifest")
     primary = Path(required_string(manifest, "primary_root", "workspace manifest"))
@@ -1487,176 +2184,264 @@ def lane_report(manifest_path: Path) -> dict[str, object]:
     project = primary if scope == "." else primary / PurePosixPath(scope)
     lane_root = Path(required_string(manifest, "repo_root", "workspace manifest"))
     removed = not lane_root.is_dir()
-    if removed:
-        workspace = verify_workspace_for_removal(manifest_path, project)
-        anchor: dict[str, object] | None = None
-    else:
-        workspace = verify_workspace(manifest_path)
-        anchor = inspect_anchor(workspace)
-        if anchor.get("status") != "task-lane":
+    git_environment = read_only_git_environment()
+    try:
+        workspace = (
+            verify_workspace_for_removal(
+                manifest_path, project, git_environment=git_environment
+            )
+            if removed
+            else verify_workspace(manifest_path, git_environment=git_environment)
+        )
+    except PromptWorkspaceError as exc:
+        if (not lane_root.is_dir()) != removed:
+            raise _LaneReportUnstable from exc
+        raise
+    if (not lane_root.is_dir()) != removed:
+        raise _LaneReportUnstable
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    anchor_before: dict[str, object] | None = None
+    if not removed:
+        try:
+            anchor_before = inspect_anchor(workspace, environment=git_environment)
+        except PromptWorkspaceError as exc:
+            if not lane_root.is_dir():
+                raise _LaneReportUnstable from exc
+            raise
+        if anchor_before.get("status") != "task-lane":
+            if not lane_root.is_dir():
+                raise _LaneReportUnstable
             raise PromptWorkspaceError(
                 "WORKTREE_CONFLICT", "managed lane inspection is inconsistent"
             )
-
-    source_ref = required_string(workspace, "source_ref", "workspace manifest")
-    source_head = _git_text(
-        primary, ["rev-parse", "--verify", source_ref], "read source head"
-    )
-    source_head = _commit(primary, source_head, "source report head")
-    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
-    finalization_pending = pending_finalization_generations(runs_root, workspace)
-    active = False
-    for run_dir in sorted(
-        path
-        for path in runs_root.iterdir()
-        if path.is_dir()
-        and not path.is_symlink()
-        and RUN_ID_RE.fullmatch(path.name) is not None
-    ):
-        interop = load_interop(run_dir, required=False)
-        if (
-            interop is not None
-            and interop.get("mode") == "lane"
-            and interop.get("released") is False
-        ):
-            if not _run_matches_workspace_incarnation(workspace, run_dir, interop):
-                raise PromptWorkspaceError(
-                    "RUN_STATE_INVALID", "active run has mismatched lane identity"
-                )
-            active = True
-            break
-
-    if anchor is not None:
-        lane_head = _commit(primary, anchor.get("head"), "lane report head")
-        latest = int(anchor["latest_generation"])
-        integrated = int(anchor["last_integrated_generation"])
-        pending_numbers = list(range(integrated + 1, latest + 1))
-        summaries = dict(sealed_summaries(runs_root, workspace, set(pending_numbers)))
-        comparison = diff_statistics(
-            primary, source_head, lane_head, scope, require_ancestry=False
-        )
-        relationship = commit_relationship(primary, source_head, lane_head)
-        source_clean = _clean(primary)
-        lane_clean = _clean(lane_root)
-        pending_summaries: list[dict[str, object]] = []
-        for generation in pending_numbers:
-            summary = summaries.get(generation)
-            pending_summaries.append(
-                {
-                    "generation": generation,
-                    "summary": (
-                        "summary finalization pending"
-                        if generation in finalization_pending
-                        else (
-                            summary
-                            if summary is not None
-                            else "summary unavailable for legacy generation"
-                        )
-                    ),
-                }
-            )
-        invocation = _quoted_invocation(project)
-        if active or finalization_pending:
-            next_action = {
-                "action": "run",
-                "readiness": "finalization_pending",
-                "invocation": '$task-implementer run "<prompt-file>"',
-                "instruction": "Finish the active Task Implementer run finalization.",
-            }
-        elif pending_numbers:
-            if not source_clean:
-                readiness = "commit_primary_first"
-                instruction = f'Invoke $commit in "{project}" first, then {invocation}'
-            elif not lane_clean:
-                readiness = "lane_not_ready"
-                instruction = "Resolve managed lane changes before integration."
-            else:
-                readiness = "ready"
-                instruction = invocation
-            next_action = {
-                "action": "integrate",
-                "readiness": readiness,
-                "invocation": invocation,
-                "instruction": instruction,
-            }
+    state_before = _lane_state_digest(runs_root)
+    error: PromptWorkspaceError | None = None
+    try:
+        finalization_pending = pending_finalization_generations(runs_root, workspace)
+        active = _current_run(workspace, runs_root) if not removed else None
+        if removed:
+            latest = integrated = 0
+            current_run = None
         else:
-            next_action = {
-                "action": "run",
-                "readiness": "ready",
-                "invocation": '$task-implementer run "<prompt-file>"',
-                "instruction": "The managed lane has no pending generation.",
-            }
-        return {
-            "schema": "task-implementer/lane-report-v1",
-            "status": "managed",
-            "source": {
-                "branch": required_string(
-                    workspace, "source_branch", "workspace manifest"
-                ),
-                "commit": source_head,
-                "clean": source_clean,
-            },
-            "lane": {
-                "branch": LANE_BRANCH_DISPLAY,
-                "commit": lane_head,
-                "clean": lane_clean,
-                "state": anchor["lane_state"],
-            },
-            "generations": {
-                "active": active,
-                "pending": len(pending_numbers),
-                "finalization_pending": len(finalization_pending),
-            },
-            "comparison": {
-                "label": (
-                    "source-to-lane comparison; histories diverged"
-                    if relationship == "diverged"
-                    else "source-to-lane comparison"
-                ),
-                "relationship": relationship,
-                **comparison,
-            },
-            "pending_summaries": pending_summaries,
+            assert anchor_before is not None
+            latest = int(anchor_before["latest_generation"])
+            integrated = int(anchor_before["last_integrated_generation"])
+            if integrated < 0 or latest < integrated:
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "lane generation totals are invalid"
+                )
+            current_run = _active_run_projection(active) if active is not None else None
+            if current_run is None and latest > integrated:
+                pending_generations = set(range(integrated + 1, latest + 1))
+                if len(pending_generations) > PENDING_GENERATIONS_LIMIT:
+                    raise PromptWorkspaceError(
+                        "RUN_STATE_INVALID",
+                        "pending lane generations exceeded the reporting bound",
+                    )
+                summaries = [
+                    (generation, summary)
+                    for generation, summary in sealed_summaries(
+                        runs_root, workspace, pending_generations
+                    )
+                    if summary is not None
+                ]
+                if not summaries:
+                    current_run = {
+                        "status": "unavailable",
+                        "phase": "unavailable",
+                        "progress": None,
+                    }
+                else:
+                    _generation, summary = max(summaries, key=lambda item: item[0])
+                    current_run = _sealed_run_projection(summary)
+        generations = {
+            "active": (
+                1
+                if active is not None
+                and isinstance(active.get("interop"), dict)
+                and active["interop"].get("released") is False
+                else 0
+            ),
+            "released_total": latest,
+            "integrated_total": integrated,
+            "pending_integration": latest - integrated,
+            "finalization_pending": len(finalization_pending),
+        }
+        next_action, git_evidence = _next_action(
+            status="removed" if removed else "managed",
+            project=project,
+            primary=primary,
+            lane_root=lane_root,
+            active=active,
+            current_run=current_run,
+            generations=generations,
+        )
+        phase = str(current_run["phase"]) if current_run is not None else None
+        report = {
+            "schema": LANE_REPORT_SCHEMA,
+            "status": "removed" if removed else "managed",
+            "lane": {"state": "removed" if removed else anchor_before["lane_state"]},
+            "generations": generations,
+            "current_run": current_run,
+            "current_step": (
+                _CURRENT_STEPS.get(phase, "No Task Implementer run is active.")
+                if not removed
+                else "The managed persistent lane has been removed."
+            ),
+            "remaining_steps": _remaining_steps(
+                "removed" if removed else "managed", current_run, generations
+            ),
             "next_action": next_action,
         }
+    except PromptWorkspaceError as caught:
+        error = caught
+        report = {}
+        git_evidence = {}
 
-    last_summary = _latest_sealed_summary(runs_root, workspace)
-    lane_head = (
-        str(last_summary["lane"]["promoted_head"])
-        if isinstance(last_summary, dict)
-        else source_head
+    try:
+        state_after = _lane_state_digest(runs_root)
+        anchor_after = (
+            inspect_anchor(workspace, environment=git_environment)
+            if not removed
+            else None
+        )
+    except PromptWorkspaceError as exc:
+        raise _LaneReportUnstable from exc
+    if (
+        state_before != state_after
+        or stable_json(anchor_before) != stable_json(anchor_after)
+        or (not lane_root.is_dir()) != removed
+    ):
+        raise _LaneReportUnstable
+    if error is not None:
+        raise error
+    fingerprint = _sha256(
+        stable_json(
+            {
+                "anchor": anchor_before,
+                "state": state_before,
+                "git": git_evidence,
+                "report": report,
+            }
+        )
     )
-    comparison = diff_statistics(
-        primary, source_head, lane_head, scope, require_ancestry=False
+    return report, fingerprint
+
+
+def lane_report(manifest_path: Path) -> dict[str, object]:
+    """Return one concise, stable, zero-write lane status snapshot."""
+
+    for _attempt in range(2):
+        observations: list[tuple[dict[str, object], str]] = []
+        unstable = False
+        for _observation in range(2):
+            try:
+                observations.append(_lane_report_once(manifest_path))
+            except _LaneReportUnstable:
+                unstable = True
+        if unstable:
+            continue
+        first, first_fingerprint = observations[0]
+        second, second_fingerprint = observations[1]
+        if first_fingerprint == second_fingerprint and first == second:
+            return second
+    raise PromptWorkspaceError(
+        "WORKSPACE_BUSY",
+        "Task Implementer state is changing; run the lane status task again.",
     )
-    return {
-        "schema": "task-implementer/lane-report-v1",
-        "status": "removed",
-        "source": {
-            "branch": required_string(workspace, "source_branch", "workspace manifest"),
-            "commit": source_head,
-            "clean": _clean(primary),
-        },
-        "lane": {
-            "branch": LANE_BRANCH_DISPLAY,
-            "commit": lane_head,
-            "state": "removed",
-        },
-        "generations": {
-            "active": False,
-            "pending": 0,
-            "finalization_pending": 0,
-        },
-        "comparison": {
-            "label": "source-to-last-sealed-lane comparison",
-            "relationship": commit_relationship(primary, source_head, lane_head),
-            **comparison,
-        },
-        "pending_summaries": [],
-        "next_action": {
-            "action": "workspace init",
-            "readiness": "ready",
-            "invocation": f"$task-implementer workspace init {_quoted_path(project)}",
-            "instruction": "Create a new managed persistent lane before another run.",
-        },
-    }
+
+
+def render_lane_report(report: dict[str, object]) -> str:
+    """Render the bounded human view used by the generated workspace task."""
+
+    generations = report["generations"]
+    current = report.get("current_run")
+    released = int(generations["released_total"])
+    integrated = int(generations["integrated_total"])
+    pending = int(generations["pending_integration"])
+    active = int(generations["active"])
+    finalizing = int(generations["finalization_pending"])
+    lane_parts = [
+        f"Lane: {report['lane']['state']}",
+        f"{_count_label(released, 'generation')} released",
+        f"{_count_label(integrated, 'generation')} integrated",
+        f"{_count_label(pending, 'generation')} "
+        f"{'awaits' if pending == 1 else 'await'} source integration",
+        _count_label(active, "active generation"),
+    ]
+    if finalizing:
+        lane_parts.append(f"{_count_label(finalizing, 'generation')} finalizing")
+    lines = ["Task Implementer Lane Status", "; ".join(lane_parts)]
+    if isinstance(current, dict):
+        phase = str(current["phase"]).replace("_", " ")
+        run_status = str(current["status"])
+        lines.append(
+            f"Run: {run_status}"
+            + (f" — {phase}" if phase != run_status else "")
+        )
+        if current.get("source_status") is not None:
+            lines.append(
+                "Source since workers started: " + str(current["source_status"])
+            )
+        progress = current.get("progress")
+        if isinstance(progress, dict):
+            tasks = progress["tasks"]
+            workers = progress["workers"]
+            waves = progress["waves"]
+            task_parts = [
+                f"{tasks['total']} total",
+                f"{tasks['promoted']} promoted",
+            ]
+            task_parts.extend(
+                f"{tasks[key]} {label}"
+                for key, label in (
+                    ("pending", "pending"),
+                    ("in_progress", "in progress"),
+                    ("blocked", "blocked"),
+                    ("superseded", "superseded"),
+                )
+                if tasks[key]
+            )
+            task_parts.append(f"{tasks['remaining']} remaining")
+            worker_parts = [f"{workers['total']} total"]
+            worker_parts.extend(
+                f"{workers[key]} {label}"
+                for key, label in (
+                    ("planned", "planned"),
+                    ("created", "created"),
+                    ("queued", "queued"),
+                    ("active", "active"),
+                    ("finished", "finished"),
+                    ("failed", "failed"),
+                    ("superseded", "superseded"),
+                )
+                if workers[key]
+            )
+            active_wave = waves["active_ordinal"]
+            wave_active = (
+                f"wave {active_wave} active" if active_wave is not None else "none active"
+            )
+            lines.extend(
+                [
+                    "Tasks: " + "; ".join(task_parts),
+                    "Temporary workers: " + "; ".join(worker_parts),
+                    "Waves: "
+                    f"{waves['total']} total; {waves['promoted']} promoted; "
+                    f"{wave_active}; {waves['remaining']} remaining",
+                ]
+            )
+    else:
+        lines.append("Run: none active")
+    lines.extend(
+        [
+            f"Current: {report['current_step']}",
+            "Remaining: " + " -> ".join(report["remaining_steps"]),
+            f"Next: {report['next_action']['instruction']}",
+        ]
+    )
+    rendered = "\n".join(lines) + "\n"
+    if len(rendered.encode("utf-8")) > LANE_REPORT_HUMAN_BYTES_LIMIT:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "human lane status exceeded its output bound"
+        )
+    return rendered

@@ -5,8 +5,7 @@ only behavior confirmed by official OpenAI documentation.
 
 Docs reviewed:
 
-- [OpenAI Codex Agent Skills](https://developers.openai.com/codex/skills)
-- [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
+- [OpenAI Build skills](https://learn.chatgpt.com/docs/build-skills)
 - [OpenAI Codex IDE extension](https://developers.openai.com/codex/ide)
 - [OpenAI Codex app](https://developers.openai.com/codex/app)
 - [Agent Skills specification](https://agentskills.io/specification)
@@ -21,22 +20,23 @@ Official OpenAI Codex documentation confirms:
 - Skills use progressive disclosure. Codex initially sees each skill's `name`,
   `description`, and file path, then loads the full `SKILL.md` only when it
   decides the skill is relevant.
-- The initial skills list has a context budget; when many skills are installed,
-  Codex can shorten descriptions first and may omit some skills from the list.
+- The initial skills list uses at most 2% of the model context window, or 8,000
+  characters when the context window is unknown. The budget includes each
+  skill's name, description, and path; when many skills are installed, Codex
+  shortens descriptions first and may then omit skills from the list.
 - Codex can activate a skill explicitly or implicitly.
+- In ChatGPT, explicit invocation uses `@` to select a skill.
 - In CLI/IDE, explicit invocation is available by running `/skills` or typing
   `$` to mention a skill.
 - Implicit invocation depends on the `description` field matching the task.
-
-No official OpenAI documentation reviewed for this skill confirms manual
-`@skill` invocation syntax for skills. Do not document `@skill` or other manual
-syntax unless current official OpenAI documentation confirms it.
 
 ## Description Strategy
 
 The best trigger strategy is a precise, trigger-rich `description` field:
 
 - Front-load the main job.
+- Keep the description concise because every enabled repo, user, admin, system,
+  and plugin skill shares the initial list budget.
 - Include user phrases that should activate the skill.
 - Include accepted inputs such as skill names, local folders, multi-skill
   folders, GitHub repositories, and GitHub tree URLs.
@@ -71,6 +71,12 @@ skill. Official docs also describe explicit invocation as including the skill
 directly in the prompt. Natural prompts can also work when the `description`
 matches, but the most deterministic prompt includes `align-skill` plus the
 target path, skill name, folder, GitHub repository URL, or GitHub tree URL.
+
+## ChatGPT
+
+Type `@` to select `align-skill`, then identify the target skill or folder in
+the prompt. Keep report-only or remote-source boundaries explicit when ChatGPT
+does not have an authorized writable local target.
 
 ## Codex IDE Extension
 

@@ -1,6 +1,6 @@
 interface:
   display_name: "AI Stack"
   short_description: "Select the least-agentic sufficient AI stack"
-  default_prompt: "Use $ai-stack to freeze the workload, classify each AI capability as a direct model call, deterministic workflow, or agent independently from graph or durability needs, select the smallest sufficient SDK and stack, classify every component and evidence claim, and define validation and switch conditions."
+  default_prompt: "Use $ai-stack to freeze the workload, classify each AI capability as a direct model call, deterministic workflow, or agent independently from graph or durability needs, prefer Pydantic AI as the portable Python model and agent runtime, justify specialist or provider-native escape hatches, classify every component and evidence claim, and define validation and switch conditions."
 policy:
   allow_implicit_invocation: true

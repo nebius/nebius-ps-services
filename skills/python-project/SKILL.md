@@ -1,6 +1,6 @@
 ---
 name: python-project
-description: "Use for Python repo scaffolding and hardening: pyproject/setuptools-scm, src layout, Ruff, pytest, Typer, Pydantic, CLI tools, systemd services, APIs/UI apps, and Python project CI. Do not use for domain-specific Nebius automation, Terraform modules, Helm charts, or generic non-Python projects."
+description: "Scaffold or harden Python repos with pyproject/setuptools-scm, src layout, Ruff, pytest, Typer, Pydantic, CLIs, services, APIs/UI, and CI. Use domain skills for Nebius, Terraform, or Helm; not for non-Python work."
 ---
 
 # Python Project

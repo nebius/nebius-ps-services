@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-design
-description: "Use only as the Agentic SDLC design-authoring adapter to maintain-project-specs; use when canonical FEAT records in docs/design.md must be created or updated from requirements and evidence. Preserve stable FEAT IDs and return validation to the shared owner."
+description: "Use only as part of the Agentic SDLC workflow; adapt requirements and evidence into canonical FEAT records in docs/design.md through maintain-project-specs, preserving stable IDs and shared-owner validation."
 ---
 
 # Create Design

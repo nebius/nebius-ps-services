@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Use for GitHub PR review by number, URL, or current branch: inspect base/head, issues, checks, reviews, conflicts, and changed files; fix safe issues or conflicts on writable branches; route to sibling skills; report merge readiness and blockers. In an active Agentic SDLC run, use findings-and-readiness-only mode and never mutate the exact promoted PR head."
+description: "Use only when explicitly asked to review a GitHub PR by number, URL, or branch: inspect changes, checks, reviews, and conflicts; fix safe writable findings and report readiness. In Agentic SDLC, report only."
 ---
 
 # Review PR

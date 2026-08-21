@@ -1,0 +1,11 @@
+id,should_trigger,prompt
+nosleep-positive-01,true,"Use nosleep4mac to install the per-user AC-power LaunchAgent."
+nosleep-positive-02,true,"Invoke nosleep4mac to verify my Mac stays awake on AC while locked."
+nosleep-positive-03,true,"Repair the existing nosleep4mac LaunchAgent configuration."
+nosleep-negative-01,false,"Run caffeinate temporarily for this terminal session."
+nosleep-negative-02,false,"Prevent only the display from sleeping on battery power."
+nosleep-negative-03,false,"Install a system-wide daemon that keeps the Mac awake."
+nosleep-negative-04,false,"Why does my Mac sleep?"
+nosleep-negative-05,false,"Keep a closed MacBook running."
+nosleep-negative-06,false,"Disable battery sleep on this Mac."
+nosleep-negative-07,false,"Change the display sleep timeout."

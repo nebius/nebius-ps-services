@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +35,8 @@ from nebius_vpngw.agent.vm_ha_controller import (
     RouteReconciliationContext,
     VMHAController,
 )
+
+pytestmark = pytest.mark.integration
 
 
 def test_two_node_takeover_effects_are_ordered_and_crash_replay_is_idempotent(
@@ -87,7 +90,7 @@ def test_two_node_takeover_effects_are_ordered_and_crash_replay_is_idempotent(
     ports.cloud.attach_candidate = lambda _action: once(
         "attach", lambda: state.__setitem__("attached", True)
     )
-    ports.cloud.confirm_candidate = lambda: once("confirm", lambda: None)
+    ports.cloud.confirm_candidate = lambda _action: once("confirm", lambda: None)
     ports.routes.reconcile = lambda _action: once(
         "routes", lambda: state.__setitem__("routes", True)
     )
@@ -227,8 +230,11 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     )
     monkeypatch.setattr(agent_main, "CONFIG_PATH", config_path)
     monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "state.json")
-    monkeypatch.setattr(agent_main, "VM_HA_MATERIALIZATION_PATH", state_dir / "materialization.json")
-    monkeypatch.setattr(agent_main, "acquire_routing_lock", lambda **kwargs: None)
+    monkeypatch.setattr(
+        agent_main, "VM_HA_MATERIALIZATION_PATH", state_dir / "materialization.json"
+    )
+    lock_fd = os.open(state_dir / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    monkeypatch.setattr(agent_main, "acquire_routing_lock", lambda **kwargs: lock_fd)
     monkeypatch.setattr(agent_main, "_boot_id", lambda: "boot-a")
     monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda path=config_path: vm_ha)
     monkeypatch.setattr(
@@ -241,10 +247,23 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
         "_vm_ha_materialization_authorized",
         lambda: vm_ha,
     )
+    passive_effects: list[str] = []
     monkeypatch.setattr(
         agent_main,
         "update_firewall_from_config",
-        lambda cfg: (_ for _ in ()).throw(AssertionError("firewall escaped passive mode")),
+        lambda cfg, **kwargs: passive_effects.append(
+            f"firewall:{kwargs.get('require_reload')}"
+        ),
+    )
+
+    def enforce_passive_hygiene(cfg):
+        assert not (state_dir / "materialization.json").exists()
+        passive_effects.append("hygiene")
+
+    monkeypatch.setattr(
+        agent_main,
+        "enforce_vm_ha_passive_routing_hygiene_locked",
+        enforce_passive_hygiene,
     )
     monkeypatch.setattr(
         agent_main,
@@ -264,7 +283,15 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     )
     monkeypatch.setattr(frr_module, "BGPD_CONF", tmp_path / "bgpd.conf")
     monkeypatch.setattr(frr_module, "FRR_CONF", tmp_path / "frr.conf")
-    monkeypatch.setattr(frr_module.FRRRenderer, "_ensure_bgpd_enabled", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        frr_module.grp,
+        "getgrnam",
+        lambda name: SimpleNamespace(gr_gid=1234),
+    )
+    monkeypatch.setattr(frr_module.os, "chown", lambda *args: None)
+    monkeypatch.setattr(
+        frr_module.FRRRenderer, "_ensure_bgpd_enabled", lambda *args, **kwargs: False
+    )
     monkeypatch.setattr(frr_module.FRRRenderer, "ensure_local_prefix_routes", lambda *args: None)
     monkeypatch.setattr(
         frr_module.subprocess,
@@ -281,10 +308,12 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
 
     assert materialized_endpoints
     assert "start_action = start" in (tmp_path / "swanctl.conf").read_text()
+    assert "unique = replace" in (tmp_path / "swanctl.conf").read_text()
     assert " neighbor 169.254.10.2 activate" in (tmp_path / "frr.conf").read_text()
     record = json.loads((state_dir / "materialization.json").read_text())
     assert record["boot_id"] == "boot-a"
     assert record["generation_id"] == "a" * 64
+    assert passive_effects == ["firewall:True", "hygiene"]
 
     ready_passive = policy.decide(
         _snapshot(

@@ -128,7 +128,7 @@ class ObservabilityEvaluationContractTest(unittest.TestCase):
     def test_eval_cases_require_zero_call_admission_and_sequential_queries(
         self,
     ) -> None:
-        cases = self.read(EVALUATE / "evals" / "trigger-prompts.md")
+        cases = self.read(EVALUATE / "evals" / "process-cases.md")
         normalized = " ".join(cases.split())
 
         self.assertIn(

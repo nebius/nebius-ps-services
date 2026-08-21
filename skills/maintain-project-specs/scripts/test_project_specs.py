@@ -956,6 +956,56 @@ class ProjectSpecsTestCase(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         design_path = self.docs / "design.md"
         decision_path = private_root / "decision.json"
+        rules_path = private_root / "rules.md"
+        render_state_path = private_root / "render-state.json"
+        decision_path.write_text(
+            json.dumps(
+                {
+                    "schema": "project-agent-instructions.decision.v3",
+                    "manifest_sha256": manifest["manifest_sha256"],
+                    "disposition": "not-needed",
+                    "rationale": "No durable local instruction was initially selected.",
+                    "evidence": [
+                        {
+                            "path": "docs/design.md",
+                            "sha256": hashlib.sha256(
+                                design_path.read_bytes()
+                            ).hexdigest(),
+                            "locator": "### TI-DES-001: Maintain one owner",
+                        }
+                    ],
+                    "rules": [],
+                    "budget_exception": None,
+                    "ownership_approval": None,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        decision_path.chmod(0o600)
+        subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_AGENT_SCRIPT),
+                "render",
+                "--private-root",
+                str(private_root),
+                "--manifest",
+                str(manifest_path),
+                "--decision",
+                str(decision_path),
+                "--output",
+                str(rules_path),
+                "--state",
+                str(render_state_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(rules_path.read_bytes(), b"")
         decision_path.write_text(
             json.dumps(
                 {
@@ -1003,8 +1053,6 @@ class ProjectSpecsTestCase(unittest.TestCase):
             encoding="utf-8",
         )
         decision_path.chmod(0o600)
-        rules_path = private_root / "rules.md"
-        render_state_path = private_root / "render-state.json"
         subprocess.run(
             [
                 sys.executable,

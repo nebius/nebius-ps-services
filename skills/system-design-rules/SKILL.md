@@ -1,6 +1,6 @@
 ---
 name: system-design-rules
-description: "Use for design-phase and architecture decision work: evaluate system designs, compare architecture options, review ADRs/design docs, identify trade-offs, choose boundaries, APIs, data ownership, reliability patterns, security controls, observability, scaling, cost, and team ownership before implementation. Apply a refined 100-rule software design checklist to any project or solution and produce practical decision guidance, risks, and follow-up questions."
+description: "Review architectures, ADRs, boundaries, APIs, data ownership, reliability, security, observability, scaling, cost, and team ownership with a 100-rule checklist before implementation."
 ---
 
 # System Design Rules
@@ -164,5 +164,5 @@ Return the shape that best fits the request, usually:
 
 - Read `references/design-principles.md` for the refined 100-rule design
   checklist and decision worksheet.
-- Use `evals/trigger-prompts.md` when reviewing or tuning implicit invocation
+- Use `evals/trigger-prompts.csv` when reviewing or tuning implicit invocation
   behavior.

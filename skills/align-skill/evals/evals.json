@@ -1,0 +1,51 @@
+{
+  "skill_name": "align-skill",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Align an existing writable 700-line deployment skill. It combines a common workflow, AWS and GCP procedures, a release checklist, an embedded report format, repeated background paragraphs, a standalone report-only operation, a safety rationale, and a rare retry edge case. It has no evals. Preserve behavior and keep validation efficient.",
+      "expected_output": "A semantic long-skill alignment that classifies each block, preserves decision-changing and safety-critical content, routes conditional material exactly, identifies the independent job without splitting only for length, creates target-specific evals, and reports comparable context-cost and evidence states truthfully.",
+      "files": [
+        "evals/fixtures/mixed-700-line-skill.md"
+      ],
+      "assertions": [
+        "The result classifies the shared workflow as core, the provider ranges as conditional references, the repeated release sequence as deterministic work, the report format as an asset, the background paragraphs as removable, and inventory reporting as an independent-job candidate.",
+        "The result keeps the unique common workflow directives in lines 73-79 and shared safety, retry, validation, and output directives in lines 633-638 and 699-700 represented in SKILL.md, removes behavior-neutral repetition in lines 80-160 and 639-698, and gives the AWS and GCP references exact provider-specific read conditions.",
+        "The authorization rationale and verification-timeout retry rule from lines 631-700 retain explicit owners and remain effective after the refactor.",
+        "Inventory reporting is considered for a separate skill because lines 561-630 establish an independent trigger and outcome, not merely because the source is 700 lines; new scaffolding is routed to skill-creator.",
+        "The report uses 700 validator-compatible splitlines as the baseline, records the exact after-count when a candidate exists or marks it UNAVAILABLE in report-only mode, and records comparable token cost with its method or marks token evidence UNAVAILABLE without adding a dependency or threshold.",
+        "The result requires each resulting writable skill to create evals/trigger-prompts.csv with at least three positive and three near-miss negative cases, without claiming creation in report-only mode.",
+        "The result treats more than 500 lines as a review warning rather than an automatic failure.",
+        "The report distinguishes static, runtime, and quality evidence without claiming unavailable evidence passed."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review a skill from a GitHub URL in report-only mode. It has a Markdown trigger list but no canonical CSV, and no writable local source is authorized.",
+      "expected_output": "A non-mutating partial alignment report that identifies the canonical eval gap, performs safe review-only checks, and does not claim full alignment or runtime proof.",
+      "files": [],
+      "assertions": [
+        "The result does not create or modify target files.",
+        "The Markdown trigger list is not represented as satisfying the strict canonical CSV contract.",
+        "The result reports missing evaluation coverage as partial or unverified.",
+        "The result does not claim STATIC_PASS, RUNTIME_PASS, or QUALITY_PASS without corresponding evidence."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Align a 700-line safety-sensitive workflow skill. The owner asks you to get it below 500 lines, but its rules govern authorization, checkpoint identity, failure recovery, stop conditions, evidence, and output on every run. Apply the best practices without weakening behavior.",
+      "expected_output": "A justified over-budget outcome that preserves the irreducible core, removes only proven no-op duplication, records specific retained-block rationale and non-regression evidence, and does not mechanically summarize or split the skill for size alone.",
+      "files": [
+        "evals/fixtures/irreducible-700-line-skill.md"
+      ],
+      "assertions": [
+        "The result does not mechanically summarize sections, hide always-needed guardrails behind conditional reads, or split the skill only to meet the soft budget.",
+        "The exception identifies lines 81-660 as retained core and explains specifically why conditional loading would weaken authorization, identity, recovery, stopping, evidence, output, idempotency, or concurrency behavior.",
+        "The result removes only the behavior-neutral history in lines 661-700, preserves the remaining workflow, and requires comparison against captured working bytes before a completed alignment claim, or marks the baseline UNAVAILABLE in report-only mode.",
+        "The report uses 700 validator-compatible splitlines as the baseline, records the exact after-count when a candidate exists or marks it UNAVAILABLE in report-only mode, and records comparable token cost with its method or explicitly reports token evidence as UNAVAILABLE.",
+        "The result rejects a generic statement that the skill is complex as sufficient exception evidence.",
+        "Static, runtime, and quality evidence remain separate, and any unavailable clean-run evidence is not represented as a pass."
+      ]
+    }
+  ]
+}

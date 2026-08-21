@@ -8,11 +8,12 @@ import yaml
 
 from nebius_vpngw import build
 
+VM_HA_COMPOSED_SUITES = (
+    "tests/integration/test_vm_ha_runtime_composed.py",
+    "tests/integration/test_vm_ha_failover.py",
+)
+
 VM_HA_SAFETY_NODES = (
-    "tests/integration/test_vm_ha_runtime_composed.py::"
-    "test_clean_owner_bootstrap_materializes_passive_before_promotion",
-    "tests/integration/test_vm_ha_failover.py::"
-    "test_healthy_nodes_keep_one_exact_owner_and_one_passive",
     "tests/unit/test_cli_helpers.py::"
     "test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager",
     "tests/unit/test_ssh_policy.py::"
@@ -23,6 +24,15 @@ VM_HA_SAFETY_NODES = (
     "test_vm_ha_stage_classifies_missing_pinned_host_identity",
     "tests/unit/test_ssh_push.py::"
     "test_vm_ha_activation_classifies_host_identity_rejection",
+)
+
+GCP_PYTHON_HELPERS = (
+    "misc/gcp_vpngw_vm_ha.py",
+    "misc/gcp_vpngw_classic_vm_ha.py",
+)
+GCP_SHELL_HELPERS = (
+    "misc/gcp-vpngw-vm-ha.sh",
+    "misc/gcp-vpngw-classic-vm-ha.sh",
 )
 
 
@@ -52,7 +62,11 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     assert "--add-data" in cmd
     assert str(build.Path(build.__file__).parent / "__main__.py") in cmd
     systemd_dir = build.Path(build.__file__).parent / "systemd"
+    assert (systemd_dir / "nebius-vpngw-fix-routes.service").exists()
+    assert (systemd_dir / "nebius-vpngw-fix-routes.timer").exists()
     assert (systemd_dir / "nebius-vpngw-vm-ha-guard.service").exists()
+    assert (systemd_dir / "nebius-vpngw-vm-ha-peer-firewall.sh").exists()
+    assert (systemd_dir / "nebius-vpngw-vm-ha-rearm.service").exists()
     assert (systemd_dir / "nebius-vpngw-vm-ha.service").exists()
 
 
@@ -70,10 +84,12 @@ def test_pull_request_ci_selects_vm_ha_safety_regressions_exactly_once() -> None
 
     safety_run = runs["VM-HA safety regressions"]
     unit_run = runs["Unit tests"]
+    for suite in VM_HA_COMPOSED_SUITES:
+        assert safety_run.count(suite) == 1
+        assert f"{suite}::" not in safety_run
     for node in VM_HA_SAFETY_NODES:
         assert safety_run.count(node) == 1
-        if node.startswith("tests/unit/"):
-            assert f"--deselect={node}" in unit_run
+        assert f"--deselect={node}" in unit_run
 
     manual_run = next(
         step["run"]
@@ -81,3 +97,52 @@ def test_pull_request_ci_selects_vm_ha_safety_regressions_exactly_once() -> None
         if step.get("name") == "Integration tests"
     )
     assert manual_run == "python -m pytest -n auto tests/integration"
+
+
+def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    workflow = yaml.safe_load(
+        (repo_root / ".github/workflows/vpngw-ci.yml").read_text(encoding="utf-8")
+    )
+
+    lint_runs = [
+        step.get("run")
+        for step in workflow["jobs"]["lint"]["steps"]
+        if step.get("run")
+    ]
+    assert lint_runs.count("python -m mypy") == 1
+    assert workflow["jobs"]["unit-tests"]["needs"] == "lint"
+
+    build_job = workflow["jobs"]["build"]
+    packaging_job = workflow["jobs"]["packaging"]
+    assert build_job["if"] == "github.event_name != 'workflow_dispatch'"
+    assert packaging_job["if"] == "github.event_name == 'workflow_dispatch'"
+    for job in (build_job, packaging_job):
+        build_runs = [
+            step["run"]
+            for step in job["steps"]
+            if "run" in step and "python -m build --wheel --no-isolation" in step["run"]
+        ]
+        assert len(build_runs) == 1
+
+
+def test_ci_and_release_cover_both_gcp_vm_ha_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    for workflow_name in ("vpngw-ci.yml", "vpngw-release.yml"):
+        workflow = yaml.safe_load(
+            (repo_root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+        )
+        runs = [
+            step["run"]
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", ())
+            if "run" in step
+        ]
+        ruff = next(command for command in runs if "python -m ruff check" in command)
+        shell = next(command for command in runs if "bash -n misc/gcp-vpngw.sh" in command)
+        for helper in GCP_PYTHON_HELPERS:
+            assert ruff.count(helper) == 1
+        for helper in GCP_SHELL_HELPERS:
+            assert shell.count(f"bash -n {helper}") == 1
+        assert shell.count("./misc/gcp-vpngw.sh --vm-ha-peer --help") == 1
+        assert shell.count("./misc/gcp-vpngw.sh --classic-vm-ha-peer --help") == 1

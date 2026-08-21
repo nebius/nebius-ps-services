@@ -52,6 +52,9 @@ The report at `~/.codex/sdlc-verification/report.md` must include:
 
 Verify `docs/agentic-sdlc-design.md` includes:
 
+- canonical `maintain-project-specs` semantic, schema, template, validation,
+  and receipt ownership; routed `sdlc-create-requirements` and
+  `sdlc-create-design` authoring adapters; and no legacy phase-owner metadata
 - core workflow terms: no workflow CLI, `sdlc-start`, PreToolUse, Stop, private
   local run state, and resume/idempotency
 - `Workflow Verification`
@@ -95,6 +98,13 @@ Verify `docs/agentic-sdlc-design.md` includes:
 
 Verify:
 
+- The real source catalog passes the shared skill-structure validator; fixture
+  self-tests are not a substitute for catalog validation.
+- Every required phase skill is free of legacy direct spec-owner or v2
+  project-instruction wording.
+- Both rich Agentic spec templates retain `maintain-project-specs` ownership,
+  managed-region markers, and their narrow Markdownlint envelopes.
+- The requirements adapter README states every main boundary as `Do not`.
 - Global skill folders exist under `~/.agents/skills` for all required Agentic
   SDLC phase skills.
 - Each skill has `SKILL.md`.
@@ -107,8 +117,10 @@ Verify:
   `policy.allow_implicit_invocation: false`.
 - No project-local `.agents/skills` directory is required by the disposable
   project.
-- The installed `worktree` and `nebius-grafana-query` support skills exist.
-- Every required SDLC skill, both runtime support skills, and
+- The installed `maintain-project-specs`, `worktree`,
+  `nebius-grafana-query`, `project-agent-instructions`, and conditional
+  `troubleshoot` support skills exist.
+- Every required SDLC skill, all five runtime support skills, and
   `sdlc-workflow-test` match their source copies, excluding installer
   provenance and bytecode artifacts.
 
@@ -430,6 +442,11 @@ before mutation. Invalid UTF-8 becomes a reported failure rather than a crash.
 A deterministic subprocess timeout becomes a named FAIL check; it must not
 prevent report generation. A custom report path must remain under the private
 verification root.
+
+Capability regression subprocesses use a 120-second default timeout. The
+measured slow worktree and Task Implementer wave matrices use bounded 300- and
+900-second timeouts respectively, so their full crash/recovery coverage is not
+misreported as a workflow failure.
 
 ## Idempotency And Change Request
 

@@ -812,6 +812,8 @@ components:
                           memory: 512Mi
                           ephemeralStorage: 2Gi
                       mariadbOperator:
+                        metrics:
+                          enabled: false
                         resources:
                           cpu: "250m"
                           memory: 1Gi
@@ -907,7 +909,6 @@ components:
                         features:
                           - cpu
                         static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
-                        dynamic: "InstanceId={{ .PodName }}"
                       slurmd:
                         resources:
                           cpu: "4"
@@ -949,6 +950,8 @@ components:
                       k8sNodeFilterName: accounting
                       mariadbOperator:
                         enabled: true
+                        metrics:
+                          enabled: false
                         storage:
                           size: 128Gi
                           storageClassName: compute-csi-default-sc
@@ -1364,7 +1367,6 @@ components:
                         features:
                           - cpu
                         static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
-                        dynamic: "InstanceId={{ .PodName }}"
                       slurmd:
                         resources:
                           cpu: "4"
@@ -1411,9 +1413,8 @@ components:
                           - gpu
                           - cuda
                         static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
-                        dynamic: "InstanceId={{ .PodName }}"
                         gresConfig:
-                          - AutoDetect=nvidia
+                          - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
                       slurmd:
                         customEnv:
                           - name: NVIDIA_DRIVER_CAPABILITIES
@@ -1463,6 +1464,8 @@ components:
                       k8sNodeFilterName: accounting
                       mariadbOperator:
                         enabled: true
+                        metrics:
+                          enabled: false
                         storage:
                           size: 128Gi
                           storageClassName: compute-csi-default-sc
@@ -1705,7 +1708,6 @@ components:
                             features:
                               - cpu
                             static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
-                            dynamic: "InstanceId={{ .PodName }}"
                           slurmd:
                             resources:
                               cpu: "4"
@@ -1754,9 +1756,8 @@ components:
                               - h100
                               - infiniband
                             static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
-                            dynamic: "InstanceId={{ .PodName }}"
                             gresConfig:
-                              - AutoDetect=nvidia
+                              - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
                           slurmd:
                             customEnv:
                               - name: NVIDIA_DRIVER_CAPABILITIES
@@ -1990,9 +1991,8 @@ components:
                           - gpu
                           - cuda
                         static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
-                        dynamic: "InstanceId={{ .PodName }}"
                         gresConfig:
-                          - AutoDetect=nvidia
+                          - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
                       slurmd:
                         customEnv:
                           - name: NVIDIA_DRIVER_CAPABILITIES
@@ -2042,6 +2042,8 @@ components:
                       k8sNodeFilterName: accounting
                       mariadbOperator:
                         enabled: true
+                        metrics:
+                          enabled: false
                         storage:
                           size: 128Gi
                           storageClassName: compute-csi-default-sc

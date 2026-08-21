@@ -31,7 +31,10 @@ def _instance(
             network_interfaces=[
                 SimpleNamespace(
                     name=name,
-                    ip_address=SimpleNamespace(allocation_id=allocation_id),
+                    ip_address=SimpleNamespace(allocation_id=f"primary-{name}"),
+                    aliases=(
+                        [SimpleNamespace(allocation_id=allocation_id)] if allocation_id else []
+                    ),
                 )
                 for name, allocation_id in attachments
             ]
@@ -101,16 +104,21 @@ def test_transfer_enforces_fencing_and_exact_ownership_order() -> None:
         events.append(f"owner:{value}")
         return _allocation(owner)
 
-    def set_allocation(instance_id: str, nic_name: str, allocation_id: str | None) -> None:
+    def set_allocation(
+        instance_id: str,
+        nic_name: str,
+        allocation_id: str,
+        present: bool,
+    ) -> None:
         nonlocal owner
-        events.append(f"set:{instance_id}/{nic_name}:{allocation_id or 'absent'}")
-        owner = AllocationOwner(instance_id, nic_name) if allocation_id else None
+        events.append(f"set:{instance_id}/{nic_name}:{allocation_id}:{present}")
+        owner = AllocationOwner(instance_id, nic_name) if present else None
 
     adapter = VMHACloudAdapter(
         instance_reader=read_instance,
         instance_stopper=stop_instance,
         allocation_reader=read_allocation,
-        allocation_setter=set_allocation,
+        alias_allocation_setter=set_allocation,
         attempts=4,
         poll_interval=0,
         sleeper=lambda _: None,
@@ -149,7 +157,7 @@ def test_ambiguous_or_transitional_state_never_reaches_allocation(state: str) ->
         instance_reader=lambda _: _instance(state),
         instance_stopper=lambda _: None,
         allocation_reader=read_allocation,
-        allocation_setter=lambda *_: None,
+        alias_allocation_setter=lambda *_: None,
         attempts=1,
         poll_interval=0,
     )
@@ -170,7 +178,7 @@ def test_stopping_timeout_is_retryable_and_never_detaches() -> None:
         instance_reader=lambda _: _instance("STOPPING"),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(AllocationOwner("old", "eth0")),
-        allocation_setter=lambda *args: setters.append(args),
+        alias_allocation_setter=lambda *args: setters.append(args),
         attempts=2,
         poll_interval=0,
         sleeper=lambda _: None,
@@ -194,7 +202,7 @@ def test_unexpected_allocation_owner_is_permanent_and_not_mutated() -> None:
         ),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(AllocationOwner("foreign", "eth9")),
-        allocation_setter=lambda *args: setters.append(args),
+        alias_allocation_setter=lambda *args: setters.append(args),
         attempts=2,
         poll_interval=0,
     )
@@ -211,12 +219,17 @@ def test_unexpected_allocation_owner_is_permanent_and_not_mutated() -> None:
 def test_detached_allocation_skips_detach_and_attaches_candidate() -> None:
     candidate = AllocationOwner("new", "eth0")
     owner: AllocationOwner | None = None
-    setters: list[tuple[str, str, str | None]] = []
+    setters: list[tuple[str, str, str, bool]] = []
 
-    def set_allocation(instance_id: str, nic_name: str, allocation_id: str | None) -> None:
+    def set_allocation(
+        instance_id: str,
+        nic_name: str,
+        allocation_id: str,
+        present: bool,
+    ) -> None:
         nonlocal owner
-        setters.append((instance_id, nic_name, allocation_id))
-        owner = AllocationOwner(instance_id, nic_name) if allocation_id else None
+        setters.append((instance_id, nic_name, allocation_id, present))
+        owner = AllocationOwner(instance_id, nic_name) if present else None
 
     adapter = VMHACloudAdapter(
         instance_reader=lambda instance_id: _instance(
@@ -225,7 +238,7 @@ def test_detached_allocation_skips_detach_and_attaches_candidate() -> None:
         ),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(owner),
-        allocation_setter=set_allocation,
+        alias_allocation_setter=set_allocation,
         attempts=2,
         poll_interval=0,
     )
@@ -235,7 +248,7 @@ def test_detached_allocation_skips_detach_and_attaches_candidate() -> None:
         former_owner=AllocationOwner("old", "eth0"),
         candidate=candidate,
     )
-    assert setters == [("new", "eth0", "private-1")]
+    assert setters == [("new", "eth0", "private-1", True)]
 
 
 def test_replay_with_exact_candidate_owner_is_read_only() -> None:
@@ -248,7 +261,7 @@ def test_replay_with_exact_candidate_owner_is_read_only() -> None:
         ),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(candidate),
-        allocation_setter=lambda *args: setters.append(args),
+        alias_allocation_setter=lambda *args: setters.append(args),
         attempts=2,
         poll_interval=0,
     )
@@ -290,7 +303,7 @@ def test_candidate_compute_revision_is_ownership_epoch_not_allocation_revision()
         ),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: allocation,
-        allocation_setter=lambda *_: None,
+        alias_allocation_setter=lambda *_: None,
         attempts=1,
         poll_interval=0,
     )
@@ -322,17 +335,22 @@ def test_transfer_away_and_back_uses_each_candidate_compute_revision() -> None:
     def read_allocation(_: str) -> SimpleNamespace:
         return _allocation(allocation_owner)
 
-    def set_allocation(instance_id: str, _: str, allocation_id: str | None) -> None:
+    def set_allocation(
+        instance_id: str,
+        _: str,
+        allocation_id: str,
+        present: bool,
+    ) -> None:
         nonlocal allocation_owner
         revisions[instance_id] += 1
-        attachments[instance_id] = allocation_id or ""
-        allocation_owner = owners[instance_id] if allocation_id else None
+        attachments[instance_id] = allocation_id if present else ""
+        allocation_owner = owners[instance_id] if present else None
 
     adapter = VMHACloudAdapter(
         instance_reader=read_instance,
         instance_stopper=lambda _: None,
         allocation_reader=read_allocation,
-        allocation_setter=set_allocation,
+        alias_allocation_setter=set_allocation,
         attempts=2,
         poll_interval=0,
     )
@@ -359,7 +377,7 @@ def test_transfer_rejects_candidate_on_former_compute_instance() -> None:
         instance_reader=lambda _: _instance("STOPPED"),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(candidate),
-        allocation_setter=lambda *_: None,
+        alias_allocation_setter=lambda *_: None,
         attempts=1,
         poll_interval=0,
     )
@@ -379,7 +397,7 @@ def test_stale_attachment_read_times_out_without_duplicate_detach() -> None:
         instance_reader=lambda _: _instance("STOPPED"),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(former),
-        allocation_setter=lambda *args: setters.append(args),
+        alias_allocation_setter=lambda *args: setters.append(args),
         attempts=3,
         poll_interval=0,
         sleeper=lambda _: None,
@@ -391,7 +409,7 @@ def test_stale_attachment_read_times_out_without_duplicate_detach() -> None:
             former_owner=former,
             candidate=AllocationOwner("new", "eth0"),
         )
-    assert setters == [("old", "eth0", None)]
+    assert setters == [("old", "eth0", "private-1", False)]
 
 
 @pytest.mark.parametrize(
@@ -414,7 +432,7 @@ def test_cloud_read_errors_are_typed_and_block_promotion(
         instance_reader=failed_read,
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(None),
-        allocation_setter=lambda *_: None,
+        alias_allocation_setter=lambda *_: None,
         attempts=1,
         poll_interval=0,
     )

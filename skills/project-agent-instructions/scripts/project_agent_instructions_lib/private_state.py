@@ -171,11 +171,37 @@ def _relative_private_path(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
+def _sync_private_directory(
+    directory: Path,
+    write_failure_code: str,
+    write_failure_message: Optional[str],
+) -> None:
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    try:
+        directory_descriptor = os.open(directory, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OSError as error:
+        raise ProjectInstructionsError(
+            write_failure_code,
+            write_failure_message or "private evidence could not be written safely",
+        ) from error
+
+
 def _write_private_json(
     path: Path,
     value: object,
     git_root: Path,
     private_root: Path,
+    *,
+    write_failure_code: str = "UNSAFE_TARGET",
+    write_failure_message: Optional[str] = None,
 ) -> None:
     target = _private_member(private_root, path, "private evidence")
     if _inside(target, git_root):
@@ -187,7 +213,11 @@ def _write_private_json(
     encoded = _stable_json(value)
     metadata = _lstat_optional(target)
     if metadata is not None:
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+        ):
             raise ProjectInstructionsError(
                 "UNSAFE_TARGET", "private evidence target is unsafe"
             )
@@ -196,10 +226,35 @@ def _write_private_json(
                 "UNSAFE_TARGET",
                 "private evidence target must use mode 0600",
             )
-        if target.read_bytes() == encoded:
+        try:
+            existing_bytes = target.read_bytes()
+        except OSError as error:
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET", "private evidence target could not be read safely"
+            ) from error
+        confirmed = _lstat_optional(target)
+        if (
+            confirmed is None
+            or not stat.S_ISREG(confirmed.st_mode)
+            or stat.S_IMODE(confirmed.st_mode) != 0o600
+            or confirmed.st_nlink != 1
+            or (confirmed.st_dev, confirmed.st_ino)
+            != (metadata.st_dev, metadata.st_ino)
+            or confirmed.st_size != metadata.st_size
+            or confirmed.st_mtime_ns != metadata.st_mtime_ns
+        ):
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET", "private evidence target changed during validation"
+            )
+        if existing_bytes == encoded:
+            _sync_private_directory(
+                target.parent,
+                write_failure_code,
+                write_failure_message,
+            )
             return
         try:
-            existing: Any = json.loads(target.read_bytes())
+            existing: Any = json.loads(existing_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ProjectInstructionsError(
                 "UNSAFE_TARGET",
@@ -217,7 +272,8 @@ def _write_private_json(
         )
     except OSError as error:
         raise ProjectInstructionsError(
-            "UNSAFE_TARGET", "private evidence could not be staged"
+            write_failure_code,
+            write_failure_message or "private evidence could not be staged",
         ) from error
     temporary_path = Path(temporary)
     try:
@@ -229,19 +285,15 @@ def _write_private_json(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, target)
-        directory_flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            directory_flags |= os.O_DIRECTORY
-        if hasattr(os, "O_NOFOLLOW"):
-            directory_flags |= os.O_NOFOLLOW
-        directory_descriptor = os.open(target.parent, directory_flags)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        _sync_private_directory(
+            target.parent,
+            write_failure_code,
+            write_failure_message,
+        )
     except OSError as error:
         raise ProjectInstructionsError(
-            "UNSAFE_TARGET", "private evidence could not be written safely"
+            write_failure_code,
+            write_failure_message or "private evidence could not be written safely",
         ) from error
     finally:
         if descriptor >= 0:

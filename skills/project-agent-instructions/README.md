@@ -21,7 +21,13 @@ automatically require a project instruction file.
 - Preserves every human-authored prefix byte while owning only one generated
   tail region; managed-region edits fail closed.
 - Deterministically renders exact current-turn rules without repository
-  mutation, then owns, recovers, and verifies selected-project `AGENTS.md`
+  mutation, rejects target-inapplicable decisions before publication, and
+  serializes atomic private-rules revision after revalidating exact owned state
+  and rules predecessors at the final replacement boundary. Only
+  `RENDER_STATE_PUBLICATION_INCOMPLETE` is rerunnable after an interrupted
+  matching-state I/O write; its equal-bytes retry re-syncs the private parent
+  directory when needed, while generic unsafe targets remain terminal. The
+  workflow then owns, recovers, and verifies selected-project `AGENTS.md`
   through a guarded terminal-seal transition.
 
 ## Coordinator Flow
@@ -100,6 +106,10 @@ Lifecycle-owned inspection is one uncomposed canonical command. It declares
 the active Codex home explicitly and uses absolute receipt, runtime,
 private-root, and manifest-output paths from the exact current-session bundle;
 environment fallback or relative output is not valid lifecycle evidence.
+Matching `PreToolUse` guards run before the command and may report a rejection
+before the assistant can explain or retry it. `Stop` evaluates turn-final
+lifecycle state after the assistant response; these event positions are not a
+workflow command ordering mechanism.
 
 ## Boundaries
 
@@ -127,8 +137,10 @@ transition rules, recovery algorithm, and private helper interface remain in
   invocation policy.
 - [`references/decision-contract.md`](references/decision-contract.md): v3
   receipts, discovery, rendering, ownership, recovery, and verification.
-- [`evals/trigger-prompts.md`](evals/trigger-prompts.md): should-trigger and
+- [`evals/trigger-prompts.csv`](evals/trigger-prompts.csv): should-trigger and
   should-not-trigger examples.
+- [`evals/process-cases.md`](evals/process-cases.md): supplemental coordinator
+  and decision-outcome cases.
 - [`scripts/project_agent_instructions.py`](scripts/project_agent_instructions.py):
   private coordinator helper entry point.
 - [`scripts/project_agent_instructions_lib/`](scripts/project_agent_instructions_lib/):

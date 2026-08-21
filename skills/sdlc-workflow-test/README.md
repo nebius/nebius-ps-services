@@ -61,13 +61,22 @@ current meaning when no lifecycle action is selected.
 - Uses `references/verification-checklist.md` as the test plan.
 - Runs `scripts/verify_agentic_sdlc.py` for static discovery, SDLC contract,
   capability regressions, a nested disposable project, and hook fixture checks.
+  The two measured slow aggregates use explicit bounded budgets: 300 seconds
+  for the worktree matrix and 900 seconds for the Task Implementer wave matrix;
+  every other capability suite keeps the 120-second default.
 - Statically verifies the exact-SHA Agentic SDLC PR publication/review/merge
   modes and includes bounded observability plus explicit-PR, canonical
   single-action publication and merge authorization in capability regressions.
-- Requires installed `worktree`, `nebius-grafana-query`, and conditional
+- Requires installed `maintain-project-specs`, `worktree`,
+  `nebius-grafana-query`, `project-agent-instructions`, and conditional
   `troubleshoot` support and includes them in source-installed parity and
-  verification-identity checks. `troubleshoot` is exercised only in controlled
-  failure-routing scenarios and remains absent from the golden path.
+  verification-identity checks.
+  `project-agent-instructions` is a golden-path step after design;
+  `troubleshoot` is exercised only in controlled failure-routing scenarios and
+  remains absent from the golden path.
+- Verifies that `maintain-project-specs` remains the sole semantic, schema,
+  template, validation, and receipt owner of canonical requirements and design
+  while the two Agentic authoring phases remain routed adapters.
 - Deterministically verifies normalized failure events, bounded diagnosis,
   authoritative repair control, positive design admission, and append-only
   corrective-plan/wave contracts.

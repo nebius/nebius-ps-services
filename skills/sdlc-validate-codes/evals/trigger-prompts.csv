@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-validate-positive-01,true,"Run build lint type import and configuration validation for this implemented SDLC feature."
+sdlc-validate-positive-02,true,"Validate the locked end-to-end slice boundaries before sdlc-commit."
+sdlc-validate-positive-03,true,"Run code-review in report-only mode as this SDLC feature's quality gate."
+sdlc-validate-negative-01,false,"Lint and auto-fix this ordinary repository outside Agentic SDLC."
+sdlc-validate-negative-02,false,"Run the feature's behavior tests after validation."
+sdlc-validate-negative-03,false,"Commit the SDLC feature without completing validation."

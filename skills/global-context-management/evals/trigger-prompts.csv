@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+context-positive-01,true,"Use global context management for this complex multi-file implementation."
+context-positive-02,true,"Keep durable task state and bounded read-only exploration during this long debugging task."
+context-positive-03,true,"Coordinate concise context validation and final risk review for this migration."
+context-negative-01,false,"Configure my machine-wide Codex hooks and settings."
+context-negative-02,false,"Start the Agentic SDLC workflow for this prompt."
+context-negative-03,false,"Answer this one-line translation question."

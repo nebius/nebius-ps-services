@@ -61,11 +61,17 @@ jobs:
         run: |
           set -euo pipefail
           bash -n misc/gcp-vpngw.sh
+          bash -n misc/gcp-vpngw-vm-ha.sh
+          bash -n misc/gcp-vpngw-classic-vm-ha.sh
           bash -n misc/fix-vpngw-esp4.sh
           ./misc/gcp-vpngw.sh --help >/dev/null
+          ./misc/gcp-vpngw.sh --vm-ha-peer --help >/dev/null
+          ./misc/gcp-vpngw.sh --classic-vm-ha-peer --help >/dev/null
           ./misc/fix-vpngw-esp4.sh --help >/dev/null
       - name: Ruff
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests misc/gcp_vpngw_vm_ha.py misc/gcp_vpngw_classic_vm_ha.py
+      - name: Mypy
+        run: python -m mypy
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -97,8 +103,8 @@ jobs:
       - name: VM-HA safety regressions
         run: |
           python -m pytest -n auto \
-            tests/integration/test_vm_ha_runtime_composed.py::test_clean_owner_bootstrap_materializes_passive_before_promotion \
-            tests/integration/test_vm_ha_failover.py::test_healthy_nodes_keep_one_exact_owner_and_one_passive \
+            tests/integration/test_vm_ha_runtime_composed.py \
+            tests/integration/test_vm_ha_failover.py \
             tests/unit/test_cli_helpers.py::test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager \
             tests/unit/test_ssh_policy.py::test_required_vm_ha_trust_rejects_missing_enrollment \
             tests/unit/test_ssh_policy.py::test_vm_ha_policy_rejects_public_only_host_key \

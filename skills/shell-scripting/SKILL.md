@@ -1,6 +1,6 @@
 ---
 name: shell-scripting
-description: Create, refactor, or review Bash shell scripts with strict mode, safe argument parsing, idempotent behavior, and rich CLI output (structured logs plus readable usage/help with color fallback). Use when users ask for .sh scripts, shell automation, CLI wrappers, or script hardening.
+description: "Create, refactor, review, or harden Bash scripts, shell automation, and CLI wrappers with strict mode, safe parsing, idempotency, structured logs, readable help, and color fallback."
 ---
 
 # Shell Scripting

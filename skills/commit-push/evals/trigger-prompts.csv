@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+commit-push-positive-01,true,"Commit all current changes and push this feature branch."
+commit-push-positive-02,true,"Use commit-push with this message and report the final remote branch."
+commit-push-positive-03,true,"Stage the whole repository commit it and push without opening a PR."
+commit-push-negative-01,false,"Create a local commit but do not push it."
+commit-push-negative-02,false,"Open or update a pull request for these changes."
+commit-push-negative-03,false,"Integrate this managed child worktree into its owner."

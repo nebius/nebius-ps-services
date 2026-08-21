@@ -1,6 +1,6 @@
 ---
 name: align-skill
-description: "Use for reviewing, hardening, validating, aligning, and improving existing or newly scaffolded Codex or Agent Skill folders. Use after skill-creator or a manual scaffold/draft exists to refine SKILL.md front matter, trigger descriptions, progressive disclosure, official portable structure, repo metadata, safety guardrails, validation, scripts/references/assets/evals, vendor-doc checks, and reusable learning capture. Do not replace skill-creator for initial new-skill scaffolding."
+description: "Align and harden existing/scaffolded Codex or Agent Skill folders: triggers, concise instructions, metadata, safety, resources, and evals. Accept local or report-only GitHub sources; use skill-creator for new scaffolds and align for projects."
 ---
 
 # Align Skill
@@ -21,14 +21,12 @@ authorization.
 
 ## Purpose
 
-Use this skill to inspect, review, align, harden, validate, and improve one or
-more Codex or Agent Skill folders. It can help refine skill-writing drafts after
-a target skill folder, scaffold, or `SKILL.md` draft exists. The target is skill
-quality: `SKILL.md`, supporting `references/`, `assets/`, `scripts/`, optional
-upstream `agents/openai.yaml` metadata, repo-required `agents/openai.yaml`
-metadata when local policy requires it, optional `evals/` trigger examples,
-triggering behavior, safety/security rules, fast validation, and validation
-evidence.
+Inspect, align, harden, validate, and improve one or more existing Codex or
+Agent Skill folders. Make the target easier to trigger correctly, cheaper to
+load, safer to execute, and independently evaluable. For every authorized
+writable target that completes alignment, create or update its canonical
+trigger evals and report static, runtime, and output-quality evidence
+separately.
 
 This skill is separate from `align`, which is for end-to-end project/codebase
 alignment.
@@ -47,6 +45,8 @@ alignment.
   `$skill-name --help` and `$skill-name -h` concisely explain the skill and
   describe every public action, positional argument, and flag.
 - Reviewing trigger/evaluation prompts stored under `evals/`.
+- Creating or updating target-specific trigger evals for an authorized writable
+  skill and selecting proportionate output-quality or deterministic tests.
 - Checking skill guidance, commands, scripts, examples, and vendor-specific
   claims against current official documentation.
 - Adding or hardening safety guardrails before validation or live tests.
@@ -73,6 +73,8 @@ alignment.
   authoring, hardening, and validation helper around that flow.
 - Do not broaden a skill until it becomes hard to trigger correctly.
 - Do not rewrite skills from vague "best practices" without evidence.
+- Do not mutate report-only, remote-only, or otherwise unauthorized targets;
+  report their alignment and eval gaps as partial.
 - Do not run live external changes unless a non-production test environment is
   confirmed.
 
@@ -83,10 +85,9 @@ the full `SKILL.md` only when the skill is selected. Front-load target type,
 authoring intent, and boundaries in the front matter `description`.
 
 For deterministic activation, mention `align-skill` plus the target path,
-skill name, folder, GitHub repository URL, or GitHub tree URL. In CLI/IDE,
-confirmed explicit mechanisms include `/skills` and `$` skill mention. Do not
-document `@skill` or other syntax unless current official OpenAI documentation
-confirms it.
+skill name, folder, GitHub repository URL, or GitHub tree URL. In ChatGPT, type
+`@` to select a skill. In Codex CLI or the IDE extension, use `/skills` or type
+`$` to mention a skill.
 
 Read `references/triggering-guide.md` when reviewing trigger behavior, surface
 support, or prompt examples.
@@ -106,6 +107,14 @@ support, or prompt examples.
   public-safe, and in scope.
 - Keep skills scoped to their actual job and keep `SKILL.md` short enough for
   progressive disclosure.
+- Prefer directives over essays. Preserve rationale only when it changes a
+  decision, constraint, route, validation, safety outcome, or output; remove
+  text whose absence would change none of those.
+- Calibrate freedom per workflow block: goals and constraints when several
+  approaches are safe, bounded defaults when one route is preferred, and a
+  tested script or exact sequence when behavior is fragile or deterministic.
+- Treat more than 500 `SKILL.md` lines as a review warning. Move deep material
+  into focused references or record why the remaining core is justified.
 - Move large checklists, templates, policies, and long examples into
   `references/` or `assets/`.
 - Keep target `SKILL.md` content limited to trigger, scope, required workflow,
@@ -119,6 +128,13 @@ support, or prompt examples.
 Read `references/canonical-skill-structure.md` and
 `references/alignment-rubric.md` when structure or quality criteria are in
 scope.
+
+Read `references/progressive-disclosure-refactor.md` before editing when a
+target exceeds 500 `SKILL.md` lines or semantic review finds its always-loaded
+instructions overloaded. Do not summarize sections mechanically.
+
+Read `references/evaluation-guide.md` whenever creating, migrating, validating,
+running, or reporting target evals.
 
 For skill draft, scaffold, or update tasks, also read
 `references/skill-authoring-best-practices.md` after the target scope is known.
@@ -136,7 +152,9 @@ newly scaffolded skill folder:
 2. If creating a brand-new skill and `skill-creator` is available, use it for
    the initial scaffold or naming workflow, then return here for alignment,
    safety, trigger quality, and validation.
-3. Start from concrete use cases and should-trigger/should-not-trigger prompts.
+3. Start from concrete use cases and create or update the target's canonical
+   trigger CSV with at least three should-trigger and three meaningful
+   near-miss should-not-trigger prompts.
 4. Keep the skill focused on one repeatable job and front-load the `description`
    with user intent, accepted inputs, and boundaries from adjacent skills.
 5. Apply the correct structure profile:
@@ -146,7 +164,8 @@ newly scaffolded skill folder:
      policy, and tool dependencies.
    - This repository's source-owned standard: keep `agents/openai.yaml` on
      every skill, keep the standard `## Help` and `## Learning Loop` sections,
-     and add other resource folders only when useful.
+     require canonical trigger evals after writable alignment, and add other
+     resource folders only when useful.
 6. Inventory the target's documented public actions, positional arguments, and
    flags. Add or repair the standard `## Help` contract so every public item
    has exact usage plus a concise description. Include `-h, --help`; when the
@@ -156,15 +175,17 @@ newly scaffolded skill folder:
    expects OpenAI metadata. Use `agents/openai.yaml`, not `agents.openai.yaml`.
    Add `interface.default_prompt` and a `policy.allow_implicit_invocation`
    value derived from the skill requirements and `SKILL.md`.
-8. Apply safe, secure, and fast skill guidance from
+8. Apply lean, safe, secure, and fast skill guidance from
    `references/skill-authoring-best-practices.md`.
-9. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
+9. Select output-quality evals or deterministic tests proportionate to the
+   target change, following `references/evaluation-guide.md`.
+10. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
    `Idempotency`, `Failure Handling`, `Must Not`, and `Completion Criteria`
    sections. Keep private execution state out of committed project files and
    keep hooks as invariant guardrails rather than workflow orchestrators.
-10. Run the mandatory review lanes for the target skill scope, then validate
-   locally with the narrowest relevant checks. Broaden only when the contract or
-   shared validator changed.
+11. Run the mandatory review lanes for the target skill scope, then validate
+    locally with `--require-evals` and the narrowest relevant checks. Broaden
+    only when the contract or shared validator changed.
 
 ## Help Interface Enforcement
 
@@ -261,8 +282,9 @@ profile requirements. Keep the core distinction loaded here:
 - OpenAI optional resources: `agents/openai.yaml`, `references/`, `scripts/`,
   and `assets/` when they serve the skill.
 - This repository's source-owned standard: every repo-owned skill keeps
-  `agents/openai.yaml`; `assets/`, `evals/`, `references/`, and `scripts/` are
-  added only when useful.
+  `agents/openai.yaml`; every authorized writable target that completes
+  alignment keeps canonical trigger evals; `assets/`, `references/`, and
+  `scripts/` are added only when useful.
 
 ## Invocation Policy Selection
 
@@ -301,8 +323,12 @@ not be forced onto simple instruction-only skills.
 
 1. Detect target scope: single skill, multiple named skills, parent folder, or
    GitHub source.
-2. Inspect nearby repository conventions before editing.
-3. Read the target `SKILL.md` files and supporting folders.
+2. Classify each target as authorized writable or report-only. Never mutate a
+   remote, restricted, or report-only target or describe it as fully aligned.
+3. Inspect nearby repository conventions and each target's `SKILL.md` and
+   supporting folders. Before editing a dirty writable target, capture its
+   current working bytes in a task-owned temporary baseline rather than using
+   `HEAD` implicitly.
 4. Inventory each target's public actions, positional arguments, and flags.
    Add or repair the standard `## Help` section so its report-only response
    concisely describes every public interface item, and add or repair the
@@ -310,20 +336,34 @@ not be forced onto simple instruction-only skills.
 5. Identify products, CLIs, APIs, clouds, frameworks, package managers, and
    external services the skill references.
 6. Verify vendor-specific behavior against current official documentation.
-7. Apply focused, evidence-backed improvements across `SKILL.md`, references,
+7. Apply the semantic authoring rubric: tighten the description, use
+   directive-first core instructions, remove behavior-neutral prose, calibrate
+   workflow freedom, and move deep provider, domain, or workflow variants into
+   focused references. For an over-budget or overloaded target, follow the
+   conditional progressive-disclosure refactor, including block
+   classification, preservation evidence, size evidence, and a split or
+   justified-exception decision.
+8. For each writable target, create or migrate one canonical
+   `evals/trigger-prompts.csv`, select proportionate quality evals or
+   deterministic tests, and run every applicable changed-scope eval. Keep the
+   CSV target-owned: do not follow symlinked path components or expose raw IDs
+   or prompts in validation output. For a report-only target, record the
+   missing or existing coverage without writing.
+9. Apply focused, evidence-backed improvements across `SKILL.md`, references,
    assets, scripts, metadata, README entries, and changelog entries when those
    surfaces exist and are in scope.
-8. Run the mandatory `code-review` and `apply-security` lanes against the
+10. Run the mandatory `code-review` and `apply-security` lanes against the
    target skill scope. Resolve safe blocking findings when edits are allowed;
    otherwise report them as blockers, explicit deferrals, or owner-review needs.
-9. Capture newly learned durable knowledge, including reusable review-lane
+11. Capture newly learned durable knowledge, including reusable review-lane
    findings, back into the target skill's local source materials. Prefer the
    narrowest appropriate surface: `SKILL.md` for runtime rules, `references/`
    for detailed guidance, `assets/` for reusable templates, `scripts/` for
    deterministic checks, and README or changelog entries for human-facing or
    release-note updates.
-10. Re-run relevant static validation after source-material updates, then report
-    what was changed, captured, skipped, or remains uncertain.
+12. Re-run strict static validation for every writable aligned target, then
+    report what changed, what passed, and every skipped or unavailable evidence
+    lane.
 
 ## Live Validation Workflow
 
@@ -336,16 +376,33 @@ Use the safe validation hierarchy:
 5. Disposable or sandbox integration tests.
 6. Live external tests only after test-environment confirmation.
 
-Use `python3 scripts/validate-skill-structure.py <target>` when this skill's
-validator is available, relevant, and script execution is permitted by the
-current user and repository policy. For stateful workflow skills, add
-`--profile stateful-workflow` to check the optional state-machine section
-contract. If script execution is not permitted, mirror the same static checks
-manually and report that the validator was skipped.
+Use `python3 scripts/validate-skill-structure.py --require-evals <target>` for
+authorized writable targets that complete alignment. Add
+`--profile stateful-workflow` independently when the optional state-machine
+contract applies. Use basic validation without `--require-evals` for legacy
+catalog checks; it permits missing evals but still rejects a malformed canonical
+CSV that exists. The validator rejects symlinked CSV paths before reading and
+reports duplicate rows without echoing raw IDs or prompt content. If script
+execution is not permitted, mirror the static checks manually and report that
+the validator was skipped.
 
 When changing the validator itself, also run
 `python3 scripts/test-validate-skill-structure.py`; it uses temporary local
-fixtures and performs no network or installed-runtime changes.
+fixtures plus a read-only pass over the real source catalog and performs no
+network or installed-runtime changes.
+
+Report evidence with only these states:
+
+- `STATIC_PASS`: definitions and deterministic static checks passed.
+- `RUNTIME_PASS`: fresh-surface trigger behavior was observed.
+- `QUALITY_PASS`: output assertions passed against a prior-version or no-skill
+  baseline.
+- `NOT_RUN`, `UNAVAILABLE`, or `FAIL`: the lane lacks passing evidence.
+
+Do not call a trigger CSV a runtime eval run. Require a fresh trigger check
+after invocation changes when a runnable surface exists, and a quality
+comparison after material behavior changes when a clean runner and baseline
+exist. An executed applicable `FAIL` blocks completion.
 
 ## Output Contract
 
@@ -355,6 +412,14 @@ Return:
 - Changes made.
 - Evidence used and vendor docs checked.
 - Validation run.
+- Eval files, case counts, baseline, and static/runtime/quality evidence states.
+- For an over-budget or overloaded target, block dispositions, preservation
+  evidence, before-and-after line and compatible token cost, and the split or
+  justified-exception decision. Route any new sibling-skill scaffold to
+  `skill-creator`.
+- For every working-byte baseline, the exact scoped cleanup result or an
+  explicit retention reason, owner-only permissions, cleanup owner, and
+  deadline.
 - `code-review` lane result.
 - `apply-security` lane result.
 - Review-lane findings fixed, deferred, skipped, incomplete, or blocking.
@@ -384,6 +449,11 @@ Stop before writing learned material into reusable skill sources when the
 learning is confidential, environment-specific, not evidence-backed, outside
 the target skill's scope, or the user requested report-only work. In that case,
 report the skipped source update and the reason.
+
+Stop before claiming an authorized writable target is aligned when its
+canonical trigger evals are missing or strict validation fails. For remote or
+report-only targets, report `EVALS_MISSING` or the observed coverage and keep
+the outcome partial without mutation.
 
 Stop before claiming full alignment when mandatory `code-review` or
 `apply-security` evidence is missing or incomplete. Report the incomplete lane

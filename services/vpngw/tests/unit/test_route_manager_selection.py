@@ -12,12 +12,62 @@ from nebius_vpngw.config_loader import (
     GatewayGroupSpec,
     InstanceResolvedConfig,
     ResolvedDeploymentPlan,
+    connection_static_remote_prefixes,
 )
-from nebius_vpngw.deploy.route_manager import RouteManager
+from nebius_vpngw.deploy.route_manager import RouteManagementError, RouteManager
 from nebius_vpngw.deploy.vm_ha_routes import ManagedRouteKind, ManagedRouteOwnership
 from nebius_vpngw.schema import VMHARouteTarget
 
 _LocalConfig = dict[str, t.Any]
+
+
+def test_add_routes_normalizes_unexpected_sdk_failure(monkeypatch) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    monkeypatch.setattr(
+        route_manager,
+        "_add_routes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("sensitive detail")),
+    )
+
+    with pytest.raises(RouteManagementError, match="postcondition") as caught:
+        route_manager.add_routes(SimpleNamespace(), {})
+
+    assert "sensitive detail" not in str(caught.value)
+
+
+def test_static_remote_prefixes_union_connection_and_enabled_member_tunnels() -> None:
+    connection = {
+        "remote_prefixes": ["10.10.0.0/24"],
+        "tunnels": [
+            {
+                "gateway_instance_index": 0,
+                "static_routes": {"remote_prefixes": ["10.20.0.0/24"]},
+            },
+            {
+                "gateway_instance_index": 1,
+                "static_routes": {"remote_prefixes": ["10.30.0.0/24"]},
+            },
+            {
+                "gateway_instance_index": 0,
+                "ha_role": "disable",
+                "static_routes": {"remote_prefixes": ["10.40.0.0/24"]},
+            },
+        ],
+    }
+
+    assert connection_static_remote_prefixes(connection) == [
+        "10.10.0.0/24",
+        "10.20.0.0/24",
+        "10.30.0.0/24",
+    ]
+    assert connection_static_remote_prefixes(connection, instance_index=0) == [
+        "10.10.0.0/24",
+        "10.20.0.0/24",
+    ]
+    assert connection_static_remote_prefixes(connection, instance_index=1) == [
+        "10.10.0.0/24",
+        "10.30.0.0/24",
+    ]
 
 
 def _fake_subnet(
@@ -46,10 +96,38 @@ def _fake_subnet(
             ),
         ),
         status=SimpleNamespace(
+            ipv4_private_pools=[
+                SimpleNamespace(cidrs=status_cidrs or explicit_cidrs or [])
+            ],
             ipv4_private_cidrs=status_cidrs or explicit_cidrs or [],
             route_table=SimpleNamespace(id="", default=True),
         ),
     )
+
+
+def test_status_subnet_cidrs_prefer_current_pool_shape_without_legacy_access() -> None:
+    class CurrentStatus:
+        ipv4_private_pools = [SimpleNamespace(cidrs=["10.20.0.0/16"])]
+
+        @property
+        def ipv4_private_cidrs(self) -> list[str]:
+            raise AssertionError("deprecated status field must not be read")
+
+    subnet = SimpleNamespace(status=CurrentStatus())
+
+    assert RouteManager._extract_status_subnet_cidrs(subnet) == [
+        ipaddress.ip_network("10.20.0.0/16")
+    ]
+
+
+def test_status_subnet_cidrs_support_legacy_sdk_shape() -> None:
+    subnet = SimpleNamespace(
+        status=SimpleNamespace(ipv4_private_cidrs=["10.30.0.0/16"])
+    )
+
+    assert RouteManager._extract_status_subnet_cidrs(subnet) == [
+        ipaddress.ip_network("10.30.0.0/16")
+    ]
 
 
 def _fake_route(*, route_id: str, name: str, cidr: str, allocation_id: str) -> SimpleNamespace:
@@ -57,9 +135,148 @@ def _fake_route(*, route_id: str, name: str, cidr: str, allocation_id: str) -> S
         metadata=SimpleNamespace(id=route_id, name=name),
         spec=SimpleNamespace(
             destination=SimpleNamespace(cidr=cidr),
-            next_hop=SimpleNamespace(allocation=SimpleNamespace(id=allocation_id)),
+            next_hop=SimpleNamespace(
+                allocation=SimpleNamespace(id=allocation_id),
+                default_egress_gateway=False,
+            ),
         ),
     )
+
+
+def test_list_routes_uses_public_sdk_clients_and_reads_all_pages(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import nebius.api.nebius.vpc.v1 as vpc_v1
+
+    class FakeRequest:
+        def __init__(self, response: SimpleNamespace) -> None:
+            self.response = response
+
+        def wait(self) -> SimpleNamespace:
+            return self.response
+
+    class FakePagedClient:
+        def __init__(
+            self,
+            pages: dict[str, SimpleNamespace],
+            *,
+            by_name: SimpleNamespace | None = None,
+        ) -> None:
+            self.pages = pages
+            self.by_name = by_name
+            self.page_tokens: list[str] = []
+            self.requested_names: list[str] = []
+
+        def list(self, request: object) -> FakeRequest:
+            page_token = str(getattr(request, "page_token", "") or "")
+            self.page_tokens.append(page_token)
+            return FakeRequest(self.pages[page_token])
+
+        def get_by_name(self, request: object) -> FakeRequest:
+            self.requested_names.append(str(getattr(request, "name", "") or ""))
+            if self.by_name is None:
+                raise RuntimeError("resource not found")
+            return FakeRequest(self.by_name)
+
+    class FakeSDK:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def sync_close(self) -> None:
+            self.closed = True
+
+    allocation = SimpleNamespace(
+        metadata=SimpleNamespace(id="allocation-gateway-0"),
+        status=SimpleNamespace(details=SimpleNamespace(allocated_cidr="172.16.30.10/32")),
+    )
+    subnet = _fake_subnet(
+        name="workload-subnet",
+        network_id="network-1",
+        explicit_cidrs=["10.20.0.0/16"],
+    )
+    subnet.status.route_table = SimpleNamespace(id="route-table-1", default=False)
+    gateway_subnet = _fake_subnet(
+        name="vpngw-subnet",
+        network_id="network-1",
+        explicit_cidrs=["172.16.30.0/28"],
+    )
+    allocation_route = _fake_route(
+        route_id="route-1",
+        name="vpngw-10-50-0-0-16",
+        cidr="10.50.0.0/16",
+        allocation_id="allocation-gateway-0",
+    )
+    default_route = SimpleNamespace(
+        metadata=SimpleNamespace(id="route-2", name="default-egress"),
+        spec=SimpleNamespace(
+            destination=SimpleNamespace(cidr="0.0.0.0/0"),
+            next_hop=SimpleNamespace(
+                allocation=SimpleNamespace(id=""),
+                default_egress_gateway=True,
+            ),
+        ),
+    )
+    allocation_client = FakePagedClient(
+        {
+            "": SimpleNamespace(items=[], next_page_token="allocations-2"),
+            "allocations-2": SimpleNamespace(items=[allocation], next_page_token=""),
+        }
+    )
+    subnet_client = FakePagedClient(
+        {
+            "": SimpleNamespace(items=[], next_page_token="subnets-2"),
+            "subnets-2": SimpleNamespace(items=[subnet], next_page_token=""),
+        },
+        by_name=gateway_subnet,
+    )
+    route_client = FakePagedClient(
+        {
+            "": SimpleNamespace(items=[allocation_route], next_page_token="routes-2"),
+            "routes-2": SimpleNamespace(items=[default_route], next_page_token=""),
+        }
+    )
+    sdk = FakeSDK()
+    route_manager = RouteManager(project_id="project-test", auth_token="token-test")
+    bgp_calls: list[tuple[ResolvedDeploymentPlan, _LocalConfig]] = []
+
+    monkeypatch.setattr(route_manager, "_create_read_sdk", lambda: sdk, raising=False)
+    monkeypatch.setattr(
+        route_manager,
+        "_list_bgp_advertised_routes",
+        lambda plan, local_cfg, _console, **_kwargs: bgp_calls.append((plan, local_cfg)),
+    )
+    monkeypatch.setattr(
+        vpc_v1,
+        "AllocationServiceClient",
+        lambda client: allocation_client,
+    )
+    monkeypatch.setattr(vpc_v1, "SubnetServiceClient", lambda client: subnet_client)
+    monkeypatch.setattr(vpc_v1, "RouteServiceClient", lambda client: route_client)
+
+    plan = _three_vm_plan()
+    local_cfg: _LocalConfig = {
+        "gateway": {"local_prefixes": ["10.20.0.0/16"]},
+        "gateway_group": {
+            "subnet": {"name": "vpngw-subnet"},
+        },
+    }
+
+    route_manager.list_routes(plan, local_cfg)
+
+    output = capsys.readouterr().out
+    assert "Subnet: workload-subnet" in output
+    assert "Route Table ID: route-table-1" in output
+    assert "10.50.0.0/16" in output
+    assert "172.16.30.10" in output
+    assert "0.0.0.0/0" in output
+    assert "default-egress" in output
+    assert allocation_client.page_tokens == ["", "allocations-2"]
+    assert subnet_client.page_tokens == ["", "subnets-2"]
+    assert subnet_client.requested_names == ["vpngw-subnet"]
+    assert route_client.page_tokens == ["", "routes-2"]
+    assert bgp_calls == [(plan, local_cfg)]
+    assert sdk.closed is True
 
 
 def _metadata_name(resource: object) -> str:
@@ -275,6 +492,32 @@ def test_collect_remote_prefix_targets_uses_connection_vm_allocations() -> None:
         "10.20.0.0/16": "alloc-vm1",
         "10.30.0.0/16": "alloc-vm2",
     }
+
+
+def test_collect_remote_prefix_targets_includes_tunnel_only_static_prefixes() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    local_cfg: _LocalConfig = {
+        "defaults": {"routing": {"mode": "static"}},
+        "connections": [
+            {
+                "name": "gcp-site-a",
+                "routing_mode": "static",
+                "tunnels": [
+                    {
+                        "gateway_instance_index": 0,
+                        "ha_role": "active",
+                        "static_routes": {"remote_prefixes": ["10.40.0.0/16"]},
+                    }
+                ],
+            }
+        ],
+    }
+
+    assert route_manager._collect_remote_prefix_targets(
+        _three_vm_plan(),
+        local_cfg,
+        {0: "alloc-vm0"},
+    ) == {"10.40.0.0/16": "alloc-vm0"}
 
 
 def test_collect_remote_prefix_targets_rejects_same_prefix_on_different_vms() -> None:
@@ -579,6 +822,7 @@ def test_get_bgp_learned_routes_honors_custom_ssh_config(
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
     ssh_key = tmp_path / "vpngw-key"
+    monkeypatch.delenv("VPNGW_SSH_KNOWN_HOSTS_FILE", raising=False)
     monkeypatch.setenv("VPNGW_SSH_USER", "env-user")
     monkeypatch.setenv("VPNGW_SSH_KEY", "/tmp/env-key")
     local_cfg: _LocalConfig = {
@@ -644,6 +888,7 @@ def test_get_bgp_learned_routes_honors_env_ssh_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
+    monkeypatch.delenv("VPNGW_SSH_KNOWN_HOSTS_FILE", raising=False)
     monkeypatch.setenv("VPNGW_SSH_USER", "env-user")
     monkeypatch.setenv("VPNGW_SSH_KEY", "/tmp/env-key")
     local_cfg: _LocalConfig = {
@@ -931,6 +1176,7 @@ def test_list_bgp_routes_honors_custom_ssh_config(
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
     ssh_key = tmp_path / "vpngw-key"
+    monkeypatch.delenv("VPNGW_SSH_KNOWN_HOSTS_FILE", raising=False)
     local_cfg: _LocalConfig = {
         "gateway_group": {
             "vm_spec": {
@@ -1029,6 +1275,7 @@ def test_list_static_routes_honors_custom_ssh_config(
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
     ssh_key = tmp_path / "vpngw-key"
+    monkeypatch.delenv("VPNGW_SSH_KNOWN_HOSTS_FILE", raising=False)
     local_cfg: _LocalConfig = {
         "gateway_group": {
             "vm_spec": {

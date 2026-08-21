@@ -28,7 +28,7 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
     ) -> None:
         skill = self.read(DIAGNOSE / "SKILL.md")
         metadata = self.read(DIAGNOSE / "agents" / "openai.yaml")
-        evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
+        evals = self.read(DIAGNOSE / "evals" / "process-cases.md")
         readme = self.read(ROOT / "README.md")
 
         self.assertIn(
@@ -65,10 +65,10 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
 
     def test_default_profile_project_fallback_is_aligned(self) -> None:
         diagnose_skill = self.read(DIAGNOSE / "SKILL.md")
-        diagnose_evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
+        diagnose_evals = self.read(DIAGNOSE / "evals" / "process-cases.md")
         setup_skill = self.read(SETUP / "SKILL.md")
         setup_readme = self.read(SETUP / "README.md")
-        setup_evals = self.read(SETUP / "evals" / "trigger-prompts.md")
+        setup_evals = self.read(SETUP / "evals" / "process-cases.md")
         hook = self.read(
             SETUP / "assets" / "hooks" / "pre_tool_use_nebius_auth.py"
         )
@@ -204,8 +204,8 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
 
     def test_root_readme_and_evals_match_the_contract(self) -> None:
         readme = self.read(ROOT / "README.md")
-        setup_evals = self.read(SETUP / "evals" / "trigger-prompts.md")
-        diagnose_evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
+        setup_evals = self.read(SETUP / "evals" / "process-cases.md")
+        diagnose_evals = self.read(DIAGNOSE / "evals" / "process-cases.md")
 
         self.assertIn("`agent-nebius-auth-setup` | Explicit only", readme)
         self.assertIn("One\ndeterministic group is parented", readme)

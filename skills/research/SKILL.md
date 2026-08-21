@@ -1,6 +1,6 @@
 ---
 name: research
-description: "Use for senior-engineer technical research and due diligence on one focal topic, technology, architecture pattern, product, framework, RFC, protocol, API, problem statement, feature requirement, or disputed claim. Search internal Slack and Confluence sources first when organization context matters, fall back to MCP access for internal systems when connectors are unavailable, verify technical claims with official vendor docs and authoritative external sources, and distinguish internal guidance from vendor facts and industry practice. Do not use for implementation, open-ended brainstorming, choosing technology for an application or AI stack layer, final software design or `/plan` handoff, checklist-only design review, or Agentic SDLC artifact creation."
+description: "Research one technical topic, technology, pattern, product, framework, RFC, protocol, API, requirement, or disputed claim using ranked authoritative sources. Not for implementation, brainstorming, stack selection, final design, or SDLC artifacts."
 ---
 
 # Research
@@ -234,5 +234,5 @@ best-practice evidence separately.
 
 - Read `references/research-methodology.md` for the detailed phase checklist,
   source-tier rubric, conflict handling, and report template.
-- Use `evals/trigger-prompts.md` when reviewing or tuning implicit invocation
+- Use `evals/trigger-prompts.csv` when reviewing or tuning implicit invocation
   behavior.

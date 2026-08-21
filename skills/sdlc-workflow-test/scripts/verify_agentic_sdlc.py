@@ -56,6 +56,7 @@ REQUIRED_SDLC_SKILLS = (
     "sdlc-validate-codes",
 )
 REQUIRED_RUNTIME_SUPPORT_SKILLS = (
+    "maintain-project-specs",
     "worktree",
     "nebius-grafana-query",
     "project-agent-instructions",
@@ -66,8 +67,82 @@ SOURCE_PARITY_SKILLS = (
     *REQUIRED_RUNTIME_SUPPORT_SKILLS,
     "sdlc-workflow-test",
 )
+DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS = 120
+CAPABILITY_SUITE_TIMEOUT_SECONDS = {
+    "worktree": 300,
+    "task-waves": 900,
+}
 
 DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
+LEGACY_SPEC_OWNER_TERMS = (
+    "Only `sdlc-create-requirements` writes",
+    "Only `sdlc-create-design` writes",
+    "ownership-receipted v2",
+    "v2-managed selected-project",
+    'created_by_skill: "sdlc-create-requirements"',
+    'updated_by_skill: "sdlc-create-requirements"',
+    'created_by_skill: "sdlc-create-design"',
+    'updated_by_skill: "sdlc-create-design"',
+    "Agentic SDLC-owned `docs/design.md`",
+)
+MARKDOWNLINT_TEMPLATE_ENVELOPE = "MD003 MD022 MD033 MD041"
+DESIGN_REQUIRED_TERMS = (
+    "There is no workflow CLI",
+    "sdlc-start",
+    "sdlc-auto-steering",
+    "sdlc-update-documents",
+    "sdlc-prepare-execution",
+    "Feature execution plane",
+    "one direct-child commit",
+    "WORKFLOW_UPGRADE_REQUIRED",
+    "steering/auto-steering.json",
+    "documents.md",
+    "requirements-change",
+    "design-change",
+    "project-agent-instructions-change",
+    "docs-update",
+    "PreToolUse",
+    "Stop",
+    "Private local run state",
+    "Resume And Idempotency",
+    "Workflow Verification",
+    "Quick preflight test",
+    "Full workflow test",
+    "Real three-tier application test",
+    "$sdlc-workflow-test",
+    "--resume",
+    "$sdlc-start",
+    "$sdlc-start workspace init [project-folder]",
+    "$sdlc-start run <prompt-ref-or-file>",
+    "agentic-sdlc/prompt-v3",
+    "Only `## Ask` is required",
+    "requirements refinement",
+    "refinement gate binds the latest accepted",
+    "FIFO queue",
+    "ALREADY_COMPLETE",
+    "allow_implicit_invocation: false",
+    "~/.codex/sdlc-verification/report.md",
+    "does not deny filesystem targets by path",
+    "Ordinary outbound network commands",
+    "secret-bearing",
+    "MCP payloads",
+    "guarded Git or GitHub actions",
+    "source-installed parity",
+    "exact manual",
+    "task-recover",
+    "replan-future",
+    "sequential fallback",
+    "v4 outer",
+    "verification-live-results-v3",
+    "predefined runtime operational criterion",
+    "non-Grafana provenance",
+    "installed `nebius-grafana-query`",
+    "installed\n  `project-agent-instructions`",
+    "publication-only mode",
+    "findings-and-readiness-only mode",
+    'phase: "create-pr"',
+    'uat_status: "passed"',
+)
 DEFAULT_PROJECT_ID = "sdlc-verification-project"
 DEFAULT_RUN_ID = "active"
 DESIGN_RELATIVE = Path("docs") / "agentic-sdlc-design.md"
@@ -842,69 +917,226 @@ def check_design(ctx: Context) -> None:
             f"Missing or unreadable: {ctx.design_path}",
         )
         return
-    required_terms = [
-        "There is no workflow CLI",
-        "sdlc-start",
-        "sdlc-auto-steering",
-        "sdlc-update-documents",
-        "sdlc-prepare-execution",
-        "Feature execution plane",
-        "one direct-child commit",
-        "WORKFLOW_UPGRADE_REQUIRED",
-        "steering/auto-steering.json",
-        "documents.md",
-        "requirements-change",
-        "design-change",
-        "project-agent-instructions-change",
-        "docs-update",
-        "PreToolUse",
-        "Stop",
-        "Private local run state",
-        "Resume And Idempotency",
-        "Workflow Verification",
-        "Quick preflight test",
-        "Full workflow test",
-        "Real three-tier application test",
-        "$sdlc-workflow-test",
-        "--resume",
-        "$sdlc-start",
-        "$sdlc-start workspace init [project-folder]",
-        "$sdlc-start run <prompt-ref-or-file>",
-        "agentic-sdlc/prompt-v3",
-        "Only `## Ask` is required",
-        "requirements-refinement",
-        "refinement gate binds the latest accepted",
-        "FIFO queue",
-        "ALREADY_COMPLETE",
-        "allow_implicit_invocation: false",
-        "~/.codex/sdlc-verification/report.md",
-        "does not deny filesystem targets by path",
-        "Ordinary outbound network commands",
-        "secret-bearing",
-        "MCP payloads",
-        "guarded Git or GitHub actions",
-        "source-installed parity",
-        "exact manual",
-        "task-recover",
-        "replan-future",
-        "sequential fallback",
-        "v4 outer",
-        "verification-live-results-v3",
-        "predefined runtime operational criterion",
-        "non-Grafana provenance",
-        "installed `nebius-grafana-query`",
-        "installed\n  `project-agent-instructions`",
-        "publication-only mode",
-        "findings-and-readiness-only mode",
-        'phase: "create-pr"',
-        'uat_status: "passed"',
+    normalized_text = " ".join(text.split())
+    missing = [
+        term
+        for term in DESIGN_REQUIRED_TERMS
+        if " ".join(term.split()) not in normalized_text
     ]
-    missing = [term for term in required_terms if term not in text]
     status = "PASS" if not missing else "FAIL"
     detail = "Design document contains core SDLC and verification contract terms."
     if missing:
         detail = "Missing expected design terms: " + ", ".join(missing)
     ctx.add("Environment checked", "Design contract", status, detail)
+
+
+def check_source_phase_contract(ctx: Context) -> None:
+    problems: list[str] = []
+    for required in REQUIRED_SDLC_SKILLS:
+        folder = ctx.skills_root / required
+        skill_md = folder / "SKILL.md"
+        meta = frontmatter(skill_md)
+        if meta.get("name") != required:
+            problems.append(f"{required}: invalid or missing source name")
+        description = meta.get("description", "")
+        if not description.startswith(DESCRIPTION_PREFIX):
+            problems.append(f"{required}: source description prefix is invalid")
+        policy = openai_invocation_policy(folder / "agents" / "openai.yaml")
+        if policy != "false":
+            problems.append(f"{required}: source invocation policy is not false")
+    ctx.add(
+        "Environment checked",
+        "Source phase-skill contract",
+        "PASS" if not problems else "FAIL",
+        "All required source phase skills have canonical metadata and explicit-only policy."
+        if not problems
+        else "; ".join(problems),
+        capability_id="source.phase-contract",
+    )
+
+
+def check_source_catalog_validation(ctx: Context) -> None:
+    validator = (
+        ctx.skills_root / "align-skill" / "scripts" / "validate-skill-structure.py"
+    )
+    if not validator.is_file():
+        ctx.add(
+            "Environment checked",
+            "Source catalog structure",
+            "FAIL",
+            f"Shared source-catalog validator is missing: {validator}",
+            capability_id="source.catalog-structure",
+        )
+        return
+    result = run(
+        [sys.executable, "-B", str(validator), str(ctx.skills_root)],
+        cwd=ctx.skills_root,
+        timeout=120,
+    )
+    output = (result.stdout + result.stderr).strip().splitlines()
+    summary = output[-1] if output else "Validator returned no output."
+    ctx.add(
+        "Environment checked",
+        "Source catalog structure",
+        "PASS" if result.returncode == 0 else "FAIL",
+        summary,
+        capability_id="source.catalog-structure",
+    )
+
+
+def check_spec_ownership_contract(ctx: Context) -> None:
+    problems: list[str] = []
+
+    def normalized(path: Path) -> str:
+        return " ".join(read_text(path).split())
+
+    design = normalized(ctx.design_path)
+    design_terms = (
+        "`maintain-project-specs` is the single semantic, schema, template, validation, and receipt owner",
+        "`sdlc-create-requirements` and `sdlc-create-design` are routed authoring adapters",
+        "adapter invokes that shared validator; it does not define a second spec schema or receipt authority",
+    )
+    for term in design_terms:
+        if term not in design:
+            problems.append(f"design contract missing: {term}")
+
+    adapters = {
+        "sdlc-create-requirements": "This skill may write requirements only while routed as its Agentic SDLC authoring adapter",
+        "sdlc-create-design": "This skill may write design only while routed as its Agentic SDLC authoring adapter",
+    }
+    for skill, term in adapters.items():
+        text = normalized(ctx.skills_root / skill / "SKILL.md")
+        if term not in text or "`maintain-project-specs` owns both canonical documents" not in text:
+            problems.append(f"{skill}: shared-owner adapter invariant is missing")
+
+    common_owner_term = (
+        "`maintain-project-specs` is the sole semantic, schema, and validation "
+        "owner of both canonical specs"
+    )
+    common_phases = set(REQUIRED_SDLC_SKILLS) - {
+        "sdlc-create-requirements",
+        "sdlc-create-design",
+        "sdlc-start",
+    }
+    for skill in sorted(common_phases):
+        text = normalized(ctx.skills_root / skill / "SKILL.md")
+        if common_owner_term not in text:
+            problems.append(f"{skill}: positive shared-owner invariant is missing")
+
+    start = normalized(ctx.skills_root / "sdlc-start" / "SKILL.md")
+    if (
+        "`maintain-project-specs` owns both canonical specs" not in start
+        or "write only as its Agentic SDLC adapters" not in start
+    ):
+        problems.append("sdlc-start: shared-owner coordinator invariant is missing")
+
+    owner = normalized(ctx.skills_root / "maintain-project-specs" / "SKILL.md")
+    if (
+        "This is the only semantic owner of project specs" not in owner
+        or "This skill exclusively owns the canonical spec schemas and validator"
+        not in owner
+    ):
+        problems.append("maintain-project-specs: authoritative owner contract is missing")
+
+    adapter = normalized(
+        ctx.skills_root / "sdlc-start" / "scripts" / "validate_project_specs.py"
+    )
+    if (
+        "Agentic SDLC adapter for the shared project-spec validator" not in adapter
+        or '"maintain-project-specs" / "scripts"' not in adapter
+        or "return validate_project(project_root)" not in adapter
+    ):
+        problems.append("sdlc-start: shared project-spec validator adapter is invalid")
+
+    workflow_test = normalized(ctx.skills_root / "sdlc-workflow-test" / "SKILL.md")
+    workflow_sequence = (
+        "`sdlc-create-design`, `project-agent-instructions`, "
+        "`sdlc-auto-steering`"
+    )
+    if workflow_sequence not in workflow_test:
+        problems.append(
+            "sdlc-workflow-test: project-agent-instructions is missing after design"
+        )
+
+    readme = read_text(ctx.skills_root / "sdlc-create-requirements" / "README.md")
+    boundary_match = re.search(
+        r"^## Main Boundaries\s*$\n(?P<body>.*?)(?=^## |\Z)",
+        readme,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    boundary_lines = (
+        [
+            line.strip()
+            for line in boundary_match.group("body").splitlines()
+            if line.strip().startswith("-")
+        ]
+        if boundary_match
+        else []
+    )
+    if not boundary_lines or any(
+        not line.startswith("- Do not ") for line in boundary_lines
+    ):
+        problems.append("sdlc-create-requirements README boundaries are not prohibitions")
+
+    template_contracts = {
+        "requirements": ctx.skills_root
+        / "sdlc-create-requirements"
+        / "assets"
+        / "templates"
+        / "requirements.md.template",
+        "design": ctx.skills_root
+        / "sdlc-create-design"
+        / "assets"
+        / "templates"
+        / "design.md.template",
+    }
+    for kind, path in template_contracts.items():
+        text = read_text(path)
+        lines = text.splitlines()
+        expected_disable = (
+            f"<!-- markdownlint-disable {MARKDOWNLINT_TEMPLATE_ENVELOPE} -->"
+        )
+        expected_enable = (
+            f"<!-- markdownlint-enable {MARKDOWNLINT_TEMPLATE_ENVELOPE} -->"
+        )
+        required_terms = (
+            f"<!-- maintain-project-specs:{kind}:start schema=maintain-project-specs/{kind}-v1 -->",
+            f"<!-- maintain-project-specs:{kind}:end -->",
+            'created_by_skill: "maintain-project-specs"',
+            'updated_by_skill: "maintain-project-specs"',
+        )
+        if (
+            not lines
+            or lines[0] != expected_disable
+            or lines[-1] != expected_enable
+            or any(term not in text for term in required_terms)
+        ):
+            problems.append(f"{kind} template ownership or lint envelope is invalid")
+
+    legacy_paths = [
+        ctx.design_path,
+        ctx.skills_root / "README.md",
+        ctx.skills_root
+        / "sdlc-start"
+        / "references"
+        / "prompt-requirements-refinement.md",
+        *(ctx.skills_root / skill / "SKILL.md" for skill in REQUIRED_SDLC_SKILLS),
+    ]
+    for path in legacy_paths:
+        text = read_text(path)
+        for term in LEGACY_SPEC_OWNER_TERMS:
+            if term in text:
+                problems.append(f"{path}: legacy ownership term remains: {term}")
+
+    ctx.add(
+        "Environment checked",
+        "Canonical spec ownership",
+        "PASS" if not problems else "FAIL",
+        "Shared spec ownership, routed adapters, template envelopes, and workflow ordering are canonical."
+        if not problems
+        else "; ".join(problems),
+        capability_id="spec.ownership-contract",
+    )
 
 
 def check_vertical_slice_contract(ctx: Context) -> None:
@@ -1449,6 +1681,10 @@ def check_skill_discovery(ctx: Context) -> None:
         )
 
     support_checks = {
+        "maintain-project-specs": (
+            "Canonical project-spec owner runtime dependency",
+            "runtime.project-spec-owner-dependency",
+        ),
         "worktree": (
             "Managed worktree runtime dependency",
             "runtime.worktree-dependency",
@@ -2420,7 +2656,9 @@ def check_capability_regressions(ctx: Context) -> None:
     }
     results: dict[str, tuple[subprocess.CompletedProcess[str], set[str], set[str]]] = {}
     for suite, (command, cwd) in suites.items():
-        timeout = 180 if suite == "worktree" else 120
+        timeout = CAPABILITY_SUITE_TIMEOUT_SECONDS.get(
+            suite, DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS
+        )
         result = run(command, cwd=cwd, env=env, timeout=timeout)
         passed, skipped = parse_unittest_results(result.stderr + result.stdout)
         results[suite] = (result, passed, skipped)
@@ -2896,6 +3134,14 @@ def check_capability_regressions(ctx: Context) -> None:
             "Verifier contract self-tests",
             (
                 ("verifier", "test_any_deterministic_failure_forces_fail"),
+                ("verifier", "test_source_phase_contract_rejects_bad_source_prefix"),
+                ("verifier", "test_source_catalog_validation_rejects_missing_reference"),
+                ("verifier", "test_spec_ownership_contract_accepts_canonical_sources"),
+                ("verifier", "test_spec_ownership_contract_rejects_legacy_owner"),
+                ("verifier", "test_spec_ownership_contract_rejects_missing_owner_dependency"),
+                ("verifier", "test_spec_ownership_contract_rejects_missing_phase_invariant"),
+                ("verifier", "test_spec_ownership_contract_rejects_unsafe_readme_boundary"),
+                ("verifier", "test_spec_ownership_contract_rejects_missing_template_envelope"),
                 ("verifier", "test_missing_live_evidence_is_partial"),
                 ("verifier", "test_valid_live_evidence_is_accepted"),
                 (
@@ -3986,6 +4232,13 @@ def final_status(ctx: Context) -> str:
 
 def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
     capability_rows = [
+        ("Source phase-skill contract", "source.phase-contract"),
+        ("Source catalog structure", "source.catalog-structure"),
+        ("Canonical spec ownership", "spec.ownership-contract"),
+        (
+            "Canonical project-spec owner dependency",
+            "runtime.project-spec-owner-dependency",
+        ),
         ("Installed worktree dependency", "runtime.worktree-dependency"),
         ("Source-installed parity", "runtime.skill-parity"),
         ("Public two-command interface", "public.interface"),
@@ -4120,6 +4373,7 @@ def report(ctx: Context) -> str:
     lines.extend(["", "## Validation commands", ""])
     lines.extend(
         [
+            "- `python3 align-skill/scripts/validate-skill-structure.py .`",
             "- `python3 -m unittest -v sdlc-start/scripts/test_prompt_workspace.py sdlc-start/scripts/test_sdlc_start_contract.py sdlc-start/scripts/test_validate_project_specs.py`",
             "- `python3 -m unittest discover -v -s sdlc-prepare-execution/scripts -p 'test_*.py'`",
             "- `python3 sdlc-implement-plan/scripts/test_worker_dispatch.py -v`",
@@ -4215,6 +4469,9 @@ def main(argv: list[str]) -> int:
         print(root_problem, file=sys.stderr)
         return 2
     check_design(ctx)
+    check_source_phase_contract(ctx)
+    check_source_catalog_validation(ctx)
+    check_spec_ownership_contract(ctx)
     check_vertical_slice_contract(ctx)
     check_execution_plane_contract(ctx)
     check_repair_loop_contract(ctx)

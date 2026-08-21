@@ -1,6 +1,6 @@
 ---
 name: prompt-session-intake
-description: "Internal coordinator used only when its non-blocking capture hook stages metadata for a safe direct prompt bound to Task Implementer or Agentic SDLC. While the current agent handles the direct request normally, select only durable project intent, record merge/noop/sensitive, accept, merge the canonical prompt once, and consume the exact sidecar; never invoke standalone or execute a workflow."
+description: "Internal coordinator only for safe direct-prompt metadata bound to Task Implementer or Agentic SDLC. Extract durable intent, record merge/noop/sensitive, merge once, and consume the sidecar; never invoke standalone."
 ---
 
 # Prompt Session Intake

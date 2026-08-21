@@ -33,7 +33,32 @@
 - Best-practice reference used:
 - Trigger quality changes:
 - `SKILL.md` concision and progressive-disclosure result:
+- Directive/no-op and freedom-calibration result:
 - Safe/secure/fast hardening guidance applied:
+
+## Long-Skill Refactor Evidence
+
+- Conditional reference used or not applicable:
+- `SKILL.md` logical lines before and after, using the validator-compatible method:
+- Compatible tokens before and after, measurement method, or `UNAVAILABLE`:
+- Core, reference, script, asset, removed, and independent-job dispositions:
+- Safety, rationale, gotcha, failure, validation, and output preservation:
+- Exact conditional reference routes added:
+- Split decision or justified over-budget exception:
+- Non-regression evidence:
+- Baseline removed, or retention reason, permissions, cleanup owner, and deadline:
+
+## Evaluation Coverage
+
+- Eval files created, migrated, or inspected:
+- Positive and near-miss negative case counts:
+- Deterministic or output-quality cases:
+- Baseline used:
+- Line and compatible token-cost result:
+- `STATIC_PASS`, `NOT_RUN`, `UNAVAILABLE`, or `FAIL`:
+- `RUNTIME_PASS`, `NOT_RUN`, `UNAVAILABLE`, or `FAIL`:
+- `QUALITY_PASS`, `NOT_RUN`, `UNAVAILABLE`, or `FAIL`:
+- Failed applicable evals blocking completion:
 
 ## Evidence Used
 

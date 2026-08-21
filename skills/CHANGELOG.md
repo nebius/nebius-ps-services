@@ -6,6 +6,49 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed project-instruction decision revision after an earlier current-session
+  render. Rendering now rejects target-inapplicable dispositions before
+  publishing private evidence and atomically replaces changed private rules
+  only under a nonblocking private-bundle lock and after the final replacement
+  boundary revalidates both canonical state and rules predecessors. Interrupted
+  matching-state I/O publication returns the distinct exact-rerun result
+  `RENDER_STATE_PUBLICATION_INCOMPLETE`; an equal-bytes retry re-syncs the
+  private parent directory when replacement completed before that durability
+  boundary, while generic unsafe ownership remains terminal. Missing,
+  ownership-mismatched, unsafe, hard-linked, or concurrently changing
+  predecessors remain blocked. This removes the owned empty-render deadlock
+  without weakening lifecycle hooks or deleting retained session evidence.
+- Fixed ordinary `$troubleshoot` sensitive-report handling so Stop records a
+  terminal `sensitive_detected` disposition and emits one generic warning
+  instead of prompting the model for a second report. Report-obligation v3
+  removes correction counters and later tool denial, validates local evidence
+  against the full resolved Git repository root, and accepts contained
+  relative, native absolute, home-relative, and strict local `file:` targets
+  while keeping format-only defects advisory and escape or sensitive content
+  terminal. It parses balanced Markdown destinations, rejects ambiguous or
+  renderer-active link syntax, independently scans decoded targets for
+  sensitive values, and normalizes contained exhausted-fallback references
+  without truncating markup. It redacts unsafe values and fails old active
+  state to a fresh session, and keeps shared Stop peers running while preserving
+  first-terminal precedence and surfacing finalization failures generically.
+  Activation now has a schema/status-only preflight that preserves known v1/v2
+  terminal history while rejecting active or ambiguous legacy state, plus a
+  provenance-preserving targeted skill backup/sync path. Exhausted-budget
+  correction behavior is unchanged.
+- Restored the canonical Agentic SDLC phase-description prefix, aligned every
+  phase with `maintain-project-specs` as the single spec owner, restored the
+  required project-instructions workflow step, made authoring templates
+  Markdownlint-safe, corrected requirements-adapter safety wording, and added
+  real-source catalog and workflow ownership regressions.
+- Replaced the generated Task Implementer pending-change dump with a concise
+  human `Show Lane Status` task and hard-cut `lane-report-v2` machine view.
+  Status now reports only persistent-lane generations, current or latest
+  task/worker/wave progress, current and remaining steps, and the next public
+  action. It uses two matching bounded observations with one retry, never
+  computes or exposes changed-file data, and avoids workspace locks,
+  lease-resource inspection, checkpointing, integration, and metadata writes.
+  The exact previous four-task workspace shape migrates explicitly; all older
+  or altered shapes remain tampered.
 - Fixed project-contract recovery after a Task Implementer worker commit. The
   canonical lifecycle library now accepts the hook-owned
   `task-worker-delegated` waiver and lets a later prompt reopen normal planning,
@@ -173,12 +216,16 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added canonical `evals/trigger-prompts.csv` coverage to all 69 source-owned
+  skills, migrated legacy Markdown trigger authorities, and retained detailed
+  workflow or output-quality scenarios as supplemental cases where needed.
+  Invocation policy and workflow behavior are unchanged.
 - Added crash-safe Task Implementer `run-summary-v1` completion evidence with
   immutable replay, evidence-backed source movement, full-repository and scoped
   Git file/line/binary statistics, queue status, exact integration readiness,
   and sanitized structured next actions. The generated workspace now labels
   `CODE — MANAGED PERSISTENT LANE` explicitly and provides a manual read-only
-  pending-lane report without adding a sixth public action or hook privilege.
+  lane-status report without adding a sixth public action or hook privilege.
 - Added fail-closed generated-workspace classification. `workspace init` and
   `run` migrate only the exact previous shape; non-mutating `workspace reuse`
   requests an upgrade, and forged helpers, arguments, folders, or tasks fail
@@ -488,17 +535,44 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Shortened and front-loaded all 69 repo-owned skill descriptions while
+  preserving their invocation policies, primary trigger intent, adjacent
+  routing boundaries, safety constraints, full workflow instructions, and 724
+  canonical positive/near-miss trigger cases, adding two focused cases for the
+  Agentic SDLC PR publication boundary. The aggregate description
+  payload is roughly half its previous size, reducing Codex's initial skills
+  context cost without changing installed copies or skill workflow bodies.
+- Upgraded `align-skill` to make authorized writable targets lean and
+  independently evaluable. Alignment now reviews directive quality, removable
+  no-op prose, calibrated workflow freedom, focused domain references, and a
+  soft 500-line `SKILL.md` budget; creates canonical target-specific trigger
+  CSVs with at least three positive and three near-miss negative cases; selects
+  proportionate deterministic or output-quality evidence; and reports static,
+  fresh-runtime, and quality proof separately. The validator adds an
+  independent `--require-evals` gate while default catalog validation remains
+  compatible with legacy skills that have not yet been aligned. Long or
+  overloaded targets now use a conditionally loaded semantic refactor that
+  classifies instruction ownership, preserves safety rationale and rare
+  gotchas, records comparable line and token cost, separates independent jobs
+  only when their triggers and outcomes justify it, and permits specific
+  evidence-backed exceptions above the soft budget. Trigger-eval validation
+  now rejects symlinked file or directory components and keeps raw IDs and
+  prompts out of duplicate diagnostics.
 - Refined `design` and `ai-stack` around the least-agentic sufficient
-  architecture: direct model calls for one-request tasks, deterministic
-  workflows for known sequences, and agents only for model-selected actions or
-  observation-driven next steps. Unknown-count loops remain deterministic when
-  code owns continuation, while graphs and durable workflows may wrap any
-  control-flow level. OpenAI direct text or reasoning generation supported by
-  Responses routes to an official OpenAI SDK plus Responses API; other direct
-  workloads use their official task-specific APIs. OpenAI-native agents route
-  to the OpenAI Agents SDK, Anthropic/Gemini or provider-neutral Python agents
-  to Pydantic AI, and coding-focused engineering specialists to the Codex SDK
-  with app-server reserved for deep embedded clients.
+  architecture and revised `ai-stack` around a Pydantic AI-first portable
+  Python runtime for direct requests, bounded agents, and specialist agents.
+  The application owns its logical runtime facade, canonical state, tool and
+  authorization boundary, capability and governance routing, retry and
+  replay-safe fallback policy, budgets, telemetry, evaluation, and release
+  identity. Provider settings remain explicit, Pydantic AI capabilities and
+  Harness are conditional specialist layers, and provider-native agent SDKs
+  require a documented separate-runtime escape decision. The lean path stays
+  in-process; graphs, gateways, queues, durable engines, multiple stores, and
+  multi-agent topologies remain trigger-driven. Direct-call behavior now
+  selects between the low-level direct API and a no-tools single-request
+  `Agent` from required runtime services rather than framework naming;
+  authenticated resume and cancel mutations require optimistic concurrency,
+  and the durable workflow owner is selected from workload evidence.
 - Replaced the Task Implementer README's text-only lifecycle map with a
   polished visual workflow that distinguishes long-lived and temporary Git
   roles, isolated worker commits, verified wave promotion, repeated dependency

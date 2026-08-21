@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import stat
 import tempfile
 from typing import Optional
 
@@ -29,6 +30,12 @@ from .private_state import _load_private_json_object
 from .private_state import _private_member
 from .private_state import _relative_private_path
 from .private_state import _write_private_json
+from .render_state import RENDER_STATE_SCHEMA
+from .render_state import RENDER_STATE_PUBLICATION_INCOMPLETE
+from .render_state import replace_rendered_rules
+from .render_state import render_lock
+from .render_state import validate_render_disposition
+from .render_state import validate_render_predecessor
 from .target_io import _exclusive_create
 from .target_io import _complete_retained_backup
 from .target_io import _generated_content
@@ -59,7 +66,37 @@ def render_decision(
     state_path: Path,
     private_root: Path,
 ) -> dict[str, object]:
-    """Render exact current-turn rules without mutating project AGENTS.md."""
+    """Serialize one render and its matching state publication."""
+
+    provisional_root = Path(os.path.abspath(private_root.expanduser()))
+    provisional_manifest = _private_member(
+        provisional_root, manifest_path, "manifest"
+    )
+    recorded = _load_private_json_object(
+        provisional_manifest, "manifest", provisional_root
+    )
+    _validate_manifest_shape(recorded)
+    locked_root = _ensure_private_root(
+        provisional_root, Path(str(recorded["git_root"]))
+    )
+    with render_lock(locked_root):
+        return _render_decision_locked(
+            manifest_path,
+            decision_path,
+            output_path,
+            state_path,
+            locked_root,
+        )
+
+
+def _render_decision_locked(
+    manifest_path: Path,
+    decision_path: Path,
+    output_path: Path,
+    state_path: Path,
+    private_root: Path,
+) -> dict[str, object]:
+    """Render exact rules while the current private-bundle lock is held."""
 
     provisional_root = Path(os.path.abspath(private_root.expanduser()))
     manifest_path = _private_member(provisional_root, manifest_path, "manifest")
@@ -75,21 +112,44 @@ def render_decision(
             "CONCURRENT_MODIFICATION", "project inputs changed after inspection"
         )
     decision = _load_private_json_object(decision_path, "decision", private_root)
-    disposition, body, decision_sha256, _approval = _validate_decision(
+    disposition, body, decision_sha256, approval = _validate_decision(
         decision, current
     )
+    validate_render_disposition(current, disposition, approval)
     rendered = body or b""
     output_path = _private_member(private_root, output_path, "rendered rules")
     state_path = _private_member(private_root, state_path, "render state")
     existing = _lstat_optional(output_path)
     if existing is not None:
         if (
-            not existing.st_mode & 0o100000
-            or existing.st_mode & 0o077
-            or _read_regular(output_path, "rendered rules") != rendered
+            not stat.S_ISREG(existing.st_mode)
+            or stat.S_IMODE(existing.st_mode) != 0o600
+            or existing.st_nlink != 1
         ):
             raise ProjectInstructionsError(
                 "UNSAFE_TARGET", "rendered rules target is not an exact owned file"
+            )
+        existing_bytes = _read_regular(output_path, "rendered rules")
+        if existing_bytes != rendered:
+            predecessor_state, predecessor_state_bytes = validate_render_predecessor(
+                state_path,
+                output_path,
+                private_root,
+                current,
+                manifest_path,
+                decision_path,
+                existing,
+                existing_bytes,
+            )
+            replace_rendered_rules(
+                output_path,
+                rendered,
+                private_root,
+                state_path,
+                predecessor_state,
+                predecessor_state_bytes,
+                existing,
+                existing_bytes,
             )
     else:
         try:
@@ -119,7 +179,7 @@ def render_decision(
         "repository_mutated": False,
     }
     render_state = {
-        "schema": "project-agent-instructions.render-state.v1",
+        "schema": RENDER_STATE_SCHEMA,
         "project_root": current["project_root"],
         "git_root": current["git_root"],
         "project_scope": current["project_scope"],
@@ -142,6 +202,10 @@ def render_decision(
         render_state,
         Path(str(current["git_root"])),
         private_root,
+        write_failure_code=RENDER_STATE_PUBLICATION_INCOMPLETE,
+        write_failure_message=(
+            "matching render state publication is incomplete; rerun the exact render"
+        ),
     )
     result["state_path"] = str(state_path)
     result["state_sha256"] = _sha256_bytes(_read_regular(state_path, "render state"))
@@ -328,16 +392,6 @@ def _ownership_record(
     }
 
 
-def _human_existing_sufficient(manifest: dict[str, object]) -> bool:
-    target = dict(manifest["target"])
-    active = manifest.get("active_project_instruction")
-    if not isinstance(active, dict) or active.get("path") != target.get("active_path"):
-        return False
-    if target.get("active_path") == target.get("path"):
-        return target.get("file_status") in {"human-owned", "human-edited"}
-    return active.get("kind") in {"project-override", "project-fallback"}
-
-
 def _select_outcome(
     manifest: dict[str, object],
     disposition: str,
@@ -350,71 +404,16 @@ def _select_outcome(
     target = dict(manifest["target"])
     status = str(target["file_status"])
     target_digest = target.get("sha256")
-    active_path = target.get("active_path")
-    target_path = target.get("path")
-    if status == "legacy":
-        raise ProjectInstructionsError(
-            "LEGACY_GENERATED_FILE",
-            "legacy generated AGENTS.md requires manual resolution",
-        )
+    validate_render_disposition(manifest, disposition, approval)
     if disposition == "existing-sufficient":
-        if (
-            status == "managed"
-            or approval is not None
-            or not _human_existing_sufficient(manifest)
-        ):
-            raise ProjectInstructionsError(
-                "EXISTING_INSTRUCTIONS_GAP",
-                "existing-sufficient requires active human-owned instructions",
-            )
         return "existing-sufficient"
     if disposition == "not-needed":
-        if status == "managed":
-            if (
-                approval is None
-                or approval["action"] != "retire"
-                or approval["target_sha256"] != target_digest
-            ):
-                raise ProjectInstructionsError(
-                    "RETIREMENT_APPROVAL_REQUIRED",
-                    "managed project AGENTS.md requires exact-digest retirement approval",
-                )
-            return "retired"
-        if approval is not None:
-            raise ProjectInstructionsError(
-                "UNSAFE_TARGET", "retirement approval is not applicable"
-            )
-        if status == "missing" and active_path is None:
-            return "not-needed"
-        raise ProjectInstructionsError(
-            "INSTRUCTION_CONFLICT",
-            "not-needed conflicts with existing project instructions",
-        )
+        return "retired" if status == "managed" else "not-needed"
     assert body is not None
-    if active_path is not None and active_path != target_path:
-        raise ProjectInstructionsError(
-            "EXISTING_INSTRUCTIONS_GAP", "alternate project instructions are active"
-        )
     if status == "missing":
-        if approval is not None:
-            raise ProjectInstructionsError(
-                "UNSAFE_TARGET", "ownership approval is not applicable"
-            )
         return "created"
-    if status == "human-edited":
-        raise ProjectInstructionsError(
-            "STALE_GENERATED_FILE", "edited generated instructions are human-owned"
-        )
     if status == "human-owned":
-        if approval is not None:
-            raise ProjectInstructionsError(
-                "UNSAFE_TARGET", "ownership approval is not applicable"
-            )
         return "attached"
-    if status != "managed":
-        raise ProjectInstructionsError(
-            "UNSAFE_TARGET", "target ownership state is invalid"
-        )
     has_receipt = ownership is not None and _ownership_matches(
         ownership, manifest, target, status="active"
     )

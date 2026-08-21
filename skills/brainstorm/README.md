@@ -20,7 +20,8 @@ the appropriate workflow skill.
 - `SKILL.md`: runtime contract, source priority, guardrails, and output shape.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/source-priority.md`: detailed source-gathering rubric.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 
 ## Boundaries
 

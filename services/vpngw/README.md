@@ -60,6 +60,12 @@ pipx list
 nebius-vpngw --version
 ```
 
+Use `nebius-vpngw --help` for the quick-start sequence and
+`nebius-vpngw COMMAND --help` for command-specific guidance. Every public
+command help page includes at least one practical invocation example; mutating
+commands still retain their documented confirmation, approval, and fencing
+boundaries.
+
 For wheel-based installs, `apply` reuses the original release wheel URL or local wheel file recorded
 by pip when it deploys the agent to gateway VMs. End users do not need a source checkout or
 `python -m build`.
@@ -70,19 +76,35 @@ by pip when it deploys the agent to gateway VMs. End users do not need a source 
 nebius-vpngw create-config my-vpn.config.yaml
 ```
 
-This generates a full schema-aligned YAML template (including defaults, BGP/static examples, and HA roles).
+In a terminal, this opens a guided wizard for project, gateway, network,
+connection, tunnel, and optional advanced settings. The wizard validates the
+complete schema-v1 candidate before an atomic write, stores PSKs only as
+environment-variable references, and keeps VM-level HA disabled unless you
+explicitly enable it. Enter `?` for field help, `b` to restart the previous
+section, or `q` to quit without writing.
+
+Automation remains compatible: non-TTY invocations write the existing commented
+template. Use `--interactive` to force the wizard (including in a scripted test)
+or `--no-interactive` to force template generation.
 
 ### 3. Prepare Nebius network and reserve public IPs
 
-Before peer tunnel setup, prepare the Nebius side and reserve public IPs for the gateway.
+After the wizard writes a valid config, it offers this operation separately and
+defaults to **No**. The confirmation explains that it authenticates to Nebius and
+may ensure or create a subnet, route table, public allocations, and the YAML
+`external_ips` entries. Declining keeps the config only.
+
+For a network-first workflow, or to rerun the operation later, use the supported
+standalone command below. It remains safe to rerun.
 
 `prep-network` creates or reuses a dedicated explicit-CIDR gateway subnet (`vpngw-subnet` by default), using `gateway_group.subnet.cidr` or the first free `/24` (or configured `prefix_length`) from the network's private pool. For an explicit CIDR outside the pool, it can extend the pool when the network has exactly one private pool; it fails on overlaps or an incompatible existing subnet. If the subnet has no accessible route table, it attempts to create and attach `<subnet-name>-routing-table` (`vpngw-subnet-routing-table` by default) with a `0.0.0.0/0` default-egress route; route-table errors are reported as warnings.
 
 Workflow:
 
-1. Fill minimal fields in `my-vpn.config.yaml`: `tenant_id`, `project_id`, `region_id`, `gateway_group` (leave `connections` for later).
+1. If you used `--no-interactive`, fill minimal fields in `my-vpn.config.yaml`: `tenant_id`, `project_id`, `region_id`, `gateway_group` (leave `connections` for later).
    `project_id` must be set to a real value (or resolved via `${PROJECT_ID}` env var) before `prep-network`.
    Set `gateway_group.network_id` if you want a custom Nebius VPC instead of the auto-resolved `default-network`.
+   Omitting it is supported; `apply` reports the selected network once while retaining its internal VM-HA safety rereads.
 2. Run network preparation:
 
    ```bash
@@ -93,9 +115,12 @@ Workflow:
 4. The peer team creates their VPN gateway and points tunnels to those Nebius public IPs.
 5. After you receive peer tunnel details, complete the config and apply.
 
-### 4. Complete peer gateway/tunnel details in YAML
+### 4. Complete peer gateway/tunnel details
 
-After peer-side creation, fill `connections` and `tunnels` (peer public IPs, PSKs, inner `/30` CIDRs, BGP ASN for BGP mode).
+The wizard collects peer public IPs, PSK environment-variable names, inner
+`/30` CIDRs, static prefixes, and BGP ASNs in dependency order. For a
+network-first workflow, rerun with `--interactive --force` after peer-side
+creation, or complete `connections` and `tunnels` directly in YAML.
 
 Generated template notes:
 
@@ -136,9 +161,16 @@ For example, if you want to test connectivity with `ping`, create an ingress fir
 ### 8. Optional: manual failover/failback (BGP active/passive)
 
 ```bash
-nebius-vpngw failover tunnel-2 --local-config-file my-vpn.config.yaml
-nebius-vpngw failback tunnel-1 --local-config-file my-vpn.config.yaml
+nebius-vpngw failover tunnel tunnel-2 --local-config-file my-vpn.config.yaml
+nebius-vpngw failback tunnel tunnel-1 --local-config-file my-vpn.config.yaml
 ```
+
+The resource-scoped command migration has no compatibility aliases:
+
+- `vm-ha-failover` → `failover vm`
+- `vm-ha-failback` → `failback vm`
+- `failover [TUNNEL_NAME]` → `failover tunnel [TUNNEL_NAME]`
+- `failback [TUNNEL_NAME]` → `failback tunnel [TUNNEL_NAME]`
 
 This is useful for planned maintenance, peer changes, or operational testing.
 
@@ -148,7 +180,7 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
 > route tables with `nebius-vpngw add-routes-local` when routes change. An
 > explicitly enabled two-node VM-HA cluster instead reconciles its declared
 > static routes and locally learned BGP routes only from the controller-verified
-> owner, after authoritative fencing and exact shared-allocation ownership.
+> owner, after authoritative fencing and exact shared secondary-alias ownership.
 
 ## Security Notice
 
@@ -158,26 +190,230 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
 - **Required:** Ensure `.gitignore` includes your config file patterns
 - **Best practice:** Use environment variables for secrets with `${VAR}` syntax
 
-VM-HA apply also requires an operator-enrolled SSH identity before any cloud
-resource is created or changed. Set `VPNGW_SSH_KNOWN_HOSTS_FILE` to an absolute,
-readable, non-empty OpenSSH known-hosts file containing the pinned identities of
-both members. Apply copies that public trust into a protected immutable
-snapshot shared by OpenSSH and Paramiko, then verifies every existing member's
-remote identity before service-account or infrastructure mutation. Set
-`VPNGW_SSH_HOST_KEYS_DIR` to an absolute directory containing one unencrypted
-private host key named `<gateway-hostname>.key` for every fresh or recreated
-member; retained members do not require their server private keys on the
-operator host. Apply validates each required private key against its exact pin
-and proves the cloud-init enrollment anchors before deletion, allocation, disk,
-or instance work. Public-only, encrypted, malformed, mismatched, unreachable,
-or identity-rejected members fail closed. Trust-on-first-use and disabled host
-verification are not supported. During clean bootstrap, each member first
+VM-HA also requires exact operator-to-gateway SSH host trust before any cloud
+resource is created or changed. By default, `apply` manages public pins in a
+deployment-specific store at `~/.ssh/nebius-vpngw/<scope-sha256>/`; it does not
+read or modify the general `~/.ssh/known_hosts` file. The scope binds the
+tenant, project, region, gateway group, and HA cluster. Each member is pinned by
+its stable hostname, while SSH connects to the current management IP with that
+hostname as `HostKeyAlias`. The authoritative receipt stays hostname-keyed; its
+derived OpenSSH projection also lists the exact current management-address
+aliases so a supported older release can use that file explicitly.
+
+`apply` can create or repair this store only from trusted evidence: an existing
+managed receipt, a validated explicit pin file, or that member's original
+unencrypted private SSH host key. Set `VPNGW_SSH_HOST_KEYS_DIR` to an absolute
+directory containing an owner-only `<gateway-hostname>.key` (normally mode
+`0600`) for
+each fresh or recreated member and for any retained member whose managed pin
+must be recovered. A successful apply first verifies every retained member,
+then publishes an
+owner-only public-key receipt and OpenSSH projection before cloud mutation.
+`apply --dry-run`, `status`, route commands, transfer commands, and mTLS commands
+never write or repair persistent SSH trust.
+
+`VPNGW_SSH_KNOWN_HOSTS_FILE` remains an optional highest-precedence override and
+migration source. If set, it must be an absolute, readable, non-empty OpenSSH
+file with exact member pins; an invalid or incomplete value fails without
+falling back to managed state. Apply never rewrites that file. Trust-on-first-use,
+`ssh-keyscan`-only enrollment, general known-hosts fallback, and disabled host
+verification are not supported. Apply also proves that the configured
+management public key matches the selected mode-`0600` management private key
+for every fresh member before deletion, allocation, disk, or instance work.
+Cloud-init validates the rendered SSH configuration, activates either the
+image's socket- or service-based SSH model, and verifies a port-22 listener
+before bootstrap completes. Public-only, encrypted, malformed, mismatched,
+unreachable, or identity-rejected members fail closed. During clean bootstrap,
+each member first
 renders inert deterministic local strongSwan and FRR files behind the cold-start
 guard. After the controller grants current-boot passive authority, the member
 may establish only its local tunnel, XFRM, and BGP materialization needed to
 measure promotion readiness. Forwarding, firewall changes, allocation transfer,
 VPC route effects, and owner-only reconciliation remain fenced until exact
 active authority is proven.
+
+### VM-HA SSH trust and mTLS
+
+These are two separate trust relationships:
+
+- **SSH trust is operator to gateway.** The managed receipt/projection, or the
+  optional `VPNGW_SSH_KNOWN_HOSTS_FILE` override, lives on the operator host;
+  it is not a `known_hosts` file on either gateway. It stores each member's
+  pinned public SSH server key. The matching private host key stays on that
+  gateway and is what `sshd` presents. The CLI uses this trust for status,
+  configuration staging, agent operations, and managed mTLS bootstrap or
+  recovery.
+- **mTLS trust is gateway to gateway.** Each member keeps its own private mTLS
+  identity and an exact public certificate pin for its peer. The HA runtime
+  uses the authenticated, encrypted channel for heartbeats and readiness/state
+  evidence. It is not configuration-file synchronization and it does not
+  replace Nebius cloud ownership checks.
+
+An `exact SSH trust is unavailable` status result means the local CLI could not
+construct the required pin policy; it does not prove that a gateway deleted or
+changed its SSH host key. Run `apply` with the same configuration. It will
+repair a missing managed store when authoritative member host-key files remain,
+or migrate verified exact pins from an explicit override:
+
+```bash
+export VPNGW_SSH_HOST_KEYS_DIR=/absolute/protected/member-host-keys
+nebius-vpngw apply --local-config-file vm-ha.config.yaml
+```
+
+For a one-time migration, set `VPNGW_SSH_KNOWN_HOSTS_FILE` to the existing
+trusted file for one successful `apply`, then unset it. If neither a verified
+pin nor the original private host key remains, apply still fails closed: verify
+the current fingerprint through an independently authenticated channel or use
+an explicitly approved replacement/reprovisioning workflow. Never accept
+`ssh-keyscan` output by itself.
+
+### Migrating one gateway VM to VM-HA
+
+VM-HA remains explicit and default-disabled. Adding an enabled
+`gateway_group.vm_ha` block does not recreate the existing gateway: the
+configured active member keeps its Compute instance, boot disk, NIC, primary
+private allocation, public allocation, and unrelated NIC aliases. Apply adds
+the missing passive with its own primary address and creates one movable
+secondary private alias used only for HA ownership.
+
+For an existing ordinary `instance_count: 1` config, use the dedicated wizard
+instead of editing the two-member topology by hand:
+
+```bash
+nebius-vpngw configure-vm-ha \
+  --local-config-file my-vpn.config.yaml
+```
+
+The default output is `my-vpn.vm-ha.config.yaml`; use `--output` to choose a
+different new file. The command never converts in place. Before starting,
+prepare one absolute operator-local Nebius credential JSON path per member.
+Each must be a distinct, non-symlink, single-link, owner-controlled mode-`0600`
+regular file. The wizard hides the entered paths and checks their safety before
+authentication or cloud preparation. No CA, certificate, or TLS private-key
+path belongs in YAML: `apply` generates an independent self-signed identity on
+each VM and exchanges only exact public leaf certificates over pinned SSH.
+
+The wizard preserves the raw source and environment references, derives one
+passive-member counterpart for every existing tunnel, and asks only for the
+new HA credential and peer-side inputs. You may enter an already reserved
+passive public IP or separately confirm a default-No Nebius operation that
+ensures the gateway subnet/route table and creates or reuses only
+`<gateway>-1-eth0-ip`. That preparation does not inspect the serving member's
+allocation and does not create VMs, shared aliases, managed routes, lifecycle
+state, or host configuration. If an allocation request may have been accepted
+before its result failed, the command reports the deterministic allocation
+name and tells you to rerun for safe reuse; it never claims rollback.
+
+The wizard first prints the secret-free member-1 peer handoff. If the peer is
+not ready, it exits successfully without writing a candidate; a separately
+reserved passive IP remains allocated and is reused on the next run. After the
+peer supplies its new public and APIPA endpoints, the wizard validates and
+publishes the complete candidate with mode `0600`. New files use atomic
+no-clobber publication. Replacing an expected candidate uses recoverable
+conditional publication: a racing writer wins without being overwritten, and
+an interruption can leave a clearly named private recovery directory for
+manual review. Comments are canonicalized only in the new candidate; the
+source stays byte-for-byte unchanged.
+
+Preview the exact current-state plan without changing lifecycle, cloud, route,
+or host state:
+
+```bash
+nebius-vpngw validate-config my-vpn.vm-ha.config.yaml
+nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml --dry-run
+```
+
+Run the migration interactively, or copy the exact migration digest printed by
+the preview into the noninteractive approval:
+
+```bash
+nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml
+nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml \
+  --approve-vm-ha-migration <MIGRATION_DIGEST>
+```
+
+Apply stages and locks the passive before the retained active, activates both
+behind the cold-start guard, and accepts the rollout only after exact pinned
+status proves the expected generation, manifest digests, shared alias owner,
+route-runtime receipt, and unlocked passive non-forwarding state. Durable
+`provisioning` is written and reread before the first cloud effect,
+`activating` is retained through both unlock proofs, and `active` is written
+last. An unchanged interrupted apply resumes the same checkpointed operation.
+When the checkpoint is already `activating`, apply validates two stable cloud
+observations and the exact persisted member, shared-alias, route-target, and
+runtime identities, then resumes host activation directly; it does not call the
+VM provisioning path or repeat its final provisioning transition.
+Each VM-HA cloud effect is bound to an exhaustive path-level observation guard,
+and an accepted SDK operation is persisted before its bounded wait so restart
+resumes the same operation rather than submitting a new identity. The accepted
+receipt clears only after explicit terminal success; terminal failure or an
+unavailable success status remains durable and blocks. When the current Nebius
+operation API reports the exact typed `UNIMPLEMENTED` code for lookup, the
+adapter resubmits only the same idempotent request, requires the same operation
+ID, and still proves the exact resource postcondition. Deterministic allocation
+creates recover an exact typed `ALREADY_EXISTS` result only through an
+exact-name reread and complete resource-shape validation. Legacy v2 and v3
+lifecycle records remain readable without rewrite; the next approved,
+quiescent mutation advances to the guarded v4 record.
+
+Owner-gated route replacement uses a private v2 pending-mutation journal with
+the exact removed route metadata and next hop plus the accepted delete, create,
+or restore operation identity. A restart resumes that operation instead of
+submitting another request. The legacy v1 intent remains readable without an
+implicit rewrite; if it cannot prove either the original or desired route, the
+controller blocks. A terminal replacement-create failure restores and
+re-observes the exact original route before exposing the compensated failure.
+
+Status polling retries only a well-formed expected node that is still
+converging on the requested generation, apply lock, or data-plane state.
+Malformed or foreign node, cluster, runtime-binding, or lock-operation status
+fails immediately. If the final `active` lifecycle write reports an error,
+apply re-reads the exact record: an exact active successor is accepted only
+after both node states are verified again; an exact activating predecessor is
+relocked passive-first and then active on the original operation. The passive
+must remain non-forwarding; the exact owner may continue forwarding only with
+its current owner and route receipt independently verified. Any other state is
+reported as unsafe and requires inspection.
+
+If an interrupted deployment already has two VMs but no lifecycle record,
+ordinary migration approval cannot adopt them. Preview the topology and use
+only the separately shown recovery digest:
+
+```bash
+nebius-vpngw apply --local-config-file my-vpn.config.yaml --dry-run
+nebius-vpngw apply --local-config-file my-vpn.config.yaml \
+  --recover-vm-ha-migration <RECOVERY_DIGEST>
+```
+
+Migration and recovery digests bind exact desired and observed cloud/route
+identity, are not interchangeable, and become stale when either side changes.
+A same-name or foreign allocation, ambiguous route outcome, identity drift, or
+destructive retained-active change remains blocked for operator resolution.
+
+An explicit `apply --sa NAME` selects one exact dedicated identity. Apply uses
+the current Nebius SDK resource APIs to ensure a same-name custom group whose
+only member is that service account and whose only access permit is project-
+scoped `editor`, then obtains a short-lived token through supported Nebius CLI
+service-account impersonation. Plain project `editor` is the narrowest current
+Nebius role boundary that covers both Compute ownership and VPC allocation and
+route mutations; the nonexistent `compute.editor`, `vpc.editor`, and
+`roles/editor` spellings are rejected. Foreign members, extra permits, identity
+drift, a failed reread, or a missing impersonated token stop before product
+cloud mutation. Apply never deletes foreign IAM state and never falls back to
+ambient operator credentials after `--sa` was requested.
+
+The renewable authorized-key credential used by each VM runtime is referenced
+through that member's `nebius_credentials_path`; `--sa` does not create a
+second key or persist its short-lived token. Keep each credential file outside
+the repository with mode `0600` permissions.
+
+To return a managed cluster to ordinary mode, remove or disable the explicit
+`gateway_group.vm_ha` block and run `apply` again. When `--sa` is supplied,
+apply completes the exact selection above before lifecycle-bound discovery.
+Without `--sa`, apply uses the operator credential. It then revalidates and
+deactivates both former members, records a terminal removal tombstone, and only
+afterward continues ordinary provisioning. An ordinary configuration with no
+valid HA lifecycle record performs no HA discovery or teardown.
 
 ## Features
 
@@ -191,7 +427,7 @@ active authority is proven.
 - **Gateway groups:** Multiple independent gateway VMs by default; adding an
   explicit `gateway_group.vm_ha` block creates one coordinated two-node cluster
 - **Split-brain safety:** VM promotion requires an authoritatively stopped former
-  Compute owner and exact shared-allocation confirmation on the candidate before
+  Compute owner and exact shared-secondary-alias confirmation on the candidate before
   forwarding or route reconciliation
 
 ## Installation (Detailed)
@@ -288,6 +524,24 @@ pip install -e ".[dev]"
 - Active-active forwarding, ECMP, and clusters larger than two members remain
   unsupported.
 
+### Single VM with tunnel-level HA
+
+![Single-VM Nebius VPN Gateway with tunnel-level HA](images/nebius-vpngw-single-vm-tunnel-ha.svg)
+
+Tunnel roles provide a preferred path and a hot standby path on the same
+gateway VM. They protect against a tunnel failure, but both paths are lost if
+the VM fails because VM-HA is still disabled.
+
+### Explicit two-VM VM-level HA
+
+![Two-VM Nebius VPN Gateway with VM-level and tunnel-level HA](images/nebius-vpngw-two-vm-ha.svg)
+
+The four-tunnel BGP example keeps tunnel selection independent from VM
+ownership: `nebius-vpngw0` owns tunnels 0 and 3, while `nebius-vpngw1` owns
+tunnels 1 and 2. Only the authoritative shared-allocation owner forwards.
+VM-HA remains opt-in and default-disabled; a static-only GCP Classic standby is
+tunnel-cold rather than the warm-tunnel topology shown here.
+
 ### Two-node VM-level HA
 
 Start from [`examples/vm-ha-bgp-example.yaml`](examples/vm-ha-bgp-example.yaml).
@@ -295,26 +549,173 @@ Each member supplies operator-local source paths for a peer CA, certificate,
 private key, and renewable Nebius credentials file. `apply` installs the bytes
 separately into immutable, restricted node-local bundles; runtime manifests,
 status, journals, and logs contain only absolute references.
+Before cloud or host mutation, configuration loading verifies every CA
+certificate's validity and CA constraint, each leaf's validity and exact node
+URI identity, an unencrypted matching private key, and bidirectional mutual
+trust with the configured peer entirely in memory.
 
 The HA service starts behind a forwarding and tunnel-initiation guard. A
 candidate can promote only after fresh cloud reads prove the former Compute
 owner is `Stopped`, the former attachment is absent, and the shared allocation
-is attached exactly to the candidate. Route reconciliation remains owner-only.
+is attached exactly to the candidate as a secondary alias. Route reconciliation
+remains owner-only.
 Ambiguous cloud state, credential or policy drift, stale peer state, and partial
 transitions fail closed.
+
+When the exact active owner sends a fresh but unhealthy heartbeat, the
+controller grants that owner one persisted five-second local repair attempt.
+FRR, StrongSwan, or the gateway agent is repaired according to the failed
+readiness category; every command is bounded, and the final second is reserved
+for directly disabling and verifying IP forwarding. Two fresh healthy
+observations cancel passive suspicion, but the consumed attempt is reset only
+after sixty seconds of continuous health or a new ownership incarnation.
+
+A missing heartbeat receives no repair grace. One unavailable BGP neighbor is
+reported as a degraded redundant path only when every required prefix still
+has learned-route and usable-XFRM coverage; loss of a sole required path is a
+full outage. The tunnel health monitor is observer-only in VM-HA mode so it
+cannot race the controller's single repair attempt. Repair never moves the
+shared allocation or changes VPC routes. If recovery does not converge, the
+passive still follows the strict Compute-stop, detach, attach, ownership-reread,
+route-receipt, and forwarding sequence. `status` includes the current repair
+phase, safe readiness reasons, redundancy state, and observed phase timings.
+Existing non-HA monitoring behavior is unchanged.
 
 ```bash
 nebius-vpngw apply --local-config-file vm-ha.config.yaml
 nebius-vpngw status --local-config-file vm-ha.config.yaml
-nebius-vpngw vm-ha-recover --local-config-file vm-ha.config.yaml
-nebius-vpngw vm-ha-failback --local-config-file vm-ha.config.yaml
+nebius-vpngw set-vm-ha-mtls --local-config-file vm-ha.config.yaml --dry-run
+nebius-vpngw vm-ha-rearm --local-config-file vm-ha.config.yaml
+nebius-vpngw failover vm --local-config-file vm-ha.config.yaml
+nebius-vpngw failback vm --local-config-file vm-ha.config.yaml
 ```
 
-`vm-ha-recover` validates durable recovery state without bypassing fencing.
-`vm-ha-failback` requests the normal fenced ownership-transfer path; it does not
-rewrite configured roles or force forwarding. Offline tests cover the safety
-contract, but a live-ready claim still requires a separately authorized
-non-production trial with independently observed cloud and data-plane state.
+Initial `apply` and exact member replacement manage mTLS automatically. An
+unchanged healthy apply does not rotate keys. To rotate both identities
+explicitly, review the dry-run's secret-free plan digest, then rerun with
+`--approve PLAN_DIGEST` (or confirm interactively). The transaction inhibits
+failover and rearm, expands old/new trust, switches the passive before the
+owner, verifies three fresh authenticated rounds, prunes the old identities,
+and resumes idempotently after interruption. Certificates use a fixed
+year-9999 validity sentinel; there is no scheduled renewal or rotation.
+
+For an explicit VM-HA configuration, ordinary `status` includes one concise
+`VM-HA Status — <OVERALL>` table with `Gateway`, `Role`, `mTLS`, and `Ready`
+columns and one row for each configured gateway. The authoritative current
+owner is `active`, the non-owner is `standby`, and both roles are `unknown`
+without proven ownership; configured active/passive preference is intentionally
+omitted. Healthy aggregate, mTLS, and readiness values are green; every non-good
+or unavailable value is red while retaining literal status text. Missing or
+conflicting evidence is shown conservatively without exposing cloud resource identities, controller details,
+certificate metadata, internal paths, or recovery actions. Tunnel PSK environment references may
+remain unresolved for this read-only command because status does not consume
+those secrets;
+project, topology, credential-path, and other operational placeholders still
+must resolve. Status uses the management username and private key from
+`gateway_group.vm_spec` for every SSH probe. In explicit VM HA it also requires
+an exact immutable pin for each member from the per-deployment managed receipt
+or the optional explicit override; one missing pin is reported only on that
+member as `ssh-trust-unavailable`, and status never creates, imports, repairs,
+enrolls, or bypasses trust. Cloud authority reports route-target,
+managed-record, prefix-set, and shared-allocation next-hop drift separately so
+the owning apply repair is identifiable without exposing resource IDs. Exact
+product authority labels scope records to this cluster, so a complete
+foreign-cluster route is ignored while partial or current-cluster drift still
+blocks. The agent projects the live writer inhibition and forwarding guard over
+its last successful snapshot, preventing a post-unlock controller failure from
+being reported as a lock that still exists.
+
+After every committed promotion, an independent start-only rearm service on the
+exact current owner automatically restores the stopped former owner as an
+alias-free warm standby. It requires the terminal promotion receipt and exact
+ownership revision, resumes only its own idempotent Compute start, and has no
+authority to stop Compute, move the allocation, change VPC routes or firewall
+state, or enable forwarding. `vm-ha-rearm` is the role-neutral explicit retry:
+it targets whichever exact member is currently the non-owner through that
+owner-side reconciler and returns only after fresh current-boot
+`standby_ready` evidence less than 10 seconds old is available. Automatic rearm
+never changes ownership. Each explicit retry is consumed before its one logical
+start attempt; a definite failure requires a new request, while a crash after
+cloud acceptance is recovered only by exact terminal operation lookup. Apply,
+removal, retry submission, and rearm share one writer lock, so maintenance
+cannot race the final pre-start inhibition check. Deactivation keeps that
+root-only lock file and directory in place, removing only sibling HA state, so
+a concurrent writer can never acquire a replacement inode while cleanup still
+holds the original lock. Rearm is intentionally not a general repair command:
+it cannot enroll SSH trust, deploy a stale generation, clean route hygiene on
+an already-running member, reconcile cloud routes, move the shared allocation,
+change firewall state, or enable forwarding. Those failures must be repaired
+through their owning setup or supported apply workflow before rearm can verify
+fresh standby readiness.
+
+Removing VM HA uses a two-member barrier: the same lifecycle operation first
+inhibits both reconcilers, proves both controllers acknowledge the gate with no
+pending cloud effect, and stops both rearm and safety-controller services on
+every member before either member is deactivated. That completed barrier is
+checkpointed, so a crash after one deactivation resumes with idempotent
+teardown instead of trying to invoke the removed agent again.
+
+Repeating `failover vm` or `failback vm` when its requested configured
+role is already the exact healthy owner is a successful request-free no-op.
+The command returns `nebius-vpngw/vm-ha-planned-transfer-result-v1` with
+`outcome: already-owner`; it does not disable forwarding or write a transfer
+request. Ambiguous or unhealthy same-owner evidence fails without mutation.
+Returning ownership to the configured active remains an explicit failback.
+`failover vm` requests a planned move to the configured-passive VM without
+changing the tunnel-level `failover tunnel` behavior. Planned failover and
+failback share one preparation path: if the role-bound target is stopped, the
+current owner requests rearm; if it is starting, the CLI observes it; and once
+running, the CLI waits for fresh `standby_ready` evidence and immediately
+reproves ownership before submitting the unchanged role- and generation-bound
+request. One wall-clock deadline bounds Compute observation, pinned-SSH probes
+and sleeps, and every repeated readiness request. The CLI never starts or
+stops Compute, moves the allocation, reconciles routes, or enables forwarding.
+Every readiness sample is strictly rebound to the expected cluster, member,
+role, generation, configuration digests, allocation, and route runtime before
+it can authorize the existing role-bound request. A passive standby
+intentionally has no active-owner `controller_ready_boot_id`; its fresh fenced
+guard and `standby_ready` record are the authoritative current-boot evidence.
+Likewise, restoring forwarding on an already-authoritative current owner after
+apply or restart is local reconciliation, not a new ownership transfer, and
+does not create transfer lineage.
+`failback vm` requests the normal fenced ownership-transfer path; it does not
+rewrite configured roles or force forwarding. The controller still owns every
+stop, detach, attach, authoritative ownership reread, route, and forwarding
+effect for planned and automatic transfer. Automatic takeover remains directed
+from configured active to configured passive; there is no automatic failback.
+`status` adds a resource-identity-free redundancy panel with standby readiness
+reasons, rearm phase/failure, and separately available preparation, detection
+or repair, common-cutover, and redundancy-restoration durations. The clean-slate
+heartbeat-v2 envelope binds the managed-mTLS epoch and fingerprint actually
+authenticated on each fresh connection; mixed or older wire versions fail
+closed. Its `promotion_ready` flag also represents a fresh exact alias-free
+passive standby. The earlier
+implementation has completed an authorized
+non-production trial with independently observed cloud, route, component-log,
+and bidirectional workload-traffic evidence; that evidence does not claim
+production validation for this warm-standby refactor or a different
+environment.
+
+GCP VM HA has two isolated fixture modes:
+
+- `misc/gcp-vpngw.sh --vm-ha-peer` builds the BGP-only four-tunnel HA VPN and
+  Cloud Router fixture. Both Nebius members keep warm tunnels while BGP follows
+  the current owner.
+- `misc/gcp-vpngw.sh --classic-vm-ha-peer` builds two one-to-one Classic VPN
+  gateways and tunnels plus explicit static routes. The static passive member
+  is Compute-warm but tunnel-cold: it has no established IKE SA or usable XFRM
+  path. Only after the standard former-owner `Stopped` and shared-allocation
+  ownership gates does the controller prepare the candidate tunnel with
+  forwarding still disabled, then reconcile routes and enable forwarding. The
+  helper requires Premium-tier external addresses and Premium-tier `EXTERNAL`
+  forwarding rules before it creates any missing resource.
+
+Use separate gateway groups, cluster identities, configs, peer resources, and
+routes for these modes. A hybrid config remains schema-valid for existing
+users, but it is not the supported GCP VM-HA topology because a re-established
+Classic tunnel can make GCP select the non-forwarding standby. See
+[`misc/README.md`](misc/README.md#explicit-two-member-vm-ha-peer-mode) and
+[`misc/README.md`](misc/README.md#isolated-classic-static-vm-ha-peer-mode).
 
 **Networking:**
 
@@ -328,10 +729,10 @@ For detailed architecture, see [design document](docs/design.md).
 
 ### File Structure
 
-This is the template structure generated by:
+This is the commented compatibility template generated by:
 
 ```bash
-nebius-vpngw create-config my-vpn.config.yaml
+nebius-vpngw create-config my-vpn.config.yaml --no-interactive
 ```
 
 ```yaml
@@ -492,7 +893,10 @@ connections:
 - The route you want must be advertised by the peer
 - `remote_prefixes` only allowlists advertised routes
 - It does not carve a smaller route out of a larger one
-- Routes are learned dynamically by BGP on the gateway VM; VPC route-table entries still require `nebius-vpngw add-routes-local`
+- Routes are learned dynamically by BGP on the gateway VM. Ordinary gateways
+  use `nebius-vpngw add-routes-local` for VPC route-table entries; explicit
+  VM-HA keeps those routes controller-owned and uses the command only for
+  exact, authority-bound BGP export repair.
 - Example: Peer advertises 300 networks → you don't need to list all 300 in YAML
 
 ```yaml
@@ -588,13 +992,21 @@ Missing variables are reported before deployment.
 
 ### Template Generation
 
-Generate new config with comprehensive comments:
+Generate a guided config in a terminal:
 
 ```bash
 nebius-vpngw create-config my-vpn.config.yaml
 ```
 
-Template embedded in code, always aligned with schema. Files ending in `.config.yaml` are auto-ignored by git.
+Force either mode explicitly:
+
+```bash
+nebius-vpngw create-config my-vpn.config.yaml --interactive
+nebius-vpngw create-config my-vpn.config.yaml --no-interactive
+```
+
+Non-TTY calls and `--no-interactive` retain the embedded, commented template.
+Files ending in `.config.yaml` are auto-ignored by git.
 
 ### Merge Precedence
 
@@ -614,10 +1026,30 @@ Settings cascade with specific overriding general:
 ```bash
 nebius-vpngw create-config <file>
 # Use --force to overwrite existing files
+# Use --interactive to force the wizard
+# Use --no-interactive to force the existing template
 ```
 
 If the target file already contains the current embedded template, rerunning the
 same command is a no-op and exits successfully.
+
+The wizard writes only after schema validation and a redacted final confirmation.
+Its optional network-preparation prompt is a distinct cloud-effect confirmation
+and defaults to No. Quitting, EOF, validation failure, or a declined overwrite
+does not publish a partial candidate.
+
+**Convert an existing ordinary config to explicit VM-HA:**
+
+```bash
+nebius-vpngw configure-vm-ha --local-config-file <source> [--output <candidate>]
+```
+
+This TTY-only, two-phase wizard preserves the source, prepares at most the
+passive public allocation after a separate default-No confirmation, and writes
+only a complete schema-valid candidate. `--force` replaces a nonmatching
+destination after final confirmation; same-path, symlink, and source-hardlink
+destinations are rejected. Deployment and migration approval remain in
+`apply --dry-run` and `apply`.
 
 **Validate config:**
 
@@ -635,9 +1067,11 @@ nebius-vpngw prep-network --local-config-file <file>
 ```
 
 Ensures the dedicated gateway subnet and its route table exist.
-Safe to rerun.
+Safe to rerun. This public command remains available independently of the
+`create-config` wizard for network-first and automation workflows.
 
 - `gateway_group.network_id` optionally pins deployment to a specific existing Nebius VPC network
+- When it is omitted, the CLI reports the auto-selected network once per operation instead of repeating the same progress message for internal safety rereads
 - `gateway_group.subnet.name` defaults to `vpngw-subnet`
 - `gateway_group.subnet.cidr` pins an exact private CIDR, including an extended RFC1918 range outside the default-network CIDR
 - If `gateway_group.subnet.cidr` is omitted, the CLI auto-carves the first free subnet using `gateway_group.subnet.prefix_length`
@@ -705,23 +1139,43 @@ so a different resource cannot be silently stolen or silently rebound.
 nebius-vpngw status --local-config-file <file>
 ```
 
-Shows tunnel status, configured active/passive role, current traffic state, BGP sessions, service health, and routing validation.
+Shows complete tunnel names, configured active/passive roles, IPsec and BGP
+state, peer and encryption details, service health, and routing validation.
 
-For multi-connection configs, traffic state is evaluated per connection, not once for the whole VM. `status` shows the configured role separately from the current traffic path, and prints a `Traffic Override` panel when runtime behavior differs from the configured active/passive preference. If live BGP multipath is detected for the same prefix across different active connections, `status` also prints an `ECMP Warning` panel that lists the overlapping prefix and the active tunnel names currently carrying it.
+For multi-connection configs, `status` keeps configured role in the primary
+table and prints a `Traffic Override` panel when runtime behavior differs from
+the configured active/passive preference. If live BGP multipath is detected
+for the same prefix across different active connections, `status` also prints
+an `ECMP Warning` panel that lists the overlapping prefix and active tunnel
+names currently carrying it.
 
 **Manage routes:**
 
 ```bash
-# List local routes (Nebius VPC → Remote)
+# Audit local routes (Nebius VPC → Remote); this command is read-only
 # Shows route tables for explicit-pool workload subnets selected by gateway.local_prefixes
-# BGP advertised routes include tunnel role (active/passive)
+# BGP advertisements include tunnel role plus MATCH/DRIFT/UNKNOWN parity
+# It never uploads config or reloads/starts a gateway service
 nebius-vpngw list-routes-local --local-config-file <file>
 
-# Add local routes (Nebius VPC → Remote)
-# Safe to rerun: only missing routes are added
+# Add local routes (Nebius VPC → Remote) on ordinary gateways
+# Safe to rerun: only missing routes are added, and complete convergence is required
 # - BGP mode: Queries BGP-learned routes from gateway VMs via FRR
-# - Static mode: Uses remote_prefixes from YAML configuration
+# - Static mode: Unions connection remote_prefixes with enabled per-tunnel
+#   static_routes.remote_prefixes
 # - Creates VPC route table entries with gateway private IP as next-hop
+# - Explicit VM HA never uses member primary allocations as VPC next hops:
+#   static routes remain controller-owned, while BGP mode may repair only
+#   proven advertisement drift without direct VPC route mutation
+# - Before BGP route mutation or repair, verifies the installed agent capability
+#   contract on every target; deploy skew fails before route changes
+# - Explicitly repairs proven BGP export drift only while lifecycle, owner,
+#   allocation, generation, the target member's local ownership epoch,
+#   forwarding/fencing, writer inhibition, and pending-operation evidence stay exact
+# - Reconciles only the already-installed gateway config; use apply to deploy YAML changes
+# - Serializes authority validation through render with the apply/rearm and
+#   mTLS writer locks
+# - UNKNOWN advertisement evidence never authorizes a reload
 # - Filters out local networks automatically
 # - Skips remote prefixes that overlap the target network's private pools
 # - Sanitizes inherited subnet status CIDRs to ignore explicit CIDRs owned by other subnets
@@ -731,6 +1185,8 @@ nebius-vpngw list-routes-local --local-config-file <file>
 #   non-vpngw routes, rebuilds managed VPN routes, then reattaches the subnet
 # - --swap-route-table asks for confirmation and writes rollback specs under
 #   .nebius-vpngw-rollbacks/ next to the local config file
+# - --summarize, --swap-route-table, and --yes are ordinary-gateway options;
+#   --yes is valid only together with --swap-route-table
 # - A later run without --summarize reconciles back to exact managed routes and
 #   removes broader `vpngw-*` summaries after the exact routes are in place
 # - Targets explicit-pool subnets directly and inherited-pool subnets only after sanitizing inherited status CIDRs
@@ -753,8 +1209,8 @@ nebius-vpngw list-routes-remote --local-config-file <file>
   - Managed via Nebius VPC API
   - Large imported route sets can hit per-route-table limits even when the tenant-wide route quota shown in the console still has headroom. `vpc.routetable.max-route-count` means the target subnet route table is full.
   - Prefixes that overlap the target network's private pools are skipped before route creation. Nebius treats those CIDRs as local to the network and rejects them as route destinations.
-  - For inherited-pool subnets (`use_network_pools=true`), the CLI sanitizes `status.ipv4_private_cidrs` against explicit CIDRs owned by other subnets before it decides which subnet route tables to touch. This avoids a Nebius console/API status bug where inherited subnets appear to own CIDRs that were explicitly carved out elsewhere.
-  - If a route with the same destination already exists but points to a different next-hop, `add-routes-local` warns and leaves that route unchanged instead of treating it as satisfied.
+- For inherited-pool subnets (`use_network_pools=true`), the CLI reads the current `status.ipv4_private_pools[].cidrs` shape (with an older-SDK fallback), then sanitizes those CIDRs against explicit CIDRs owned by other subnets before it decides which subnet route tables to touch. This avoids a Nebius console/API status bug where inherited subnets appear to own CIDRs that were explicitly carved out elsewhere.
+  - If a route with the same destination already exists but points to a different next-hop, `add-routes-local` warns, leaves that route unchanged, and exits nonzero because the requested postcondition was not reached.
   - `add-routes-local --summarize` is conservative. It only merges routes when:
     - the prefixes are exact neighbors or one already contains the other
     - the merged result is a valid CIDR block
@@ -776,9 +1232,16 @@ nebius-vpngw list-routes-remote --local-config-file <file>
 - **Remote Routes (Remote → Nebius)**: Routes on the gateway VMs that direct traffic from remote sites to Nebius networks
   - BGP mode: Dynamically learned via FRR and installed in kernel
   - Static mode: Manually configured in YAML
+  - Connection-level static prefixes and enabled, member-scoped per-tunnel `static_routes.remote_prefixes` are shown through one canonical resolver.
   - Visible via SSH queries to gateway VMs
   - `list-routes-remote` scopes BGP output to the selected connection's tunnel peers on the owning gateway VM so multi-connection gateways do not repeat the full FRR table for every connection.
   - `list-routes-local` attributes advertised BGP routes by both peer IP and owning gateway VM, so reused APIPA ranges on different gateway instances do not cross-label connection/tunnel output.
+  - `list-routes-local` is observational: it reports exact per-gateway export
+    parity as `MATCH`, proven mismatch as `DRIFT`, and incomplete peer or VM-HA
+    authority evidence as `UNKNOWN`. Use `add-routes-local` or `apply` for an
+    explicitly mutating reconciliation workflow. `add-routes-local` may
+    force-render the already-installed config under exact authority but never
+    uploads a replacement; `apply` remains the config deployment boundary.
 
 **Tunnel Management:**
 
@@ -793,29 +1256,32 @@ nebius-vpngw restart-tunnel all --local-config-file <file>
 # - If exactly two tunnels exist, passive is auto-selected
 # - If more than two tunnels exist, pass the passive tunnel name
 # - In multi-connection configs, this is the normal path: be explicit
-nebius-vpngw failover --local-config-file <file>
-nebius-vpngw failover gcp-ha-tunnel-2 --local-config-file <file>
+nebius-vpngw failover tunnel --local-config-file <file>
+nebius-vpngw failover tunnel gcp-ha-tunnel-2 --local-config-file <file>
 
 # Manual failback to restore the active tunnel (does not disable passive)
 # - If multiple active tunnels exist, pass the active tunnel name
 # - In multi-connection configs, this is the normal path: be explicit
-nebius-vpngw failback --local-config-file <file>
-nebius-vpngw failback gcp-ha-tunnel-1 --local-config-file <file>
+nebius-vpngw failback tunnel --local-config-file <file>
+nebius-vpngw failback tunnel gcp-ha-tunnel-1 --local-config-file <file>
 ```
 
-`restart-tunnel <name>` only targets the gateway VM(s) that own that tunnel in the
-resolved deployment plan. `failover` and `failback` also operate on the owning
-connection/instance only, so they remain safe to use in multi-VM and
-multi-connection topologies.
+`restart-tunnel <name>` only targets the gateway VM(s) that own that tunnel in an
+ordinary resolved deployment plan. `failover tunnel` and `failback tunnel` are
+ordinary BGP-only operations on the owning connection/instance. All three are
+rejected before SSH for explicit VM HA; use the controller-owned `apply` path for
+repair and `failover vm`/`failback vm` for ownership transfer. Direct `destroy`
+is likewise ordinary-only; remove VM HA through the supported `apply` lifecycle
+before destroying ordinary gateway resources.
 
 The live `--help` output for these commands now reflects that ownership model:
 `list-routes-remote` is described as connection-scoped on the owning gateway VM,
-and `failover`/`failback` explicitly call out that multi-connection configs
+and `failover tunnel`/`failback tunnel` explicitly call out that multi-connection configs
 normally require a tunnel name.
 
-`failover` is an operational override. It administratively shuts down the
+`failover tunnel` is an operational override. It administratively shuts down the
 configured active tunnel's BGP neighbor to move traffic to the passive tunnel,
-but it does not rewrite YAML or swap configured roles. `failback` clears that
+but it does not rewrite YAML or swap configured roles. `failback tunnel` clears that
 override and restores traffic to the configured active tunnel.
 
 Tunnel names must be globally unique across the full config. The schema enforces
@@ -1001,7 +1467,10 @@ connections:
 For a typical Nebius Managed Kubernetes cluster, treat the stable worker-subnet CIDR as `gateway.local_prefixes`, not the current per-node Pod `/24`s.
 
 - Common pattern: worker nodes and Pod IPs come from the same Nebius VPC subnet CIDR; the current Pod CIDRs are node-assigned and can change.
-- Route model: `add-routes-local` updates the worker subnet route table so traffic for remote prefixes goes to the VPN gateway. Pods do not need custom routes.
+- Route model: on ordinary gateways, `add-routes-local` updates the worker
+  subnet route table so traffic for remote prefixes goes to the VPN gateway.
+  Explicit VM-HA reconciles its shared-allocation routes through `apply` and
+  the controller. Pods do not need custom routes.
 - ClusterIP: do not treat `ClusterIP` as a VPN target. It is a cluster-internal virtual IP, even if it falls inside the same routed subnet range.
 - Cilium defaults commonly seen on Nebius MK8s: `routing-mode: native`, `enable-endpoint-routes: true`, `kube-proxy-replacement: true`.
 - Cilium masquerade note: private destinations in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `169.254.0.0/16` are commonly exempt from masquerading. For those prefixes, the remote side may see Pod IPs as the source, so return routing and firewall policy must allow the cluster subnet.
@@ -1051,6 +1520,9 @@ connections:
 ```
 
 **Route management:**
+
+The direct VPC route mutation below applies to ordinary gateways. Explicit
+VM-HA static routes are controller-owned and are reconciled with `apply`.
 
 ```bash
 # Add local routes to VPC route table (Nebius → Remote)
@@ -1136,7 +1608,7 @@ sudo vtysh -c "show ip route"
 
 ### VPC Route Management
 
-Add routes to VPC route table (Nebius → Remote):
+For an ordinary gateway, add routes to the VPC route table (Nebius → Remote):
 
 ```bash
 nebius-vpngw add-routes-local --local-config-file <file>
@@ -1145,6 +1617,8 @@ nebius-vpngw add-routes-local --local-config-file <file>
 Creates routes for remote prefixes and selects the next-hop from the gateway VM
 that owns each connection. In single-VM topologies all routes point to the same
 VM; in pinned multi-VM topologies each site's prefixes point to that site's VM.
+Explicit VM-HA does not use member-primary allocations as route next hops;
+its shared-allocation routes remain owned by `apply` and the VM-HA controller.
 
 List routes in VPC:
 
@@ -1375,7 +1849,7 @@ nebius-vpngw status --local-config-file <file>
 **Reports:**
 
 - Tunnel status (ESTABLISHED, CONNECTING, DOWN)
-- Carrying traffic indicator (runtime active tunnel)
+- Complete tunnel name and configured role
 - BGP session state and route counts
 - Service health (agent, strongSwan, FRR)
 - Routing validation (table 220, APIPA routes, orphaned routes)
@@ -1385,7 +1859,7 @@ nebius-vpngw status --local-config-file <file>
 Per-tunnel information:
 
 - Gateway VM assignment
-- Carrying traffic (runtime active tunnel)
+- Configured active/passive role
 - Peer IP address
 - Encryption algorithm (e.g., AES_GCM_16-256)
 - Uptime
@@ -1598,9 +2072,27 @@ This is the **primary defense** against DHCP-added broad APIPA routes.
 
 `nebius-vpngw-fix-routes.timer` runs every 5 minutes:
 
-- Catches routes added by periodic DHCP renewals
+- Catches policy-rule or route-only table 220 state and broad APIPA routes
+  added by periodic DHCP renewals
+- Matches the exact selected table, so an unrelated rule at priority 220 or a
+  rule selecting table 2200 is preserved
+- Uses current-boot VM-HA authority under the shared routing lock: an active
+  owner receives the full reconciler, while a fenced passive member receives
+  only table 220 and broad `169.254.0.0/16` cleanup
+- Skips blocked, stale, transitioning, or unfenced VM-HA members without
+  routing mutation
 - Independent of agent lifecycle
 - Provides continuous enforcement between agent operations
+
+If status reports `routing-hygiene-not-ready`, allow the next five-minute
+maintenance cycle and rerun status. If the condition persists, redeploy through
+the supported `apply` workflow; `vm-ha-rearm` does not repair routing hygiene on
+an already-running standby.
+
+Passive maintenance never enables forwarding, rewrites sysctls, creates peer
+or local-prefix routes, reloads services, or changes cloud/VPC state. Passive
+readiness and `status` remain degraded while either prohibited route artifact
+is present or cannot be observed exactly.
 
 **Why This Three-Layer Approach?**
 
@@ -1622,7 +2114,7 @@ This follows the same pattern as AWS/Azure/Juniper/Cisco routers when building s
 **If routes persist:**
 
 ```bash
-# Manual cleanup
+# Trigger role-fenced maintenance (blocked/transitioning members are skipped)
 ssh ubuntu@<gateway-ip>
 sudo systemctl start nebius-vpngw-fix-routes.service
 
@@ -1905,8 +2397,8 @@ python -m mypy
 
 ## Release & Versioning
 
-- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments. When `setuptools-scm` is not installed in a source checkout, runtime version resolution falls back to `git describe` before it consults any generated `_version.py` cache.
-- The repo uses the current `setuptools-scm` `semver-pep440` version scheme so local lint/test/build runs stay free of the renamed-scheme deprecation warning.
+- Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments. Source lookup loads the canonical `pyproject.toml` configuration without writing a version file. When `setuptools-scm` is not installed in a source checkout, runtime version resolution gives `git describe` five seconds before it treats that probe as unavailable and consults package metadata or the generated `_version.py` cache.
+- The repo uses the current `setuptools-scm` `semver-pep440` version scheme and nested `[tool.setuptools_scm.tag]` matching so local lint/test/build runs remain free of deprecated scheme and tag-configuration warnings.
 - Local developer builds should reuse the prepared project virtualenv (`python -m build --wheel --no-isolation` or `make build`) so the output stays stable and avoids transient isolated-build toolchain warnings.
 - The `vpngw` GitHub Actions workflows validate their own YAML in CI and exercise the wheel-build regression test path before release publication, so workflow edits and packaging regressions are checked before tag time.
 - Semantic Versioning policy:
@@ -2028,7 +2520,7 @@ Notes:
 - `strongswan_renderer.py`: Generates strongSwan IPsec configuration with XFRM interfaces
 - `xfrm_manager.py`: Manages XFRM tunnel interface lifecycle (create, IP config, MTU)
 - `routing_guard.py`: Enforces routing invariants, prevents local_prefix routes that break forwarding, cleans problematic routes
-- `fix_routes.py`: Standalone utility invoked by systemd timer to periodically enforce routing invariants
+- `fix_routes.py`: Standalone utility invoked by systemd timer to periodically enforce role-fenced routing invariants
 - `firewall_manager.py`: Synchronizes UFW rules with active tunnels
 - `tunnel_iterator.py`: Centralized tunnel enumeration for consistent indexing
 - `state_store.py`: Persists last-applied state for idempotency

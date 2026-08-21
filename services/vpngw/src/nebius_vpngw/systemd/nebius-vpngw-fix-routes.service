@@ -8,7 +8,7 @@ ConditionPathExists=/etc/nebius-vpngw/config-resolved.yaml
 [Service]
 Type=oneshot
 Environment="PYTHONUNBUFFERED=1"
-ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready
+ExecCondition=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-route-maintenance-ready
 ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.fix_routes --config /etc/nebius-vpngw/config-resolved.yaml
 StandardOutput=journal
 StandardError=journal

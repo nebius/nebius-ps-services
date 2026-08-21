@@ -1,6 +1,6 @@
 ---
 name: container
-description: "Use for creating, reviewing, hardening, optimizing, and troubleshooting OCI container images and containerized application stacks. Covers Dockerfile or Containerfile, build contexts, .dockerignore, BuildKit and buildx, Docker and compatible OCI tooling, Compose, image metadata, runtime contracts, non-root execution, signals, secrets, storage, networking, health behavior, multi-platform images, GPU device requirements, SBOM, provenance, vulnerability policy, and production-readiness validation. Do not use for application architecture, language-specific project scaffolding, GitHub Actions implementation, registry release publishing, or Helm and Kubernetes resource authoring when a dedicated sibling skill owns that work."
+description: "Create, review, harden, optimize, or troubleshoot OCI images and container stacks: Dockerfiles, buildx, Compose, runtime/security, multi-platform/GPU, and SBOM. Use sibling skills for app design, CI, publishing, or Helm/Kubernetes."
 ---
 
 # Container Engineering

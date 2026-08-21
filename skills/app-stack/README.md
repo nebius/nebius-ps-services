@@ -59,7 +59,8 @@ topology ownership upstream.
   mutation boundaries, and completion evidence.
 - `references/scaffold-handoff.schema.json`: closed logical handoff consumed by
   `scaffold-project`.
-- `evals/trigger-prompts.md`: trigger and output-quality examples.
+- `evals/trigger-prompts.csv`: canonical trigger and boundary examples.
+- `evals/process-cases.md`: supplemental workflow and output-quality cases.
 
 ## Boundaries
 

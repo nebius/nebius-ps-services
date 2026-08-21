@@ -1,6 +1,6 @@
 ---
 name: sdlc-uat-tests
-description: "Use only as part of the Agentic SDLC workflow; use after all Agentic SDLC feature commits are complete to run product-level user acceptance testing across the whole system, using any confirmed safe live experiment environment, before pull request creation."
+description: "Use only as part of the Agentic SDLC workflow; after all feature commits, run whole-system product-level acceptance testing in any confirmed safe live experiment environment before PR creation."
 ---
 
 # UAT Tests
@@ -119,8 +119,11 @@ Validate the full product, not just individual features, before PR creation.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

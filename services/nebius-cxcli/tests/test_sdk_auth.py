@@ -159,6 +159,30 @@ def test_init_nebius_sdk_prefers_credentials_file(
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
+def test_init_nebius_sdk_passes_endpoint_override_as_sdk_domain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+
+    credentials_file = tmp_path / "auth.json"
+    credentials_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        endpoint="api.example.invalid",
+        parent_id="project-1",
+        context="test",
+        require_renewable_auth=True,
+    )
+
+    assert sdk.kwargs["domain"] == "api.example.invalid"
+    assert "endpoint" not in sdk.kwargs
+    sdk.sync_close(timeout=2)
+
+
 def test_init_nebius_sdk_uses_service_account_key_when_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -204,6 +228,20 @@ def test_init_nebius_sdk_uses_managed_event_loop_for_sync_calls_inside_running_l
     monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
     monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
     monkeypatch.setenv("NEBIUS_IAM_TOKEN", "iam-token-123")
+    sdk_module = sys.modules["nebius.sdk"]
+    original_sdk = sdk_module.SDK
+
+    class AsyncContextRejectingSDK(original_sdk):
+        def run_sync(self, awaitable, timeout=None):  # type: ignore[no-untyped-def]
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return super().run_sync(awaitable, timeout)
+            if asyncio.iscoroutine(awaitable):
+                awaitable.close()
+            raise RuntimeError("SDK run_sync rejects asynchronous callers")
+
+    monkeypatch.setattr(sdk_module, "SDK", AsyncContextRejectingSDK)
 
     async def _run() -> None:
         sdk: Any = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
@@ -223,6 +261,61 @@ def test_init_nebius_sdk_uses_managed_event_loop_for_sync_calls_inside_running_l
         assert sdk_loop.is_closed()
 
     asyncio.run(_run())
+
+
+def test_init_nebius_sdk_starts_managed_event_loop_before_sdk_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "iam-token-123")
+    sdk_module = sys.modules["nebius.sdk"]
+    original_sdk = sdk_module.SDK
+
+    class RunningLoopSDK(original_sdk):
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs["event_loop"].is_running()
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(sdk_module, "SDK", RunningLoopSDK)
+
+    sdk: Any = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+    sdk_loop = sdk.kwargs["event_loop"]
+
+    assert sdk_loop.is_running()
+    sdk.sync_close(timeout=2)
+    assert sdk_loop.is_closed()
+
+
+def test_init_nebius_sdk_stops_managed_event_loop_when_constructor_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "iam-token-123")
+    sdk_module = sys.modules["nebius.sdk"]
+    captured_loops: list[asyncio.AbstractEventLoop] = []
+
+    class FailingSDK:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            loop = kwargs["event_loop"]
+            captured_loops.append(loop)
+            assert loop.is_running()
+            raise RuntimeError("sdk constructor boom")
+
+    monkeypatch.setattr(sdk_module, "SDK", FailingSDK)
+
+    with pytest.raises(RuntimeError, match="sdk constructor boom"):
+        sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+
+    assert len(captured_loops) == 1
+    assert captured_loops[0].is_closed()
 
 
 def test_init_nebius_sdk_async_close_uses_managed_event_loop(
@@ -948,6 +1041,37 @@ def test_init_nebius_sdk_renewable_auth_rejects_static_only_sources(
             context="long migration",
             require_renewable_auth=True,
         )
+
+
+def test_init_nebius_sdk_renewable_auth_reports_set_variable_names_and_last_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    credentials_file = tmp_path / "sensitive-auth-path.json"
+    credentials_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    sdk_module = sys.modules["nebius.sdk"]
+
+    class FailingSDK:
+        def __init__(self, **_kwargs):  # type: ignore[no-untyped-def]
+            raise TypeError("SDK constructor rejected the supplied domain")
+
+    monkeypatch.setattr(sdk_module, "SDK", FailingSDK)
+
+    with pytest.raises(RuntimeError, match="Failed to initialize renewable") as exc_info:
+        sdk_auth.init_nebius_sdk(
+            parent_id="project-1",
+            context="long migration",
+            require_renewable_auth=True,
+        )
+
+    assert "NEBIUS_AUTH_CREDENTIALS_FILE" in str(exc_info.value)
+    assert str(credentials_file) not in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, TypeError)
+    assert str(exc_info.value.__cause__) == "SDK constructor rejected the supplied domain"
 
 
 def test_init_nebius_sdk_renewable_auth_rejects_cli_impersonation(

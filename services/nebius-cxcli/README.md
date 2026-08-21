@@ -2281,17 +2281,35 @@ catalog-pinned campaign. A complete campaign is a live-verified no-op. If no
 later campaign exists, onboarding is also a no-op. The external MK8s
 cluster remains outside Terraform ownership.
 
-Schema v6 supports two explicit compute migration modes:
+Campaign schema v6 supports two explicit compute migration modes; execution
+uses the v7 operation journal and owner-only v7 reports:
 
 - `in-place` updates the accepted fixed-capacity node groups themselves,
-  including Nebius autoscaling groups whose minimum and maximum are equal. Before a
-  worker group is dispatched, cxcli requires exact Kubernetes-to-Slurm identity,
-  no active allocation or epilog, every node IDLE with no reason, and then an
+  including Nebius autoscaling groups whose minimum and maximum are equal.
+  Before dispatch, cxcli takes a provider/Kubernetes/Slurm readiness census. A
+  safely idle group that is already missing, non-Ready, `DOWN`, drained for a
+  customer-owned reason, or nonresponding is deferred before provider dispatch
+  with a sealed readiness receipt. Its deduplicated unavailable count consumes
+  the global availability budget but not a provider concurrency slot. Exact
+  node names are written only to owner-mode reports, which mark the run partial
+  and keep the rolling phase pending. Ambiguous identity, active work, epilog
+  uncertainty, unhealthy controller/accounting authority, compensation work,
+  or an unprovable owned-lock restore still fails recovery-required.
+  A group admitted for rollout requires exact Kubernetes-to-Slurm identity, no
+  active allocation or epilog, every node IDLE with no reason, and then an
   exact cxcli-owned Slurm drain followed by a final re-read. Cancelling or
   requeueing a job in the TUI does not release the group until that proof passes.
-  cxcli acquires those locks as a preparation boundary, displays the aggregate
-  per-group and batch unavailable-node impact in the live upgrade output, and
-  then dispatches only the prepared groups after another immediate proof.
+  cxcli admits groups lazily, displays the aggregate per-group and bounded batch
+  unavailable-node impact in the live upgrade output, and acquires a group's
+  lock only after it receives a scheduler token. One unproven initial update is
+  allowed per locked capacity domain; a capacity-deferred group suppresses
+  overlapping queued groups without draining or locking them, while a proven
+  disjoint domain may continue within the remaining budget. Capacity
+  independence comes only from disjoint failure domains or mutually exclusive
+  reservation lanes: `FORBID` uses common capacity, `STRICT` uses its exact
+  reservation IDs (or a reservation wildcard), and `AUTO` overlaps both common
+  and compatible reservation capacity. Platform, preset, and GPU-cluster
+  differences alone do not prove independence.
   For Deployment-owned Pods already placed on that group, cxcli also requires
   a redundant Ready replica elsewhere and temporarily excludes the rolling
   provider group from the exact Deployment template. This checkpointed,
@@ -2299,10 +2317,12 @@ Schema v6 supports two explicit compute migration modes:
   cordoned source node; the exact prior affinity is restored only after the
   provider replacement is terminal. A single replica without an outside Ready
   peer blocks dispatch instead of accepting an availability gap or drain loop.
-  After provider replacement, that drain stays held until every replacement
-  Node is Ready and the new `slurmd`, slot-B rootfs consumers, persistent
-  mounts, and GPU runtime checks (when applicable) pass.
-  Up to 32 clear groups are submitted concurrently by default, with an explicit
+  After provider replacement, that drain stays held until the exact group's
+  replacement Nodes are Ready and its new `slurmd`, slot-B rootfs consumer,
+  persistent mounts, and GPU runtime checks (when applicable) pass. Only then
+  can that group release its local lock; fleet-wide smoke and terminal phases
+  still require every group to complete.
+  Up to 32 admitted groups run concurrently by default, with an explicit
   maximum of 64. For a 100-node group,
   `max_unavailable: all` compiles to `max_surge=0` and
   `max_unavailable=100`; Nebius may still replace fewer nodes concurrently.
@@ -2328,6 +2348,14 @@ Schema v6 supports two explicit compute migration modes:
   the positive writer, resume accepts the successor only when the live target
   spec matches either the surge receipt or the immutable historical Helm apply
   proof bound by that receipt; arbitrary spec drift remains blocking.
+  After the exact legacy-rootfs rebind intentionally deletes the historical
+  source JailedConfig, a later source-HA bridge replay does not look that name
+  up as if it were still live. It may reuse only the sealed all-file contract
+  when the source identity and complete item mapping, distinct source/target
+  rebind and target successor, UID/resource-version delete receipts,
+  post-retirement source absence, and chronology are exact. The live bridge
+  ConfigMap, both replacement Pods, every file digest, active/standby roles,
+  and empty queue are still revalidated independently before continuation.
   Outside that legacy writer boundary, if a serial Pod restart is still
   required, cxcli first proves two Ready login Service endpoints, then selects
   the first stale Pod in stable order without inspecting SSH sessions; otherwise
@@ -2415,6 +2443,20 @@ Schema v6 supports two explicit compute migration modes:
   when its completed bootstrap and sealed pause reproduce the exact same
   continuous-pause material; cxcli checkpoints the reuse receipt, removes only
   the redundant operation-local pause, and retains the canonical rolling pause.
+  If the rolling owner is instead the later canonical target-compatibility
+  restored-manager rearm, post-switch resume, surge restore, login Slurm-config
+  projection, and OpenMetrics restore retain it only through a distinct sealed rearmed-pause
+  reuse receipt. That path freshly reconstructs the rearm producer, re-proves
+  the target binding and live zero-manager UID/spec/generation, binds the full
+  rearm journal and operation bootstrap fingerprints, and leaves the rolling
+  pause unchanged. If final SConfig writer release has already advanced the
+  producer stage to `released`, the next ordered boundary can reconstruct that
+  same rearm only from the earlier exact rearm-reuse receipt, its completed
+  bootstrap and operation authority, the unchanged live manager, and the exact
+  release chronology. Its v2 receipt additionally binds the predecessor and
+  immutable released-bridge authority fingerprints. Missing, unsealed, foreign, over-advanced,
+  reordered, extra-field, release-drifted, or receipt-drifted lineage stops
+  before admission webhook or Helm mutation.
   A completed target-admission Helm bootstrap is historical authority only
   while the currently deployed release still has its exact intended values.
   If a later checkpointed pulse supersedes those values—such as temporarily
@@ -2451,9 +2493,14 @@ Schema v6 supports two explicit compute migration modes:
   target-owned writer enable, restored command fence, and Deployment identity
   are all complete. Immediately before either surge or restore mutation, cxcli
   freshly proves that the retired source is still absent and that the exact
-  target accounting writer is enabled, identity-stable, and Ready. This breaks
-  the intentional SConfig-pulse ordering cycle without weakening ordinary Helm
-  replay, which still requires final accounting verification. Its post-Helm
+  target accounting writer is enabled, identity-stable, and Ready. If a later
+  guarded values reapply rolls that same Deployment, cxcli keeps UID, owner,
+  selector, ReplicaSet lineage, and writer command/args fail-closed while a
+  bounded checkpoint continuation re-reads only Kubernetes rollout status for
+  up to 15 minutes. This breaks the intentional SConfig-pulse ordering cycle
+  without misclassifying an exact image-pulling successor as authority drift or
+  weakening ordinary Helm replay, which still requires final accounting
+  verification. Its post-Helm
   proof binds the deployed manifest to that restored writer state; an
   unexpected return to the inert SlurmDBD command fence remains blocking.
   Positive login SSH socket counts are also resampled over a bounded two-second
@@ -2708,6 +2755,13 @@ checkpoint mutation. The long-lived provider SDK renews service-account tokens
 internally; bounded provider requests wait for renewal when due, and the
 temporary Kubernetes exec plugin uses the same Python installation and
 renewable profile to refresh its owner-only credential cache before expiry.
+For Nebius Python SDK 0.5.x, cxcli starts and handshakes its caller-owned event
+loop before SDK construction, then submits synchronous waits and shutdown to
+that loop thread-safely; constructor failure also stops the owned loop.
+An explicit Nebius endpoint override is passed through the SDK's `domain`
+constructor parameter. Renewable-auth initialization failures report only the
+names of credential variables that were present and retain the underlying
+exception as a CLI cause chain for diagnosis.
 Execute mode always replaces a stored kube context with this cxcli-owned
 handoff when the target has a Nebius cluster ID; a kube-context-only target is
 rejected because cxcli cannot prove that arbitrary local authentication will
@@ -2731,16 +2785,29 @@ fails closed for exact-command checkpoint resume.
 | `nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve` | DR restore a Soperator archive onto a new empty external target cluster. | Archive-driven and dry-run by default. This is not same-cluster rollback: do not target the original/source cluster or an existing Soperator namespace. With approval, validates archive checksums, recreation coverage, and required CRD/API availability, restores cluster-scoped retained PV bindings before namespaced resources, applies restore-ready Kubernetes manifests, and imports the chart-managed MariaDB accounting dump into the selected kube context when the archive contains one. VM/NFS retention and final Terraform convergence remain operator runbook steps. |
 | `nebius-cxcli ext-soperator scale-down --project-id <project-id> --cluster-id <mk8scluster-id> --kube-context <context> --nodeset <worker> --to-workers <count> --execute --approve` and `ext-soperator scale-up` | Ad hoc maintenance scaling for an external Soperator cluster without onboarding it. | Dry-run by default. `--project-id` and `--cluster-id` identify Nebius MK8s node groups; `--kube-context` is still required for Kubernetes and Slurm access. Ephemeral workers patch `NodeSetPowerState`; non-ephemeral workers patch the live NodeSet. Scale-down uses the same `--job-policy` choices before removing affected worker ordinals. Explicit non-ephemeral ordinal removal is tail-only until a tested controller-safe `reserveOrdinals` path is added. cxcli updates the mapped Nebius node group when it can uniquely map the worker pods to one group; otherwise it fails closed for ambiguous capacity changes. This is the supported helper for external “scale workers to zero, replace worker node groups externally, scale back up” maintenance. |
 | `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register a new target, report its active campaign, or propose the next campaign after completion. | Read-only against live resources. An existing `config.yaml` must pass the current runtime schema before discovery or campaign acceptance, so onboarding cannot preserve invalid stale target fields that a later leased execution cannot reload. It locks a schema-v6 campaign with explicit `compute_migration.mode: in-place\|blue-green`; when no Soperator exists yet, the fresh-install campaign uses the live provider Kubernetes version and current catalog Jail identity instead of emitting empty upgrade endpoints. Interactive onboarding always confirms every applicable migration setting; supplied options preselect rather than hide prompts. Non-interactive runs require `--compute-migration-mode` and the exact final `--to-k8s-version`; other migration values use documented defaults. In-place defaults to paused Slurm scheduling, zero surge, `max_unavailable: all`, worker drain timeout `10m`, and 32 parallel clear groups (maximum 64). Blue/green records one bootstrap count per worker group. An active campaign is never replaced, and accepted settings cannot be overridden by `upgrade`. |
-| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` | Reconcile live state and inspect the first unmet segment of the config-owned campaign. | Read-only. It validates immutable cluster identities, refreshes Nebius/Kubernetes/Soperator/Slurm observations, validates every live provider capability needed by the selected hop, and derives `planned`, `executing`, `segment-pending`, `blocked`, `recovery-required`, or `complete` from config, live state, and the v6 operation journal. `config.yaml` is the only desired-path authority; non-v6 campaigns, non-v6 journals, and any journal-carried desired path fail without conversion or fallback. `--dry-run` and `--execute` are mutually exclusive and one is required. Normal command exit immediately expires the shared Kubernetes Lease with an API-valid `MicroTime`; its 120-second natural expiry remains the fallback only when best-effort release itself is unavailable. |
-| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute or reconcile every remaining approved campaign segment in dependency order. | Acquires the shared cluster lease, reloads and revalidates the v6 campaign, and dispatches the accepted mode. After each terminal segment checkpoint, the same invocation refreshes discovery, reacquires the lease, revalidates campaign and journal authority, and continues. Durably accepted cxcli-owned controller/Helm convergence boundaries also revalidate and continue automatically under progress-fingerprint, transition-count, stall-time, and absolute per-boundary-instance deadline guards; approval gates, identity drift, unsupported state, deterministic or unclassified transition failures, other safety failures, explicit stop points, and interrupts still stop for exact-command resume. Lease renewal retries bounded transient MK8s credential and API connectivity failures, including an etcd leader change and the exec-credential token-expiry Unauthorized boundary, inside the lease duration; lease acquisition likewise retries a timed-out kubectl call, and its re-read reconciles a replace that landed server-side despite the client timeout — but holder-test failure and another workstation's unexpired hold still abort immediately. Read-only kubectl commands and the bridge's Pod-to-local state-artifact copies retry the same bounded transient classes (each copy attempt writes a fresh owner-only partial file promoted only after a complete stream); mutations never retry on authorization failures. In-place updates the same fixed-size node groups only after exact Slurm-clear proof and a cxcli-owned per-group Slurm drain; `max_unavailable: all` is an allowed-unavailability bound, not a provider concurrency guarantee. Blue/green creates accepted bootstrap groups and preserves source workers until their job and epilog gates clear. Both modes use the controller bridge, login gateway, slot-B Jail preparation, operation IDs, CAS resource versions, and a v6 journal. A resume from the phase-9 validation boundary reconciles a still-active target-version bridge through the validated target-singleton handoff before old-resource retirement. Before source-controller fencing, every profile checkpoints and pauses a live `deployment/soperator-manager` in addition to any locked legacy-manager selectors, preventing same-version reconciliation from recreating `controller-0`; that bridge-owned pause remains authoritative through the handoff. Before any rolling-compute service or provider replay, cxcli re-proves the exact manager pause and inert target-controller gate, so an out-of-band manager scale-up is re-fenced before continuity evidence can be accepted. A durable post-provider target-native cleanup checkpoint instead resumes only the manager, runtime, and source-cleanup tail after validating every terminal node-group replacement. A retained shared-state `current` link is replaced only when its exact preimage is a checkpointed epoch owned by the same campaign. Before the bridge writer scale, the exact bridge host list is also staged into the shared Jail with a digest-bound CAS; an interrupted unstaged scale is stopped, fenced, repaired, and restarted from its journal. If target reconciliation restored the ordinary controller command, cxcli checkpoints an exact target-manager pause, reasserts the inert gate before JWT preflight or bridge fencing, keeps both serving bridge hosts ahead of the future target during pre-fence propagation, atomically stages that handoff payload into the bridge's shared Jail PVC, and restores the manager only after singleton authority is durable. The singleton starts only through a checkpointed exact-UID/resource-version zero-to-one scale or an exact recorded ungate of the one inert-gated controller Pod (replicas already 1, gated Pod UID bound); takeover recovery fences exact partially Ready bridge Pods and restores the bound shared-Jail payload before restarting bridge writers, and an interrupt recorded between singleton-start dispatch and acceptance resumes only through the post-provider compute tail with the superseded pre-takeover client proof journaled under its singleton-recovery record. While that journal owns a controller outage, discovery reuses its bound bundle instead of blocking recovery on live Slurm RPCs. A segment that owns a validated bridge restores its exact Slurm scheduling state and removes the temporary bridge before completing, even when later Kubernetes-only campaign segments remain; its final-health cleanup gate uses that segment's targets and the journaled target SlurmCluster identity. Unknown or mixed provider outcomes are roll-forward `recovery-required`; accepted onboarding choices cannot be changed by this command. |
-| `nebius-cxcli ext-soperator jobs <config.yaml> --target <target> [--acknowledge-login-exit <fingerprint>] [--authorize-login-timeout-continuation <fingerprint>] [--acknowledge-job-ended <job-id>]` | Control Slurm jobs and resolve a confirmed protected-session exit through the active v6 upgrade journal. | For a Nebius target registered only by `cluster_id`, the command creates the same non-persisted temporary kubeconfig handoff as `ext-soperator upgrade`; onboarding does not need a durable `kube_context`. The TUI shows every current active or pending job; `r` performs a fresh live all-job poll, including jobs submitted after the screen opened. It remains available during controller gaps and shows controller authority, connectivity, snapshot age, durable action results, and any SSH socket fingerprint awaiting confirmation. Use `--acknowledge-login-exit` only after the user confirms voluntary exit; use `--authorize-login-timeout-continuation` only after the user confirms an involuntary timeout and explicitly authorizes continuation. Both bind the exact fingerprint and observed absence epoch; neither can release a live or reappeared socket. |
+| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` | Reconcile live state and inspect the first unmet segment of the config-owned campaign. | Read-only. It validates immutable cluster identities, refreshes Nebius/Kubernetes/Soperator/Slurm observations, validates every live provider capability needed by the selected hop, and derives `planned`, `executing`, `segment-pending`, `blocked`, `recovery-required`, or `complete` from config, live state, and the v7 operation journal. `config.yaml` is the only desired-path authority; an exact valid v6 journal converts once to v7, while every other non-v7 journal and any journal-carried desired path fail without fallback. `--dry-run` and `--execute` are mutually exclusive and one is required. Normal command exit immediately expires the shared Kubernetes Lease with an API-valid `MicroTime`; its 120-second natural expiry remains the fallback only when best-effort release itself is unavailable. |
+| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute or reconcile every remaining approved campaign segment in dependency order. | Acquires the shared cluster lease, reloads and revalidates the v6 campaign, and dispatches the accepted mode. The lease pins the exact command-entry `KUBECONFIG` environment for every foreground fence and background renewal, so nested discovery kubeconfig scopes cannot redirect lease traffic. After each terminal segment checkpoint, the same invocation refreshes discovery, reacquires the lease, revalidates campaign and journal authority, and continues. Durably accepted cxcli-owned controller/Helm convergence boundaries also revalidate and continue automatically under progress-fingerprint, transition-count, stall-time, and absolute per-boundary-instance deadline guards; approval gates, identity drift, unsupported state, deterministic or unclassified transition failures, other safety failures, explicit stop points, and interrupts still stop for exact-command resume. Lease renewal retries bounded transient MK8s credential and API connectivity failures, including an etcd leader change and the exec-credential token-expiry Unauthorized boundary, inside the lease duration; lease acquisition likewise retries a timed-out kubectl call, and its re-read reconciles a replace that landed server-side despite the client timeout — but holder-test failure and another workstation's unexpired hold still abort immediately. Read-only kubectl commands and the bridge's Pod-to-local state-artifact copies retry the same bounded transient classes (each copy attempt writes a fresh owner-only partial file promoted only after a complete stream); mutations never retry on authorization failures. In-place updates the same fixed-size node groups only after exact Slurm-clear proof and a cxcli-owned per-group Slurm drain; `max_unavailable: all` is an allowed-unavailability bound, not a provider concurrency guarantee. Blue/green creates accepted bootstrap groups and preserves source workers until their job and epilog gates clear. Both modes use the controller bridge, login gateway, slot-B Jail preparation, operation IDs, CAS resource versions, and a v7 journal. A resume from the phase-9 validation boundary reconciles a still-active target-version bridge through the validated target-singleton handoff before old-resource retirement. Before source-controller fencing, every profile checkpoints and pauses a live `deployment/soperator-manager` in addition to any locked legacy-manager selectors, preventing same-version reconciliation from recreating `controller-0`; that bridge-owned pause remains authoritative through the handoff. Before any rolling-compute service or provider replay, cxcli re-proves the exact manager pause and inert target-controller gate, so an out-of-band manager scale-up is re-fenced before continuity evidence can be accepted. A durable post-provider target-native cleanup checkpoint instead resumes only the manager, runtime, and source-cleanup tail after validating every terminal node-group replacement. A retained shared-state `current` link is replaced only when its exact preimage is a checkpointed epoch owned by the same campaign. Before the bridge writer scale, the exact bridge host list is also staged into the shared Jail with a digest-bound CAS; an interrupted unstaged scale is stopped, fenced, repaired, and restarted from its journal. If target reconciliation restored the ordinary controller command, cxcli checkpoints an exact target-manager pause, reasserts the inert gate before JWT preflight or bridge fencing, keeps both serving bridge hosts ahead of the future target during pre-fence propagation, atomically stages that handoff payload into the bridge's shared Jail PVC, and restores the manager only after singleton authority is durable. The singleton starts only through a checkpointed exact-UID/resource-version zero-to-one scale or an exact recorded ungate of the one inert-gated controller Pod (replicas already 1, gated Pod UID bound); takeover recovery fences exact partially Ready bridge Pods and restores the bound shared-Jail payload before restarting bridge writers, and an interrupt recorded between singleton-start dispatch and acceptance resumes only through the post-provider compute tail with the superseded pre-takeover client proof journaled under its singleton-recovery record. While that journal owns a controller outage, discovery reuses its bound bundle instead of blocking recovery on live Slurm RPCs. A segment that owns a validated bridge restores its exact Slurm scheduling state and removes the temporary bridge before completing, even when later Kubernetes-only campaign segments remain; its final-health cleanup gate uses that segment's targets and the journaled target SlurmCluster identity. Unknown or mixed provider outcomes are roll-forward `recovery-required`; accepted onboarding choices cannot be changed by this command. |
+| `nebius-cxcli ext-soperator jobs <config.yaml> --target <target> [--acknowledge-login-exit <fingerprint>] [--authorize-login-timeout-continuation <fingerprint>] [--acknowledge-job-ended <job-id>]` | Control Slurm jobs and resolve a confirmed protected-session exit through the active v7 upgrade journal. | For a Nebius target registered only by `cluster_id`, the command creates the same non-persisted temporary kubeconfig handoff as `ext-soperator upgrade`; onboarding does not need a durable `kube_context`. The TUI shows every current active or pending job; `r` performs a fresh live all-job poll, including jobs submitted after the screen opened. It remains available during controller gaps and shows controller authority, connectivity, snapshot age, durable action results, and any SSH socket fingerprint awaiting confirmation. Use `--acknowledge-login-exit` only after the user confirms voluntary exit; use `--authorize-login-timeout-continuation` only after the user confirms an involuntary timeout and explicitly authorizes continuation. Both bind the exact fingerprint and observed absence epoch; neither can release a live or reappeared socket. |
 | `nebius-cxcli upgrade node-template` and `upgrade node-group` | Upgrade Terraform-managed MK8s infrastructure underneath a cxcli-managed deployment. | `node-template` owns Kubernetes version, OS, and Nebius-image GPU stack rolling updates and writes `generated/reports/upgrade-node-template-report.md` / `.json` after verification. Node-group hardware, preset, CPU/GPU kind, GPU cluster, or fabric changes require the approved `upgrade node-group` planner; current execute writes `generated/reports/upgrade-node-group-report.md` / `.json` with the approved pre-mutation checkpoint and then stops before live replacement/cutover/retirement. |
 
 External in-place resume treats durable receipts as historical authority rather
 than refreshing their first-attempt chronology. Terminal marker and controller
 lineage proofs, accepted worker scope for an intentionally empty provider
 segment, and continuous manager-pause receipts are reused only through exact
-fingerprint and live-identity checks. Source cleanup normally requires the
+fingerprint and live-identity checks. When discovery refresh is deferred after the checkpointed
+SlurmCluster handoff, cxcli reapplies the exact source/target identity scope to
+the cached snapshot in memory: the immutable source UID remains the campaign
+comparison identity, while execution uses the selected target successor. The
+cached bundle is not rewritten, and a foreign, recreated, ambiguous, or
+mode-incompatible target still fails before provider or Kubernetes mutation.
+If the exact source deletion lands before the source-cleanup completion proof
+is sealed, resume accepts the target observation only through that same
+schema-valid source-cleanup scope with the exact checkpointed source and target
+namespace, name, and UID bindings. Cleanup authority remains the historical
+source binding, so the selected target is never treated as a deletion target;
+raw target-only discovery, a reappeared source, malformed scope, or identity
+drift remains recovery-required.
+Source cleanup normally requires the
 rolling provider-release receipt; an explicitly empty provider segment may
 instead consume the effective post-Jail release only when it is sealed by the
 topology-drain authority and paired with fresh final worker runtime plus exact
@@ -2774,6 +2841,63 @@ honor the provider operation's declared one-hour stall budget at the normal
 poll interval. That driver also freezes an absolute deadline for each exact
 boundary instance, so changing progress metadata or interleaving another
 operation cannot keep one transition alive indefinitely.
+Provider status converts Nebius SDK 0.4+ direct messages through the SDK's
+ProtoJSON layer and rejects unsupported object shapes instead of reporting an
+empty inventory. Phase status uses a phase-local cluster ID only when it agrees
+with the locked checkpoint cluster ID; otherwise it fails closed, and phases
+without their own cluster ID poll the locked campaign cluster.
+Before entering that wait for a non-terminal MK8s node-group operation, cxcli
+also re-reads the exact node group. An exact Nebius `ServiceError` attached to
+the latest non-warning valid timestamped `ERROR` event with
+`retry_type=NOTHING` stops immediately as recovery-required while retaining the
+accepted operation, except for one bounded case: a causal post-request initial
+worker update reporting exact `compute/NotEnoughResources` remains
+capacity-deferred and lets only proven-independent worker domains use the
+remaining rollout budget. A later non-warning progress event supersedes an
+older failure, but warning-only fallout such as `NodeNotFound` does not. cxcli
+reports only sanitized event/service/code tokens, never redispatches or replaces
+the operation, and does not treat arbitrary provider messages, stale events, or
+retryable/inexact events as continuation authority.
+During a checkpointed worker rollout, cxcli also reconciles an exact accepted
+provider operation before waiting for its replacement worker workload to become
+Ready. The accepted operation itself owns that temporary outage, so replay may
+reuse only the immutable pre-dispatch paused-manager workload receipt after
+revalidating the live target SlurmCluster, manager pause, worker values, and
+NodeSet/workload identities. Initial dispatch still requires live readiness,
+and terminal provider success still requires a fresh live replacement-health
+proof; missing or drifted receipt authority stops without mutation.
+When that exact operation is capacity-deferred, its group retains its local
+Slurm/Kubernetes safety boundary and one concurrency/unavailability token.
+Before scheduler classification or any progress or terminal evidence write,
+cxcli rebinds the active receipt to the current campaign, segment, planned
+group, journaled provider operation and resource identity, durable request and
+acceptance times, idempotency identity, resource version, and locked capacity
+domain. Even a self-hash-valid receipt copied from another group or campaign
+stops recovery-required before it can suppress, admit, or update work.
+Queued groups with an overlapping failure domain or provider allocation lane
+remain untouched; missing projection fields overlap conservatively. `AUTO`
+overlaps the common pool and compatible reservation lanes, while platform,
+preset, and GPU-cluster differences alone never prove independence. A proven
+different domain may continue only within the accepted global budget. Each
+completed group seals Ready replacement identity,
+active Jail rootfs, persistent mounts, Slurm registration, and applicable GPU
+runtime before releasing its own lock. The fleet-wide health gate and every
+terminal phase remain blocked, execution exits pending, and rerun reconciles
+the same provider operation before touching unfinished groups.
+An idle pre-provider readiness deferral follows the same partial-progress
+contract but consumes only its observed unavailable-node count and no provider
+slot. The owner-only Markdown/JSON report records `completion=partial`, exact
+sanitized Kubernetes and Slurm names when provable, and an unidentified count
+for a fixed-size deficit without a name. The ordinary approved command resolves
+the immutable receipt automatically when the exact source-template group is
+healthy and upgrades only remaining groups. While the receipt is active, a
+hash-bound latest observation refreshes changed affected-node names without
+rewriting its immutable trigger. Before any selected wave mutates, every peer
+completes a fresh provider/Kubernetes/Slurm recheck at one rendezvous; active
+groups consume the greater of their observed outage and configured allowance,
+so a readiness or Slurm change recomputes admission without dispatching a stale
+peer. An exact capacity error older than the accepted operation request is not
+attributed to that newer operation.
 An exact temporary controller-bridge node-group delete that instead returns
 `NOT_FOUND` at dispatch is terminal only after cxcli has durably requested the
 delete and verified the live group ID, name, resource version, ownership labels,
@@ -2962,11 +3086,56 @@ receipt, performs no second Helm apply, and does not synthesize a retroactive
 surge intent. The historical applied values fingerprint remains the protected
 dispatch authority, while the current desired values fingerprint is evaluated
 separately through semantic normalization; OpenMetrics must remain unchanged
-and no unclassified target-spec drift is accepted. Values alone, a live replica
-count, or a generic wall-clock history window cannot authorize this edge. After
+and no unclassified target-spec drift is accepted. If the sole delta is the
+checkpointed dual-CR login role change from the allocation-bearing target
+`LoadBalancer` predecessor to the target-owned `NodePort` shadow, cxcli does not
+adopt it as compatible. The historical `LoadBalancer` may use the CRD default
+NodePort zero; cxcli accepts that predecessor only when the desired `NodePort`
+is positive and the checkpointed allocation, annotation tombstones, identities,
+and complete trial spec prove the single role change. It seals the protected
+predecessor and exact role delta, reapplies the canonical desired values through
+the protected login-surge Helm path, and accepts only the intent-bound compatible
+successor. Before the surge
+is marked applied, the existing serial login MUNGE convergence also replaces
+any pre-CAS daemon behind Ready peers and proves that every successor
+authenticates both retained target-HA controllers. Kubernetes Ready alone is not
+accepted as Slurm readiness. The pre-CAS predecessor may retain its legacy
+Munge Secret projection only when its verified availability-hold Pod UID,
+workload, node, mounted Secret, sshd container identity, restart count, and
+creation-before-CAS chronology all replay exactly; the replacement must mount
+the handoff-bound target Secret. Values alone, a live replica count, or a generic
+wall-clock history window cannot authorize this edge. After that successor is
+verified, a later controller-owned Pod replacement or same-Pod Munge restart
+resumes through a bounded fingerprinted successor chain, but only after cxcli
+re-proves the same workload UID and selector, target Secret CAS, Ready endpoint
+set, node and ordinal continuity, forward chronology, and two-controller Slurm
+authentication. cxcli does not delete a healthy successor to recreate the
+historical runtime identity, and unrelated drift remains recovery-required.
+After
+Helm dependency packaging is rebuilt, cxcli fingerprints packaged charts by
+their normalized member paths, types, nested chart content, and file bytes, so
+gzip/tar writer timestamps and ownership metadata do not create false chart
+drift. Unsafe, duplicate, linked, special, truncated, corrupt, or empty archive
+members remain fail-closed. A completed bootstrap that sealed the earlier raw
+archive fingerprint can advance only through the post-switch adoption's
+immutable raw-to-canonical transition: the exact protected release and history
+must still match, and a fresh canonical render must equal the installed target
+manifest and spec. That transition is part of the v2 proof and receipt; it is
+not a general chart-drift fallback. After
 the adopted surge reaches `peer-ready` or `released`, an interrupted resume
 rebinds that receipt and proof and continues only into the restore lifecycle; it
 does not create a new surge intent or replay Helm.
+The exact login Service role-repair branch reaches the same peer and protected-
+hold lifecycle without producing that adoption receipt. cxcli recognizes its
+verified role-repair authority separately and preserves `peer-ready` or
+`released`. If an affected checkpoint already replaced `released` with a later
+surge/surge `applied` observation, recovery requires the unchanged v2 surge and
+target binding, byte-identical canonical and nested hold, exact target-slot
+peer set, released gate, and ordered peer, hold, release, and regression
+timestamps. It checkpoints one sealed recovery receipt and restores
+`released` without a Helm, Kubernetes, or Slurm mutation; exact replay writes
+nothing, and any identity, receipt, timestamp, peer, or replica drift remains
+blocking.
 After restore reaches the configured login set, the later bridge-config refresh
 may encounter the prepared SConfig zero-writer fence with its exact original
 writer size already restored. cxcli recognizes that successor without inventing
@@ -3046,6 +3215,14 @@ The census applies all node inspectors together and bulk-observes their
 preexistence, terminal phases, and final absence; exact per-node manifests,
 UIDs, placement, logs, CRI process bindings, and node identities remain
 individually verified without linear per-Pod authentication reads.
+If that bulk apply reaches an admission webhook while its backing controller is
+temporarily moving during a checkpointed system-node rollout, cxcli recognizes
+only connection refusal, no ready endpoint, or no route to the endpoint. It
+deletes and proves absence for every deterministic inspector Pod from the
+failed attempt, then uses a bounded continuation to rediscover all current Pods
+and Nodes and rebuild the entire census. It never reuses the failed Node set or
+partial evidence; admission denials, policy errors, and all other failures stop
+immediately.
 Later Kubernetes-only in-place segments consume the immutable Jail handoff proof
 archived with the completed segment that performed the slot switch. Before their
 first worker provider rollout, they recover one unique completed GPU topology
@@ -3279,6 +3456,29 @@ survival, shared-state identity, and a live queue RPC must all pass. It never
 treats the expected target-only `DOWN` response as bridge failure or falls back
 to an unbound controller; any bridge, gate, campaign, role, Pod, or RPC drift
 remains pending.
+When the source-HA all-file repair restarts both bridge writers, cxcli does not
+wait for Slurm's configured controller timeout. It checkpoints a successor
+takeover bound to the original active Pod and backup index, the unchanged
+StatefulSet, and both exact replacement Pod UIDs and nodes, then dispatches only
+to that active replacement. A crash replay adopts its unique primary marker
+without issuing another takeover. The terminal repair receipt binds that
+accepted successor before empty-queue and clean-log proof permits provider or
+worker continuation. Before that takeover, an exact `restart-intent` replay
+retains the already revalidated DOWN partition records instead of sending a
+Slurm RPC to the intentionally standby replacement pair. That bounded gap is
+available only when the writer, predecessor Pods and roles, complete all-file
+contract, staging receipts, chronology, and pause journal reproduce exactly;
+drift refuses checkpoint reuse.
+After the bridge advances to `target-ha-active`, legacy-rootfs health keeps the
+same direct-authority rule instead of reusing a previously successful login
+client. cxcli binds the accepted two-replica bridge StatefulSet UID and image,
+both exact live Pod identities admitted by the journal or its sealed
+authentication-restart successor, the target owner/epoch and permanent source
+restart fence, cluster-wide controller exclusivity, and the journaled
+active/standby roles from a direct bridge ping. It then queries the queue only
+from that exact active bridge Pod and requires a second Pod snapshot to retain
+the same runtime bindings. Any target authority, workload, Pod restart, role,
+or queue drift remains pending and cannot fall back to the retained login route.
 For GPU Jail slots, the post-population evidence marker remains the canonical
 proof of the driver version and library hashes. Some target login images still
 gate sshd startup on the older empty `etc/gpu_libs_installed.flag`; after the
@@ -3310,6 +3510,36 @@ a missing boundary intent. Its accounting rebind receipt is durable before the
 recovered intent, alias rebind, or writer pulse. A second generation, foreign
 target or Deployment, altered writer command, incomplete retirement, or any
 unrelated spec change remains pending instead of being adopted as a new fence.
+If the completed `post-switch-resume` Helm lifecycle is the next writer, the
+boundary now consumes it through one canonical successor chain. That chain
+starts at the accounting-rebound fence, revalidates the source retirement and
+rearmed manager-pause reuse, reproduces the protected release root, contiguous
+history, and deployed head, and requires the stored values plus rendered,
+defaulted, and live SlurmCluster specs to agree. One semantic-hash parent rebind
+then owns the later ConfigMap, login, and writer-release children. Exact replay
+is write-free; cxcli does not maintain a list of allowed field differences, so
+foreign values, history, identity, generation, resourceVersion, manifest, Jail,
+submount, maintenance, or OpenMetrics drift remains blocked.
+The protected login-restore Helm lifecycle is another exact successor of that
+boundary: after it restores the target login owner from the single surge count
+to the configured count, the CR-fence and direct post-Helm validators consume
+the sealed owner receipt instead of comparing the live generation only with the
+earlier rebind. If the verified login-role repair already advanced that rebind,
+the restore is the second consecutive generation; a direct restore remains one
+generation. A crash after the protected Helm head is deployed but before the
+owner receipt is written is recovered only by a read-only transient proof of
+the prepared restore intent, complete root/head dispatch and history, stored
+values, revision manifests, canonical login-size-only semantics, restoring
+reconciliation, current target identity/spec, and the exact role-repair
+predecessor. The normal path then writes the owner receipt; the transient gate
+never does. Sealed-owner acceptance additionally requires current
+bridge/manager/controller-gate/client authority, verified login workload
+removal, and the original Jail PVC, volume-source, maintenance, and
+login-submount contracts. The direct validator also revalidates the original
+zero-writer Deployment proof and any exact later sealed Deployment successor,
+then returns without rebuilding the completed intent or pulse. Neither path
+rewrites the owner or broadens the generation fence; incomplete or foreign
+lineage remains pending before worker replacement.
 If the later service replay has already sealed a restored-manager rearm, that
 zero-replica pause supersedes the immutable-child handoff's historical restored
 replica count for this boundary. cxcli revalidates the exact manager UID,
@@ -3322,6 +3552,160 @@ runs only SConfig `0 -> 1 -> 0`, returns the active config variant to compatible
 and leaves the manager and target controller fenced. It never treats an
 arbitrary zero-manager or full-target ConfigMap as authority and never falls
 back to restoring the historical manager replica count.
+A later `target-ha-active` replay keeps that receipt's source bridge epoch only
+when the exact-key full-target recovery and borrowed-rearm transition match and
+the bridge history ends with one unique canonical source writer-scale
+acceptance followed by one unique canonical target acceptance. Before any
+later mutation, cxcli checkpoints a semantic-hash receipt binding both complete
+records, both selected history entries, both authority epochs, and the pause
+generations. Missing, extra-field, duplicated, reordered, reason-drifted,
+time-inconsistent, or receipt-drifted lineage remains pending before the
+SConfig pulse.
+If the later controller-version handoff has replaced that compatible
+ConfigMap with the verified bridge-client configuration, cxcli accepts it only
+through a separate durable source receipt. The receipt binds the live ConfigMap
+UID and content/data hashes to the current target-HA epoch and version
+transition, the prior exact Jail-boundary writer zero, the borrowed manager
+pause, the target and JailedConfig identities, the login SConfig writer
+`0 -> 1 -> 0` refresh, and the exact verified per-Pod login rollout. It is
+checkpointed before compatibility revalidation or final writer release and
+replays only when the complete lineage and semantic hash remain exact;
+arbitrary ConfigMap drift still fails closed.
+If a later replay canonically adopts that same ConfigMap and digest with no
+compatibility transform, the original source receipt remains immutable. cxcli
+creates one separate semantic-hash successor only after revalidating the
+original receipt, unchanged ConfigMap/target/manager/HA/boundary/writer
+bindings, the exact same-digest `0/0` adoption record, and the later verified
+login rollout in chronological order. The ordinary generation-7 rebind may
+seal the original source after that canonical adoption has already been
+accepted; if the same handoff later becomes verified, cxcli admits the
+unchanged rollout only when the source receipt exactly fingerprints the
+accepted handoff and its acceptance is ordered after the writer and rollout
+proofs but before handoff verification. Exact live ConfigMap and login-Pod
+re-observation preserves the existing acceptance and verification timestamps,
+so the successor replays without generating a new lineage on every retry.
+Missing, post-release-created, malformed, reordered, or drifted source or
+successor state remains pending before ConfigMap, SConfig, manager, or worker
+mutation.
+If the checkpointed propagation producer later replaces a target login Pod
+after proving that it has no active SSH sessions, or removes only the exact
+surge ordinal after the protected login restore, cxcli does not reinterpret or
+overwrite either sealed source receipt. It validates each successor under its
+strict kind-specific schema: previous/replacement Pod and container identities
+for a replacement; or the removed historical rollout UID, node, container,
+target, workload, configured/surge counts, and verified restore contract for a
+removal. The current login consumers must equal the historical rollout minus
+exactly the proven removals. Cxcli reverse-replays the canonical consumer
+identity projections so every replacement/removal edge is bound to its prior
+durably sealed edge; a removal without that anchor cannot create a receipt or
+self-authenticate with an unsealed predecessor. The
+restore owner, workload, restored observation, terminal rollout, producer, and
+propagation timestamps must also retain their causal order. Cxcli then appends
+one hash-chained rollout-successor receipt while target compatibility is
+active. The protected
+login-restore rebind checkpoints that receipt before its Jail-boundary
+Deployment successor is consumed. Later exact successors append to the chain;
+terminal replay recognizes only removals covered by that exact sealed prefix
+and preserves the aggregate and per-Pod rollout timestamps byte-for-byte. If a
+later serial login observation normalizes another exact replacement while that
+historical removed Pod remains in the rollout journal, cxcli first runs the
+canonical source producer against the bound live ConfigMap and checkpoints the
+new producer edge. Only then does the same replay consume the sealed removal
+prefix. A final worker-only mixed producer event is accepted only when every
+worker UID, node, boundary, and predecessor/current container identity is
+reproduced from the verified bridge-config or typed-GRES rebind. A live-RPC
+result on that edge also requires the sealed controller-gap binding and exact
+per-client ping/config hashes; mixed login entries and unsealed worker state
+remain fail-closed. If a
+pre-fix resume already refreshed only the aggregate terminal observation after
+sealing the unchanged producer prefix, unequal hashes alone are not accepted as
+proof of an aggregate-only change. cxcli first checkpoints a separate recovery
+receipt after read-only re-observation of the exact login workload and every
+retained live login Pod proves the workload owner and generation, Pod UID, node,
+container, Running/Ready state, zero restarts, and jailed Slurm configuration
+digest. Removed Pods remain authorized only by the already sealed removal edge;
+session selection and replacement-history reinterpretation are forbidden. The
+companion receipt binds the full current rollout, its canonical identity
+projection, the predecessor receipt and producer prefix, and live observations.
+Aggregate and per-Pod observation timestamps are explicitly superseded as
+non-authoritative metadata; existing all-client propagation and handoff times
+remain unchanged and must precede recovery start, live observation, and
+acceptance. A second checkpoint then appends one same-count v2
+rollout successor referencing that exact companion. Both writes are crash-safe,
+exact replay is write-free, a later producer event can append normally, and a
+second observation recovery is rejected. A later post-v2 suffix whose producer
+hash includes restored RPC observations is recovered only when its final event
+matches the current canonical consumers, each intermediate raw replacement
+hash equals the next event's predecessor hash, strict reverse replay proves
+every login and worker transition without a new removal, the reconstruction
+rejoins the exact sealed prefix, and the predecessor rollout identity equals
+the recovery companion's timestamp-free projection. This keeps the raw
+append-only journal intact without treating an RPC-inclusive hash as canonical
+identity authority.
+The original source, canonical-adoption successor, observation recovery, and
+first rollout receipt are still never created after compatibility release. A
+later count-advancing rollout receipt is allowed only for product-owned
+login/worker events that occurred strictly after an exact terminal SConfig
+release. cxcli reproduces the already sealed prefix, the release's exact target,
+Deployment, ServiceAccount, ConfigMap, rootfs and config-digest identities, its
+semantic-hash Deployment-scale and bridge-runtime children, and every release
+generation, resource-version, and chronology field before checkpointing that
+one suffix receipt. Any pre-release, first-receipt, same-count, partial, or
+drifted case remains fail-closed.
+Terminal login-surge restore replay is also immutable. After fresh live reads
+confirm both the SlurmCluster and login workload remain at the configured
+replica count, cxcli keeps the original restore observation, start time, and
+completion time byte-for-byte; a same-invocation restore reloads the rolling
+checkpoint before terminalization so it cannot lose its start time. A
+checkpoint created by the older timestamp-refresh defect may retain its later
+terminal observation only when the complete source and producer chain ends in
+the exact sealed same-count v2 observation-recovery successor, the configured
+counts match, and the later observation/completion chronology follows that v2
+receipt. Missing or drifted v2/companion authority remains pending and
+write-free.
+Missing, reordered, foreign, malformed, retained-removed, or drifted workload,
+Pod, consumer, rollout, contract, chronology, companion, or receipt state fails
+before cluster mutation.
+The login rollout proof accepts both exact terminal records emitted by the
+producer: direct observation of a current Pod, or a source/replacement/current
+UID chain after serial recreation, together with the producer's exact optional
+session selection. The receipt also seals the manager pause generation, target
+history entry, and handoff acceptance time. It remains valid when the same
+stage later becomes `released`, but cxcli will not create it retroactively from
+released state.
+Crash resumes from `recreating` or `ready-awaiting-config` are normalized by
+the rollout producer before verification, so transient resource versions and
+timestamps cannot become alternate receipt shapes. Once that terminal record
+matches the same live Pod UID and digest, replay retains it byte-for-byte
+instead of refreshing its verification timestamp. A present session-selection
+field must be the exact typed producer record; malformed or empty values are
+rejected rather than treated as absent.
+The writer refresh must likewise have its exact terminal producer fields and a
+fully ordered lifecycle from intent through scale-up, file/Pod readiness,
+scale-down, zero, writer verification, each login Pod verification, and the
+aggregate rollout proof. Extra writer fields or reordered timestamps cannot be
+sealed by the source receipt.
+That sealed login writer refresh is also the only later Deployment state the
+original Jail-boundary crash gate accepts: the same UID and non-replica spec,
+zero at the original boundary generation, then exactly `0 -> 1 -> 0` across
+two generations. The derived successor binds both the bridge-client source
+receipt hash and the writer-refresh fingerprint; no other generation or
+replica state is adopted.
+Every protected accounting-restore, login-restore, or writer-release consumer
+first re-proves the live ConfigMap's checkpointed UID and exact target
+SlurmCluster controller owner, then seals or replays that same source receipt
+before it derives the Deployment successor. The ordinary existing
+`active-slot-switch` rebind now uses the same ordering only when the verified
+boundary zero, verified login writer refresh, and live same-UID/same-spec
+generation prove that exact later successor. The original boundary-zero state
+and other boundaries remain source-free, so a valid later writer pulse cannot
+be mistaken for foreign drift without broadening ordinary replay.
+While both active variants are explicitly present as compatible and the
+full-target transition key is absent, the login Jail digest check also accepts
+the exact bridge-client digest from that same sealed source receipt. The
+candidate is removed as soon as a transition key exists or either variant
+advances; missing variants, an empty or non-mapping transition, and malformed
+source mappings never widen the digest set.
 When that exact active-resume recovery finds the full-target `slurm.conf`
 already propagated into the login Jail before the later slot-bound writer pulse,
 it can classify the transition without rewriting the file. The recovery must
@@ -3366,6 +3750,52 @@ While the SConfig zero fence remains prepared, cxcli rebinds that generation
 only when its resourceVersion matches both the enabled-writer and restored-command
 checkpoints and reconstructing the command fence reproduces the prior full spec;
 any accompanying spec or Jail-contract drift remains blocking.
+If the protected login-surge restore Helm proof is replayed after that exact
+writer release, its installed manifest still describes the fenced zero-size
+predecessor while the live target intentionally has the original positive
+SConfig size. That proof accepts the difference only through the same sealed
+writer-release successor, reconstructs the zero-size predecessor, and requires
+it to equal the CRD-defaulted installed Helm spec. The opt-in is local to this
+restore replay and binds the release generations, intent, active Jail rebind,
+and predecessor spec in the Helm proof; a missing checkpoint, inexact release,
+or any additional live-spec difference remains blocking before Helm or workload
+mutation. The successor validator recognizes both the exact post-patch intent
+crash window and the product's terminal release receipt. Terminal replay
+requires the bridge to be released, both Deployment-scale and runtime receipts
+to be verified, the target resourceVersion and ready-Pod identity to be present,
+and child completion, release verification, and bridge release to remain in
+order; it cannot reinterpret a partial terminal checkpoint as an intent.
+The terminal login-restore proof also accepts the workflow's strengthened
+writer-release-successor mode only when its exact embedded release, child
+semantic receipts, active Jail rebind, and CRD-defaulted historical Helm
+predecessor all reproduce. A no-op replay preserves the existing terminal
+release verification timestamp; a later observation is admissible only when
+both release timestamps remain after the immutable intent, Deployment-scale,
+and runtime prerequisites. Any partial or drifted strengthened proof remains
+blocking before Helm, checkpoint, or workload mutation.
+When OpenMetrics is later restored, cxcli requires one profile-owned
+`PluginDir=/usr/lib/x86_64-linux-gnu/slurm` in `custom_slurm.conf`, matching the
+supported Nebius Slurm 25 login and worker images. After SConfig generates the
+revision-31 ConfigMap, the approved workflow checkpoints an exact
+UID/resourceVersion replacement that removes only the duplicate legacy
+`PluginDir=/usr/lib/slurm` and defunct `AccountingStorageUser=accounting` from
+the main `slurm.conf`. It then seals the source and target per-key hashes before
+the post-OpenMetrics topology receipt can advance. Foreign, missing, duplicate,
+or reordered directives and ambiguous MetricsType values fail before ConfigMap,
+checkpoint-successor, or worker mutation. Exact replay is write-free.
+Target worker values also replace the old `AutoDetect=nvidia` GRES default
+because these Soperator workers register as CLOUD nodes with their GPU count
+already in the static node definition. An empty `gresConfig` is not sufficient:
+the SConfig generator retains its global autodetection default even beside an
+explicit NodeSet mapping. cxcli therefore derives one node-specific
+`AutoDetect=off Name=gpu`, optional proven type, and `/dev/nvidia` device range
+from the exact static GPU count, preserving every other GRES line and failing
+before changing values when the count is unavailable. During the same approved workflow, worker runtime
+identity reconciliation clears only the stale cxcli predecessor
+`Extra=InstanceId={{ .PodName }}` retained by slurmctld after the corrected
+on-disk configuration and worker replacement. Other node Extra values are left
+untouched, and final health cannot pass until the exact legacy value is absent
+from every current worker alongside matching Pod-derived NodeAddr/InstanceId.
 The manager restore can also expose the one expected cxcli-owned Helm revision
 that removes temporary controller/OpenMetrics gating and lets the CRD normalize
 defaulted fields. If that advances the already-zero target `SlurmCluster`
@@ -3379,6 +3809,57 @@ seals its deployed release, stored values, manifest, live target spec, target
 UID, and accepted slot-B binding. The post-OpenMetrics topology journal accepts
 that proof only as a fingerprint-bound one-way successor of its prior replay;
 unrelated Helm revisions or target-spec changes still fail closed.
+If a later guarded values revision has a strictly newer exact Helm proof, that
+revisioned proof is the current candidate instead of the older final-values
+receipt. The GPU sysfs repair also advances any existing post-OpenMetrics
+downstream receipt through the same exact Helm/topology proof before returning
+from its verified reuse path, retaining the predecessor in append-only history.
+Malformed, unpromoted, foreign, or fingerprint-drifted newer proofs cannot fall
+back to historical evidence.
+When that current proof is one or more contiguous guarded revisions beyond an
+already sealed post-OpenMetrics topology receipt, cxcli advances only the
+nested topology record. It independently reproduces the predecessor, every
+intermediate, and current intent-bound Helm proof, requires one target-generation
+step per revision and strictly advancing Helm revisions and proof times, keeps
+the target UID and ConfigMap projection unchanged, and binds every revision's
+live-spec, values, and installed-manifest fingerprints in an exact semantic-hash
+successor-chain receipt. That receipt is checkpointed with the nested promotion,
+so neither a correlated generation edit nor a reconstructed predecessor can
+masquerade as replay authority. The historical outer OpenMetrics receipt remains
+byte-stable, and the promoted nested receipt replays without another checkpoint
+write. If one exact next-revision Helm replay produced no target generation
+change, cxcli validates the older embedded receipt against the replay it
+actually sealed, then separately requires the carried outer proof, Helm
+revision, values, and chronology to advance exactly once before a later
+generation-changing successor can extend the chain. When that successor embeds
+a second receipt, the immutable outer generation is recovered only as the
+oldest predecessor of the recursively exact chain; an arbitrary historical
+generation is still rejected.
+MariaDB accounting metrics are default-disabled unless the supplied values
+explicitly opt in. This keeps the default usable on clusters without the
+ServiceMonitor CRD while preserving an intentional monitoring integration.
+If the current target SlurmCluster carries that exact disabled value but the
+Soperator-owned MariaDB child retains its earlier enabled default, the approved
+upgrade workflow checkpoints the exact target/Helm, child UID/owner,
+resourceVersion/generation, and complete non-boolean spec before applying a
+single compare-and-swap update to `metrics.enabled`. Because the MariaDB
+Operator omits optional false-valued fields from its API representation, a
+missing metrics block, empty block, omitted `enabled`, or explicit false are
+all durably adopted as disabled without mutation. Present non-boolean values
+remain malformed, and replay refuses any identity, owner, generation,
+values-proof, or other-spec drift.
+If later exact values revisions advance the target, replay leaves that action
+receipt immutable and reproduces its historical revision, Helm-proof
+fingerprint, and target generation from the already exact recursive guarded
+values chain while separately retaining the current target proof.
+Source retirement now inventories the chart-managed MariaDB `Database`,
+`User`, and `Grant` children together with their parent. Older checkpoints
+that retired only the MariaDB parent may run one strictly checkpointed
+successor cleanup for the exact ownerless, source-referencing children. The
+cleanup UID/resourceVersion-fences every deletion and may clear only the
+known MariaDB-operator finalizers after proving the object identity, complete
+spec, and stalled deletion unchanged; foreign names, references, owners,
+finalizers, or spec drift fail closed.
 Because this release-wide Helm apply can also restore
 `deployment/soperator-manager`, cxcli checkpoints that restore before applying:
 the exact paused Deployment UID, original replicas, non-replica and rendered
@@ -3389,7 +3870,12 @@ the exact pre-apply intent, deployed manifest proof, reconciliation
 fingerprint, freshly rendered manager contract, and the manager manifest read
 from that proof's exact Helm release revision. The canonical manager-pause
 journal is mandatory before Helm can run, and a terminal verified restore is
-revalidated idempotently after a crash. Missing pause authority, a different
+revalidated idempotently after a crash. When a later cxcli values-contract
+revision is pending, that completed restore remains bound to its historical
+payload: the exact installed Helm values must reproduce the immutable intent
+fingerprint before the separate revisioned reapply may proceed. The future
+desired payload is never substituted into the earlier restore proof. Missing
+pause authority, a different
 release revision, or a matching live replica count by itself is never accepted.
 For a later campaign segment whose rolling journal is intentionally fresh, the
 same reconciliation resolves the target only from the validated campaign-level
@@ -4210,8 +4696,9 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
   exact toleration, so an old controller-role taint cannot leave a required
   bridge Pod unschedulable.
   The bridge resolves the active Slurm configuration through exactly one
-  `JailedConfig` item mapped to `/etc/slurm/slurm.conf`, then binds the referenced
-  ConfigMap, data key, UID, and resource version. Before authority transfer,
+  `JailedConfig` item mapped to `/etc/slurm/slurm.conf`, then binds the complete
+  ordered item set, referenced ConfigMap, every `/etc/slurm/*` path and digest,
+  UID, and resource version. Before authority transfer,
   cxcli tolerates a `JailedConfig` resource-version advance only when its UID,
   ConfigMap UID, name, key, and path are unchanged; the ConfigMap mutation keeps
   its own exact UID/resource-version compare-and-set. It preserves the source
@@ -4241,9 +4728,20 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
   target `ClusterName`. The target-version bridge uses the target Helm
   configuration while continuing to mount the promoted source state; an
   unrecognized third name or name drift fails before target write.
-  Material staging, singleton takeover, failed-takeover recovery, final
-  verification, and cleanup use only the exact checkpoint-bound `slurm.conf`
-  key; sibling fragments such as `custom_slurm.conf` remain unchanged.
+  Before source-bridge completion, cxcli compare-and-set stages every mapped
+  JailedConfig file into the bridge Jail and proves the complete digest set on
+  both bridge controllers. A historical source-HA checkpoint that staged only
+  `slurm.conf` is repaired by stopping the exact bridge pair, staging the full
+  set, restarting that pair, and proving one active, one standby, an empty
+  queue, and no post-start cloud-node AutoDetect error. Its restart-intent is
+  also the only bounded authority gap in which pause replay uses the exact
+  checkpointed DOWN records without a live Slurm query; cxcli first binds the
+  accepted writer, predecessor roles and Pods, full file/staging contract, and
+  strict chronology, then lets the separately checkpointed successor takeover
+  restore unique controller authority. Later controller-host
+  edits, singleton takeover, failed-takeover recovery, final verification, and
+  cleanup remain scoped to the exact checkpoint-bound `slurm.conf` key and
+  preserve the now-sealed sibling fragments.
   If a pre-target failure requires returning to the cold backup, every consumed
   restore gets a fresh immutable epoch; only an unaccepted in-progress copy
   reuses its operation token. A failure before target material/write
@@ -4263,7 +4761,20 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
   immutable workload/Pod/image identities, and obtains a short-lived JWT with
   `scontrol token` without logging it. Any identity, path, content, or
   functional-token failure fences the target and restores the target-version
-  bridge for roll-forward recovery.
+  bridge for roll-forward recovery. Validation then binds the exact SConfig
+  Deployment, ServiceAccount, Pod, and both target JailedConfigs to that proof.
+  A SConfig Pod that started before the verified target-key handoff is restarted
+  by the checkpointed product workflow, and REST-driven completion after its
+  distinct successor is required before final health can pass.
+  Final validation also detects the exact source `NodeConfigurator` custom
+  resource that an old Helm chart deliberately kept after its release and Flux
+  desired state were retired. If that orphan still owns the old rebooter
+  DaemonSet while its referenced ServiceAccount is absent, cxcli checkpoints
+  both identities and stable specs, foreground-deletes only the
+  UID/resourceVersion-bound custom resource, and proves the custom resource and
+  its owned DaemonSet absent. It never recreates the missing ServiceAccount or
+  accepts foreign ownership, desired state, or replacement identities as a
+  cleanup shortcut.
   Its namespace uses the least source-compatible Pod Security
   enforcement level, restricted audit/warnings, default-deny networking with
   exact bridge/Soperator workload, Slurm, DNS, and single-address Kubernetes API
@@ -4642,18 +5153,19 @@ checkpoint and external upgrade report. Interactive terminal output colors
 only the `FAIL` token red; plain output, checkpoints, and Markdown/JSON reports
 remain markup-free. Use `ext-soperator upgrade` for
 resume/rerun while external-upgrade-owned actions remain selected. A completed
-segment reports `Pending phase: none`, updates the campaign-scoped v6 operation
+segment reports `Pending phase: none`, updates the campaign-scoped v7 operation
 journal with the campaign fingerprint, segment id, exact operation
 postconditions, provider operation ids, completed segment ids, compensation
 state, and evidence, and keeps the immutable campaign in `config.yaml`. The
 journal never stores or reconstructs the desired path. A segment listed in
 `completed_segment_ids` is immutable. If later reconciliation finds that its
 live postconditions drifted, cxcli fails closed with `recovery-required`; it
-does not demote the completed phase or rewrite the completed v6 history. Run
+does not demote the completed phase or rewrite the completed v7 history. Run
 fresh `ext-soperator onboard` discovery and explicitly accept a new campaign
 before performing recovery work. Missing config campaign,
-config/journal fingerprint conflict, every non-v6 campaign, and every non-v6 journal schema
-fail as recovery-required without conversion. After the final segment,
+config/journal fingerprint conflict, every non-v6 campaign, and every journal
+schema other than v7 or an exact valid convertible v6 checkpoint fail as
+recovery-required. After the final segment,
 `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`
 reports `Pending phase: none` and the completed campaign remains the audit
 record. When a fail-closed phase is pending, resolve its reported blocker and
@@ -5064,7 +5576,7 @@ Important external upgrade flags:
   full-screen TUI's deliberate close result returns without reopening the text
   fallback against its original snapshot, so a job that cleared during the
   session is not shown again and no second action prompt is opened. The
-  external-upgrade v6 journal
+  external-upgrade v7 journal
   persists each intent before dispatch with JobID, user, submit time, restart
   baseline, and lineage fingerprint. Its states are `Queued -> Dispatching ->
   Applied | Rejected | Indeterminate`. The connected pre-bridge source singleton
@@ -5086,7 +5598,7 @@ Important external upgrade flags:
   partition restoration and destructive bridge cleanup. cxcli immediately
   revalidates final health against the frozen target binding in the same
   invocation. The sealed pre-target proof and the separately finalized
-  target-generation binding are both kept in the v6 journal. The same screen
+  target-generation binding are both kept in the v7 journal. The same screen
   shows an exact protected SSH socket fingerprint when
   its transport disappears. Disappearance alone is not a voluntary-exit proof:
   the login handoff stays `Indeterminate`, the source Pod/node hold remains, and
@@ -5128,8 +5640,8 @@ Important external upgrade flags:
   restore commands, target mode, and the immutable identity, exact pre-state,
   mutation intent, and exact observed held state for every cxcli-held Slurm
   job. A rerun reuses
-  campaign-scoped pause records only when the v6 journal contains the exact
-  operation and compensation evidence; non-v6 or incomplete journals fail
+  campaign-scoped pause records only when the v7 journal contains the exact
+  operation and compensation evidence; unsupported or incomplete journals fail
   closed. Because Slurm partitions expose no resource version, cxcli preserves
   the canonical full `scontrol show partition -o` records and SHA-256
   fingerprints as evidence, while compare-and-set ownership covers an explicit
@@ -5676,17 +6188,51 @@ Helm bootstrap as current admission readiness, scales the reconciliation
 manager, or weakens webhook `failurePolicy: Fail`.
 
 Login continuity during `rolling-compute-migration` is handled as a Service
-handoff. cxcli preserves the canonical login Service object and its Nebius
-LoadBalancer identity, including public or internal address. If a login
+handoff. cxcli preserves the source login Service as the sole Nebius
+LoadBalancer, including its public or internal address, while the target
+chart's shadow login Service is explicitly rendered as `NodePort`, the
+non-LoadBalancer type accepted by the installed Soperator. The two cxcli-owned
+load-balancer annotations are rendered as explicit JSON-merge null tombstones,
+so a live-only allocation left by an earlier Helm manifest is removed from the
+target SlurmCluster and its shadow Service rather than surviving omission. The
+allocation-stabilization pass reasserts this checkpoint-bound target projection
+after verifying the preserved source allocation, preventing its generic
+same-cluster values path from overwriting the tombstones before Helm. Before
+release, cxcli proves both exact Service identities and owners, their equal
+selectors, and equal Ready endpoint Pod UIDs. If the Soperator controller has
+retained the preserved allocation annotation on the otherwise exact target
+NodePort shadow, the approved workflow first semantic-hash checkpoints that
+exact copied value, target SlurmCluster and Service identity, owner, selector,
+ClusterIP, and resourceVersion, then removes only the copied allocation keys
+through a UID/resourceVersion/type/value-tested JSON patch. It re-reads and
+proves the exact annotation-free shadow before sealing the split role; a crash
+after the patch resumes from the journal without repeating a completed
+mutation, while any foreign value or role drift fails closed. The sealed role
+prevents a target Helm replay from contending for the retained allocation. The
+downstream continuity guard always preserves retained Service UIDs and
+ClusterIPs, but treats load-balancer address, type, ingress, and allocation
+metadata as continuity authority only for a real `LoadBalancer` (and older
+checkpoint records without an explicit Service type). Removing copied
+allocation metadata from the explicit target `NodePort` is therefore accepted
+without weakening the preserved source LoadBalancer fence. If a login
 `LoadBalancer` Service already has an address but lacks
 `nebius.com/load-balancer-allocation-id`, cxcli resolves the matching Nebius VPC
 allocation with the SDK/API, removes only the `nebius.com/managed-by=mk8s`
-ownership label, annotates the live Service, and persists the allocation under
-`slurmNodes.login.sshdServiceAnnotations` before target chart handoff. Every
-later target Helm or Jail Upgrade values reapply restores that annotation from
-the rolling checkpoint, preventing server-side apply from removing the retained
-allocation. If the allocation cannot be uniquely resolved or updated, cxcli
-fails before risky mutation with exact remediation context. External upgrade
+ownership label, and annotates the preserved live Service. The allocation is
+never copied into the dual-CR target Service values; same-CR upgrades retain
+the original single-Service behavior. After source retirement, the exact same
+target Service UID may return to its final `LoadBalancer` role with a distinct
+reusable allocation. A later-segment values replay replaces the archived source
+allocation only when the completed campaign transition, archived dual-CR role
+receipt, original allocation decision, target Service UID, and current live
+allocation all agree; future replays then retain only that target allocation.
+If the archived source Service is still present as a second LoadBalancer, cxcli
+verifies its exact archived identity and allocation but persists only the target
+successor in chart values, independent of Kubernetes Service-list ordering.
+Any foreign Service, receipt, transition, or allocation remains blocked. If the
+allocation cannot be uniquely
+resolved or updated, cxcli fails before risky mutation with exact remediation
+context. External upgrade
 captures the exact source login Pod, owning node, SSH container, and served
 host-key identity before target or Jail reconciliation. It keeps that source
 Pod until the exact peer-readiness handoff is complete.
@@ -5721,6 +6267,16 @@ bridge cleanup precedes its final login revalidation, the prior segment then
 completes, and the current segment starts afterward. That exact predecessor
 lineage must still match the current released hold, workload, runtime identity,
 host keys, and final Helm restore proof; out-of-order evidence fails closed.
+If the already-sealed target Pod later rolls under the same workload, the
+ordinary resume can journal the new Pod UID only when exact successor
+reconstruction reproduces every other lineage field and both proof
+fingerprints, while the live Pod retains the image and SSH host keys, has zero
+restarts, and no protected session exists. The checkpoint records the old and
+new Pod UIDs plus those proof fingerprints before continuation; workload,
+runtime, session, or proof drift still fails closed. Every later resume
+revalidates the ordered, unique, timestamped UID chain from the sealed target
+Pod through the current successor rather than trusting the presence of a
+rollover record.
 The surge is a checkpointed temporary `configured + 1` Helm state. Resume
 accepts only the locked configured or surge replica counts and proves the exact
 target Helm state first. Because bridge authority deliberately keeps the full
@@ -5739,6 +6295,13 @@ connectivity. If an older checkpoint predates the phase-owned pause journal,
 cxcli can rearm it only from the immutable-child handoff's exact manager UID and
 monotonic capture, pause, and restore generations, with a durable authorization
 checkpoint before scaling the manager down again.
+If the protected Helm restore has already changed the SlurmCluster owner back
+to the configured count while the login workload is still surged, resume adopts
+that exact successor without another owner patch. The protected root/head proof
+uses the same canonical post-default normalization as the Helm verifier: only
+the two cxcli-owned null shadow-login annotation tombstones are removed, while
+raw release hashes stay sealed and unrelated null or non-login drift remains
+blocked.
 If the rolling phase instead retains the exact verified
 `active-slot-switch` pause from before that restore, the post-switch
 started-gate continuation, both post-Jail in-place completion paths, and later
@@ -5784,6 +6347,13 @@ pre-ownership slot boundary, while still revalidating every held Pod identity
 and requiring zero container restarts before continuing writer-backed cleanup.
 Intervening Helm and pre-ownership gates preserve that journal state without
 requiring already-removed hold metadata to reappear.
+Every rerun uses the checkpoint's immutable ordered phase plan as its execution
+and report order. Completed phases must be the exact prefix of that plan; if a
+completed action no longer satisfies its live contract, cxcli invalidates that
+phase and its dependent suffix before deriving the new frontier. CLI discovery,
+executor preflight, and backup recovery share one active mutation-boundary
+classifier, so an accepted controller-bridge provider operation cannot be
+reclassified as ordinary discovery or quota work during resume.
 For a planned maintenance pause, `--stop-after-phase <phase-id>` completes and
 checkpoints that execution phase, leaves the next accepted phase pending, and
 requires a later rerun without the ceiling to continue.
@@ -5793,8 +6363,10 @@ target login pods, requires ready EndpointSlice backends for the preserved
 Service, and runs a login-side Slurm smoke check before retiring source login
 controllers or pods. While consumers still use an adopted legacy rootfs, the
 effective target Helm values disable controller OpenMetrics so an older Slurm
-client is not given the Slurm 25.11-only `MetricsType` key; the configured
-`PluginDir` remains available to the legacy parser. This effective override
+client is not given the Slurm 25.11-only `MetricsType` key; the
+profile-owned canonical multiarch `PluginDir` remains available to the legacy
+parser and to the target login/worker SPANK clients. This
+effective override
 does not rewrite `config.yaml`; it remains active through slot switch and exact
 target-slot consumer verification. A second checkpointed Helm reconciliation
 then restores the configured/default OpenMetrics value, verifies target
@@ -5803,7 +6375,37 @@ pre-release Slurm checks against that final configuration before user
 partitions reopen. A checkpoint-owned crash-window resume
 may still defer a matching old-rootfs/target-config error only when Jail Upgrade
 is planned. After Jail Upgrade switches consumers to the refreshed rootfs,
-`scontrol`, `sbatch`, and accounting/QOS smoke are fail-closed again.
+`scontrol`, `sbatch`, and accounting/QOS smoke are fail-closed again. A later
+values-contract revision reuses the guarded post-cleanup Helm/Slurm reconciler
+to materialize an explicit GPU device mapping when `gresConfig` is absent or
+empty before completed-Jail revalidation; it does not recreate the retired
+controller bridge. The later post-generation normalizer owns the one exact
+ConfigMap CAS described above.
+If that revision first makes the historical Jail verification stale after
+rolling compute, source retirement, and bridge cleanup are already complete,
+cxcli restores only the exact terminal Jail predecessor before mutation-boundary
+classification. This requires the sealed completion events, successful
+passive-slot Job monitor, restored maintenance, verified rootfs handoff, passed
+Slurm smoke, and no active copy writer. The guarded values reconciler then runs
+before fresh Jail submission verification; historical Job fields alone cannot
+send replay back through retired slot-preparation infrastructure.
+Rolling-values revision 31 derives one deterministic node-specific GPU line from the
+exact static GPU count for a missing, empty, known NVIDIA-autodetect, or exact
+revision-29/30 generated explicit GRES field that lacks the override. It preserves
+one non-matching customer GPU definition and all non-GPU lines, and rejects
+malformed or duplicate definitions before changing values. The
+generated per-NodeSet mapping must contain `AutoDetect=off`; SConfig's global
+`AutoDetect=nvidia` may remain because the node-specific override disables it on
+the cloud workers. The post-OpenMetrics projection reconstructs the exact prior
+no-custom-GRES payload, binds the contiguous Helm proofs using their actual
+live-spec generation transitions, and admits the normalized ConfigMap only
+through its separately sealed receipt. That historical comparison also removes
+the exact later canonical custom PluginDir from the reconstructed predecessor;
+the normalized successor retains it while removing the generated legacy main
+PluginDir. Later bridge-client source checks recognize that normalized payload
+only by proving the immutable OpenMetrics hashes as its predecessor, the nested
+topology hashes as its exact live target, the final-runtime receipt as the
+causal successor, and a write-free reproduction of the unchanged proof.
 If a legacy external cluster has Soperator ActiveChecks or
 `wait-for-active-checks` enabled, treat them as a maintenance-window concern:
 they can consume GPU/RDMA capacity or extend readiness waits. CXCLI managed
@@ -5954,8 +6556,66 @@ then proves the Deployment, ReplicaSets, and Pods returned to zero before
 restoring the exact manager at its checkpointed replica count. The target
 SConfig CR desired size remains zero while the manager starts the other
 consumer rollouts. This seed pulse does not restore
-the target's desired SConfig replica count or full target configuration. A crash-window
-resume still reports a recognized old-client versus target-era config mismatch
+the target's desired SConfig replica count or full target configuration. Once
+every other rootfs consumer proves the active slot, cxcli restores that positive
+writer size while the target manager remains paused. The SlurmCluster patch is
+served by one checkpoint-owned temporary Deployment built from the exact paused
+manager, with the validating webhook still configured `Fail`; cxcli proves the
+Service endpoint and server-side admission, then re-reads the target name, UID,
+resourceVersion, generation, zero size, and stable non-size spec immediately
+before the guarded patch. It retires the bridge after the operation and cleans
+an exact crash-left bridge before replay. It never changes the webhook to
+`Ignore` or dispatches the release patch without a serving endpoint. Because
+the manager remains intentionally paused after admission, cxcli then restores
+the existing SConfig Deployment itself instead of waiting for controller
+reconciliation. It re-proves the manager pause plus the target, Deployment,
+and ServiceAccount identities, checkpoints a semantic-hash `0 -> original`
+Deployment-scale receipt, and uses current-replica and resourceVersion guards.
+Only the exact next Deployment generation is admitted after dispatch; crash
+replay adopts that successor, while missing intent, skipped generation, or any
+identity/spec/receipt drift blocks before another scale. Because the manager is
+still deliberately paused and the target-HA bridge remains authoritative,
+cxcli does not wait for that paused manager to regenerate the deferred
+full-target ConfigMap. It checkpoints an exact release-runtime receipt binding
+the immutable release intent, target and ConfigMap identities, sealed
+bridge-client source and live content/data fingerprints, deferred full-target
+fingerprints, reason, and chronology. The released SConfig pod must deliver
+that achievable sealed runtime digest into the active Jail. Full-target
+generation and REST/controller recovery remain later terminal checks after the
+manager and OpenMetrics lifecycle resumes; this boundary does not claim them.
+If typed-GRES target-HA recovery has meanwhile compare-and-set the same target
+ConfigMap to its exact accepted canonical successor, post-OpenMetrics replay
+does not feed that no-MetricsType payload back through the distinct-transform
+binder. cxcli admits it only by matching the live ConfigMap name, UID,
+resourceVersion, target owner, and Slurm digest to the sealed worker-init,
+bridge-successor, recovery, reconfigure, and client-handoff preservation chain.
+The accepted Kubernetes resourceVersion fences the complete ConfigMap state;
+cxcli then carries its exact typed digest and full-data fingerprint as the
+achievable writer runtime until recovery advances. This deferral writes no
+post-OpenMetrics receipt and performs no ConfigMap mutation; a payload with
+MetricsType still belongs exclusively to the strict full-config binder, while
+any identity, data, lifecycle, or lineage drift remains blocking.
+The typed-GRES preservation receipt intentionally advances the current client
+handoff beyond the bridge-client rollout receipt that originally authorized
+writer release. On replay, cxcli therefore recovers that historical source only
+from its independently exact semantic receipt and the exact semantic-hash
+writer-release runtime bound to the same target, ConfigMap, release intent, and
+chronology. The existing current-state typed-GRES validator must still prove the
+complete accepted successor before that historical authority can be used.
+Generic post-OpenMetrics replay continues to require the current bridge-client
+lineage; malformed, stale, reordered, or identity-drifted historical evidence
+remains fail-closed without checkpoint or infrastructure mutation.
+If replay returns to
+the earlier Jail-boundary checks after the target size patch but before that
+Deployment receipt exists, cxcli admits the positive target only through the
+same sealed release intent and its exact protected login-restore predecessor.
+Both target-fence consumers require the single expected generation increment,
+unchanged non-size spec, exact target/workload/config identities and digests,
+ordered resource versions and timestamps, and the original Jail/OpenMetrics
+contract. Any present Deployment-scale receipt is validated against its exact
+zero or next-generation live state before bridge-client lineage can advance;
+arbitrary positive size or malformed release state never bypasses the fence. A
+crash-window resume still reports a recognized old-client versus target-era config mismatch
 as deferred/upgrading only after the durable target-apply marker exists. This
 does not require a new partition-transition record when admission was already
 paused before the phase.
@@ -6079,6 +6739,35 @@ config successor exists, that specialized client-config recovery is a strict
 no-op and the ordinary bridge-client handoff initializes normally. A partial
 topology lifecycle still requires its exact verified predecessor and remains
 fail-closed before any ConfigMap write.
+When that exact later-segment lifecycle advances the bridge-client digest, a
+verified login Pod may adopt the successor without serial deletion only when
+the sealed topology receipt binds its old rollout digest to the current handoff
+digest, the deployed apply authority and timeout-only semantic restoration are
+exact, and the live Pod UID is unchanged. cxcli then waits through only the
+receipt-bound predecessor or Helm observation until the jailed file matches the
+target and records the canonical terminal digest. If that per-Pod checkpointing
+is interrupted, cxcli accepts mixed predecessor/target records only for the
+exact current login set and UIDs, with canonical target records timestamped
+after config recovery; the aggregate stays on the predecessor until every Pod
+has converged. Every other cross-material journal remains recovery-required
+before checkpoint or Pod mutation.
+After that exact reconciliation advances the direct propagation proof and login
+rollout to the distinct target digest, replay keeps the topology successor's
+sealed predecessor. It accepts only one exact checkpointed config-reconciliation
+event whose predecessor/target digests, consumer names and UIDs, target-digest
+observations, propagation semantics, handoff, rollout, and causal timestamps all
+reproduce. The direct route also requires the event's replacement-consumer
+fingerprint to remain current. If a later product-owned live RPC proof refreshes
+only ping/show-config hashes and aggregate observation time, cxcli checkpoints
+one semantic revalidation receipt instead of weakening that transition proof.
+The receipt binds the unique final event and topology successor, both full
+consumer fingerprints, and the stable role/name/UID/node/container/restart/config
+projection. Later fresh RPC observations are write-free only while that stable
+projection remains exact. This covers a crash after propagation but before
+topology-successor terminalization and the terminal replay. Missing, duplicate,
+partial, extra-field, foreign, identity, digest, semantic, fingerprint, malformed
+RPC, non-final-event, or chronology drift fails before checkpoint or
+infrastructure mutation.
 Before DCGM diagnostics, cxcli also aligns the installed DCGM runtime with the
 live NVIDIA driver generation and checkpoints the exact package version and
 plugin directory. Driver 580 and newer use the CUDA 13 DCGM package/plugin;
@@ -6113,7 +6802,31 @@ cxcli never recreates the retired source partitions. After restore removes the
 target record from the active pause journal, cleanup validates the exact stored
 restored plan and its superseded-plan link against the remaining retired-source
 records and target reassertion receipt; it does not rebuild consumed state from
-historical phase journals. If the drain journal has
+historical phase journals. The same immutable-receipt rule covers a normally
+completed restore whose later phase observation differs only in Slurm-computed,
+non-owned aggregate fields such as TRES: cxcli self-validates the stored restore
+hash, proves every owned field unchanged, and requires the exact target-only
+runtime-reassertion lineage rather than replacing the receipt. On a cluster
+without a separate GPU target-retirement authority, replay instead requires an
+empty active pause journal and byte-exact equality between the complete
+canonical phase journal and the sealed restored records. Once temporary
+bridge cleanup finishes, a stale rolling-values revision cannot be sealed as a
+completed segment. cxcli checkpoints a continuation, reruns the normal guarded
+Helm/Slurm values reconciliation on the unchanged command, and repeats validation
+and both post-upgrade checks before terminal health. If that post-cleanup
+reconciliation has already checkpointed a target-only pause, cxcli treats it
+as an overlay on the immutable final restore rather than as restore-receipt
+drift. The overlay must contain only canonical target partitions and match both
+the sealed restored record and any still-active global record exactly; the
+remaining active journal must still be the sealed retired-source inventory.
+The ordinary post-cleanup reconciliation then owns the compare-and-set restore
+and removal of that overlay. A missing, extra, source-partition, record, stage,
+or target-singleton reassertion mismatch stops before Slurm or checkpoint
+mutation. This release reuses the exact historical action-generation and
+pre-cleanup preservation receipts without misclassifying intentionally pending
+post-values terminal health as restore drift; destructive cleanup still
+requires current passed health, and terminal health is freshly revalidated
+after release. If the drain journal has
 not yet been created and this campaign has no provider-rollout predecessor,
 cxcli establishes bridge RPC authority from the exact live release-worker
 Pod/UID/node bindings, verified pre-activation fleet, topology replay, target
@@ -6154,6 +6867,64 @@ owned by the same target StatefulSet on the same node. Only the replacement UID
 and its history advance; the repair neither rewrites the historical delete proof
 nor deletes a Pod, and any journal, receipt, owner, runtime, or partial-worker
 drift remains pending.
+If a later checkpointed target-values Helm apply recreates that worker after the
+final-runtime reload, cxcli accepts the new UID only through a separate exact
+post-values successor. It reproduces the complete final-runtime worker set and
+aggregate runtime identity, the same StatefulSet and NodeSet chain, the current
+ControllerRevision and byte-identical template, and the unique intent-bound
+Helm proof whose timestamps enclose revision and Pod creation. The live Pod must
+be Running, Ready, zero-restart, on the bound node, and owned by that same
+StatefulSet. Its jailed Slurm digest must match the immutable post-OpenMetrics
+ConfigMap receipt and an exact current or immediately preceding topology proof.
+For a recursively sealed guarded-topology chain, this worker proof binds the
+immutable outer ConfigMap generation to the oldest exact predecessor, not only
+the newest receipt edge. It also requires the producer's terminal jailed-file
+digest-verification timestamp in the exact ConfigMap receipt and rejects a
+missing or reordered attestation.
+If the exact final-runtime normalizer has subsequently advanced only the
+aggregate ConfigMap topology, the immutable post-values receipt remains bound
+to its historical jailed digest even though the shared jailed file visible in
+the not-yet-replaced worker may already contain the normalized digest. cxcli
+keeps that receipt byte-for-byte, verifies the current file with the distinct
+digest from the exact normalization/final-runtime chain, and may retain only
+the receipt's original post-OpenMetrics and topology fingerprints. Every live
+worker, owner, ControllerRevision, container, Helm, history, config, and
+timestamp field must still reproduce, and both current aggregate fingerprints
+must differ from their sealed predecessors; any other difference remains
+fail-closed before Pod mutation.
+An older guarded-values receipt in that chain is reproduced against the
+final-runtime receipt's sealed predecessor replay, while the final-runtime
+receipt separately proves the transition from that predecessor to the current
+normalized topology; cxcli never compares the older receipt directly with the
+later revision.
+The verified ConfigMap normalizer uses the same sealed-predecessor boundary on
+replay after topology promotion: its immutable revision-27 predecessor must
+equal the final-runtime receipt's `previous_replay`, and that receipt alone
+proves the transition to revision 31. Exact replay writes nothing; a direct
+comparison between the old receipt and later topology is never accepted.
+The outer post-OpenMetrics ConfigMap receipt follows the same rule when it
+revalidates its nested guarded-values receipt: direct validation is used before
+topology promotion, while an exact final-runtime successor requires the guarded
+receipt to reproduce against that successor's byte-identical sealed predecessor.
+The independently exact final-runtime receipt is the only authority for the
+transition to the promoted replay; missing or drifted historical lineage fails
+before any checkpoint or infrastructure mutation.
+The dual-CR login Service cleanup and role receipts also remain immutable across
+that later values progression. Their shared historical Helm-proof fingerprint
+must resolve to one exact revision and generation in the same sealed topology
+lineage, while the current promoted Helm proof and every live Service, target,
+allocation, annotation, selector, owner, and Ready endpoint check remain current.
+The cleanup must precede the roles receipt, and neither receipt is rewritten.
+The complete binding is semantic-hash checkpointed before the worker UID is
+advanced; the path performs no Pod deletion and rejects any owner, revision,
+template, Helm, runtime, config, topology, container, readiness, or chronology
+drift. A later immutable-child handoff replay recognizes that accepted Pod only
+by revalidating the original historical successor and typed-GRES rebind, rerunning
+the post-values live proof without checkpoint writes, and reproducing the single
+linear history through any completed rollout, final-runtime reload, and the exact
+post-values receipt. Exact replay leaves the handoff timestamps and checkpoint
+byte-stable; a branched, reordered, or drifted UID/history remains pending before
+Pod deletion or any other infrastructure mutation.
 If the corrected live
 typed-GRES topology still carries the exact stale
 registration drain reason from its pre-replay process, cxcli resumes that worker
@@ -6185,6 +6956,18 @@ node, CPU/socket/core/thread, and typed-GRES fields; changing non-contract
 uptime, memory, or temporary-disk fields cannot masquerade as topology drift. Any
 allocation, reason, flag, semantic topology, process chronology, NodeSet, or
 successor drift remains blocking.
+Before that target-HA recovery consumes the worker lineage, cxcli runs the
+existing bridge-client worker-handoff reconciler against the complete verified
+typed-GRES rollover. It checkpoints each exact replacement rebind and the
+aggregate checkpoint-gap successor receipt first, without deleting another
+Pod, then consumes only that sealed chain. A partial, foreign, or drifted chain
+fails closed; an exact replay preserves the terminal rollout timestamp and
+writes no checkpoint. If a later replay enters recovery after those receipts
+were already sealed, the generic-handoff predecessor gate accepts the current
+worker only when its immutable rebind predecessor is the original rollover Pod,
+its current successor is the typed-GRES replacement, and the canonical complete
+per-worker and checkpoint-gap validator succeeds. It never relaxes the worker
+UID, node, NodeSet, owner, readiness, or aggregate-chain boundary.
 If the exact Ready successors
 still register generic GRES, cxcli does not issue `RESUME`: Slurm rejects that
 state transition while `INVALID_REG` is present, and `slurmd -C` proves detected
@@ -6236,10 +7019,50 @@ reassert, immediately before `scontrol reconfigure`, before the post-reconfigure
 pause reassert, and after the successful verification ping. An unrelated Pod,
 process, or role replacement remains blocking before mutation or verified
 checkpointing.
+If the same replay also observes a later exact generic client-handoff
+projection, cxcli composes two separately owned checkpoint children instead of
+rewriting that accepted successor. The existing controller-lineage receipt owns
+only the old-to-current Pod generation. A second exact-key semantic receipt
+binds the immutable successor fingerprint, stored and current predecessor
+projections, controller and preservation fingerprints, target config/material,
+both current jailed digests, and acceptance after both prior proofs. Only that
+exact three-field Pod-plus-predecessor combination is reduced to the immutable
+intent for local comparison; any extra change remains recovery-required before
+Slurm reconfigure or worker signaling.
 Verified marker-repair replay revalidates the queue/accounting authority sealed
 by that repair; it does not rebuild the historical pre-Slurm chronology from a
 later queue observation. Missing or incomplete repairs still require a fresh
 authority derivation.
+After typed-GRES recovery has accepted the new config and sealed the generic
+client-handoff preservation receipt, resume no longer asks the immutable
+generic worker rollout to prove that its predecessor digest is still live. It
+exact-key validates that preservation, the compatibility and bridge successors,
+the immutable successor hash, recovery digests, and worker-init projection,
+then continues through the existing live Jail/config, worker, queue, controller,
+reconfigure, and registration proofs. The predecessor journal is not rewritten;
+an optional preservation rebind must reproduce the prior preservation plus the
+exact worker-lineage and bridge-authority chain with strictly ordered proof
+times, even when all outer fingerprints are recomputed;
+partial, foreign, extra-field, or hash-drifted preservation still fails before
+reconfigure, worker signaling, checkpoint mutation, or infrastructure mutation.
+If the verified marker repair replaced both retained controller Pods after the
+accounting Munge runtime was sealed, later worker-rollout replay admits that
+bridge generation only through the same exact repair. The original accounting
+runtime remains immutable: every non-bridge binding must match, the repair must
+name the original Pod UIDs and fingerprint the current active/standby roles,
+and its StatefulSet, queue, accounting writer/database, registered IDs,
+authentication probes, and lifecycle chronology must all validate. cxcli then
+re-probes the unchanged accounting writer against the current Ready bridge Pods
+before continuing. This replay writes neither the checkpoint nor Kubernetes;
+missing, partial, foreign, or reordered evidence remains recovery-required.
+Its final inert-stager cleanup also treats the originally captured Kubernetes
+`resourceVersion` as historical intent evidence. cxcli re-reads the exact Pod,
+revalidates its checkpointed UID, immutable source-or-target image provenance,
+inert command, security context, Ready state, and controller-state PVC, then
+uses the fresh resourceVersion for a bounded conditional delete. If only Pod
+status continues to advance, cleanup may fall back to the immutable UID
+precondition after repeated complete revalidation; a replacement UID or any
+material drift still fails before deletion or cleanup checkpointing.
 The Jail journal remains the single rollover writer: its rolling mirror may
 advance only through the same immutable old/new Pod lineage with monotonic
 observation metadata and an exactly bound registration proof. Exact verified
@@ -6295,8 +7118,12 @@ restored writer, and both retained bridge roles, then uses ephemeral local and
 cross-runtime Munge probes without logging or checkpointing credential bytes.
 Only an exact pre-CAS accounting daemon that is locally healthy but isolated
 from both bridge roles may be recreated. Before its UID/resourceVersion-
-preconditioned delete, every target partition must remain checkpoint-paused and
-the Slurm queue must be empty. The distinct same-Deployment successor must
+preconditioned delete, every target partition must remain checkpoint-paused,
+the journaled active/standby roles must still match the exact retained bridge
+Pods, and `squeue` must report empty when executed directly in the active bridge
+container. A retained login route is not accepted as target-HA authority.
+Direct Slurm RPC failure remains distinct from successful non-empty output, and
+both stop before restart intent. The distinct same-Deployment successor must
 start after the CAS, mount the unchanged Secret, and authenticate with both HA
 controllers before cxcli seals the reload. Verified replay performs no second
 delete; queue activity, mixed authentication, post-CAS isolation, writer,
@@ -6313,9 +7140,15 @@ before any Pod mutation.
 When the selected bridge-client payload is already the canonical compatible
 form, cxcli first seals an exact compatibility-adoption receipt with equal
 predecessor and target digests and zero transforms. That receipt is config and
-target bound and authorizes the same worker rollout; a missing receipt or a
-mixed adoption/transform shape remains fail-closed instead of weakening Pod
-readiness.
+target bound and authorizes the same worker rollout. If replay observes that
+accepted receipt before first propagation, it admits the canonical reason only
+when the recorded, observed, successor, and verified login-rollout digests and
+identities all reproduce exactly. A present partial propagation, missing
+receipt or verified rollout, or mixed adoption/transform shape remains
+fail-closed instead of weakening Pod readiness. If the exact verified
+propagation proof was checkpointed before a crash but the handoff is still
+`accepted`, replay uses the existing complete predecessor validator before
+advancing; a pending or drifted propagation never substitutes for that proof.
 After serial recreation, an intentionally inert target controller never becomes
 a Slurm partition read path. cxcli reuses the exact checkpoint-owned `DOWN`
 records only when the manager pause is a sealed standard, bootstrap, or rearm
@@ -6324,6 +7157,17 @@ bridge, and partition identities all match. A sealed bootstrap pause uses its
 UID, generation, spec fingerprint, original replicas, and immutable admission
 contract rather than a mutation-time Kubernetes resource version; malformed or
 drifted pause authority remains fail-closed before reuse.
+If an older interrupted checkpoint has all of that authoritative evidence but
+lacks only the derived controller-gap semantic binding, the same producer used
+by fresh execution seals that binding before worker partition-pause admission.
+The consumer then reuses the exact checkpoint records without a target-controller
+RPC; incomplete worker or partition evidence still fails closed.
+Across every external Soperator upgrade, cxcli derives the runnable top-level
+phase from the immutable checkpointed plan after exact protected-predecessor
+reconstruction; `pending_phase` is status only. Declarative phase-local
+transition graphs and every-write interruption matrices remain tracked
+hardening work, so this top-level contract is not a claim that every nested
+transition has already been migrated.
 While the exact in-place Soperator manager pause protects bridge-owned
 configuration, the manager cannot refresh the parent NodeSet `PodsReady`
 condition. At that boundary cxcli does not wait on stale status alone: it
@@ -6443,6 +7287,15 @@ the same objects during the rolling handoff. cxcli resolves the legacy PVC
 from the discovered source SlurmCluster/NodeSets, records it as
 `jailRootfs.adoption.legacyPvcName`, and keeps every Jail consumer on that PVC
 until the passive slot has been populated and selected.
+
+On a checkpointed resume after the source-to-target SlurmCluster handoff, those
+objects describe different epochs: the immutable legacy PVC remains the copy
+and rollback source, while the selected target SlurmCluster and NodeSets point
+at the current active slot. cxcli reuses the checkpointed legacy name and UID
+only with the exact target-scoped identity and complete distinct slot binding;
+it does not report the expected target slot as conflicting source storage.
+Source-role conflicts, replaced PVCs, and malformed or drifted checkpoint,
+discovery, and backup evidence still stop before mutation.
 
 Persistence and copying are separate decisions. During external first
 adoption, `/home`, `/data`, `/scripts`, and `/models` remain at their existing
@@ -6657,8 +7510,11 @@ separate from the later target-only slot-b seed pulse.
    It then restores the checkpointed target SConfig replica count
    with the actual target service account, proves that no captured source writer
    survived, waits for the target-owned SConfigController pod on the active
-   slot, and verifies that pod delivered the checkpointed full target config
-   and exact digest into the Jail. Only that second boundary records
+   slot, and verifies that pod delivered the checkpointed release-runtime
+   config and exact digest into the Jail. While the manager is paused, that
+   runtime is the sealed bridge-client ConfigMap and the deferred full-target
+   digest remains separately bound for later restoration. Only that second
+   boundary records
    `rootfs_handoff_verification.status=verified`, with the active slot, rollback
    slot, target worker NodeSets, persistent mount state, SConfig identity, and
    live mount evidence for resume and audit.

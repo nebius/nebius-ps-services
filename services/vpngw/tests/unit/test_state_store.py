@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from unittest.mock import patch
 
@@ -35,6 +37,21 @@ def test_state_store_returns_none_for_invalid_json(tmp_path) -> None:
     store = StateStore(state_path)
 
     assert store.load_last_applied() is None
+
+
+def test_render_version_upgrade_invalidates_version_three_state(tmp_path) -> None:
+    resolved_config = {"connections": [{"name": "peer-a"}]}
+    old_hash = hashlib.sha256(
+        json.dumps(
+            {"config": resolved_config, "render_version": 3},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    state_path = tmp_path / "last-applied.json"
+    state_path.write_text(json.dumps({"config_hash": old_hash}), encoding="utf-8")
+
+    assert RENDER_VERSION == 4
+    assert StateStore(state_path).is_changed(resolved_config)
 
 
 def test_state_store_atomic_write_preserves_previous_state_on_replace_failure(tmp_path) -> None:

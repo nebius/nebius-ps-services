@@ -4,7 +4,7 @@ Use this reference to design and select frameworks for production agentic
 applications. Keep the agent kernel, workflow durability, model providers,
 tools, open protocols, state, security, and evaluation independently replaceable.
 
-Baseline date: 2026-08-14
+Baseline date: 2026-08-16
 
 ## Contents
 
@@ -31,11 +31,12 @@ AI control flow:
   Agent only for model-selected actions or observation-driven next steps
 
 Model and agent runtime:
-  Official OpenAI SDK plus Responses API for supported direct text or reasoning
-  Official task-specific API for embeddings, audio, realtime, and other direct work
-  OpenAI Agents SDK for intentionally OpenAI-native agents
-  Pydantic AI for typed agents using Anthropic, Gemini, another non-OpenAI
-  provider, or a provider-neutral Python boundary
+  Pydantic AI direct model API for low-level portable request control
+  Pydantic AI no-tools single-request Agent for typed direct-call services
+  Official provider task API for intentionally provider-specific direct work
+  Pydantic AI Agent for portable typed agents across supported providers
+  Pydantic AI capabilities or Harness for portable specialists when justified
+  Provider-native agent SDK only through a documented runtime escape
   Codex SDK for coding-focused engineering specialists
   Codex app-server only for deep embedded client integration
 
@@ -44,14 +45,13 @@ Explicit graph orchestration:
   require a first-class state graph
 
 Cross-service durable execution:
-  Temporal for timers, long waits, external side effects, compensation, and
-  workflow recovery
+  One qualified durable workflow owner selected from workload evidence
+  Temporal, DBOS, Prefect, Restate, or an existing engine are candidates
 
 Model access:
-  Narrow application-local seam for one intentionally selected provider
-  Internal capability-aware ModelProvider contract when multiple providers,
-  routing, evaluated fallback, self-hosting, regional/data policy, or shared
-  platform ownership creates semantic portability requirements
+  Pydantic AI Model, Provider, settings, and profiles for the portable path
+  Application-owned operational and governance catalog when routing is needed
+  Custom cross-runtime ModelProvider only for a proven non-Pydantic consumer
   Native provider adapters for OpenAI and Anthropic
   Native or verified OpenAI-compatible adapter for Nebius Token Factory
   agentgateway when shared platform routing and policy are justified
@@ -85,11 +85,14 @@ Security and operations:
   existing organizational authority
 ```
 
-Do not install every layer for every application. A one-request task can use a
-provider SDK without an agent kernel. A known multi-step task can use ordinary
-application code with explicit model calls. A bounded non-OpenAI assistant can
-use Pydantic AI, one narrow provider seam, direct functions, and PostgreSQL
-without LangGraph, Temporal, MCP, A2A, a gateway, or a new telemetry platform.
+Do not install every layer for every application. A one-request portable task
+can use Pydantic AI's direct API or a no-tools single-request `Agent` according
+to its runtime-service needs; intentionally provider-specific work can use the
+official task SDK. A known multi-step task can use ordinary application code
+with explicit model calls. A bounded assistant can use Pydantic AI, direct
+functions, and an existing application store without LangGraph, Temporal, MCP,
+A2A, a gateway, PostgreSQL, Redis, a vector database, or a new telemetry
+platform.
 
 ## Architectural Planes
 
@@ -108,16 +111,20 @@ verified principal context into downstream policy boundaries.
 
 ### Agent Kernel Plane
 
-Own prompt assembly, typed dependencies, model calls, bounded tool loops,
-structured output, agent-local policies, and run context.
+Own portable prompt assembly, typed dependencies, model calls, bounded tool
+loops, structured output, and run context.
 
-Current defaults: OpenAI Agents SDK for intentionally OpenAI-native agents;
-Pydantic AI for Python agents using non-OpenAI providers or requiring a typed
-provider-neutral boundary. This plane is absent for direct calls and
-deterministic workflows that own model requests directly.
+Current portable Python default: Pydantic AI `Agent` across supported
+providers. Pydantic AI direct model requests do not require an agent kernel.
+Provider-native SDKs are separate specialized runtimes selected only when a
+named harness requirement defeats the portable path.
 
 Keep the kernel small. Do not let it become the authoritative store, workflow
 scheduler, secret manager, or provider gateway.
+
+Place an application-owned logical runtime facade above portable and native
+runtimes. It owns stable run, stream, resume, cancel, and normalized event
+contracts, but it may stay in-process until a deployment trigger exists.
 
 ### Orchestration And Durability Plane
 
@@ -125,7 +132,8 @@ Own explicit transitions, checkpoints, interrupts, timers, retries, and
 recovery.
 
 - LangGraph: Own in-application graph state and model/tool workflow topology.
-- Temporal: Own durable cross-service workflows and non-idempotent side effects.
+- Selected qualified workflow engine: Own durable cross-service workflows and
+  non-idempotent side effects.
 - Queue or job system: Own bounded asynchronous work that does not need a full
   workflow engine.
 
@@ -145,10 +153,12 @@ Own tools, data access, code execution, browsers, files, and external systems.
 
 Own provider configuration, model capability resolution, credential injection,
 routing, budgets, fallback, error normalization, and telemetry. Use a narrow
-application-local seam for one intentionally selected provider. Implement the
-full contract in `model-provider-contract.md` only when multiple providers,
-routing, evaluated fallback, self-hosting, regional or data policy, or shared
-platform ownership creates semantic portability requirements.
+application-local seam for one intentionally selected provider. For portable
+Pydantic AI workloads, use its `Model`, `Provider`, profile, settings, and
+message contracts plus application-owned routing metadata even when several
+providers, regional policy, fallback, or self-hosting are involved. Implement
+the custom semantic contract in `model-provider-contract.md` only when a
+proven non-Pydantic or cross-runtime consumer must share that boundary.
 
 Use provider SDKs behind adapters. Do not expose provider SDK types in domain
 workflows.
@@ -199,15 +209,17 @@ mixture. Require a measured reason to move upward on either axis.
 
 | Requirement | Preferred choice | Add or switch when |
 | --- | --- | --- |
-| One direct OpenAI text or reasoning request supported by Responses | Official OpenAI SDK plus Responses API | The task needs a different official task API, an application-owned deterministic sequence, or an agent loop |
-| One direct OpenAI embedding, transcription, realtime, or other specialized request | Official OpenAI SDK plus the task-specific API | The workload becomes a multi-step workflow or model-directed loop |
-| Known sequence with model steps | Ordinary application workflow plus direct provider calls | The model must choose actions or observation-driven next steps |
-| OpenAI-native agent | OpenAI Agents SDK | Provider portability or custom graph semantics become required |
-| Python, non-OpenAI or provider-neutral typed agent | Pydantic AI | A provider-native SDK or another ecosystem offers required semantics with lower total complexity |
+| One portable Python model request with low-level response control | Pydantic AI direct model API | Typed parsing, validation retries, or typed dependencies justify a no-tools single-request `Agent`; provider-specific work may use the official task API |
+| One portable Python model request with typed agent services | No-tools, single-request Pydantic AI `Agent` | The model must choose actions or continuation, making the behavior agentic |
+| One provider-specific embedding, transcription, realtime, or other specialized request | Official provider SDK plus the task-specific API | Portable direct access satisfies the exact feature, or the workload becomes a workflow or agent |
+| Known sequence with model steps | Ordinary application workflow plus explicit Pydantic AI or provider calls | The model must choose actions or observation-driven next steps |
+| Portable Python typed agent | Pydantic AI `Agent` | A provider-native runtime or another ecosystem provides a named required semantic with lower total complexity |
+| Portable specialist environment | Pydantic AI capability or Harness | One bounded agent suffices, or a provider-native harness is explicitly required |
+| Provider-native agent | Separate native runtime adapter | The unique harness requirement disappears or the portable Pydantic AI path satisfies it |
 | Coding-focused engineering specialist | Codex SDK | A deep embedded client also requires Codex app-server; a broader orchestrator may instead expose Codex through one explicit MCP boundary |
 | Simple high-level agent with broad integrations | Selected default kernel plus only the required integrations | Switch to LangChain `create_agent` only when its maintained integrations measurably reduce total complexity |
-| Explicit state graph, checkpoints, interrupts, time travel | LangGraph around the selected deterministic or agent control flow | Cross-service timers and irreversible side effects require Temporal outside the graph |
-| Long-running business process and durable side effects | Temporal around direct calls, deterministic workflows, agents, or mixtures | Work is short-lived, read-only, and safely replayable without durable orchestration |
+| Explicit state graph, checkpoints, interrupts, time travel | LangGraph around the selected deterministic or agent control flow | Cross-service timers and irreversible side effects require a qualified durable workflow owner outside the graph |
+| Long-running business process and durable side effects | Selected qualified workflow engine around direct calls, deterministic workflows, agents, or mixtures | Work is short-lived, read-only, and safely replayable without durable orchestration |
 | Claude-native coding, file, sandbox, or Skill agent | Claude Agent SDK | A provider-neutral service agent is the actual requirement |
 | Anthropic-hosted durable agent session | Claude Managed Agents | Provider neutrality, lifecycle control, or non-beta stability is required |
 | Microsoft or .NET enterprise agent stack | Microsoft Agent Framework | Exact language, package, feature lifecycle, non-Microsoft ecosystem fit, or portability fails the gate |
@@ -226,23 +238,33 @@ observability, deployment, lifecycle, and exit cost.
 
 ### Pydantic AI
 
-Use as the current default agent kernel for Python agents that use Anthropic,
-Gemini, another non-OpenAI provider, or require provider-neutral typed
-boundaries, when these are important:
+Use as the current default portable Python model and agent runtime across
+supported approved providers when these are important:
 
 - typed inputs, outputs, dependencies, tools, and validation;
-- model and provider separation;
+- direct model requests without creating an agent;
+- model and provider separation with resolved capability profiles;
 - native and OpenAI-compatible provider support;
 - a clean path to Nebius Token Factory through a verified OpenAI-compatible
   provider profile;
 - MCP client integration;
 - testability through model and tool substitution;
-- optional durable execution integrations.
+- capabilities, declarative Agent Specs, and optional Harness specialists;
+- optional durable execution integrations;
+- OpenTelemetry instrumentation and Pydantic Evals.
 
-Use it for bounded single-agent applications, structured workflows controlled
-by application code, and agents invoked as steps inside another workflow. Do
-not wrap a one-request task or a fully known sequence in an agent merely to use
-the framework.
+Use it for portable direct requests, bounded single-agent applications,
+structured workflows controlled by application code, and agents invoked as
+steps inside another workflow. Use its direct model API when a one-request task
+needs low-level `ModelResponse` control. A no-tools single-request `Agent` is
+also appropriate for direct-call behavior when typed parsing, validation
+retries, or typed dependencies are required; the use of that primitive does
+not make a known sequence agentic.
+
+Keep provider-specific settings explicit and keep canonical state, routing
+governance, tools, authorization, budgets, telemetry, and evaluation
+application-owned. Use capabilities for reusable runtime behavior and Harness
+only when a richer portable specialist environment is a requirement.
 
 Do not treat Pydantic validation as authorization. Do not share one MCP client
 or toolset across users when that object carries one identity or credential.
@@ -274,26 +296,33 @@ restart from its beginning, so do not assume line-level continuation.
 Do not use LangGraph for every agent. A graph adds state schemas, persistence,
 migration, concurrency, replay, and operational ownership.
 
-### Temporal
+### Durable Workflow Owner
 
-Use Temporal around the selected direct, deterministic, agentic, or mixed
-control flow when work spans services or must survive process failure, long
-waits, human approvals, provider outages, timers, or irreversible side effects.
+Select one qualified workflow engine around the direct, deterministic,
+agentic, or mixed control flow when work spans services or must survive process
+failure, long waits, human approvals, provider outages, timers, or irreversible
+side effects. Compare Temporal, DBOS, Prefect, Restate, and any existing owner
+against language support, replay semantics, operations, recovery, and cost.
 
-Keep workflow code deterministic. Execute model calls, MCP calls, and external
-side effects in activities. Persist version identities and idempotency keys.
-Map MCP Task handles to Temporal workflow or activity identity when Tasks are
-exposed.
+Keep durable workflow code deterministic where the selected engine requires
+it. Execute model calls, MCP calls, and external side effects in activities or
+the engine's equivalent side-effect boundary. Persist version identities and
+idempotency keys. Map MCP Task handles to workflow or activity identity when
+Tasks are exposed.
 
 Do not put token-by-token model streaming inside durable workflow history.
 Store references or bounded summaries instead.
 
 ### OpenAI Agents SDK
 
-Use only after a capability is classified as agentic. Select it for an
-intentionally OpenAI-first profile when agents, agents-as-tools,
-handoffs, tools, sessions, guardrails, human approval, tracing, and MCP match the
-product.
+Use only after a capability is classified as agentic and a named OpenAI-native
+harness feature defeats the Pydantic AI portable path. Select it as a separate
+runtime adapter when agents-as-tools, handoffs, provider sessions, guardrails,
+human approval, tracing, or hosted tools are themselves product requirements.
+
+Keep application-owned canonical state, tool mediation, budgets, normalized
+events, and evaluation. Do not wrap the SDK inside Pydantic AI or infer its use
+only because the selected model is from OpenAI.
 
 Use the Responses model path for native OpenAI capabilities. A custom
 OpenAI-compatible base URL does not prove that another provider supports the
@@ -394,19 +423,20 @@ First decide whether the task needs an agent. Prefer:
 
 ```text
 FastAPI or existing application service
-  -> direct provider SDK call for one-request tasks
+  -> Pydantic AI direct model call for portable one-request tasks
+  -> official provider SDK for intentionally native task APIs
   -> deterministic application workflow for known sequences
-  -> OpenAI Agents SDK for an OpenAI-native dynamic loop
-  -> Pydantic AI for a non-OpenAI or provider-neutral typed dynamic loop
-  -> narrow application-local seam around the selected native provider SDK
+  -> Pydantic AI Agent for portable typed dynamic loops
+  -> provider-native runtime adapter only after an escape decision
+  -> application-owned logical runtime facade and canonical state
   -> direct typed tools
-  -> existing authoritative store when durable records or audit are required
+  -> existing authoritative store only when durable records or audit are required
   -> OpenTelemetry when cross-service trace correlation is required
 ```
 
-Add the full capability-aware `ModelProvider` contract only when multiple
-providers, routing, evaluated fallback, self-hosting, regional/data policy, or
-shared platform ownership creates semantic portability requirements. Add MCP
+Use Pydantic AI's model/provider/profile contract for multiple portable Python
+providers. Add a custom cross-runtime `ModelProvider` only when a proven
+non-Pydantic consumer must share the same semantic boundary. Add MCP
 only for independently reusable tools. Add LangGraph only when explicit graph
 semantics appear, independently of whether any node is agentic.
 
@@ -416,7 +446,7 @@ Use:
 
 ```text
 application API
-  -> Temporal workflow
+  -> selected durable workflow
   -> deterministic validation and model-call activities where required
   -> authorization and approval service
   -> idempotent tool or MCP activity
@@ -435,9 +465,9 @@ Use:
 LangGraph
   nodes: plan, retrieve, analyze, request approval, execute, verify
   checkpointer: execution state only
-  agent nodes: optional; use the selected OpenAI Agents SDK or Pydantic AI kernel
-    only where the model chooses actions or continuation
-  external side effects: Temporal activity or idempotent service call
+  agent nodes: optional; use Pydantic AI only where the model chooses actions
+    or continuation, or a justified native runtime activity
+  external side effects: durable activity or idempotent service call
 ```
 
 Do not use an unconstrained supervisor when the transitions are known.
@@ -471,8 +501,9 @@ Use explicit ownership rather than one global agent:
 Application
   -> deterministic logic, APIs, PostgreSQL, RBAC, and approvals
   -> general AI tasks
-       -> direct provider call or deterministic workflow where sufficient
-       -> OpenAI Agents SDK or Pydantic AI only for dynamic agent tasks
+       -> Pydantic AI direct request or deterministic workflow where sufficient
+       -> Pydantic AI Agent only for portable dynamic tasks
+       -> provider-native runtime only for a justified harness escape
   -> engineering tasks
        -> Codex SDK
        -> Codex app-server only for deep client integration
@@ -531,7 +562,8 @@ Separate:
   policy.
 - Agent working state: Bounded run-local plan, scratch data, and tool results.
 - Graph checkpoint: Exact graph execution state.
-- Temporal workflow state: Durable business-process progress.
+- Durable workflow state: Business-process progress owned by the selected
+  qualified engine.
 - Long-term memory: Selected governed facts, preferences, or experience.
 - External knowledge: Authoritative data retrieved under ACL.
 - Audit history: Actions, approvals, versions, and outcomes.
@@ -581,8 +613,10 @@ Do not use a model-based guardrail as the authorization layer.
 
 Describe only logical capabilities and boundaries:
 
-- agent kernel and typed application dependencies;
-- narrow provider seam or conditionally justified full `ModelProvider`;
+- application-owned runtime facade and typed application dependencies;
+- Pydantic AI model/provider/profile boundary for the portable path;
+- provider-specific settings and any justified native runtime escape;
+- conditionally justified cross-runtime `ModelProvider` only when required;
 - direct tools, ordinary APIs, and independently reusable MCP capabilities;
 - graph state, durable workflow state, long-term memory, knowledge, and audit
   as separate stores where present;
@@ -621,9 +655,11 @@ complete compatible identity, not only the model name.
 
 ## Official Sources
 
-- Pydantic AI: <https://ai.pydantic.dev/>
-- Pydantic AI Anthropic models: <https://ai.pydantic.dev/models/anthropic/>
-- Pydantic AI Google models: <https://ai.pydantic.dev/models/google/>
+- Pydantic AI: <https://pydantic.dev/docs/ai/>
+- Pydantic AI direct model requests: <https://pydantic.dev/docs/ai/core-concepts/direct/>
+- Pydantic AI Harness: <https://pydantic.dev/docs/ai/harness/>
+- Pydantic AI Anthropic models: <https://pydantic.dev/docs/ai/models/anthropic/>
+- Pydantic AI Google models: <https://pydantic.dev/docs/ai/models/google/>
 - LangChain agents: <https://docs.langchain.com/oss/python/langchain/agents>
 - LangGraph: <https://docs.langchain.com/oss/python/langgraph/overview>
 - Temporal: <https://docs.temporal.io/>

@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+attach-ubuntu-positive-01,true,"Open this project in a disposable Ubuntu Docker container from my Mac."
+attach-ubuntu-positive-02,true,"Reuse the Ubuntu development container and mount the current repository at workdir."
+attach-ubuntu-positive-03,true,"Configure VS Code Dev Containers for an Ubuntu test environment."
+attach-ubuntu-negative-01,false,"Write a production Dockerfile for this application."
+attach-ubuntu-negative-02,false,"Run this test suite directly on the current host."
+attach-ubuntu-negative-03,false,"Create a Kubernetes development namespace."

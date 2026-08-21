@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: "Use for GitHub PR creation from unmanaged local work or named branches: reuse or prepare feature branches, run format/whitespace/lint/test gates before committing, stage repo-root changes with git add -A, merge the latest base branch into the PR branch, push with explicit refspecs, open or reuse PRs, repair safe check failures, and report PR URLs/readiness. In an active unmanaged Agentic SDLC run, publish only the clean exact promoted SHA after passing UAT. Reject worktree-managed children and route them to local integration. Do not use for direct commit-and-push only."
+description: "Use only when explicitly asked to create/prepare a GitHub PR from unmanaged work or a named branch: validate, commit, merge base, push, open/reuse, and report readiness. In active Agentic SDLC, publish only the exact promoted SHA after UAT. Reject managed worktrees; use commit-push when no PR is wanted."
 ---
 
 # Create PR

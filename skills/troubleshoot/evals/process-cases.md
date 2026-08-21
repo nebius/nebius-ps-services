@@ -239,8 +239,18 @@ outcome, tool error, ordinary early stop, and unresolved outcome. Accept the
 four-section concise report, including `Confidence: High`, without requiring
 matrices or log tables. For an ordinary incomplete or malformed report, expect
 `continue: true`, `advisory_incomplete`, no correction, no tool denial, and no
-generated fallback. For a sensitive report, expect one bounded redaction
-correction and then a concise redacted safety fallback.
+generated fallback. Accept inline or Markdown local references whose decoded,
+canonical targets remain inside the full Git repository root, including
+sibling-project relative, native absolute, home-relative, and strict local
+`file:` forms. Include balanced or escaped parentheses and optional Markdown
+titles, and expect contained format defects to remain advisory. For secrets in
+raw or decoded targets, private endpoints, ambiguous Markdown, renderer-active
+schemes, outside-root targets, traversal, unsafe URI forms, or symlink escape,
+expect one terminal non-report warning, `sensitive_detected`, no continuation,
+no later tool denial, and no automatic replacement report. Generated fallback
+fields replace over-limit reference markup atomically instead of truncating it.
+The original assistant response may remain visible because Stop is not a
+pre-render suppression boundary.
 
 For a proven code defect repaired in source with passing reproducer, regression,
 and affected-boundary checks but no installation or fresh-session activation,

@@ -42,6 +42,8 @@ def _heartbeat(*, boot_id: str = "boot-a", sequence: int = 0) -> PeerHeartbeat:
         configured_role="passive",
         observed_owner_id="node-a",
         generation_id="a" * 64,
+        mtls_epoch=1,
+        certificate_fingerprint="d" * 64,
         digests=_digests("a"),
         service_healthy=True,
         route_ready=True,
@@ -276,6 +278,8 @@ def test_replay_guard_rejects_sequences_and_retired_boot_id_across_restart() -> 
     guard.accept(
         _heartbeat(sequence=3),
         authenticated_node_id="node-b",
+        authenticated_certificate_fingerprint="d" * 64,
+        authenticated_mtls_epoch=1,
         expected_cluster_id="cluster-a",
         expected_node_id="node-b",
     )
@@ -283,6 +287,8 @@ def test_replay_guard_rejects_sequences_and_retired_boot_id_across_restart() -> 
         guard.accept(
             _heartbeat(sequence=3),
             authenticated_node_id="node-b",
+            authenticated_certificate_fingerprint="d" * 64,
+            authenticated_mtls_epoch=1,
             expected_cluster_id="cluster-a",
             expected_node_id="node-b",
         )
@@ -290,6 +296,8 @@ def test_replay_guard_rejects_sequences_and_retired_boot_id_across_restart() -> 
     next_state = guard.accept(
         _heartbeat(boot_id="boot-b", sequence=0),
         authenticated_node_id="node-b",
+        authenticated_certificate_fingerprint="d" * 64,
+        authenticated_mtls_epoch=1,
         expected_cluster_id="cluster-a",
         expected_node_id="node-b",
     )
@@ -298,6 +306,8 @@ def test_replay_guard_rejects_sequences_and_retired_boot_id_across_restart() -> 
         restarted.accept(
             _heartbeat(boot_id="boot-a", sequence=4),
             authenticated_node_id="node-b",
+            authenticated_certificate_fingerprint="d" * 64,
+            authenticated_mtls_epoch=1,
             expected_cluster_id="cluster-a",
             expected_node_id="node-b",
         )
@@ -309,18 +319,24 @@ def test_replay_guard_requires_authenticated_identity_and_tracks_first_new_boot_
         guard.accept(
             _heartbeat(),
             authenticated_node_id="node-c",
+            authenticated_certificate_fingerprint="d" * 64,
+            authenticated_mtls_epoch=1,
             expected_cluster_id="cluster-a",
             expected_node_id="node-b",
         )
     guard.accept(
         _heartbeat(sequence=2),
         authenticated_node_id="node-b",
+        authenticated_certificate_fingerprint="d" * 64,
+        authenticated_mtls_epoch=1,
         expected_cluster_id="cluster-a",
         expected_node_id="node-b",
     )
     next_state = guard.accept(
         _heartbeat(boot_id="boot-b", sequence=7),
         authenticated_node_id="node-b",
+        authenticated_certificate_fingerprint="d" * 64,
+        authenticated_mtls_epoch=1,
         expected_cluster_id="cluster-a",
         expected_node_id="node-b",
     )
@@ -329,6 +345,8 @@ def test_replay_guard_requires_authenticated_identity_and_tracks_first_new_boot_
         guard.accept(
             _heartbeat(boot_id="boot-b", sequence=7),
             authenticated_node_id="node-b",
+            authenticated_certificate_fingerprint="d" * 64,
+            authenticated_mtls_epoch=1,
             expected_cluster_id="cluster-a",
             expected_node_id="node-b",
         )
@@ -380,6 +398,8 @@ def test_replay_guard_never_forgets_retired_boot_id() -> None:
         guard.accept(
             _heartbeat(boot_id=f"boot-{index}", sequence=0),
             authenticated_node_id="node-b",
+            authenticated_certificate_fingerprint="d" * 64,
+            authenticated_mtls_epoch=1,
             expected_cluster_id="cluster-a",
             expected_node_id="node-b",
         )
@@ -388,6 +408,8 @@ def test_replay_guard_never_forgets_retired_boot_id() -> None:
         guard.accept(
             _heartbeat(boot_id="boot-0", sequence=0),
             authenticated_node_id="node-b",
+            authenticated_certificate_fingerprint="d" * 64,
+            authenticated_mtls_epoch=1,
             expected_cluster_id="cluster-a",
             expected_node_id="node-b",
         )

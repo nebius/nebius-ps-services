@@ -93,12 +93,15 @@ prompts enter the workflow explicitly through
 recommended phase skill in local state. This keeps workflow phases from being
 selected by ordinary prompt matching outside an active Agentic SDLC run.
 
-Every phase skill owns a narrow responsibility. For example,
-`sdlc-create-requirements` owns `docs/requirements.md`, `sdlc-create-design`
-owns `docs/design.md`, `project-agent-instructions` owns the conditional
-v3-managed selected-project `AGENTS.md`, `sdlc-create-plan` owns a locked private
-task graph, and `sdlc-prepare-execution` owns the persistent integration
-resource.
+Every phase skill owns a narrow responsibility. `maintain-project-specs` is the
+single semantic, schema, template, validation, and receipt owner for
+`docs/requirements.md` and `docs/design.md`. Inside Agentic SDLC,
+`sdlc-create-requirements` and `sdlc-create-design` are routed authoring
+adapters that may update their respective managed records, then return
+validation to that shared owner. `project-agent-instructions` owns the
+conditional v3-managed selected-project `AGENTS.md` tail,
+`sdlc-create-plan` owns a locked private task graph, and
+`sdlc-prepare-execution` owns the persistent integration resource.
 `sdlc-implement-plan` owns task waves and ordered integration, while
 `sdlc-commit` owns final sealing and exact local promotion after evidence passes.
 
@@ -109,7 +112,7 @@ The always-present committed SDLC truth inside a target project is:
 - `<project>/docs/requirements.md`
 - `<project>/docs/design.md`
 
-After both tracked documents pass the Agentic owner validator with total
+After both tracked documents pass the shared owner validator with total
 status-aware feature traceability and receive a private full-file and
 traceability receipt, `project-agent-instructions` decides whether
 durable project-specific operating rules add to ancestor project instructions.
@@ -126,13 +129,16 @@ runtime state and must not be committed.
 
 Ownership is strict:
 
-- Only `sdlc-create-requirements` writes `docs/requirements.md`.
-- Only `sdlc-create-design` writes `docs/design.md`.
+- `maintain-project-specs` is the sole semantic, schema, template, validation,
+  and receipt owner of both canonical specs.
+- Inside Agentic SDLC, only the routed `sdlc-create-requirements` and
+  `sdlc-create-design` authoring adapters write their respective managed
+  records. They preserve stable IDs and return validation to the shared owner.
 - Only `project-agent-instructions` may create, attach, refresh, explicitly
   adopt, or explicitly retire a v3-managed selected-project `AGENTS.md`;
   human-owned or edited instruction files are preserved.
-- Other skills route changes back to the owning skill instead of editing those
-  files directly.
+- Other phase skills route spec changes through the matching authoring adapter
+  instead of editing either canonical document directly.
 
 ### Private local run state
 
@@ -390,33 +396,36 @@ external call and is not classified as an environment outage.
 
 ## Requirements, Design, And Project Instructions
 
-The two committed product-truth documents are created from templates in their
-owning skills:
+The two committed product-truth documents use rich Agentic authoring templates
+whose schema and managed-region ownership remain controlled by
+`maintain-project-specs`:
 
 - `sdlc-create-requirements/assets/templates/requirements.md.template`
 - `sdlc-create-design/assets/templates/design.md.template`
 
-`sdlc-create-requirements` uses the requirements template when
-`<project>/docs/requirements.md` does not exist. The template defines the
-front matter, source prompt, problem, desired outcome, users, success
-definition, constraints, environment, external systems, stable `REQ-*` blocks,
-acceptance criteria, negative criteria, validation method, test method,
-evaluation method, optional Live Experiment Environment details, open questions,
-decision log, and change log. The Live Experiment Environment section records
-status, non-production confirmation, safe access references, allowed and
-prohibited agent actions, test data, reset instructions, approvals, and
-evidence limits without storing secret values.
+When routed, `sdlc-create-requirements` uses the requirements template to
+author missing or changed managed requirement records. The template defines
+the source prompt, problem, desired outcome, users, success definition,
+constraints, environment, external systems, stable `REQ-*` blocks, acceptance
+criteria, negative criteria, validation method, test method, evaluation
+method, optional Live Experiment Environment details, open questions, decision
+log, and change log. The Live Experiment Environment section records status,
+non-production confirmation, safe access references, allowed and prohibited
+agent actions, test data, reset instructions, approvals, and evidence limits
+without storing secret values.
 
 The requirements template also records:
 
-- `created_by_skill: "sdlc-create-requirements"`
-- `updated_by_skill: "sdlc-create-requirements"`
-- a user edit policy that routes updates through `sdlc-create-requirements`
+- `created_by_skill: "maintain-project-specs"`
+- `updated_by_skill: "maintain-project-specs"`
+- a user edit policy that routes semantic ownership through
+  `maintain-project-specs` and Agentic authoring through
+  `sdlc-create-requirements`
 - an ID policy that forbids renumbering existing requirement IDs
 
-`sdlc-create-design` uses the design template when
-`<project>/docs/design.md` does not exist. The template defines the front
-matter, source requirements link, design summary, technology choices,
+When routed, `sdlc-create-design` uses the design template to author missing or
+changed managed feature records. The template defines the source requirements
+link, design summary, technology choices,
 architecture sections, stable `FEAT-*` feature blocks, requirements covered,
 context evidence, end-to-end feature flow, layer map, implementation
 boundaries, TDD success criteria, validation plan, test plan, evaluation plan,
@@ -425,19 +434,22 @@ change log.
 
 The design template also records:
 
-- `created_by_skill: "sdlc-create-design"`
-- `updated_by_skill: "sdlc-create-design"`
+- `created_by_skill: "maintain-project-specs"`
+- `updated_by_skill: "maintain-project-specs"`
 - `source_requirements: "docs/requirements.md"`
-- a user edit policy that routes updates through `sdlc-create-design`
+- a user edit policy that routes semantic ownership through
+  `maintain-project-specs` and Agentic authoring through `sdlc-create-design`
 - an execution plan policy stating that plans are local runtime artifacts and
   must not be committed
 - an ID policy that forbids renumbering existing feature IDs
 
 Project instructions intentionally have no fill-every-section template.
-`sdlc-start/scripts/validate_project_specs.py` validates complete tracked
-Agentic-owned documents, managed blocks, ready-feature completeness,
-marker/body agreement, and total status-aware REQ-to-FEAT traceability before
-emitting the private v3 prerequisite receipt.
+`maintain-project-specs` validates complete tracked canonical documents,
+managed blocks, ready-feature completeness, marker/body agreement, and total
+status-aware REQ-to-FEAT traceability before emitting the private v3
+prerequisite receipt. The `sdlc-start/scripts/validate_project_specs.py`
+adapter invokes that shared validator; it does not define a second spec schema
+or receipt authority.
 `project-agent-instructions/references/decision-contract.md` defines layered
 discovery, structured evidence-backed rules, deterministic rendering, the 2 KiB
 preferred and 4 KiB hard body budgets, provenance plus private ownership,
@@ -565,10 +577,11 @@ The preflight must verify and record:
   placement in the workflow contract
 - `sdlc-prepare-execution` discovery, task-graph/state-schema contract, and
   deterministic scheduler plus real-Git lifecycle tests
-- installed `worktree`, installed `nebius-grafana-query`, installed
-  `project-agent-instructions`, and conditional `troubleshoot` availability plus
-  source-installed parity for every required SDLC skill, both runtime support
-  classes, and `sdlc-workflow-test`
+- installed `maintain-project-specs`, installed `worktree`, installed
+  `nebius-grafana-query`, installed `project-agent-instructions`, and
+  conditional `troubleshoot` availability plus source-installed parity for
+  every required SDLC skill, all five runtime support skills, and
+  `sdlc-workflow-test`
 - named regression capabilities for prompt workspace/history/exact manual
   rename/lifecycle, owner-issued full-spec validation receipts; execution
   scope, sessions, `task-recover`, resource-free
@@ -643,13 +656,14 @@ new workflow CLI and do not let hooks orchestrate phases.
 
 Required happy-path evidence:
 
-- `sdlc-create-requirements` creates committed requirements with stable
-  `REQ-*` IDs.
+- `sdlc-create-requirements`, routed as the shared owner's requirements
+  authoring adapter, creates committed requirements with stable `REQ-*` IDs.
 - `sdlc-start` creates or resumes private local run state and recommends one
   next skill.
 - `sdlc-gather-context` records a compact context pack, including layer and
   boundary facts when the feature may span a vertical slice.
-- `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
+- `sdlc-create-design`, routed as the shared owner's design authoring adapter,
+  creates committed design with stable `FEAT-*` IDs.
 - `project-agent-instructions` records verified spec, config, decision, and
   ownership state and conditionally maintains a selected-project `AGENTS.md`
   only when tracked evidence requires durable project rules.
@@ -840,9 +854,11 @@ the contract.
 
 ### `sdlc-create-requirements`
 
-Converts user intent, tickets, issues, Slack threads, Confluence pages, GitHub
-context, or approved change requests into durable requirements in
-`docs/requirements.md`. It preserves stable `REQ-*` IDs, records acceptance
+Acts as the routed Agentic SDLC requirements-authoring adapter to
+`maintain-project-specs`. It converts user intent, tickets, issues, Slack
+threads, Confluence pages, GitHub context, or approved change requests into
+durable managed requirement records in `docs/requirements.md`, preserves
+stable `REQ-*` IDs, records acceptance
 and negative criteria, records optional Live Experiment Environment details for
 safe later evaluation, and marks unclear items as open questions instead of
 guessing.
@@ -880,8 +896,10 @@ pages, threads, or logs.
 
 ### `sdlc-create-design`
 
-Converts requirements and gathered context into `docs/design.md`. It maps
-stable `REQ-*` blocks to stable `FEAT-*` blocks, defines architecture,
+Acts as the routed Agentic SDLC design-authoring adapter to
+`maintain-project-specs`. It converts requirements and gathered context into
+managed feature records in `docs/design.md`, maps stable `REQ-*` blocks to
+stable `FEAT-*` blocks, defines architecture,
 boundaries, vertical end-to-end feature flow, layer map, data flow, control
 flow, state, error handling, security, observability, validation, tests,
 evaluation, rollback, and done criteria.

@@ -18,6 +18,18 @@ for that skill when the task contract allows source edits. For read-only or
 report-only work, the agent should report why source capture was skipped.
 `align-skill` can add or repair this rule during skill alignment.
 
+When `align-skill` completes an authorized writable target, it also creates or
+updates that skill's canonical trigger eval CSV with positive and near-miss
+negative cases. Every source-owned skill in this catalog now carries that
+canonical CSV and passes strict catalog validation. Ordinary validation keeps
+legacy-input compatibility for external or not-yet-migrated targets.
+
+Front matter descriptions stay compact and front-load each skill's job and
+nearest routing boundary because Codex initially budgets only the skill name,
+description, and path. The full `SKILL.md` still loads after selection, so
+workflow detail belongs in the body and focused supporting files rather than
+the always-visible description.
+
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Table of Contents
@@ -41,7 +53,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, report-only child code review, lint/syntax, and security. |
-| `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
+| `align-skill` | Implicit allowed | Align existing or scaffolded Codex or Agent Skill folders with lean progressive disclosure, precise trigger boundaries, safety review, target-specific evals, and tiered evidence. |
 | `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, bounded research for unresolved source conflicts, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Neutral findings-first review of local code; direct `$code-review` runs fix safe scoped findings and validate them with focused repository-native proof, while implicit and nested runs remain report-only. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
@@ -79,7 +91,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `ai-stack` | Implicit allowed | Classify AI work as direct model calls, deterministic workflows, or agents, then select the smallest sufficient model, SDK, agent, Codex, interoperability, retrieval, evaluation, safety, and operations stack with explicit component and evidence states. |
+| `ai-stack` | Implicit allowed | Classify AI work as direct calls, deterministic workflows, or agents; use Pydantic AI as the portable Python default; then select bounded specialist, native-runtime, durability, interoperability, retrieval, evaluation, safety, and operations layers with explicit evidence. |
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
@@ -113,8 +125,9 @@ Agentic SDLC workflow, starting with
 `$sdlc-start run <prompt-ref-or-file>`; the external
 `sdlc-workflow-test` verifier is not a phase. `project-agent-instructions` is
 shared explicit-only runtime support and a golden-path step after design;
-`troubleshoot` is required runtime support for ambiguous failure diagnosis but
-remains absent from the golden phase sequence.
+`maintain-project-specs` is the canonical spec owner and shared runtime
+dependency; `troubleshoot` is required runtime support for ambiguous failure
+diagnosis but remains absent from the golden phase sequence.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
@@ -122,9 +135,9 @@ remains absent from the golden phase sequence.
 | `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
 | `sdlc-classify-failure` | Explicit only | Validate normalized failure/diagnosis records, enforce repair budgets and design admission, and route proven causes or conditional troubleshooting. |
 | `sdlc-commit` | Explicit only | Seal final integration changes, ff-only promote the exact verified tip to the unchanged project branch, and non-force-clean integration resources; never pushes. |
-| `sdlc-create-design` | Explicit only | Create initial design or perform evidence-gated failure redesign with positive system-contract proof, stable feature IDs, and required approval. |
+| `sdlc-create-design` | Explicit only | Author canonical `FEAT-*` records as the routed Agentic SDLC design adapter to `maintain-project-specs`, including evidence-gated failure redesign. |
 | `sdlc-create-plan` | Explicit only | Create a locked task graph or append-only corrective plan vN+1 that preserves completed definitions/digests and binds the diagnosis/oracle. |
-| `sdlc-create-requirements` | Explicit only | Create or update `docs/requirements.md` from user prompts, tickets, stories, change requests, and optional safe live experiment environment details while preserving stable requirement IDs. |
+| `sdlc-create-requirements` | Explicit only | Author canonical `REQ-*` records as the routed Agentic SDLC requirements adapter to `maintain-project-specs`, preserving stable IDs and safe environment boundaries. |
 | `sdlc-evaluate` | Explicit only | Evaluate acceptance criteria and emit normalized, commit-bound failure events; use Grafana only for a predefined evidenced operational gate. |
 | `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
 | `sdlc-gui-test` | Explicit only | Control and evaluate GUI behavior through Computer Use, Browser, or Playwright as required, with screenshots or accessibility snapshots. |
@@ -340,7 +353,10 @@ repairs concise report-only Help for every created or aligned skill, covering
 each public action, positional argument, and flag. Before it claims a target
 skill is aligned, it applies `code-review` in review-only mode and
 `apply-security` in advisory or scan mode to the target skill scope, and it
-reports fixed, deferred, skipped, incomplete, or blocking findings.
+reports fixed, deferred, skipped, incomplete, or blocking findings. For a
+significantly long or overloaded `SKILL.md`, it conditionally classifies blocks,
+preserves safety-critical rationale, records comparable context cost, and
+supports specific over-budget exceptions instead of mechanically summarizing.
 
 ### `brainstorm`
 
@@ -409,7 +425,8 @@ user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
 checklist review of an existing proposal, `app-stack` directly for a
 product-stack-only request, `ai-stack` directly for an AI-stack-only request,
-and `sdlc-create-design` for Agentic SDLC-owned `docs/design.md`. It also
+and `sdlc-create-design` as the routed Agentic authoring adapter for canonical
+`docs/design.md` owned by `maintain-project-specs`. It also
 accepts a proven causal handoff from `troubleshoot`
 when the durable remediation changes a system contract such as a component
 boundary, public interface, data owner, migration, or cross-component workflow.
@@ -464,22 +481,30 @@ scoring candidates, and assigns every component `Required`, `Conditional`,
 documented`, or `Assumed`.
 
 Before selecting products, it classifies each capability as a direct model
-call, deterministic workflow containing model calls, or agent. Direct OpenAI
-text or reasoning generation supported by Responses uses an official OpenAI
-SDK plus the Responses API; other direct workloads use the official
-task-specific API. Intentionally OpenAI-native agents use the OpenAI Agents
-SDK. Python agents using Anthropic, Gemini, another non-OpenAI provider, or a
-provider-neutral typed boundary use Pydantic AI by default. Coding-focused
-engineering specialists use the Codex SDK; Codex app-server is added only for
-deep product clients that need its authentication, conversation-history,
-approval, and streamed-event protocol. Graph and durable orchestration are an
-independent axis and may wrap deterministic or agentic control flow.
+call, deterministic workflow containing model calls, or agent. Portable Python
+direct-call behavior uses either Pydantic AI's low-level direct API or a
+no-tools single-request `Agent` when typed parsing, validation retries, or
+typed dependencies are required; the primitive does not change the behavior
+classification. Intentionally provider-specific tasks may use their official
+task APIs. Portable Python model-directed agents across supported providers use
+Pydantic AI `Agent` by default; capabilities and Harness are conditional
+specialist layers. Provider-native agent SDKs are separate evaluated runtime
+escapes for named harness requirements and are never nested inside Pydantic AI.
+Coding-focused engineering specialists may use the Codex SDK. Graph and durable
+orchestration remain an independent axis.
 
-The skill keeps its dated baseline replaceable: LangGraph only for explicit
-graph semantics, Temporal for durable cross-service execution, an internal
-capability-aware provider contract only when semantic portability is real,
-official Tier 1 MCP SDKs as conformance authority, and benchmark-gated PyTorch,
-serving, retrieval, MLflow, and OpenTelemetry layers. Use `app-stack` for the
+The application retains the logical runtime facade, canonical run and
+conversation state, model-routing governance, tools, authorization, budgets,
+telemetry, evaluation, and release identity. The facade stays in-process until
+a scale or ownership trigger justifies a service; gateways, queues, multiple
+stores, durable engines, and multi-agent topologies remain conditional.
+
+The skill keeps its dated baseline replaceable: Pydantic AI model/provider
+profiles for portable execution, an additional custom provider protocol only
+for a proven cross-runtime consumer, LangGraph only for explicit graph
+semantics, a qualified workflow engine for durable execution, official Tier 1
+MCP SDKs as conformance authority, and benchmark-gated PyTorch, serving,
+retrieval, MLflow, and OpenTelemetry layers. Use `app-stack` for the
 surrounding product stack,
 `research` for deep due diligence on one choice, and `design` for cross-layer
 synthesis and `/plan`. Its optional implementation handoff is logical-only and
@@ -631,11 +656,15 @@ valid directly from the primary source project without reopening first.
 Only the exact previous generated workspace shape may be migrated by
 `workspace init` or `run`; reuse reports `WORKFLOW_UPGRADE_REQUIRED` and every
 tampered folder/task/argument/helper fails before lane or filesystem mutation.
-The generated `Task Implementer: Show Pending Lane Changes` task is read-only:
-it reports source/lane commits, aggregate project-relative changes, active and
-pending generations, pending sealed summaries, and the exact next public
-action. A legacy generation is labelled `summary unavailable for legacy
-generation`; `lane-report` remains internal and does not add a sixth action.
+The generated `Task Implementer: Show Lane Status` task is strictly read-only.
+Its concise human view reports persistent-lane generations, current or latest
+task/worker/wave progress, current and remaining steps, and the exact next
+public action; explicit `--json` returns the same bounded `lane-report-v2`
+projection. It does not compute or expose changed files, statistics, commits,
+branches, prompt content, private identities, state paths, or summaries. Two
+matching observations are required, with one retry before `WORKSPACE_BUSY`.
+Legacy-only progress remains unavailable rather than reconstructed, and
+`lane-report` stays internal without adding a sixth action.
 
 An explicit init or run binds the current Codex session. In that bound session,
 every direct prompt still runs normally in the current agent. The separate
@@ -1029,7 +1058,8 @@ steering ledger for accepted prompt revisions, while
 `steering/auto-steering.json` stores machine-readable
 dispositions and compact reminders. Requirements, design, or generated
 project-instruction changes captured in steering still route through their
-owning skills before implementation treats them as true.
+authoring adapters or instruction owner before implementation treats them as
+true.
 `docs/requirements.md` may also record an optional Live Experiment Environment
 so later evaluation and UAT can use a confirmed non-production or disposable
 target with safe connection, allowed-action, reset, and evidence rules.
@@ -1067,9 +1097,10 @@ workflows and does not refine, edit, or execute work from the hook process.
 See `docs/agentic-sdlc-design.md` for the architecture, template ownership,
 local state layout, hook boundaries, and full skill-by-skill lifecycle.
 
-- `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
-  prompts, tickets, approved change requests, and optional safe live experiment
-  environment details while preserving stable `REQ-*` IDs.
+- `sdlc-create-requirements`: acts as the routed requirements-authoring adapter
+  to `maintain-project-specs`, creating or updating managed `REQ-*` records
+  from user prompts, tickets, approved change requests, and optional safe live
+  experiment environment details while preserving stable IDs.
 - `sdlc-start`: initializes the private prompt workspace, accepts immutable
   prompt-v3 revisions with Ask-only required input, compiles requirements with
   selective stable clarifications, durably queues explicit cross-prompt run
@@ -1081,20 +1112,24 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-gather-context`: builds compact feature context packs from official docs,
   internal sources, code, tests, and layer-boundary evidence when a vertical
   slice may apply.
-- `sdlc-create-design`: creates or updates `docs/design.md`, maps requirements to
-  stable `FEAT-*` blocks, records selected and rejected design options, and
-  defines vertical feature flow, layer map, implementation, validation, test,
-  evaluation, rollout, and rollback boundaries. Failure-driven redesign
+- `sdlc-create-design`: acts as the routed design-authoring adapter to
+  `maintain-project-specs`, creating or updating managed `FEAT-*` records,
+  mapping requirements, recording selected and rejected design options, and
+  defining vertical feature flow, layer map, implementation, validation,
+  test, evaluation, rollout, and rollback boundaries. Failure-driven redesign
   additionally requires positive system-contract proof, valid
   evaluator/environment, reproducibility, high confidence, affected-feature
   closure, rollback, and durable approval for broader changes.
 - `project-agent-instructions`: after an owner receipt validates requirements,
   design, and traceability, decides whether tracked evidence justifies durable
   selected-project rules; deterministically renders within a 2 KiB preferred
-  and 4 KiB hard budget, preserves human-owned files, binds v3 managed output
-  to private ownership, guards adoption/retirement, resolves the nearest
-  effective marker ancestor for nested discovery, fingerprints effective Codex
-  config, and rejects untracked evidence or unresolved recovery state.
+  and 4 KiB hard budget, rejects target-inapplicable decisions before render
+  publication, serializes private-rules revision from exact predecessor
+  ownership with rerunnable state publication, preserves human-owned files,
+  binds v3 managed output to private ownership,
+  guards adoption/retirement, resolves the nearest effective marker ancestor
+  for nested discovery, fingerprints effective Codex config, and rejects
+  untracked evidence or unresolved recovery state.
 - `sdlc-auto-steering`: refreshes private active-run steering, records every
   mid-run user prompt safely, classifies entries, derives compact reminders,
   and routes requirements, design, project-instruction, docs, or human-input
@@ -1616,8 +1651,8 @@ progress; after the exact private state update records exhaustion, other tool us
 stops and a concise user-visible report is returned. An ordinary incomplete,
 malformed, partial, `FAIL`, or `UNKNOWN` report is advisory: the Stop hook
 records it without requesting another turn, denying later tools, or emitting a
-generated fallback. Sensitive report content and exact remediation-budget
-exhaustion retain one bounded correction and a redacted concise fallback. When
+generated fallback. Exact remediation-budget exhaustion retains one bounded
+correction and a redacted concise fallback. When
 the hook supplies an exhausted-budget report, the assistant returns it verbatim
 instead of rewriting its exact marker-derived fields. Historical exhausted v1 data
 markers remain report-only without requiring invented evidence or authored
@@ -1627,7 +1662,17 @@ state uses the canonical v4 data schema. A new user instruction is required for
 fresh state; an exhausted tranche cannot be reopened. The optional
 `troubleshoot/assets/hooks` bundle enforces the
 recorded private task-state budget at supported `UserPromptSubmit`, `PreToolUse`,
-and `Stop` boundaries. Every canonical attempt is bound to the marker's exact blocker key,
+and `Stop` boundaries. Its v3 report obligation records one terminal status
+without a correction counter. Ordinary sensitive or unsafe reports stop with a
+generic warning and no automatic replacement; Stop does not retract output
+already rendered by the host. Local report evidence prefers repository-relative
+labels and admits relative, native absolute, home-relative, or strict local
+`file:` targets only when canonical resolution keeps them inside the full Git
+repository root. Without a proven Git root, absolute, home-relative, and local
+`file:` forms remain unsafe. Contained format defects remain advisory;
+outside-root, escaping, ambiguous or renderer-active, sensitive, or unsafe-URI
+targets remain terminal. Every canonical
+attempt is bound to the marker's exact blocker key,
 so an old ledger copied onto an independent issue is rejected as invalid rather
 than exhausting that issue. The hook does not infer causal identity or attempts
 from raw command failures. Attempt entries are appended only after remediation
@@ -1655,10 +1700,10 @@ single-Stop arbiter entry. This is a current-tree inventory, not a fixed allowli
 | `UserPromptSubmit` for all prompts | `prompt-session-intake` [`prompt_session_intake.py`](prompt-session-intake/assets/hooks/prompt_session_intake.py) | Binds only exact Task Implementer or Agentic SDLC init/run invocations. Later direct turns always pass to the current agent; eligible safe input stages metadata-only event-v2 session/turn causality and never a prompt body. The current agent records merge/no-op/sensitive and only a durable project-intent projection may reach the canonical prompt through an operation-and-projection-bound adapter. Secrets, stale provenance, conflicts, unsafe state, ambiguity, and internal capture errors skip persistence without stopping delivery. Unbound, Stop-generated, compaction, system, and subagent prompts do not stage. The hook never edits a workflow prompt or starts a run. |
 | `PreToolUse` matching `^Bash$` | `agent-nebius-auth-setup` [`pre_tool_use_nebius_auth.py`](agent-nebius-auth-setup/assets/hooks/pre_tool_use_nebius_auth.py) | Activates only for Nebius-sensitive Bash commands. It resolves the explicit task project or sanitized default profile, validates the canonical owned mode-`0600` credential, rejects token or environment disclosure and conflicting auth state, and rewrites an allowed command with renewable project/profile/credential context. Unrelated Bash commands pass unchanged; relevant unsafe or internally failing cases are denied. |
 | `PreToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `sdlc-start` [`pre_tool_use_sdlc_policy.py`](sdlc-start/assets/hooks/pre_tool_use_sdlc_policy.py) | Applies policy only when an active Agentic SDLC run covers the working directory. It blocks dangerous shell patterns, secret-bearing payloads, unauthorized Git, GitHub, merge, and MCP actions, can warn about spec-phase drift, and records private hook history. No active run passes immediately; corrupt active state or internal failure denies the tool call. |
-| `PreToolUse` matching `*` | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Validates the parent-authored remediation marker and its authorization handshake. A normally missing marker passes. Pending, invalid, exhausted, or terminally locked state blocks tool use except for an exact `apply_patch` that updates only the advertised `current.md`. Ordinary report-quality gaps never deny tools; only an active sensitive-output redaction correction remains a report-related tool boundary. |
+| `PreToolUse` matching `*` | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Validates the parent-authored remediation marker and its authorization handshake. A normally missing marker passes. Pending, invalid, exhausted, or terminally locked state blocks tool use except for an exact `apply_patch` that updates only the advertised `current.md`. Ordinary report-quality and sensitive-detection dispositions never deny later tools; incompatible report state remains a trusted-state boundary requiring a fresh session. |
 | `PreToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Requires current planning and a verified project-rule render before selected-project implementation, protects canonical specs and lifecycle-owned `${CODEX_HOME}/project-specs` state, recognizes non-symlinked coordinators from canonical `~/.agents/skills`, binds ordinary project-instructions evidence to the exact current-session private bundle, and parses shell quoting before classifying effects. The sole alternate bundle admits exact Task Implementer run-owned inspect and render during reconciliation-required, authenticated by a canonical installed or sibling-source helper for the active prepared integration checkout; the hook rechecks its command digest and selected outer project. Apply and verify retain the ordinary terminal seal path. Proven fixed writes to config, hooks, task state, installed skills, credentials, and other external user files pass through epoch-neutral to their actual policy owners. Mixed, dynamic, ambiguous, selected-project, malformed coordinator-shaped, unattested alternate-bundle, or lifecycle-private effects retain their gates. An exact digest-pinned commit transaction requires a sealed/waived direct lifecycle or Task Implementer owner evidence; raw Git stays denied. Exact current-session runtime/decision authoring, private-input mode tightening, and canonical spec intent-to-add break bounded bootstrap cycles without opening lifecycle state or Git-index mutation. Multiple implementation edits remain open after the first write. |
 | `PostToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Silently marks a successful material selected-project write as reconciliation-required and advances the compare-and-swap write epoch. Concurrent recorders converge; a late success after planning or sealing invalidates that later evidence and reopens reconciliation. The first authenticated Task Implementer `wave-plan` similarly records its successful run-owned lane checkpoint before dispatch; failed or unbound commands cannot claim it. Proven external effects, exact bootstrap transitions, admitted canonical spec reconciliation, and a completed digest-pinned commit prepare with its exact consumed authorization and claim remain epoch-neutral. Recording errors and invalid completed coordinator-shaped calls stay visible. After independently verifying the canonical current-session terminal project-instructions apply, it advances to `seal-armed`. It cannot undo a completed side effect. |
-| `Stop` for all stops | shared [`stop_lifecycle_arbiter.py`](maintain-project-specs/assets/hooks/stop_lifecycle_arbiter.py), carried byte-identically by `maintain-project-specs`, `prompt-session-intake`, `sdlc-start`, and `troubleshoot` | Runs the troubleshooting, project-contract, SDLC, and prompt-session Stop evaluators sequentially within one 25-second monotonic budget below the registered 30-second host timeout. A terminal result takes precedence; otherwise every initial continuation reason is combined. Each explicit troubleshoot turn should supply the concise outcome, cause/fix, verification, and next-action report. Valid delivery is finalized transactionally only after no peer continuation remains; ordinary report-quality gaps record an advisory result and never request continuation or emit a fallback. Sensitive output and exact remediation-budget exhaustion retain bounded fail-closed reporting. Project reconciliation still requests one accumulated semantic review and a conditional project-instructions decision; verified `not-needed` leaves a missing file absent. Prompt-session cleanup always passes Stop and best-effort releases writer provenance; incomplete or invalid capture never requests continuation. Missing managed project state fails closed for its owning delegate. Legacy independently registered Stop entries are migrated only when an exact singleton managed command is proven. |
+| `Stop` for all stops | shared [`stop_lifecycle_arbiter.py`](maintain-project-specs/assets/hooks/stop_lifecycle_arbiter.py), carried byte-identically by `maintain-project-specs`, `prompt-session-intake`, `sdlc-start`, and `troubleshoot` | Runs the troubleshooting, project-contract, SDLC, and prompt-session Stop evaluators sequentially within one 25-second monotonic budget below the registered 30-second host timeout. Every delegate runs for lifecycle and cleanup effects; the first terminal result in delegate order takes precedence, otherwise every initial continuation reason is combined. Each explicit troubleshoot turn should supply the concise outcome, cause/fix, verification, and next-action report. Valid delivery is finalized transactionally only after no peer continuation remains; ordinary report-quality gaps record an advisory result and never request continuation or emit a fallback. Sensitive or unsafe ordinary output records `sensitive_detected`, stops with one generic non-report warning, and never requests an automatic replacement report; exact remediation-budget exhaustion retains its bounded correction and fallback. Project reconciliation still requests one accumulated semantic review and a conditional project-instructions decision; verified `not-needed` leaves a missing file absent. Prompt-session cleanup always passes Stop and best-effort releases writer provenance; incomplete or invalid capture never requests continuation. Missing managed project state fails closed for its owning delegate. Legacy independently registered Stop entries are migrated only when an exact singleton managed command is proven. |
 
 Matching registrations are independent. Codex starts matching command hooks for
 the same event concurrently, so they must not depend on ordering or

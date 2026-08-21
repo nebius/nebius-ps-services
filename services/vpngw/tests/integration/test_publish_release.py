@@ -7,6 +7,10 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_SOURCE = PROJECT_ROOT / "publish-release.sh"
 RUNTIME_VERSION_SOURCE = PROJECT_ROOT / "src" / "nebius_vpngw" / "runtime_version.py"

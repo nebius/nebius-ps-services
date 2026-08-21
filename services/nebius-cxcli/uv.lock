@@ -536,20 +536,6 @@ wheels = [
 ]
 
 [[package]]
-name = "grpcio-status"
-version = "1.80.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "grpcio" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/ed/105f619bdd00cb47a49aa2feea6232ea2bbb04199d52a22cc6a7d603b5cb/grpcio_status-1.80.0.tar.gz", hash = "sha256:df73802a4c89a3ea88aa2aff971e886fccce162bc2e6511408b3d67a144381cd", size = 13901, upload-time = "2026-03-30T08:54:34.784Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/80/58cd2dfc19a07d022abe44bde7c365627f6c7cb6f692ada6c65ca437d09a/grpcio_status-1.80.0-py3-none-any.whl", hash = "sha256:4b56990363af50dbf2c2ebb80f1967185c07d87aa25aa2bea45ddb75fc181dbe", size = 14638, upload-time = "2026-03-30T08:54:01.569Z" },
-]
-
-[[package]]
 name = "idna"
 version = "3.15"
 source = { registry = "https://pypi.org/simple" }
@@ -830,22 +816,22 @@ wheels = [
 
 [[package]]
 name = "nebius"
-version = "0.3.59"
+version = "0.5.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "certifi" },
     { name = "cryptography" },
     { name = "grpcio" },
-    { name = "grpcio-status" },
     { name = "portalocker" },
     { name = "protobuf" },
     { name = "pyjwt" },
     { name = "pyyaml" },
+    { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ec/d0/03db9264d0d40143bcec22ebbe326b3110217d90c22f50fbc6ea2acc870d/nebius-0.3.59.tar.gz", hash = "sha256:10902a2e7263af1cba738e22837bb3da1c583323af4f7ebd1619ef94f0fc0983", size = 875801, upload-time = "2026-04-21T09:14:46.032Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/c3/1c4ba2ec6476557dd1e966673aea38fbce35bdaa2772d918dc476ad67084/nebius-0.5.6.tar.gz", hash = "sha256:09618a8378330bc3293cc2af6d862b1af4bcb3217f44f4aef0d4111a02d4bf60", size = 1129044, upload-time = "2026-08-19T09:25:39.176Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/3f/838451051501d8ac4b0fe4af99849d0689a9b90f9b1bfca7643bac00ef0e/nebius-0.3.59-py3-none-any.whl", hash = "sha256:24cf5bb2c6b29f930719f7c6aea3803c911116fcc4da9ac53decc1cb855aea47", size = 1224578, upload-time = "2026-04-21T09:14:43.593Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/18/8b9fb634ff16cc7b091427f0b24f6e5cca2249a0b35943e77e8a94b98dc5/nebius-0.5.6-py3-none-any.whl", hash = "sha256:c1627521751c31716fd568b9ed2a3422b7e752b0f92e6bab2b4ebb2f1638e8bb", size = 1082391, upload-time = "2026-08-19T09:25:36.874Z" },
 ]
 
 [[package]]
@@ -881,7 +867,7 @@ requires-dist = [
     { name = "click", marker = "extra == 'dev'", specifier = ">=8.1.7,<8.4.0" },
     { name = "googleapis-common-protos", specifier = ">=1.74.0,<2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.0,<2.0.0" },
-    { name = "nebius", specifier = ">=0.3.59,<1.0.0" },
+    { name = "nebius", specifier = ">=0.4.0,<1.0.0" },
     { name = "pynacl", specifier = ">=1.5.0,<2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3,<10.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0,<7.0.0" },

@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+publish-release-positive-01,true,"Use publish-release to create the next GitHub Release end to end."
+publish-release-positive-02,true,"Set up this project's release changelog helper and workflow assets."
+publish-release-positive-03,true,"Prepare merge tag verify and report the package release assets."
+publish-release-negative-01,false,"Create a pull request without publishing a release."
+publish-release-negative-02,false,"Publish a container image to the registry."
+publish-release-negative-03,false,"Write only the GitHub Actions release workflow."

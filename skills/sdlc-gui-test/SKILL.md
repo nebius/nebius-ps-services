@@ -1,6 +1,6 @@
 ---
 name: sdlc-gui-test
-description: "Use only as part of the Agentic SDLC workflow; use when browser-based GUI behavior must be controlled, observed, screenshotted, and evaluated against acceptance criteria through the declared harness, including required human-like computer-use UAT or Browser/Playwright when allowed."
+description: "Use only as part of the Agentic SDLC workflow; control, observe, screenshot, and evaluate browser GUI behavior through the declared harness, including human-like computer-use UAT or Browser/Playwright when allowed."
 ---
 
 # GUI Test
@@ -109,8 +109,11 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

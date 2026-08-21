@@ -34,7 +34,9 @@ def main() -> int:
         "reporting helper": read("scripts/prompt_workspace_reporting.py"),
         "resume helper": read("scripts/prompt_workspace_resume.py"),
         "metadata": read("agents/openai.yaml"),
-        "evals": read("evals/trigger-prompts.md"),
+        "evals": read("evals/workflow-cases.md")
+        + "\n"
+        + read("evals/trigger-prompts.csv"),
         "repo README": REPO_README.read_text(encoding="utf-8")
         if source_checkout
         else "",
@@ -265,12 +267,15 @@ def main() -> int:
         ),
         "reporting helper": (
             'SUMMARY_SCHEMA = "task-implementer/run-summary-v1"',
+            'LANE_REPORT_SCHEMA = "task-implementer/lane-report-v2"',
             '"--no-ext-diff"',
             '"--no-textconv"',
             "def diff_statistics",
             "def record_source_head_at_open",
             "def lane_report",
-            "summary unavailable for legacy generation",
+            "def render_lane_report",
+            "def _lane_state_digest",
+            '"WORKSPACE_BUSY"',
             "queue_activation_pending",
         ),
         "resume helper": (
@@ -352,7 +357,7 @@ def main() -> int:
             "FEAT-017",
             "resume-control-v1",
             "FEAT-019",
-            "Immutable Task Implementer completion reporting",
+            "Concise zero-write Task Implementer lane status",
         ),
     }
     if not source_checkout:

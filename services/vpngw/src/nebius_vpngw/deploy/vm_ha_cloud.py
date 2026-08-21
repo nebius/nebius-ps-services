@@ -7,11 +7,164 @@ raises instead of falling back to the ordinary provisioning scaffold path.
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import time
 import typing as t
-from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
+
+VM_HA_REQUEST_TIMEOUT_SECONDS = 30.0
+VM_HA_PER_RETRY_TIMEOUT_SECONDS = 10.0
+VM_HA_REQUEST_RETRIES = 3
+VM_HA_OPERATION_TIMEOUT_SECONDS = 300.0
+VM_HA_OPERATION_POLL_INTERVAL_SECONDS = 1.0
+
+
+def nebius_request_error_code_is(error: BaseException, code_name: str) -> bool:
+    """Match one typed Nebius SDK request status without parsing its message."""
+
+    try:
+        from nebius.aio.service_error import RequestError
+    except ImportError:
+        return False
+    status_code = getattr(getattr(error, "status", None), "code", None)
+    return isinstance(error, RequestError) and (getattr(status_code, "name", None) == code_name)
+
+
+def operation_status_lookup_unsupported(error: BaseException) -> bool:
+    """Return whether the SDK lacks only the generic operation lookup API."""
+
+    return nebius_request_error_code_is(error, "UNIMPLEMENTED")
+
+
+def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
+    value: dict[str, t.Any] = {
+        "timeout": VM_HA_REQUEST_TIMEOUT_SECONDS,
+        "auth_timeout": VM_HA_REQUEST_TIMEOUT_SECONDS,
+        "per_retry_timeout": VM_HA_PER_RETRY_TIMEOUT_SECONDS,
+        "retries": VM_HA_REQUEST_RETRIES,
+    }
+    if operation_id:
+        value["metadata"] = (("x-idempotency-key", operation_id),)
+    return value
+
+
+def wait_vm_ha_operation(operation: t.Any) -> None:
+    if not callable(getattr(operation, "sync_wait", None)):
+        raise RuntimeError("VM-HA mutation returned no bounded operation waiter")
+    operation.sync_wait(
+        interval=VM_HA_OPERATION_POLL_INTERVAL_SECONDS,
+        timeout=VM_HA_OPERATION_TIMEOUT_SECONDS,
+        poll_iteration_timeout=VM_HA_REQUEST_TIMEOUT_SECONDS,
+        poll_per_retry_timeout=VM_HA_PER_RETRY_TIMEOUT_SECONDS,
+        poll_retries=VM_HA_REQUEST_RETRIES,
+        auth_timeout=VM_HA_REQUEST_TIMEOUT_SECONDS,
+    )
+
+
+@dataclass(frozen=True)
+class AcceptedCloudOperation:
+    action_operation_id: str
+    kind: str
+    cloud_operation_id: str
+
+
+class VMHACloudOperationJournal:
+    """Atomic private receipt for one accepted controller cloud operation."""
+
+    _SCHEMA = "nebius-vpngw/vm-ha-cloud-operation-v1"
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def load(self) -> AcceptedCloudOperation | None:
+        if not self.path.exists():
+            return None
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError("VM-HA accepted cloud operation record is malformed") from error
+        if (
+            not isinstance(value, dict)
+            or set(value)
+            != {
+                "action_operation_id",
+                "cloud_operation_id",
+                "kind",
+                "schema",
+            }
+            or value.get("schema") != self._SCHEMA
+        ):
+            raise ValueError("VM-HA accepted cloud operation record is invalid")
+        fields = tuple(
+            value.get(key)
+            for key in (
+                "action_operation_id",
+                "kind",
+                "cloud_operation_id",
+            )
+        )
+        if any(not isinstance(item, str) or not item for item in fields):
+            raise ValueError("VM-HA accepted cloud operation identity is invalid")
+        return AcceptedCloudOperation(
+            t.cast(str, fields[0]), t.cast(str, fields[1]), t.cast(str, fields[2])
+        )
+
+    def save(self, record: AcceptedCloudOperation) -> None:
+        existing = self.load()
+        if existing is not None:
+            if existing != record:
+                raise ValueError("another VM-HA cloud operation receipt is pending")
+            return
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.path.parent, 0o700)
+        payload = (
+            json.dumps(
+                {
+                    "action_operation_id": record.action_operation_id,
+                    "cloud_operation_id": record.cloud_operation_id,
+                    "kind": record.kind,
+                    "schema": self._SCHEMA,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+            directory = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def clear(self, expected: AcceptedCloudOperation) -> None:
+        if self.load() != expected:
+            raise ValueError("VM-HA accepted cloud operation receipt changed")
+        self.path.unlink()
+        directory = os.open(self.path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 class HACloudError(RuntimeError):
@@ -77,6 +230,7 @@ class ComputeObservation:
     state: InstanceCloudState
     resource_version: str
     nic_allocations: tuple[tuple[str, str], ...]
+    nic_alias_allocations: tuple[tuple[str, tuple[str, ...]], ...]
 
     def allocation_on(self, network_interface_name: str) -> str | None:
         matches = [
@@ -95,6 +249,30 @@ class ComputeObservation:
             )
         return matches[0]
 
+    def alias_allocations_on(self, network_interface_name: str) -> tuple[str, ...]:
+        matches = [
+            allocation_ids
+            for name, allocation_ids in self.nic_alias_allocations
+            if name == network_interface_name
+        ]
+        if len(matches) > 1:
+            raise AmbiguousHACloudError(
+                f"Compute instance {self.instance_id} has duplicate NIC identity "
+                f"{network_interface_name}"
+            )
+        if not matches:
+            raise AmbiguousHACloudError(
+                f"Compute instance {self.instance_id} has no NIC {network_interface_name}"
+            )
+        return matches[0]
+
+    def has_alias_allocation(
+        self,
+        network_interface_name: str,
+        allocation_id: str,
+    ) -> bool:
+        return allocation_id in self.alias_allocations_on(network_interface_name)
+
 
 @dataclass(frozen=True)
 class ClusterCloudObservation:
@@ -108,27 +286,157 @@ class ClusterCloudObservation:
 
     @property
     def former_attachment_absent(self) -> bool:
-        return self.former.allocation_on(self.former_owner.network_interface_name) in {
-            None,
-            "",
-        }
+        return not self.former.has_alias_allocation(
+            self.former_owner.network_interface_name,
+            self.allocation.allocation_id,
+        )
+
+    @property
+    def former_attachment_exact(self) -> bool:
+        return bool(
+            self.allocation.owner == self.former_owner
+            and self.former.has_alias_allocation(
+                self.former_owner.network_interface_name,
+                self.allocation.allocation_id,
+            )
+        )
 
     @property
     def candidate_attachment_exact(self) -> bool:
         return bool(
             self.allocation.owner == self.candidate_owner
-            and self.candidate.allocation_on(self.candidate_owner.network_interface_name)
-            == self.allocation.allocation_id
+            and self.candidate.has_alias_allocation(
+                self.candidate_owner.network_interface_name,
+                self.allocation.allocation_id,
+            )
+        )
+
+    @property
+    def candidate_attachment_absent(self) -> bool:
+        return not self.candidate.has_alias_allocation(
+            self.candidate_owner.network_interface_name,
+            self.allocation.allocation_id,
         )
 
 
 class NebiusSDKCloudClient:
     """Exact synchronous Nebius SDK calls used by the on-node HA service."""
 
-    _REQUEST_TIMEOUT_SECONDS = 30.0
-
-    def __init__(self, sdk: t.Any) -> None:
+    def __init__(
+        self,
+        sdk: t.Any,
+        *,
+        operation_journal: VMHACloudOperationJournal | None = None,
+        request_timeout_provider: t.Callable[[], float] | None = None,
+    ) -> None:
         self.sdk = sdk
+        self.operation_journal = operation_journal
+        self._request_timeout_provider = request_timeout_provider
+
+    def _request_kwargs(self, operation_id: str | None = None) -> dict[str, t.Any]:
+        kwargs = vm_ha_request_kwargs(operation_id)
+        if self._request_timeout_provider is None:
+            return kwargs
+        remaining = float(self._request_timeout_provider())
+        if not (0 < remaining < float("inf")):
+            raise TimeoutError("VM-HA cloud request deadline has expired")
+        request_timeout = min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining)
+        kwargs.update(
+            timeout=request_timeout,
+            auth_timeout=request_timeout,
+            per_retry_timeout=min(VM_HA_PER_RETRY_TIMEOUT_SECONDS, request_timeout),
+        )
+        return kwargs
+
+    def _resume_operation(self, cloud_operation_id: str) -> t.Any:
+        from nebius.api.nebius.common.v1 import GetOperationRequest, OperationServiceClient
+
+        return (
+            OperationServiceClient(self.sdk)
+            .get(
+                GetOperationRequest(id=cloud_operation_id),
+                **self._request_kwargs(),
+            )
+            .wait()
+        )
+
+    @staticmethod
+    def _require_operation_success(operation: t.Any) -> None:
+        successful = getattr(operation, "successful", None)
+        if not callable(successful):
+            raise AmbiguousHACloudError("VM-HA cloud operation exposed no terminal success status")
+        try:
+            succeeded = bool(successful())
+        except Exception as error:
+            raise AmbiguousHACloudError(
+                "VM-HA cloud operation success status is unavailable"
+            ) from error
+        if not succeeded:
+            raise PermanentHACloudError("VM-HA cloud operation finished unsuccessfully")
+
+    def _mutate(
+        self,
+        *,
+        action_operation_id: str | None,
+        kind: str,
+        submit: t.Callable[[], t.Any],
+    ) -> None:
+        journal = self.operation_journal
+        accepted = None if journal is None else journal.load()
+        if accepted is not None:
+            assert journal is not None
+            if (
+                not action_operation_id
+                or accepted.action_operation_id != action_operation_id
+                or accepted.kind != kind
+            ):
+                raise PermanentHACloudError(
+                    "a different accepted VM-HA cloud operation is still pending"
+                )
+            try:
+                operation = self._resume_operation(accepted.cloud_operation_id)
+            except Exception as error:
+                if not operation_status_lookup_unsupported(error):
+                    raise
+                operation = submit().wait()
+                resumed_operation_id = str(getattr(operation, "id", "") or "")
+                if resumed_operation_id != accepted.cloud_operation_id:
+                    raise AmbiguousHACloudError(
+                        "VM-HA idempotent replay returned a different cloud operation identity"
+                    ) from error
+            wait_vm_ha_operation(operation)
+            self._require_operation_success(operation)
+            journal.clear(accepted)
+            return
+        operation = submit().wait()
+        cloud_operation_id = str(getattr(operation, "id", "") or "")
+        if journal is not None:
+            if not action_operation_id or not cloud_operation_id:
+                raise AmbiguousHACloudError("VM-HA mutation returned no durable operation identity")
+            accepted = AcceptedCloudOperation(
+                action_operation_id=action_operation_id,
+                kind=kind,
+                cloud_operation_id=cloud_operation_id,
+            )
+            journal.save(accepted)
+        wait_vm_ha_operation(operation)
+        self._require_operation_success(operation)
+        if journal is not None and accepted is not None:
+            journal.clear(accepted)
+
+    def finalize_accepted_operation(self, expected: AcceptedCloudOperation) -> None:
+        """Read and clear one exact terminal operation without resubmitting it."""
+
+        journal = self.operation_journal
+        if journal is None:
+            raise PermanentHACloudError("VM-HA cloud operation journal is unavailable")
+        accepted = journal.load()
+        if accepted != expected:
+            raise PermanentHACloudError("accepted VM-HA cloud operation identity changed")
+        operation = self._resume_operation(accepted.cloud_operation_id)
+        wait_vm_ha_operation(operation)
+        self._require_operation_success(operation)
+        journal.clear(accepted)
 
     def get_instance(self, instance_id: str) -> t.Any:
         from nebius.api.nebius.compute.v1 import GetInstanceRequest, InstanceServiceClient
@@ -137,20 +445,36 @@ class NebiusSDKCloudClient:
             InstanceServiceClient(self.sdk)
             .get(
                 GetInstanceRequest(id=instance_id),
-                timeout=self._REQUEST_TIMEOUT_SECONDS,
-                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                **self._request_kwargs(),
             )
             .wait()
         )
 
-    def stop_instance(self, instance_id: str) -> None:
+    def stop_instance(self, instance_id: str, operation_id: str | None = None) -> None:
         from nebius.api.nebius.compute.v1 import InstanceServiceClient, StopInstanceRequest
 
-        InstanceServiceClient(self.sdk).stop(
-            StopInstanceRequest(id=instance_id),
-            timeout=self._REQUEST_TIMEOUT_SECONDS,
-            auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
-        ).wait()
+        self._mutate(
+            action_operation_id=operation_id,
+            kind="stop-instance",
+            submit=lambda: InstanceServiceClient(self.sdk).stop(
+                StopInstanceRequest(id=instance_id),
+                **self._request_kwargs(operation_id),
+            ),
+        )
+
+    def start_instance(self, instance_id: str, operation_id: str | None = None) -> None:
+        """Start one exact Compute instance through the bounded mutation path."""
+
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, StartInstanceRequest
+
+        self._mutate(
+            action_operation_id=operation_id,
+            kind="start-instance",
+            submit=lambda: InstanceServiceClient(self.sdk).start(
+                StartInstanceRequest(id=instance_id),
+                **self._request_kwargs(operation_id),
+            ),
+        )
 
     def get_allocation(self, allocation_id: str) -> t.Any:
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient, GetAllocationRequest
@@ -159,29 +483,34 @@ class NebiusSDKCloudClient:
             AllocationServiceClient(self.sdk)
             .get(
                 GetAllocationRequest(id=allocation_id),
-                timeout=self._REQUEST_TIMEOUT_SECONDS,
-                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                **self._request_kwargs(),
             )
             .wait()
         )
 
-    def set_allocation(
+    def set_alias_allocation(
         self,
         instance_id: str,
         network_interface_name: str,
-        allocation_id: str | None,
+        allocation_id: str,
+        present: bool,
+        operation_id: str | None = None,
     ) -> None:
         from nebius.api.nebius.compute.v1 import (
             InstanceServiceClient,
-            IPAddress,
+            IPAlias,
             UpdateInstanceRequest,
         )
 
         instance = self.get_instance(instance_id)
-        spec = deepcopy(getattr(instance, "spec", None))
-        metadata = deepcopy(getattr(instance, "metadata", None))
-        if spec is None or metadata is None:
+        original_spec = getattr(instance, "spec", None)
+        original_metadata = getattr(instance, "metadata", None)
+        if original_spec is None or original_metadata is None:
             raise AmbiguousHACloudError("Compute instance has no mutable spec metadata")
+        # Nebius SDK response messages are not deepcopy-safe: deserialized
+        # metadata and repeated NIC fields are cleared by deepcopy.
+        spec = clone_nebius_sdk_message(original_spec)
+        metadata = clone_nebius_sdk_message(original_metadata)
         interfaces = list(getattr(spec, "network_interfaces", ()) or ())
         matches = [
             (index, interface)
@@ -191,26 +520,35 @@ class NebiusSDKCloudClient:
         if len(matches) != 1:
             raise AmbiguousHACloudError("Compute instance has an ambiguous NIC identity")
         index, interface = matches[0]
-        current = str(getattr(getattr(interface, "ip_address", None), "allocation_id", "") or "")
-        if current == (allocation_id or ""):
-            return
-        updated = deepcopy(interface)
-        updated.ip_address = (
-            IPAddress(allocation_id=allocation_id) if allocation_id else IPAddress()
+        current_ids = network_interface_alias_allocation_ids(
+            interface,
+            description=f"Compute instance {instance_id} NIC {network_interface_name}",
         )
+        if (allocation_id in current_ids) is present:
+            return
+        updated = clone_nebius_sdk_message(interface)
+        desired_ids = (
+            (*current_ids, allocation_id)
+            if present
+            else tuple(current_id for current_id in current_ids if current_id != allocation_id)
+        )
+        updated.aliases = [IPAlias(allocation_id=current_id) for current_id in desired_ids]
         interfaces[index] = updated
         spec.network_interfaces = interfaces
-        InstanceServiceClient(self.sdk).update(
-            UpdateInstanceRequest(metadata=metadata, spec=spec),
-            timeout=self._REQUEST_TIMEOUT_SECONDS,
-            auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
-        ).wait()
+        self._mutate(
+            action_operation_id=operation_id,
+            kind="set-alias-present" if present else "set-alias-absent",
+            submit=lambda: InstanceServiceClient(self.sdk).update(
+                UpdateInstanceRequest(metadata=metadata, spec=spec),
+                **self._request_kwargs(operation_id),
+            ),
+        )
 
 
 InstanceReader = t.Callable[[str], t.Any]
-InstanceStopper = t.Callable[[str], None]
+InstanceStopper = t.Callable[..., None]
 AllocationReader = t.Callable[[str], t.Any]
-AllocationSetter = t.Callable[[str, str, str | None], None]
+AliasAllocationSetter = t.Callable[..., None]
 
 
 def _enum_name(value: t.Any) -> str:
@@ -232,6 +570,37 @@ def _enum_name(value: t.Any) -> str:
         "8": "ERROR",
     }
     return numeric_states.get(text, text)
+
+
+def network_interface_alias_allocation_ids(
+    interface: t.Any,
+    *,
+    description: str,
+) -> tuple[str, ...]:
+    """Return exact secondary-alias allocation IDs and reject ambiguous state."""
+
+    raw_aliases = list(getattr(interface, "aliases", ()) or ())
+    allocation_ids = tuple(
+        str(getattr(alias, "allocation_id", None) or "") for alias in raw_aliases
+    )
+    if any(not allocation_id for allocation_id in allocation_ids):
+        raise AmbiguousHACloudError(f"{description} has an alias without an allocation ID")
+    if len(set(allocation_ids)) != len(allocation_ids):
+        raise AmbiguousHACloudError(f"{description} has duplicate alias allocation IDs")
+    return allocation_ids
+
+
+def clone_nebius_sdk_message(message: t.Any) -> t.Any:
+    """Clone generated Nebius messages across supported SDK representations."""
+
+    protobuf = getattr(message, "__pb2_message__", None)
+    if protobuf is not None:
+        cloned_protobuf = type(protobuf)()
+        cloned_protobuf.CopyFrom(protobuf)
+        return type(message)(cloned_protobuf)
+    if hasattr(message, "_values"):
+        return type(message)(message)
+    raise TypeError("Unsupported Nebius SDK generated-message representation")
 
 
 def instance_cloud_state(instance: t.Any) -> InstanceCloudState:
@@ -281,6 +650,7 @@ def compute_observation(instance_id: str, instance: t.Any) -> ComputeObservation
             f"Compute instance {instance_id} has no network interface specification"
         )
     nic_allocations: list[tuple[str, str]] = []
+    nic_alias_allocations: list[tuple[str, tuple[str, ...]]] = []
     seen_names: set[str] = set()
     for interface in interfaces:
         name = str(getattr(interface, "name", None) or "")
@@ -293,11 +663,21 @@ def compute_observation(instance_id: str, instance: t.Any) -> ComputeObservation
             getattr(getattr(interface, "ip_address", None), "allocation_id", None) or ""
         )
         nic_allocations.append((name, allocation_id))
+        nic_alias_allocations.append(
+            (
+                name,
+                network_interface_alias_allocation_ids(
+                    interface,
+                    description=f"Compute instance {instance_id} NIC {name}",
+                ),
+            )
+        )
     return ComputeObservation(
         instance_id=instance_id,
         state=instance_cloud_state(instance),
         resource_version=str(numeric_resource_version),
         nic_allocations=tuple(nic_allocations),
+        nic_alias_allocations=tuple(nic_alias_allocations),
     )
 
 
@@ -350,7 +730,7 @@ class VMHACloudAdapter:
         instance_reader: InstanceReader,
         instance_stopper: InstanceStopper,
         allocation_reader: AllocationReader,
-        allocation_setter: AllocationSetter,
+        alias_allocation_setter: AliasAllocationSetter,
         attempts: int = 10,
         poll_interval: float = 1.0,
         sleeper: t.Callable[[float], None] = time.sleep,
@@ -362,7 +742,7 @@ class VMHACloudAdapter:
         self._instance_reader = instance_reader
         self._instance_stopper = instance_stopper
         self._allocation_reader = allocation_reader
-        self._allocation_setter = allocation_setter
+        self._alias_allocation_setter = alias_allocation_setter
         self._attempts = attempts
         self._poll_interval = poll_interval
         self._sleep = sleeper
@@ -440,7 +820,11 @@ class VMHACloudAdapter:
             candidate_owner=candidate,
         )
 
-    def require_stopped(self, instance_id: str) -> ComputeObservation:
+    def require_stopped(
+        self,
+        instance_id: str,
+        operation_id: str | None = None,
+    ) -> ComputeObservation:
         """Stop a running former owner and require an authoritative STOPPED read."""
         stop_requested = False
         for attempt in range(self._attempts):
@@ -451,7 +835,11 @@ class VMHACloudAdapter:
             if state is InstanceCloudState.RUNNING and not stop_requested:
                 self._call(
                     f"cannot stop Compute instance {instance_id}",
-                    lambda: self._instance_stopper(instance_id),
+                    lambda: (
+                        self._instance_stopper(instance_id, operation_id)
+                        if operation_id is not None
+                        else self._instance_stopper(instance_id)
+                    ),
                 )
                 stop_requested = True
             elif state in {InstanceCloudState.ERROR, InstanceCloudState.UNKNOWN}:
@@ -489,8 +877,10 @@ class VMHACloudAdapter:
                 raise RetryableHACloudError(
                     f"Compute instance {owner.instance_id} did not reach a stable state"
                 )
-            attached_allocation = observation.allocation_on(owner.network_interface_name)
-            matches = attached_allocation == allocation_id
+            matches = observation.has_alias_allocation(
+                owner.network_interface_name,
+                allocation_id,
+            )
             if matches is present:
                 return observation
             if attempt + 1 < self._attempts:
@@ -506,6 +896,7 @@ class VMHACloudAdapter:
         allocation_id: str,
         former_owner: AllocationOwner,
         candidate: AllocationOwner,
+        operation_id: str | None = None,
     ) -> None:
         """Detach only the exact former attachment and prove that it is absent."""
         detach_requested = False
@@ -521,10 +912,12 @@ class VMHACloudAdapter:
             if not detach_requested:
                 self._call(
                     f"cannot detach allocation {allocation_id} from former owner",
-                    lambda: self._allocation_setter(
+                    lambda: self._alias_allocation_setter(
                         former_owner.instance_id,
                         former_owner.network_interface_name,
-                        None,
+                        allocation_id,
+                        False,
+                        *(() if operation_id is None else (operation_id,)),
                     ),
                 )
                 detach_requested = True
@@ -536,6 +929,7 @@ class VMHACloudAdapter:
         self,
         allocation_id: str,
         candidate: AllocationOwner,
+        operation_id: str | None = None,
     ) -> None:
         """Attach to the exact candidate and require an exact ownership re-read."""
         attach_requested = False
@@ -551,10 +945,12 @@ class VMHACloudAdapter:
             if not attach_requested:
                 self._call(
                     f"cannot attach allocation {allocation_id} to candidate",
-                    lambda: self._allocation_setter(
+                    lambda: self._alias_allocation_setter(
                         candidate.instance_id,
                         candidate.network_interface_name,
                         allocation_id,
+                        True,
+                        *(() if operation_id is None else (operation_id,)),
                     ),
                 )
                 attach_requested = True

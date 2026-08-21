@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+commit-positive-01,true,"Commit all current local changes without pushing."
+commit-positive-02,true,"Run commit with this message and leave the branch local."
+commit-positive-03,true,"Use commit to create one local repository-wide commit."
+commit-negative-01,false,"Commit and push the current branch to origin."
+commit-negative-02,false,"Open a pull request for these changes."
+commit-negative-03,false,"Create the Agentic SDLC feature commit and promote it."

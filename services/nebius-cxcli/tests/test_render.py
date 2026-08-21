@@ -1264,6 +1264,10 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["rest"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
+    assert (
+        slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["metrics"]["enabled"]
+        is False
+    )
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["storage"] == {
         "size": "128Gi",
         "storageClassName": "compute-csi-default-sc",
@@ -1276,6 +1280,7 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     assert slurm_cluster["spec"]["sConfigController"]["runAsUid"] == 0
     assert slurm_cluster["spec"]["sConfigController"]["runAsGid"] == 0
     nodeset = next(doc for doc in rendered_docs if doc.get("kind") == "NodeSet")
+    assert "dynamic" not in nodeset["spec"]["nodeConfig"]
     worker_mounts = nodeset["spec"]["slurmd"]["volumes"]["customVolumeMounts"]
     assert {
         "mountPath": "/opt/slurm_scripts/",

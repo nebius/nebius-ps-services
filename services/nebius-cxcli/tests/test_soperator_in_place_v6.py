@@ -37,10 +37,10 @@ def _node_group(*, count: int = 100) -> dict[str, object]:
     }
 
 
-def test_external_upgrade_campaign_journal_and_report_are_v6_only() -> None:
-    assert migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA.endswith("/v6")
+def test_external_upgrade_campaign_is_v6_and_journal_report_are_v7() -> None:
+    assert migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA.endswith("/v7")
     assert migration.SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA.endswith("/v6")
-    assert migration.SOPERATOR_MIGRATION_REPORT_SCHEMA.endswith("/v6")
+    assert migration.SOPERATOR_MIGRATION_REPORT_SCHEMA.endswith("/v7")
 
 
 def test_managed_upgrade_rejects_abbreviated_bridge_journal(tmp_path: Path) -> None:

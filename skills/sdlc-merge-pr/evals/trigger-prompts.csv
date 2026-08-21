@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-merge-positive-01,true,"Merge this specific Agentic SDLC pull request after verifying its exact promoted SHA."
+sdlc-merge-positive-02,true,"Use sdlc-merge-pr for PR 42 now that reviews checks and UAT pass."
+sdlc-merge-positive-03,true,"Merge the reviewed SDLC PR without admin bypass or branch deletion."
+sdlc-merge-negative-01,false,"Merge a normal GitHub pull request outside Agentic SDLC."
+sdlc-merge-negative-02,false,"Review this SDLC pull request without merging it."
+sdlc-merge-negative-03,false,"Merge the SDLC PR before the head matches the promoted SHA."

@@ -132,13 +132,15 @@ incarnation. It never starts a run.
 The generated workspace exposes `CODE — MANAGED PERSISTENT LANE` and
 `PROMPTS`; it never adds the primary checkout. Its default build task creates a
 new prompt with a fresh ID only; it does not invoke Codex. Queue list and cancel
-tasks expose metadata only. `Task Implementer: Show Pending Lane Changes`
-invokes the internal inspection-only `lane-report`, which shows the current
-source branch, a redacted managed-lane branch label, both commits, active and
-pending generations, aggregate counts and
-project-relative paths, ordered pending sealed summaries, and the exact next
-public action. It creates no overlay or file decoration dirt. Do not clone
-managed prompt files.
+tasks expose metadata only. `Task Implementer: Show Lane Status` invokes the
+internal inspection-only `lane-report` without `--json`, so its cleared,
+dedicated terminal shows concise human text without echoing the command or
+taking focus. It reports persistent-lane generations, current or latest
+task/worker/wave progress, current and remaining steps, and the exact next
+public action. Explicit `--json` returns the same bounded `lane-report-v2`
+projection. Neither form exposes changed-file data, commits, branches, prompt
+content, private identities, state paths, or embedded summaries. It creates no
+overlay or file-decoration dirt. Do not clone managed prompt files.
 
 Generated workspace preflight classifies the document as current, the one exact
 previous generated shape, or tampered. `workspace init` and `run` may rewrite
@@ -539,12 +541,17 @@ statistics are explicitly a comparison when histories diverge. Filenames are
 parsed as NUL-delimited bytes and escaped for display; prompt bodies, raw diffs,
 private IDs/paths, and recovery artifacts are excluded.
 
-`lane-report` reads the Worktree anchor, refs, Git objects, private receipts,
-and sealed summaries without calling lane ensure or idle refresh. Pending
-legacy generations display `summary unavailable for legacy generation` rather
-than reconstructed history. After integration it reports no pending
-generation; after lane removal it retains current source-to-last-sealed-lane
-comparison and directs the user to `workspace init`.
+`lane-report` validates the Worktree anchor and bounded coordinator, wave,
+task-plane, interop, finalization, and sealed-summary evidence twice. It emits
+only a matching snapshot, retries one pair after movement, and otherwise
+returns `WORKSPACE_BUSY`. It never takes the workspace lock, invokes the
+mutation-adjacent lease-resource inspection path, computes a diff, ensures or
+refreshes a lane, checkpoints, integrates, or writes metadata. Git is used
+only with optional locks disabled when source/lane cleanliness determines the
+next action. The latest sealed pending run supplies totals when no run is
+active; legacy-only history remains explicitly unavailable. After integration
+it reports no pending generation; after lane removal it directs the user to
+`workspace init`.
 
 `workspace remove` deletes only an idle, clean, fully integrated lane through
 non-forced exact-head proof. It preserves completed private prompt/run and

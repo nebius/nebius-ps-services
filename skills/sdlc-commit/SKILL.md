@@ -1,6 +1,6 @@
 ---
 name: sdlc-commit
-description: "Use only as part of the Agentic SDLC workflow; use after one feature's dependency waves and downstream evidence pass to seal final integration changes, fast-forward the unchanged project branch to the exact integration tip, and non-force-clean the integration resource. It never pushes."
+description: "Use only as part of the Agentic SDLC workflow; after waves/evidence pass, seal integration changes, fast-forward the unchanged project branch to the exact tip, and non-force-clean the integration resource. Never push."
 ---
 
 # SDLC Commit
@@ -146,8 +146,11 @@ the private transition helper and action-scoped execution state.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

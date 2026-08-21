@@ -57,6 +57,33 @@ PSK1="${PSK1:-}"
 PSK2="${PSK2:-}"
 POSITIONAL_ARGS=()
 
+delegate_vm_ha_peer_mode() {
+  local argument=""
+  local script_dir=""
+  local helper=""
+
+  for argument in "$@"; do
+    if [[ "${argument}" == "--classic-vm-ha-peer" ]]; then
+      script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+      helper="${script_dir}/gcp-vpngw-classic-vm-ha.sh"
+      if [[ ! -x "${helper}" ]]; then
+        log_error "Classic static VM-HA peer helper is missing or not executable: ${helper}"
+        exit 1
+      fi
+      exec "${helper}" "$@"
+    fi
+    if [[ "${argument}" == "--vm-ha-peer" ]]; then
+      script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+      helper="${script_dir}/gcp-vpngw-vm-ha.sh"
+      if [[ ! -x "${helper}" ]]; then
+        log_error "VM-HA peer helper is missing or not executable: ${helper}"
+        exit 1
+      fi
+      exec "${helper}" "$@"
+    fi
+  done
+}
+
 init_output_style() {
   if [[ ( -t 1 || -t 2 ) && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
     S_RESET=$'\033[0m'
@@ -184,6 +211,8 @@ show_usage() {
   print_help_entry "--region REGION" "Override GCP region" "${S_YELLOW}"
   print_help_entry "--nebius-public-ip IP" "Override Nebius public IP" "${S_YELLOW}"
   print_help_entry "--nebius-asn ASN" "Override Nebius peer ASN" "${S_YELLOW}"
+  print_help_entry "--vm-ha-peer" "Use the explicit two-member/four-tunnel peer mode" "${S_YELLOW}"
+  print_help_entry "--classic-vm-ha-peer" "Use the isolated two-member Classic static peer mode" "${S_YELLOW}"
   print_help_entry "--status" "Print GCP-side status only; make no changes" "${S_YELLOW}"
   print_help_entry "--rotate-existing-tunnels" "Recreate existing tunnels, interfaces, peers, and PSKs" "${S_YELLOW}"
   print_help_entry "-h, --help" "Show help" "${S_YELLOW}"
@@ -216,11 +245,13 @@ show_usage() {
   printf '%b\n' "  ${S_CYAN}CONNECTION_NAME=site-1 PSK1=<tunnel-1-psk> PSK2=<tunnel-2-psk> ${script_ref} --rotate-existing-tunnels <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>${S_RESET}"
   printf '%b\n' "  ${S_CYAN}${script_ref} --connection-name site-1 --status --region <gcp-region>${S_RESET}"
   printf '%b\n' "  ${S_CYAN}${script_ref} --connection-name site-1 --status --local-config-file <local-config-file>${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}${script_ref} --vm-ha-peer --connection-name site-ha --gcp-project-id <gcp-project-id> --region <gcp-region> --nebius-active-public-ip <active-ip> --nebius-passive-public-ip <passive-ip> --nebius-asn <nebius-asn> --dry-run${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}${script_ref} --classic-vm-ha-peer --connection-name site-static-ha --gcp-project-id <gcp-project-id> --region <gcp-region> --network <vpc-network> --nebius-active-public-ip <active-ip> --nebius-passive-public-ip <passive-ip> --gcp-prefix <gcp-prefix> --nebius-prefix <nebius-prefix> --dry-run${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
   printf '%b\n' "  - This script requires the ${S_CYAN}gcloud${S_RESET} CLI to be installed and in ${S_CYAN}PATH${S_RESET}."
-  printf '%b\n' "  - If gcloud is not authenticated, the script runs ${S_CYAN}gcloud auth login${S_RESET}."
+  printf '%b\n' "  - Create mode can run ${S_CYAN}gcloud auth login${S_RESET}; status and VM-HA peer modes require an existing login and never start authentication."
   printf '%b\n' "  - This helper is stateless per connection: each run manages exactly one connection identified by ${S_CYAN}--connection-name${S_RESET}."
   printf '%b\n' "  - Create mode requires a connection name plus a resolved GCP project, region, Nebius public IP, and Nebius peer ASN."
   printf '%b\n' "  - Status mode also requires a connection name. Nebius public IP is optional there and can come from ${S_CYAN}--nebius-public-ip${S_RESET} or ${S_CYAN}--local-config-file${S_RESET}."
@@ -1773,11 +1804,27 @@ parse_args() {
 
 main() {
   init_output_style
+  delegate_vm_ha_peer_mode "$@"
   parse_args "$@"
 
   ensure_gcloud_installed
-  ensure_auth
-  resolve_gcp_project_id
+  if [[ "${STATUS_ONLY}" -eq 1 ]]; then
+    ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n 1 || true)"
+    if [[ -z "${ACTIVE_ACCOUNT}" ]]; then
+      log_error "No active gcloud account. Run 'gcloud auth login' explicitly, then retry status."
+      exit 1
+    fi
+    if [[ -z "${GCP_PROJECT_ID}" ]]; then
+      GCP_PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
+      if [[ -z "${GCP_PROJECT_ID}" || "${GCP_PROJECT_ID}" == "(unset)" ]]; then
+        log_error "Status requires --gcp-project-id or an existing active gcloud project."
+        exit 1
+      fi
+    fi
+  else
+    ensure_auth
+    resolve_gcp_project_id
+  fi
   resolve_region
 
   if [[ -n "${LOCAL_CONFIG_FILE}" ]]; then

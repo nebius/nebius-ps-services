@@ -82,11 +82,13 @@ Do not set `ready` while any material question is open or reopened.
 
 ## Requirements Ownership
 
-Only `sdlc-create-requirements` writes `docs/requirements.md`; it owns the full
-file. Preserve stable `REQ-*` IDs, update existing IDs when product truth
+`maintain-project-specs` is the sole semantic, schema, and validation owner of
+`docs/requirements.md`. Inside Agentic SDLC, only the routed
+`sdlc-create-requirements` authoring adapter writes its managed requirement
+records. Preserve stable `REQ-*` IDs, update existing IDs when product truth
 changes, and append IDs for genuinely new requirements. Do not delete accepted
-truth on omission alone. Other SDLC skills route requirements changes to this
-owner instead of editing the file.
+truth on omission alone. Other phase skills route requirements changes through
+the adapter and return validation to the shared owner.
 
 Design may begin only after the latest intent has a `ready` refinement ledger,
 `docs/requirements.md` reflects its compiled truth, and no material question or

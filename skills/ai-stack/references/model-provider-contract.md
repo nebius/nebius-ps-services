@@ -4,7 +4,7 @@ Use this reference to make agent applications portable across OpenAI, Anthropic,
 Nebius Token Factory, self-hosted endpoints, and future providers without
 reducing every provider to an unreliable least-common-denominator API.
 
-Baseline date: 2026-08-07
+Baseline date: 2026-08-16
 
 ## Contents
 
@@ -24,14 +24,16 @@ Baseline date: 2026-08-07
 ## Design Objective
 
 Build portability at the application boundary, not by pretending that all APIs
-behave identically. Separate:
+behave identically. For a Pydantic AI-first Python application, separate:
 
-- Application semantics: Messages, content blocks, tools, schemas, budgets,
-  deadlines, and trace context.
-- Provider adapter: Translate the domain contract to a native provider SDK or
-  documented compatible endpoint.
-- Provider profile: Declare exact capabilities and known behavioral constraints
-  for one model and endpoint.
+- Application semantics: Domain requests, typed outputs, tool contracts,
+  budgets, deadlines, policy, and normalized run events.
+- Portable execution: Pydantic AI `Model`, `Provider`, messages, settings,
+  resolved profiles, direct requests, and `Agent` loops.
+- Provider extension: Explicit provider settings and native features that do
+  not alter domain authorization or tool contracts.
+- Platform catalog: Functional supplements, operational health, and governance
+  eligibility for one exact model and endpoint.
 - Gateway policy: Inject credentials, route, rate-limit, observe, and apply
   policy when a shared platform boundary is justified.
 - Evaluation: Prove the exact provider, model, adapter, and feature combination.
@@ -40,36 +42,38 @@ Use native APIs when they preserve required features better. Use an
 OpenAI-compatible endpoint only after its exact compatibility profile passes the
 application conformance suite.
 
-Do not require this full contract for one intentionally selected provider when
-a narrow application-local seam around its native SDK is sufficient. Adopt the
-capability-aware contract when the system must support multiple providers,
-routing, evaluated fallback, self-hosted endpoints, regional or data-policy
-selection, or a shared model platform. The abstraction must remove real domain
-coupling; it must not become speculative infrastructure.
+Do not create another framework-neutral provider, message, or tool protocol for
+the portable Pydantic AI path. Use a narrow native SDK seam for intentionally
+provider-specific direct work. Adopt the custom cross-runtime contract below
+only when Pydantic AI and non-Pydantic runtimes or consumers must share a
+semantic boundary and the abstraction removes proven coupling.
 
 ## Layered Provider Architecture
 
 ```text
-Agent or deterministic application
-  -> internal ModelProvider interface
+Application runtime facade
   -> capability and policy resolver
-  -> native provider adapter or compatible-protocol adapter
+  -> Pydantic AI Model and Provider for the portable Python path
+  -> explicit provider settings or verified compatible endpoint
   -> optional agentgateway
   -> OpenAI, Anthropic, Nebius Token Factory, or self-hosted model endpoint
 ```
 
-Keep framework types behind the adapter. Domain code must not depend on
-provider-specific message, tool-call, streaming, or error classes.
+Keep provider-specific SDK objects out of domain code. Pydantic AI types may
+remain inside the portable runtime adapter; stable business services and public
+client contracts depend on application-owned domain and event types.
 
 Use a shared gateway when the organization needs centralized credentials,
 provider routing, budgets, policy, tenancy, rate limits, and telemetry. Allow a
 direct adapter for development and for workloads where the gateway adds no
 material value.
 
-## Domain Contract
+## Conditional Cross-Runtime Domain Contract
 
-Use a small internal interface. Keep provider extensions explicit rather than
-leaking SDK objects throughout the application.
+Skip this section when Pydantic AI is the only portable execution boundary.
+Only a proven cross-runtime or shared non-Pydantic consumer requirement
+justifies this small internal interface. Keep provider extensions explicit
+rather than leaking SDK objects throughout the application.
 
 ```python
 from __future__ import annotations
@@ -185,9 +189,11 @@ class ModelProvider(Protocol):
     def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]: ...
 ```
 
-Treat this as a semantic sketch. Adapt names and types to the repository, but
-preserve the separation between target identity, capabilities, normalized
-content, provider extensions, and trace context.
+Treat this as a conditional semantic sketch, not the default implementation.
+Adapt names and types to the repository, but preserve the separation between
+target identity, capabilities, normalized content, provider extensions, and
+trace context. Do not translate Pydantic AI messages into these types and back
+unless a non-Pydantic runtime actually consumes the same contract.
 
 ## Configuration And Secret Handling
 
@@ -329,22 +335,22 @@ operation deadline and retry budget.
 
 ### OpenAI
 
-Use the official OpenAI SDK and Responses API for OpenAI text or reasoning
-generation supported by Responses. Use the documented task-specific API for
-embeddings, transcription, realtime speech, and other direct workloads outside
-that capability. Preserve native tool, structured output, multimodal,
-reasoning, usage, and tracing semantics required by the application.
+Use the Pydantic AI OpenAI model and provider for portable direct or agent
+execution. Use the official OpenAI SDK and exact task API for intentionally
+OpenAI-specific direct workloads. Preserve required native tool, structured
+output, multimodal, reasoning, usage, and tracing semantics through explicit
+settings.
 
-Use the OpenAI Agents SDK when the whole agent architecture is intentionally
-OpenAI-first and its abstractions fit. Do not make its model classes the
-organization-wide domain contract.
+Use the OpenAI Agents SDK only when a named OpenAI harness feature defines the
+workload. Treat it as a specialized runtime behind the application facade, not
+as a Pydantic AI model adapter or organization-wide domain contract.
 
 ### Anthropic
 
-Use the official Anthropic SDK and Messages API for the generic provider
-adapter. Use Claude Agent SDK for Claude-native coding, filesystem, sandbox,
-hook, subagent, MCP, Skill, and session workflows where its opinionated agent
-loop is the desired product behavior.
+Use the Pydantic AI Anthropic model for portable direct or agent execution. Use
+Claude Agent SDK for Claude-native coding, filesystem, sandbox, hook, subagent,
+MCP, Skill, and session workloads only when its opinionated harness is a named
+requirement.
 
 Treat Claude Managed Agents as a separate hosted execution profile with its own
 lifecycle, data, session, sandbox, and beta-status review. Do not treat it as a
@@ -352,9 +358,9 @@ portable implementation of the generic agent kernel.
 
 ### Nebius Token Factory
 
-Use the official OpenAI-compatible endpoint profile, or a framework adapter
-whose current official documentation explicitly supports Nebius. Configure base
-URL, API key reference, and exact model ID independently.
+Use a verified Pydantic AI OpenAI-compatible provider path or another adapter
+whose current official documentation explicitly supports Nebius. Configure
+base URL, credential reference, and exact model ID independently.
 
 Do not assume every Token Factory model supports the same tool calling,
 structured output, context length, tokenizer behavior, or multimodal features.
@@ -371,15 +377,17 @@ only for the operations the endpoint has passed. OpenAI-compatible text
 completion does not prove compatible tool calling, strict JSON, streaming,
 usage, multimodal input, error handling, or cancellation.
 
-### Additional Framework Adapters
+### Additional Runtime Adapters
 
-Allow Pydantic AI, LangChain, Microsoft Agent Framework, Google ADK, Strands,
-or another framework to implement the internal provider interface. Do not make
-framework installation equivalent to provider conformance.
+Allow LangChain, Microsoft Agent Framework, Google ADK, Strands, or another
+runtime behind the application-owned runtime facade only after an explicit
+escape decision. Do not make framework installation equivalent to provider or
+runtime conformance.
 
 ## Routing And Fallback
 
-Route only on explicit policy and capabilities. Define:
+Route only on explicit policy and capabilities. Separate functional support,
+operational health, and governance eligibility, then define:
 
 - allowed providers and models per workload and data class;
 - tenant, region, residency, and retention constraints;
@@ -472,5 +480,7 @@ data-handling terms.
 - Claude Agent SDK: <https://platform.claude.com/docs/en/agent-sdk/overview>
 - Nebius Token Factory API: <https://docs.nebius.com/studio/inference/quickstart>
 - Nebius Token Factory function calling: <https://docs.nebius.com/studio/inference/function-calling>
-- Pydantic AI model and provider abstractions: <https://ai.pydantic.dev/models/overview/>
+- Pydantic AI model and provider abstractions: <https://pydantic.dev/docs/ai/models/overview/>
+- Pydantic AI direct model requests: <https://pydantic.dev/docs/ai/core-concepts/direct/>
+- Pydantic AI model profiles: <https://pydantic.dev/docs/ai/models/overview/>
 - agentgateway: <https://agentgateway.dev/>

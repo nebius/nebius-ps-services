@@ -21,7 +21,8 @@ matter?".
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/research-methodology.md`: detailed source-ranking and research
   workflow guidance.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 
 ## Boundaries
 

@@ -1,6 +1,6 @@
 ---
 name: sdlc-unit-tests
-description: "Use only as part of the Agentic SDLC workflow; use after validation in the Agentic SDLC loop to run behavior tests for the current feature and any planned end-to-end slice, including unit, integration, component, contract, regression, and mock-based tests when applicable."
+description: "Use only as part of the Agentic SDLC workflow; after validation, run applicable unit, integration, component, contract, regression, and mock behavior tests for the feature and planned end-to-end slice."
 ---
 
 # Unit Tests
@@ -105,8 +105,11 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

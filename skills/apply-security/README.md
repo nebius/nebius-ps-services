@@ -29,8 +29,9 @@ user or a coordinator skill to authorize that scope.
   supported area.
 - `references/reporting-and-validation.md`: report formats, validation command
   selection, limitations, rollout guidance, and merge checklist.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples
+- `evals/trigger-prompts.csv`: should-trigger and should-not-trigger examples
   for implicit routing.
+- `evals/process-cases.md`: supplemental review and runtime-check cases.
 - `agents/openai.yaml`: UI metadata and default prompt.
 
 ## Safety Model

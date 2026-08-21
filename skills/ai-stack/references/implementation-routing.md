@@ -91,8 +91,9 @@ Recommend a thin vertical slice:
 
 1. Freeze the approved workload and acceptance gates.
 2. Establish reproducible fixtures, evaluation data, and baseline.
-3. Define the typed application, provider, tool, retrieval, state, and telemetry
-   boundaries required by the slice.
+3. Define the application runtime facade, Pydantic AI model/provider boundary,
+   typed tools, canonical state, routing policy, and telemetry required by the
+   slice.
 4. Implement one minimum path with the fewest new components.
 5. Enforce trusted identity, authorization, validation, and secret boundaries.
 6. Add contract and end-to-end tests with immutable release identity.
@@ -106,8 +107,9 @@ Examples:
 
 - RAG: one authoritative source, authorization before retrieval, labeled
   retrieval evaluation, and one answer path before hybrid or agentic retrieval.
-- Agent: one bounded tool loop and read-only capabilities before graph,
-  durability, mutating tools, memory, or multi-agent topology.
+- Agent: one in-process Pydantic AI loop, application-owned state, and read-only
+  domain tools before a service facade, graph, durability, mutating tools,
+  memory, native runtime escape, or multi-agent topology.
 - Inference: one exact model and engine defaults before quantization, custom
   routing, distributed caches, or prefill/decode disaggregation.
 - Training: smallest representative run and checkpoint-resume proof before full

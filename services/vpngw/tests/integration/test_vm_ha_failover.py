@@ -20,6 +20,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     LocalReadiness,
     RecoverableController,
     RouteReconciliationContext,
+    TransferIntent,
     VMHAController,
 )
 from nebius_vpngw.deploy.vm_ha_routes import (
@@ -34,6 +35,8 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     VMHARouteReconciler,
 )
 from nebius_vpngw.schema import VMHARouteTarget
+
+pytestmark = pytest.mark.integration
 
 GENERATION = "a" * 64
 DIGESTS = DigestSet(GENERATION, "b" * 64, "c" * 64)
@@ -134,6 +137,7 @@ class FakeNode:
     peer_generation: str = GENERATION
     routes: RouteReconciliationContext | None = None
     manual_failback: bool = False
+    manual_failover: bool = False
 
     @property
     def boot_id(self) -> str:
@@ -188,11 +192,13 @@ class ScenarioEffects:
         self.local = local
         self.applied_operation_ids: set[str] = set()
         self.crashed_operation_ids: set[str] = set()
+        self.attempted_operations: list[tuple[ActionKind, str]] = []
         self.crash_after: ActionKind | None = None
         self.fail_before: ActionKind | None = None
 
     def apply(self, action: ControllerAction) -> None:
         self.scenario.attempts.append(action.kind)
+        self.attempted_operations.append((action.kind, action.operation_id))
         if action.kind is self.fail_before:
             raise RuntimeError(f"injected-{action.kind.value}-failure")
         if action.operation_id not in self.applied_operation_ids:
@@ -309,6 +315,8 @@ class TwoNodeScenario:
             observed_owner_id=self.cloud.attachment,
             generation_id=generation,
             digests=digests,
+            mtls_epoch=1,
+            certificate_fingerprint=("d" if peer_id == "node-a" else "e") * 64,
             service_healthy=True,
             route_ready=True,
             promotion_ready=True,
@@ -330,13 +338,19 @@ class TwoNodeScenario:
             peer_received_at=node.peer_received_at,
             apply_locked=False,
             emergency_active_only=False,
-            manual_failback_requested=node.manual_failback,
             readiness=LocalReadiness(True, True, True, True),
             cloud=self.cloud.observe(local=local, peer=peer),
             guard_boot_id=node.guard_boot_id,
             data_plane_mode=node.mode,
             routes_reconciled_context=node.routes,
             route_runtime_id="route-runtime-a",
+            transfer_intent=(
+                TransferIntent.PLANNED_FAILBACK
+                if node.manual_failback
+                else TransferIntent.PLANNED_FAILOVER
+                if node.manual_failover
+                else None
+            ),
         )
 
     def run_until_active(self, local: str) -> None:
@@ -418,27 +432,52 @@ def test_fencing_failure_never_reaches_allocation_routes_or_forwarding() -> None
     assert scenario.attempts == [ActionKind.STOP_FORMER_OWNER]
 
 
+@pytest.mark.parametrize("intent", list(TransferIntent))
 @pytest.mark.parametrize("crash_after", TAKEOVER_EFFECTS)
-def test_takeover_crash_after_every_side_effect_replays_exactly_once(
+def test_every_transfer_intent_crash_after_each_effect_replays_exactly_once(
+    intent: TransferIntent,
     crash_after: ActionKind,
 ) -> None:
     scenario = TwoNodeScenario()
-    scenario.nodes["node-b"].peer_received_at = 0
-    scenario.effects["node-b"].crash_after = crash_after
+    local = "node-b"
+    if intent is TransferIntent.AUTOMATIC_FAILOVER:
+        scenario.nodes[local].peer_received_at = 0
+    elif intent is TransferIntent.PLANNED_FAILOVER:
+        scenario.nodes[local].manual_failover = True
+    else:
+        scenario.nodes["node-b"].peer_received_at = 0
+        scenario.run_until_active("node-b")
+        scenario.cloud.compute["node-a"] = ComputeState.RUNNING
+        scenario.nodes["node-a"].mode = DataPlaneMode.PASSIVE
+        scenario.nodes["node-a"].peer_received_at = scenario.clock.now
+        scenario.trace.clear()
+        scenario.attempts.clear()
+        local = "node-a"
+        scenario.nodes[local].manual_failback = True
+    scenario.effects[local].crash_after = crash_after
 
-    scenario.run_until_active("node-b")
+    scenario.run_until_active(local)
 
     assert scenario.trace == list(TAKEOVER_EFFECTS)
     assert scenario.trace.index(ActionKind.RECONCILE_ROUTES) > scenario.trace.index(
         ActionKind.CONFIRM_CANDIDATE_OWNERSHIP
     )
     assert scenario.trace[-1] is ActionKind.ENABLE_ACTIVE
-    assert scenario.effects["node-b"].crashed_operation_ids
-    assert scenario.cloud.compute["node-a"] is ComputeState.STOPPED
-    assert scenario.cloud.attachment == "node-b"
-    assert scenario.cloud.confirmed_owner == "node-b"
-    assert scenario.nodes["node-b"].mode is DataPlaneMode.ACTIVE
-    assert scenario.nodes["node-a"].mode is DataPlaneMode.BLOCKED
+    effect = scenario.effects[local]
+    assert len(effect.crashed_operation_ids) == 1
+    crash_attempts = [
+        operation_id
+        for kind, operation_id in effect.attempted_operations
+        if kind is crash_after
+    ]
+    assert crash_attempts == list(effect.crashed_operation_ids)
+    assert crash_attempts[0] in effect.applied_operation_ids
+    peer = scenario.peer(local)
+    assert scenario.cloud.compute[peer] is ComputeState.STOPPED
+    assert scenario.cloud.attachment == local
+    assert scenario.cloud.confirmed_owner == local
+    assert scenario.nodes[local].mode is DataPlaneMode.ACTIVE
+    assert scenario.nodes[peer].mode is DataPlaneMode.BLOCKED
 
 
 def test_checkpoint_filesystem_failure_happens_before_fencing_effect() -> None:
@@ -481,6 +520,20 @@ def test_takeover_resynchronization_and_manual_failback_restore_configured_owner
     assert scenario.cloud.confirmed_owner == "node-a"
     assert scenario.nodes["node-a"].mode is DataPlaneMode.ACTIVE
     assert scenario.nodes["node-b"].mode is DataPlaneMode.BLOCKED
+
+
+def test_planned_failover_uses_the_canonical_transfer_chain_with_healthy_peer() -> None:
+    scenario = TwoNodeScenario()
+    scenario.nodes["node-b"].manual_failover = True
+
+    scenario.run_until_active("node-b")
+
+    assert scenario.trace == list(TAKEOVER_EFFECTS)
+    assert scenario.cloud.compute["node-a"] is ComputeState.STOPPED
+    assert scenario.cloud.attachment == "node-b"
+    assert scenario.cloud.confirmed_owner == "node-b"
+    assert scenario.nodes["node-b"].mode is DataPlaneMode.ACTIVE
+    assert scenario.nodes["node-a"].mode is DataPlaneMode.BLOCKED
 
 
 def test_takeover_hold_down_preserves_routes_until_stable_absence() -> None:

@@ -1,6 +1,6 @@
 ---
 name: install-grafana-mcp-for-nebius
-description: "Install, configure, validate, or repair the official Grafana MCP server for Codex against Nebius-managed Grafana using one pinned human Nebius CLI profile. Use only when the user explicitly invokes this skill to set up mcp-grafana on macOS or Linux, wire Codex MCP config, repair the human-token wrapper, or configure explicitly requested external Grafana Nebius datasources. Routine read-only multi-tenant/project/resource metrics, logs, dashboards, and traces belong to $nebius-grafana-query."
+description: "Use only when explicitly invoked. Install, configure, validate, or repair Grafana MCP for Nebius-managed Grafana with a pinned human profile, Codex config, token wrapper, or requested datasources. Use nebius-grafana-query for queries."
 ---
 
 # Install Grafana MCP for Nebius

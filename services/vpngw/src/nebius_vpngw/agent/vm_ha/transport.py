@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import socket
@@ -11,7 +12,6 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Protocol
 
 from .models import (
@@ -22,6 +22,7 @@ from .models import (
     StateValidationError,
     canonical_json,
 )
+from .mtls import MTLSSnapshot
 
 _FRAME_HEADER = struct.Struct("!I")
 _DEFAULT_MAX_FRAME_BYTES = 64 * 1024
@@ -44,6 +45,8 @@ class AuthenticatedPeerMessage:
 
     heartbeat: PeerHeartbeat
     authenticated_node_id: str
+    authenticated_certificate_fingerprint: str
+    authenticated_mtls_epoch: int
 
 
 class PeerTransport(Protocol):
@@ -68,64 +71,57 @@ class ReplayStateStore(Protocol):
 
 @dataclass(frozen=True)
 class MutualTLSConfig:
-    """Build fail-closed standard-library TLS contexts for a peer adapter."""
+    """Build fresh fail-closed contexts from one managed identity snapshot."""
 
-    certificate_authority: Path
-    certificate: Path
-    private_key: Path
+    snapshot_provider: Callable[[], MTLSSnapshot]
     server_hostname: str
-    credential_check: Callable[[], None] | None = None
 
     def __post_init__(self) -> None:
         if not self.server_hostname.strip():
             raise ValueError("server_hostname must be non-empty")
 
     @staticmethod
-    def _require_credential_file(path: Path, field_name: str) -> None:
-        if not path.is_absolute():
-            raise ValueError(f"{field_name} must be an absolute file path")
-        try:
-            if not path.is_file():
-                raise ValueError(f"{field_name} must be a readable regular file")
-            with path.open("rb"):
-                pass
-        except OSError:
-            raise ValueError(f"{field_name} must be a readable regular file") from None
+    def _apply_common_context_policy(
+        context: ssl.SSLContext,
+        snapshot: MTLSSnapshot,
+    ) -> None:
+        if not snapshot.peer_certificate_pems:
+            raise PeerTransportError("managed peer certificate trust is empty")
+        peer_bundle = b"\n".join(snapshot.peer_certificate_pems).decode("ascii")
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.options |= ssl.OP_NO_TICKET
+        context.verify_flags |= getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0)
+        context.load_verify_locations(cadata=peer_bundle)
+        context.load_cert_chain(
+            str(snapshot.certificate_path),
+            str(snapshot.private_key_path),
+        )
 
-    def _validate_credential_files(self) -> None:
-        if self.credential_check is not None:
-            self.credential_check()
-        self._require_credential_file(self.certificate_authority, "certificate_authority")
-        self._require_credential_file(self.certificate, "certificate")
-        self._require_credential_file(self.private_key, "private_key")
-
-    def client_context(self) -> ssl.SSLContext:
-        self._validate_credential_files()
+    def client_context(self) -> tuple[ssl.SSLContext, MTLSSnapshot]:
         try:
-            context = ssl.create_default_context(
-                ssl.Purpose.SERVER_AUTH, cafile=str(self.certificate_authority)
-            )
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            snapshot = self.snapshot_provider()
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             context.check_hostname = True
-            context.verify_mode = ssl.CERT_REQUIRED
-            context.load_cert_chain(str(self.certificate), str(self.private_key))
-            return context
-        except (OSError, ssl.SSLError, ValueError):
-            raise PeerTransportError("unable to load peer TLS credentials") from None
+            self._apply_common_context_policy(context, snapshot)
+            return context, snapshot
+        except PeerTransportError:
+            raise
+        except (OSError, UnicodeError, ssl.SSLError, ValueError):
+            raise PeerTransportError("unable to load managed peer TLS identity") from None
 
-    def server_context(self) -> ssl.SSLContext:
-        self._validate_credential_files()
+    def server_context(self) -> tuple[ssl.SSLContext, MTLSSnapshot]:
         try:
-            context = ssl.create_default_context(
-                ssl.Purpose.CLIENT_AUTH, cafile=str(self.certificate_authority)
-            )
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            snapshot = self.snapshot_provider()
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.check_hostname = False
-            context.verify_mode = ssl.CERT_REQUIRED
-            context.load_cert_chain(str(self.certificate), str(self.private_key))
-            return context
-        except (OSError, ssl.SSLError, ValueError):
-            raise PeerTransportError("unable to load peer TLS credentials") from None
+            self._apply_common_context_policy(context, snapshot)
+            context.num_tickets = 0
+            return context, snapshot
+        except PeerTransportError:
+            raise
+        except (OSError, UnicodeError, ssl.SSLError, ValueError):
+            raise PeerTransportError("unable to load managed peer TLS identity") from None
 
 
 def _authenticated_node_id(peer_certificate: Mapping[str, Any] | None) -> str:
@@ -224,16 +220,37 @@ class MutualTLSPeerTransport:
         self._send_timeout_seconds = send_timeout_seconds
         self._max_frame_bytes = max_frame_bytes
 
-    def _verify_peer(self, channel: ssl.SSLSocket) -> str:
+    def _verify_peer(
+        self,
+        channel: ssl.SSLSocket,
+        snapshot: MTLSSnapshot,
+    ) -> tuple[str, str, int]:
         node_id = _authenticated_node_id(channel.getpeercert())
         if node_id != self._expected_peer_node_id:
             raise PeerTransportError("peer certificate belongs to the wrong node")
-        return node_id
+        certificate_der = channel.getpeercert(binary_form=True)
+        if not isinstance(certificate_der, bytes) or not certificate_der:
+            raise PeerTransportError("peer certificate identity is missing")
+        fingerprint = hashlib.sha256(certificate_der).hexdigest()
+        peers = {
+            peer.certificate_fingerprint: peer
+            for peer in snapshot.peers
+            if peer.node_id == self._expected_peer_node_id
+        }
+        peer = peers.get(fingerprint)
+        if peer is None:
+            raise PeerTransportError("peer certificate is not an exact managed pin")
+        return node_id, fingerprint, peer.epoch
 
     def send(self, heartbeat: PeerHeartbeat) -> None:
         deadline = _Deadline(self._send_timeout_seconds)
         try:
-            context = self._tls.client_context()
+            context, snapshot = self._tls.client_context()
+            if (
+                heartbeat.certificate_fingerprint != snapshot.certificate_fingerprint
+                or heartbeat.mtls_epoch != snapshot.epoch
+            ):
+                raise PeerTransportError("outbound heartbeat mTLS identity is stale")
             frame = _encode_heartbeat(
                 heartbeat,
                 max_frame_bytes=self._max_frame_bytes,
@@ -248,7 +265,7 @@ class MutualTLSPeerTransport:
                     raw,
                     server_hostname=self._tls.server_hostname,
                 ) as channel:
-                    self._verify_peer(channel)
+                    self._verify_peer(channel, snapshot)
                     channel.settimeout(deadline.remaining())
                     channel.sendall(frame)
         except PeerTransportError:
@@ -261,7 +278,7 @@ class MutualTLSPeerTransport:
     def receive(self, *, timeout_seconds: float) -> AuthenticatedPeerMessage:
         deadline = _Deadline(timeout_seconds)
         try:
-            context = self._tls.server_context()
+            context, snapshot = self._tls.server_context()
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.bind(self._listen_address)
@@ -274,14 +291,19 @@ class MutualTLSPeerTransport:
                         raw,
                         server_side=True,
                     ) as channel:
-                        node_id = self._verify_peer(channel)
+                        node_id, fingerprint, epoch = self._verify_peer(channel, snapshot)
                         header = _receive_exact(channel, _FRAME_HEADER.size, deadline)
                         (size,) = _FRAME_HEADER.unpack(header)
                         if size == 0 or size > self._max_frame_bytes:
                             raise PeerTransportError("peer heartbeat frame has an invalid size")
                         payload = _receive_exact(channel, size, deadline)
                         heartbeat = _decode_heartbeat(payload)
-                        return AuthenticatedPeerMessage(heartbeat, node_id)
+                        return AuthenticatedPeerMessage(
+                            heartbeat,
+                            node_id,
+                            fingerprint,
+                            epoch,
+                        )
         except PeerTransportError:
             raise
         except TimeoutError:
@@ -358,6 +380,10 @@ class PeerStateExchange:
         replay_state = candidate.accept(
             message.heartbeat,
             authenticated_node_id=message.authenticated_node_id,
+            authenticated_certificate_fingerprint=(
+                message.authenticated_certificate_fingerprint
+            ),
+            authenticated_mtls_epoch=message.authenticated_mtls_epoch,
             expected_cluster_id=self.cluster_id,
             expected_node_id=self.peer_node_id,
         )

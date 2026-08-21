@@ -1,6 +1,6 @@
 ---
 name: code-info
-description: "Read-only project information gathering: summarize a local project folder or GitHub repository in a copy/paste-friendly report without changing project files. Use for a concise project description, documented feature count, hierarchical CLI command/subcommand counts through three levels, total or per-language LOC, package and dependency counts, famous-project size comparisons, repo size/link, tests, artifacts, coverage, or a GitHub repo that is not cloned locally."
+description: "Use only when explicitly asked for a read-only local/GitHub project report: summary, feature/CLI/LOC/dependency counts, tests, artifacts, coverage, size, links, or comparisons. Never modify the project."
 ---
 
 # Code Info

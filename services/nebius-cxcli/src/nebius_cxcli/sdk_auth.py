@@ -82,7 +82,7 @@ class _ManagedSdkEventLoop:
 
     def _run(self) -> None:
         asyncio.set_event_loop(self.loop)
-        self._started.set()
+        self.loop.call_soon(self._started.set)
         try:
             self.loop.run_forever()
         finally:
@@ -98,12 +98,28 @@ class _ManagedSdkEventLoop:
 
 
 def _attach_managed_sdk_event_loop(sdk: Any, manager: _ManagedSdkEventLoop) -> Any:
-    original_run_sync = sdk.run_sync
     original_close = sdk.close
+
+    async def _await_on_managed_loop(awaitable: Any) -> Any:
+        return await awaitable
 
     def _run_sync(_self: object, awaitable: Any, timeout: float | None = None) -> Any:
         manager.ensure_started()
-        return original_run_sync(awaitable, timeout)
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is manager.loop:
+            if asyncio.iscoroutine(awaitable):
+                awaitable.close()
+            raise RuntimeError(
+                "Code on the cxcli-managed Nebius SDK event loop cannot call the SDK synchronously."
+            )
+        future = asyncio.run_coroutine_threadsafe(
+            _await_on_managed_loop(awaitable),
+            manager.loop,
+        )
+        return future.result(timeout)
 
     async def _close(_self: object, grace: float | None = None) -> None:
         try:
@@ -126,7 +142,11 @@ def _attach_managed_sdk_event_loop(sdk: Any, manager: _ManagedSdkEventLoop) -> A
     def _sync_close(_self: object, timeout: float | None = None) -> None:
         try:
             manager.ensure_started()
-            return original_run_sync(original_close(None), timeout)
+            future = asyncio.run_coroutine_threadsafe(
+                original_close(None),
+                manager.loop,
+            )
+            return future.result(timeout)
         finally:
             manager.stop()
 
@@ -344,7 +364,7 @@ def init_nebius_sdk(
     def _sdk_kwargs(**base: object) -> dict[str, object]:
         kwargs = dict(base)
         if endpoint_value:
-            kwargs["endpoint"] = endpoint_value
+            kwargs["domain"] = endpoint_value
         if parent_id:
             kwargs["parent_id"] = parent_id
         return kwargs
@@ -352,6 +372,7 @@ def init_nebius_sdk(
     def _create_sdk(**base: object) -> object:
         manager = _ManagedSdkEventLoop(context=context)
         try:
+            manager.ensure_started()
             sdk = SDK(**_sdk_kwargs(event_loop=manager.loop, **base))
         except Exception:
             manager.stop()
@@ -486,8 +507,19 @@ def init_nebius_sdk(
             return sdk
 
     if require_renewable_auth:
+        present = [
+            name
+            for name in (
+                "NEBIUS_AUTH_CREDENTIALS_FILE",
+                "NEBIUS_SA_ID",
+                "NEBIUS_AUTH_PUBLIC_KEY_ID",
+                "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+            )
+            if _as_text(os.environ.get(name))
+        ]
         error = RuntimeError(
             f"Failed to initialize renewable Nebius SDK credentials for {context}. "
+            f"Renewable auth variables set at attempt time: {', '.join(present) or 'none'}. "
             "Long-running operations require NEBIUS_AUTH_CREDENTIALS_FILE or the complete "
             "NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE set. "
             "Static NEBIUS_IAM_TOKEN, CLI access-token, config-profile token, and "

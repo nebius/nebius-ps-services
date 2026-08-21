@@ -5,7 +5,7 @@ technologies. This map is a starting point, not proof that a feature, release,
 model, region, extension, or integration is suitable for the target workload.
 Verify the exact version and behavior before selecting it.
 
-Baseline date: 2026-08-14
+Baseline date: 2026-08-16
 
 Prefer evidence in this order:
 
@@ -90,14 +90,26 @@ agentgateway release. Neutral governance is not a conformance result.
 
 ## Agent Application Frameworks And Harnesses
 
-### Recommended Python Kernel Candidates
+### Recommended Portable Python Runtime
 
-- Pydantic AI: <https://ai.pydantic.dev/>
-- Pydantic AI model overview: <https://ai.pydantic.dev/models/overview/>
-- Pydantic AI providers: <https://ai.pydantic.dev/models/providers/>
-- Pydantic AI model profiles: <https://ai.pydantic.dev/models/profiles/>
-- Pydantic AI Anthropic models: <https://ai.pydantic.dev/models/anthropic/>
-- Pydantic AI Google and Gemini models: <https://ai.pydantic.dev/models/google/>
+- Pydantic AI: <https://pydantic.dev/docs/ai/>
+- Agents: <https://pydantic.dev/docs/ai/core-concepts/agent/>
+- Direct model requests: <https://pydantic.dev/docs/ai/core-concepts/direct/>
+- Model overview and providers: <https://pydantic.dev/docs/ai/models/overview/>
+- Model profiles: <https://pydantic.dev/docs/ai/models/overview/>
+- Dependencies: <https://pydantic.dev/docs/ai/core-concepts/dependencies/>
+- Function tools: <https://pydantic.dev/docs/ai/tools-toolsets/tools/>
+- Toolsets: <https://pydantic.dev/docs/ai/tools-toolsets/toolsets/>
+- MCP client: <https://pydantic.dev/docs/ai/mcp/client/>
+- Capabilities: <https://pydantic.dev/docs/ai/capabilities/overview/>
+- Agent Specs: <https://pydantic.dev/docs/ai/core-concepts/agent-spec/>
+- Pydantic AI Harness: <https://pydantic.dev/docs/ai/harness/>
+- Durable execution: <https://pydantic.dev/docs/ai/capabilities/durable_execution/overview/>
+- Pydantic Evals: <https://pydantic.dev/docs/ai/evals/evals/>
+- Logfire and OpenTelemetry: <https://pydantic.dev/docs/ai/integrations/logfire/>
+- OpenAI models: <https://pydantic.dev/docs/ai/models/openai/>
+- Anthropic models: <https://pydantic.dev/docs/ai/models/anthropic/>
+- Google models: <https://pydantic.dev/docs/ai/models/google/>
 
 Verify model profiles, provider adapters, feature flags, error behavior, and
 per-user MCP identity. Do not assume OpenAI-compatible providers implement the
@@ -129,10 +141,12 @@ requirements, not merely because an application contains more than one step.
 - Claude Agent SDK deployment security: <https://code.claude.com/docs/en/agent-sdk/secure-deployment>
 - Claude Managed Agents: <https://platform.claude.com/docs/en/agents-and-tools/managed-agents/overview>
 
-Treat provider-native SDKs as strong choices when their native agent behavior is
-part of the product requirement. Put them behind application boundaries when
-provider portability remains a requirement. Review tracing export defaults and
-data policy before production use.
+Treat provider-native SDKs as separate specialized runtimes when a named native
+harness behavior is part of the product requirement. Evaluate the portable
+Pydantic AI path first, never nest the native runtime inside it, and retain
+application-owned state, tool, policy, budget, telemetry, and evaluation
+controls. Review lifecycle status, tracing export defaults, and data policy
+before production use.
 
 ### Codex Engineering Specialists
 
@@ -159,6 +173,9 @@ local app-server, so SDK use does not imply a second direct app-server client.
 - Temporal workflows: <https://docs.temporal.io/workflows>
 - Temporal activities: <https://docs.temporal.io/activities>
 - Temporal retries and failure detection: <https://docs.temporal.io/encyclopedia/detecting-activity-failures>
+- DBOS: <https://docs.dbos.dev/>
+- Prefect: <https://docs.prefect.io/>
+- Restate: <https://docs.restate.dev/>
 
 At the baseline date, Microsoft Agent Framework 1.0 is generally available for
 .NET and Python; Go and selected features or extensions remain preview. Verify
@@ -203,6 +220,7 @@ the compatible wire shape.
 
 ### Gateways And Routing
 
+- Pydantic AI Gateway: <https://pydantic.dev/docs/ai/overview/gateway/>
 - agentgateway: <https://agentgateway.dev/docs/>
 - LiteLLM: <https://docs.litellm.ai/>
 - Portkey AI Gateway: <https://portkey.ai/docs/>

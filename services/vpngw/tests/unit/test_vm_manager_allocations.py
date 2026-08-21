@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from grpc import StatusCode
+from nebius.aio.service_error import RequestError
 
 from nebius_vpngw.config_loader import GatewayGroupSpec
+from nebius_vpngw.deploy.vm_ha_cloud import wait_vm_ha_operation
 from nebius_vpngw.deploy.vm_ha_identity import (
     FormerVMHAProvenance,
     LegacyVMHAIdentity,
@@ -13,14 +19,19 @@ from nebius_vpngw.deploy.vm_ha_identity import (
     render_provisioning_marker,
 )
 from nebius_vpngw.deploy.vm_ha_lifecycle import (
+    VMHALifecycleJournal,
     VMHALifecycleMember,
     VMHALifecycleState,
     VMHALifecycleStatus,
+    VMHALifecycleStore,
+    VMHAMigrationTransaction,
+    normalize_vm_ha_observation,
 )
 from nebius_vpngw.deploy.vm_manager import (
     VMManager,
     VMProvisioningConfig,
     VMProvisioningResult,
+    validate_vm_ha_shared_allocation,
 )
 from nebius_vpngw.schema import VMHARole, VMHARouteTarget
 
@@ -97,6 +108,14 @@ def test_allocation_is_attached_accepts_assignment_network_interface() -> None:
     assert vm_mgr._allocation_is_attached(alloc)
 
 
+def test_allocation_state_uses_sdk_enum_name_instead_of_integer_value() -> None:
+    from nebius.api.nebius.vpc.v1 import AllocationStatus
+
+    allocation = SimpleNamespace(status=SimpleNamespace(state=AllocationStatus.State.ALLOCATED))
+
+    assert VMManager._allocation_state(allocation) == "ALLOCATED"
+
+
 def test_list_allocations_by_ip_waits_for_request_objects() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     alloc = _public_allocation("204.12.170.147", spec_cidr_only=True)
@@ -156,6 +175,92 @@ def test_ensure_public_allocation_rejects_requested_ip_when_allocation_is_attach
         )
 
 
+def test_vm_ha_public_allocation_resolves_typed_already_exists_by_exact_shape(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
+    desired_ip = "89.169.123.157"
+    existing = _public_allocation(
+        desired_ip,
+        alloc_id="public-1",
+        name="nebius-vpn-gw-1-eth0-ip",
+    )
+    existing.metadata.parent_id = "project-1"
+    existing.spec.ipv4_private = None
+    existing.status.state = "ALLOCATED"
+    error = RequestError(  # type: ignore[arg-type]
+        SimpleNamespace(code=StatusCode.ALREADY_EXISTS)
+    )
+    client = SimpleNamespace(
+        create=lambda *_args, **_kwargs: SimpleNamespace(wait=lambda: (_ for _ in ()).throw(error))
+    )
+
+    with (
+        patch.object(
+            vm_mgr,
+            "_find_ha_allocation_by_name",
+            return_value=existing,
+        ),
+        patch.object(vm_mgr, "_get_allocation_by_id", return_value=existing),
+    ):
+        alloc_name, alloc_obj = vm_mgr._ensure_public_allocation(
+            alloc_api=None,
+            alloc_client=client,
+            inst_name="nebius-vpn-gw-1",
+            nic_name="eth0",
+            subnet_id="subnet-1",
+            desired_ip=desired_ip,
+            preserved_alloc_id=None,
+            operation_id="operation-1",
+        )
+
+    assert alloc_name == "nebius-vpn-gw-1-eth0-ip"
+    assert alloc_obj is existing
+
+
+def test_vm_ha_public_allocation_rejects_foreign_shape_after_already_exists(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
+    desired_ip = "89.169.123.157"
+    foreign = _public_allocation(
+        desired_ip,
+        name="nebius-vpn-gw-1-eth0-ip",
+        subnet_id="foreign-subnet",
+    )
+    foreign.metadata.parent_id = "project-1"
+    foreign.spec.ipv4_private = None
+    foreign.status.state = "ALLOCATED"
+    error = RequestError(  # type: ignore[arg-type]
+        SimpleNamespace(code=StatusCode.ALREADY_EXISTS)
+    )
+    client = SimpleNamespace(
+        create=lambda *_args, **_kwargs: SimpleNamespace(wait=lambda: (_ for _ in ()).throw(error))
+    )
+
+    with (
+        patch.object(
+            vm_mgr,
+            "_find_ha_allocation_by_name",
+            return_value=foreign,
+        ),
+        patch.object(vm_mgr, "_get_allocation_by_id", return_value=foreign),
+        pytest.raises(RuntimeError, match="foreign resource shape"),
+    ):
+        vm_mgr._ensure_public_allocation(
+            alloc_api=None,
+            alloc_client=client,
+            inst_name="nebius-vpn-gw-1",
+            nic_name="eth0",
+            subnet_id="subnet-1",
+            desired_ip=desired_ip,
+            preserved_alloc_id=None,
+            operation_id="operation-1",
+        )
+
+
 def test_resolve_prepared_public_allocation_prefers_requested_ip_over_stale_name() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     desired_ip = "89.169.123.157"
@@ -207,6 +312,134 @@ def test_resolve_prepared_public_allocation_rejects_named_allocation_with_differ
         )
 
 
+def test_prepare_public_allocations_selects_only_passive_and_reuses_on_retry() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = GatewayGroupSpec(
+        name="nebius-vpn-gw",
+        instance_count=2,
+        region="eu-north1-a",
+        external_ips=[],
+        vm_spec={"num_nics": 1},
+    )
+    allocation = _public_allocation(
+        "203.0.113.20",
+        name="nebius-vpn-gw-1-eth0-ip",
+        subnet_id="subnet-1",
+    )
+    allocation.metadata.parent_id = "project-1"
+    allocation.spec.ipv4_private = None
+    allocation.status.state = "ALLOCATED"
+    resolved_names: list[str] = []
+
+    def resolve(_client, _subnet_id, alloc_name, _desired_ip, allocations_by_ip):
+        resolved_names.append(alloc_name)
+        if "-0-" in alloc_name:
+            raise AssertionError("the active allocation must not be looked up")
+        return allocation, allocations_by_ip
+
+    with (
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_resolve_prepared_public_allocation",
+            side_effect=resolve,
+        ),
+        patch.object(
+            vm_mgr,
+            "_create_prepared_public_allocation",
+            side_effect=AssertionError("retry must reuse the canonical passive allocation"),
+        ),
+        patch.object(vm_mgr, "_resolve_prepared_public_ip", return_value="203.0.113.20"),
+        patch.object(vm_mgr, "_hydrate_allocation", return_value=allocation),
+        patch.object(vm_mgr, "_validate_requested_public_allocation", return_value=allocation),
+    ):
+        first = vm_mgr._prepare_public_allocations_for_subnet(
+            object(),
+            spec,
+            "subnet-1",
+            instance_indices={1},
+            desired_external_ips=[],
+            require_unattached=True,
+        )
+        second = vm_mgr._prepare_public_allocations_for_subnet(
+            object(),
+            spec,
+            "subnet-1",
+            instance_indices={1},
+            desired_external_ips=[],
+            require_unattached=True,
+        )
+
+    assert first == second == {1: ["203.0.113.20"]}
+    assert resolved_names == [
+        "nebius-vpn-gw-1-eth0-ip",
+        "nebius-vpn-gw-1-eth0-ip",
+    ]
+
+
+def test_passive_allocation_retry_reuses_create_accepted_before_resolution_failure() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = GatewayGroupSpec(
+        name="nebius-vpn-gw",
+        instance_count=2,
+        region="eu-north1-a",
+        external_ips=[],
+        vm_spec={"num_nics": 1},
+    )
+    allocation = _public_allocation(
+        "203.0.113.20",
+        name="nebius-vpn-gw-1-eth0-ip",
+        subnet_id="subnet-1",
+    )
+    allocation.metadata.parent_id = "project-1"
+    allocation.spec.ipv4_private = None
+    allocation.status.state = "ALLOCATED"
+    resolve_calls = 0
+
+    def resolve(_client, _subnet_id, alloc_name, _desired_ip, allocations_by_ip):
+        nonlocal resolve_calls
+        resolve_calls += 1
+        assert alloc_name == "nebius-vpn-gw-1-eth0-ip"
+        return (None if resolve_calls == 1 else allocation), allocations_by_ip
+
+    with (
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=object()),
+        patch.object(vm_mgr, "_resolve_prepared_public_allocation", side_effect=resolve),
+        patch.object(
+            vm_mgr,
+            "_create_prepared_public_allocation",
+            return_value=allocation,
+        ) as create,
+        patch.object(
+            vm_mgr,
+            "_resolve_prepared_public_ip",
+            side_effect=[RuntimeError("operation status unavailable"), "203.0.113.20"],
+        ),
+        patch.object(vm_mgr, "_hydrate_allocation", return_value=allocation),
+        patch.object(vm_mgr, "_validate_requested_public_allocation", return_value=allocation),
+    ):
+        with pytest.raises(RuntimeError, match="operation status unavailable"):
+            vm_mgr._prepare_public_allocations_for_subnet(
+                object(),
+                spec,
+                "subnet-1",
+                instance_indices={1},
+                desired_external_ips=[],
+                require_unattached=True,
+            )
+        retry = vm_mgr._prepare_public_allocations_for_subnet(
+            object(),
+            spec,
+            "subnet-1",
+            instance_indices={1},
+            desired_external_ips=[],
+            require_unattached=True,
+        )
+
+    assert retry == {1: ["203.0.113.20"]}
+    create.assert_called_once()
+
+
 def test_require_public_allocation_in_gateway_subnet_rejects_different_subnet() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     alloc = _public_allocation(
@@ -224,24 +457,28 @@ def test_require_public_allocation_in_gateway_subnet_rejects_different_subnet() 
         )
 
 
-def test_set_ha_private_allocation_updates_only_exact_nic() -> None:
+def test_set_ha_private_alias_updates_only_exact_nic_and_preserves_primary() -> None:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.compute.v1 import (
         Instance,
         InstanceSpec,
         IPAddress,
+        IPAlias,
         NetworkInterfaceSpec,
     )
 
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     instance = Instance(
-        metadata=ResourceMetadata(id="instance-new", parent_id="project-1", name="new"),
+        metadata=ResourceMetadata(
+            id="instance-new", parent_id="project-1", name="new", resource_version=7
+        ),
         spec=InstanceSpec(
             network_interfaces=[
                 NetworkInterfaceSpec(
                     subnet_id="subnet-1",
                     name="eth0",
                     ip_address=IPAddress(allocation_id="old-private"),
+                    aliases=[IPAlias(allocation_id="existing-alias")],
                 ),
                 NetworkInterfaceSpec(
                     subnet_id="subnet-2",
@@ -260,27 +497,43 @@ def test_set_ha_private_allocation_updates_only_exact_nic() -> None:
         patch.object(vm_mgr, "get_ha_instance", return_value=instance),
         patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
     ):
-        vm_mgr.set_ha_private_allocation("instance-new", "eth0", "shared-private")
+        vm_mgr.set_ha_private_alias("instance-new", "eth0", "shared-private", True)
 
     request = service.update.call_args.args[0]
     assert request.metadata.id == "instance-new"
-    assert request.spec.network_interfaces[0].ip_address.allocation_id == "shared-private"
+    assert request.spec.network_interfaces[0].ip_address.allocation_id == "old-private"
+    assert [alias.allocation_id for alias in request.spec.network_interfaces[0].aliases] == [
+        "existing-alias",
+        "shared-private",
+    ]
     assert request.spec.network_interfaces[1].ip_address.allocation_id == "other-private"
+    assert [alias.allocation_id for alias in instance.spec.network_interfaces[0].aliases] == [
+        "existing-alias"
+    ]
 
 
-def test_set_ha_private_allocation_replay_skips_update() -> None:
+def test_set_ha_private_alias_replay_skips_update() -> None:
     from nebius.api.nebius.common.v1 import ResourceMetadata
-    from nebius.api.nebius.compute.v1 import Instance, InstanceSpec, IPAddress, NetworkInterfaceSpec
+    from nebius.api.nebius.compute.v1 import (
+        Instance,
+        InstanceSpec,
+        IPAddress,
+        IPAlias,
+        NetworkInterfaceSpec,
+    )
 
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     instance = Instance(
-        metadata=ResourceMetadata(id="instance-new", parent_id="project-1", name="new"),
+        metadata=ResourceMetadata(
+            id="instance-new", parent_id="project-1", name="new", resource_version=7
+        ),
         spec=InstanceSpec(
             network_interfaces=[
                 NetworkInterfaceSpec(
                     subnet_id="subnet-1",
                     name="eth0",
-                    ip_address=IPAddress(allocation_id="shared-private"),
+                    ip_address=IPAddress(allocation_id="member-primary"),
+                    aliases=[IPAlias(allocation_id="shared-private")],
                 )
             ]
         ),
@@ -292,18 +545,20 @@ def test_set_ha_private_allocation_replay_skips_update() -> None:
         patch.object(vm_mgr, "get_ha_instance", return_value=instance),
         patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
     ):
-        vm_mgr.set_ha_private_allocation("instance-new", "eth0", "shared-private")
+        vm_mgr.set_ha_private_alias("instance-new", "eth0", "shared-private", True)
 
     service.update.assert_not_called()
 
 
-def test_set_ha_private_allocation_requires_exact_nic() -> None:
+def test_set_ha_private_alias_requires_exact_nic() -> None:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.compute.v1 import Instance, InstanceSpec, NetworkInterfaceSpec
 
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     instance = Instance(
-        metadata=ResourceMetadata(id="instance-new", parent_id="project-1", name="new"),
+        metadata=ResourceMetadata(
+            id="instance-new", parent_id="project-1", name="new", resource_version=7
+        ),
         spec=InstanceSpec(
             network_interfaces=[NetworkInterfaceSpec(subnet_id="subnet-1", name="eth1")]
         ),
@@ -314,7 +569,7 @@ def test_set_ha_private_allocation_requires_exact_nic() -> None:
         patch.object(vm_mgr, "get_ha_instance", return_value=instance),
         pytest.raises(RuntimeError, match="exactly one NIC named eth0"),
     ):
-        vm_mgr.set_ha_private_allocation("instance-new", "eth0", "shared-private")
+        vm_mgr.set_ha_private_alias("instance-new", "eth0", "shared-private", True)
 
 
 def _ha_spec() -> GatewayGroupSpec:
@@ -344,16 +599,426 @@ def _ha_spec() -> GatewayGroupSpec:
     )
 
 
-def test_ensure_vm_ha_shared_allocation_reuses_one_deterministic_identity() -> None:
+def _install_vm_ha_journal(
+    vm_mgr: VMManager,
+    tmp_path,
+    *,
+    bindings: dict[str, str] | None = None,
+) -> VMHALifecycleJournal:
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    state = VMHALifecycleState.start_provisioning(
+        project_id="project-1",
+        gateway_name="gateway",
+        cluster_id="cluster",
+        allocation_name="gateway-cluster-shared-private-ip",
+        members=(
+            VMHALifecycleMember(0, "gateway-0", "node-a", "active", "", "", ""),
+            VMHALifecycleMember(1, "gateway-1", "node-b", "passive", "", "", ""),
+        ),
+        operation_id="fixture-operation",
+        approval_kind="migration",
+        approval_digest="a" * 64,
+        desired_state_digest="b" * 64,
+        current_state_digest="c" * 64,
+        initial_resource_bindings=bindings,
+    )
+    store = VMHALifecycleStore(config_path)
+    store.write_verified(state)
+    journal = VMHALifecycleJournal(store, state)
+    vm_mgr.set_vm_ha_lifecycle_journal(journal)
+    return journal
+
+
+def _install_vm_ha_activating_journal(
+    vm_mgr: VMManager,
+    tmp_path,
+    *,
+    pending_effect: str | None = None,
+    route_effect_completed: bool = False,
+) -> tuple[VMHALifecycleJournal, dict[str, object], SimpleNamespace]:
+    journal = _install_vm_ha_journal(vm_mgr, tmp_path)
+    target = _route_targets()[0]
+    members = (
+        VMHALifecycleMember(
+            0,
+            "gateway-0",
+            "node-a",
+            "active",
+            "compute-0",
+            "eth0",
+            "203.0.113.10",
+            "11",
+            "disk-0",
+            "subnet-1",
+            "primary-0",
+            "public-0",
+            ("shared-private",),
+        ),
+        VMHALifecycleMember(
+            1,
+            "gateway-1",
+            "node-b",
+            "passive",
+            "compute-1",
+            "eth0",
+            "203.0.113.11",
+            "12",
+            "disk-1",
+            "subnet-1",
+            "primary-1",
+            "public-1",
+        ),
+    )
+    observation: dict[str, object] = {
+        "members": [
+            {
+                "aliases": ["shared-private"],
+                "boot_disk_id": "disk-0",
+                "compute_id": "compute-0",
+                "compute_revision": "11",
+                "instance_name": "gateway-0",
+                "network_interface_name": "eth0",
+                "parent_id": "project-1",
+                "present": True,
+                "primary_allocation_id": "primary-0",
+                "public_allocation_id": "public-0",
+                "public_ip": "203.0.113.10",
+                "subnet_id": "subnet-1",
+            },
+            {
+                "aliases": [],
+                "boot_disk_id": "disk-1",
+                "compute_id": "compute-1",
+                "compute_revision": "12",
+                "instance_name": "gateway-1",
+                "network_interface_name": "eth0",
+                "parent_id": "project-1",
+                "present": True,
+                "primary_allocation_id": "primary-1",
+                "public_allocation_id": "public-1",
+                "public_ip": "203.0.113.11",
+                "subnet_id": "subnet-1",
+            },
+        ],
+        "project_id": "project-1",
+        "route_targets": [target.model_dump(mode="json")],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "shared-private",
+            "allocation_name": "gateway-cluster-shared-private-ip",
+            "owner": {
+                "compute_id": "compute-0",
+                "network_interface_name": "eth0",
+            },
+            "parent_id": "project-1",
+            "present": True,
+            "private_subnet_id": "subnet-1",
+            "public_shape_present": False,
+            "resource_revision": "7",
+        },
+    }
+    route_runtime_id = "route-runtime-a"
+    bindings = vm_mgr._observation_resource_bindings(observation)
+    bindings["route-runtime-id"] = route_runtime_id
+    assert journal.state.transaction is not None
+    completed_effects = ("verify-active-forwarding-and-routes",) if route_effect_completed else ()
+    transaction = replace(
+        journal.state.transaction,
+        pending_effect=pending_effect,
+        completed_effects=completed_effects,
+        resource_bindings=tuple(sorted(bindings.items())),
+        observation=normalize_vm_ha_observation(observation),
+        observation_guard=None,
+    )
+    state = replace(
+        journal.state,
+        status=VMHALifecycleStatus.ACTIVATING,
+        allocation_id="shared-private",
+        members=members,
+        route_runtime_id=route_runtime_id,
+        route_targets=vm_mgr._serialized_route_targets((target,)),
+        transaction=transaction,
+    )
+    journal.state = state
+    binding = SimpleNamespace(
+        cluster_id="cluster",
+        shared_allocation_id="shared-private",
+        route_runtime_id=route_runtime_id,
+        route_targets=(target,),
+        nodes=(
+            SimpleNamespace(
+                node_id="node-a",
+                compute_id="compute-0",
+                network_interface_name="eth0",
+                role=SimpleNamespace(value="active"),
+            ),
+            SimpleNamespace(
+                node_id="node-b",
+                compute_id="compute-1",
+                network_interface_name="eth0",
+                role=SimpleNamespace(value="passive"),
+            ),
+        ),
+    )
+    return journal, observation, binding
+
+
+def test_runtime_binding_selects_exact_approved_primary_and_shared_routes(tmp_path) -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    journal, observation, _binding = _install_vm_ha_activating_journal(vm_mgr, tmp_path)
+    shared_route_name = next(
+        iter(
+            vm_mgr._vm_ha_managed_route_names(
+                cluster_id="cluster",
+                route_target=_route_targets()[0],
+                prefix="10.35.0.0/16",
+                allocation_id="shared-private",
+            )
+        )
+    )
+    observation["routes"] = [
+        {
+            "allocation_id": "primary-0",
+            "name": "vpngw-10.20.0.0-16",
+            "prefix": "10.20.0.0/16",
+            "route_id": "route-approved",
+            "route_table_id": "route-table-1",
+            "revision": "7",
+        },
+        {
+            "allocation_id": "primary-1",
+            "name": "vpngw-10.30.0.0-16",
+            "prefix": "10.30.0.0/16",
+            "route_id": "route-passive-primary",
+            "route_table_id": "route-table-1",
+            "revision": "8",
+        },
+        {
+            "allocation_id": "shared-private",
+            "name": shared_route_name,
+            "prefix": "10.35.0.0/16",
+            "route_id": "route-shared",
+            "route_table_id": "route-table-1",
+            "revision": "10",
+        },
+        {
+            "allocation_id": "primary-0",
+            "name": "customer-route",
+            "prefix": "10.40.0.0/16",
+            "route_id": "route-foreign",
+            "route_table_id": "route-table-1",
+            "revision": "9",
+        },
+    ]
+    assert journal.state.transaction is not None
+    journal.state = replace(
+        journal.state,
+        transaction=replace(
+            journal.state.transaction,
+            observation=normalize_vm_ha_observation(observation),
+        ),
+    )
+
+    result = vm_mgr._vm_ha_migration_route_bindings(_ha_spec(), _route_targets(), "shared-private")
+
+    assert [(route.route_id, route.allocation_id, route.resource_revision) for route in result] == [
+        ("route-approved", "primary-0", "7"),
+        ("route-shared", "shared-private", "10"),
+    ]
+
+
+def test_vm_ha_activation_resume_rebuilds_binding_without_provisioning(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _journal, observation, binding = _install_vm_ha_activating_journal(
+        vm_mgr,
+        tmp_path,
+        pending_effect="activate-node-b",
+    )
+
+    with (
+        patch.object(
+            vm_mgr,
+            "observe_vm_ha_migration_state",
+            side_effect=[deepcopy(observation), deepcopy(observation)],
+        ) as observe,
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_build_vm_ha_runtime_binding",
+            return_value=binding,
+        ) as build_binding,
+        patch.object(
+            vm_mgr,
+            "ensure_group",
+            side_effect=AssertionError("activation resume must not provision"),
+        ),
+    ):
+        result = vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+
+    assert result == {
+        "gateway-0": "203.0.113.10",
+        "gateway-1": "203.0.113.11",
+    }
+    assert result.vm_ha_runtime_binding is binding
+    assert observe.call_count == 2
+    build_binding.assert_called_once()
+
+
+@pytest.mark.parametrize("route_effect_completed", [False, True])
+def test_vm_ha_activation_resume_authorizes_only_post_route_effect_route_drift(
+    tmp_path,
+    route_effect_completed: bool,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _journal, observation, binding = _install_vm_ha_activating_journal(
+        vm_mgr,
+        tmp_path,
+        route_effect_completed=route_effect_completed,
+    )
+    changed = deepcopy(observation)
+    changed["routes"] = [
+        {
+            "allocation_id": "shared-private",
+            "name": "vpngw-ha-route",
+            "prefix": "10.0.0.0/8",
+            "route_id": "route-a",
+            "route_table_id": "route-table-1",
+            "revision": "9",
+        }
+    ]
+    changed["shared_allocation"]["resource_revision"] = "8"
+
+    with (
+        patch.object(
+            vm_mgr,
+            "observe_vm_ha_migration_state",
+            side_effect=[deepcopy(changed), deepcopy(changed)],
+        ),
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_build_vm_ha_runtime_binding", return_value=binding),
+    ):
+        if route_effect_completed:
+            result = vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+            assert result.vm_ha_runtime_binding is binding
+        else:
+            with pytest.raises(RuntimeError, match="before route activation"):
+                vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+
+
+def test_vm_ha_activation_resume_accepts_only_route_revision_drift_before_effect(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    journal, observation, binding = _install_vm_ha_activating_journal(vm_mgr, tmp_path)
+    observation["routes"] = [
+        {
+            "allocation_id": "shared-private",
+            "name": "vpngw-ha-route",
+            "prefix": "10.0.0.0/8",
+            "route_id": "route-a",
+            "route_table_id": "route-table-1",
+            "revision": "7",
+        }
+    ]
+    assert journal.state.transaction is not None
+    journal.state = replace(
+        journal.state,
+        transaction=replace(
+            journal.state.transaction,
+            observation=normalize_vm_ha_observation(observation),
+        ),
+    )
+    changed = deepcopy(observation)
+    changed["routes"][0]["revision"] = "8"
+
+    with (
+        patch.object(
+            vm_mgr,
+            "observe_vm_ha_migration_state",
+            side_effect=[deepcopy(changed), deepcopy(changed)],
+        ),
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_build_vm_ha_runtime_binding", return_value=binding),
+    ):
+        result = vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+
+    assert result.vm_ha_runtime_binding is binding
+
+
+def test_vm_ha_activation_resume_rejects_non_route_drift_after_route_effect(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _journal, observation, binding = _install_vm_ha_activating_journal(
+        vm_mgr,
+        tmp_path,
+        route_effect_completed=True,
+    )
+    changed = deepcopy(observation)
+    changed["members"][0]["compute_revision"] = "99"
+
+    with (
+        patch.object(
+            vm_mgr,
+            "observe_vm_ha_migration_state",
+            return_value=changed,
+        ),
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_build_vm_ha_runtime_binding", return_value=binding),
+        pytest.raises(RuntimeError, match="non-route cloud state changed"),
+    ):
+        vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+
+
+def test_vm_ha_activation_resume_rejects_unknown_pending_effect(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_activating_journal(
+        vm_mgr,
+        tmp_path,
+        pending_effect="provision-gateway-0-compute",
+    )
+
+    with pytest.raises(RuntimeError, match="unknown pending effect"):
+        vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+
+
+def test_ensure_vm_ha_shared_allocation_reuses_one_approved_identity(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(
+        vm_mgr,
+        tmp_path,
+        bindings={"shared-allocation-id": "shared-private"},
+    )
     allocation = SimpleNamespace(
         id="shared-private",
-        metadata=SimpleNamespace(id="shared-private", name="gateway-cluster-shared-private-ip"),
+        metadata=SimpleNamespace(
+            id="shared-private",
+            name="gateway-cluster-shared-private-ip",
+            parent_id="project-1",
+        ),
+        spec=SimpleNamespace(
+            ipv4_private=SimpleNamespace(subnet_id="subnet-1"),
+            ipv4_public=None,
+        ),
+        status=SimpleNamespace(state="ALLOCATED", assignment=None),
     )
-    request = SimpleNamespace(wait=lambda: SimpleNamespace(items=[allocation]))
-    client = SimpleNamespace(list=lambda _: request)
+    client = SimpleNamespace()
 
-    with patch.object(vm_mgr, "get_ha_allocation", return_value=allocation):
+    stable_observation = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {"present": False},
+    }
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(
+            vm_mgr,
+            "_stable_vm_ha_effect_observation",
+            return_value=stable_observation,
+        ),
+    ):
         allocation_id = vm_mgr._ensure_vm_ha_shared_allocation(
             client,
             _ha_spec(),
@@ -364,21 +1029,655 @@ def test_ensure_vm_ha_shared_allocation_reuses_one_deterministic_identity() -> N
     assert vm_mgr._vm_ha_shared_allocation_id == "shared-private"
 
 
-def test_ensure_vm_ha_shared_allocation_propagates_ambiguous_sdk_failure() -> None:
+def test_ensure_vm_ha_shared_allocation_propagates_ambiguous_sdk_failure(tmp_path) -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
     client = SimpleNamespace(
-        list=lambda _: SimpleNamespace(wait=lambda: (_ for _ in ()).throw(OSError("denied")))
+        create=lambda *_args, **_kwargs: SimpleNamespace(
+            wait=lambda: (_ for _ in ()).throw(OSError("denied"))
+        )
     )
 
-    with pytest.raises(OSError, match="denied"):
+    with (
+        patch.object(
+            vm_mgr,
+            "_stable_vm_ha_effect_observation",
+            return_value={
+                "members": [],
+                "route_targets": [],
+                "routes": [],
+                "shared_allocation": {"present": False},
+            },
+        ),
+        pytest.raises(RuntimeError, match="could not be created"),
+    ):
         vm_mgr._ensure_vm_ha_shared_allocation(client, _ha_spec(), "subnet-1")
 
 
+def test_ensure_vm_ha_shared_allocation_resolves_typed_already_exists(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
+    error = RequestError(  # type: ignore[arg-type]
+        SimpleNamespace(code=StatusCode.ALREADY_EXISTS)
+    )
+    client = SimpleNamespace(
+        create=lambda *_args, **_kwargs: SimpleNamespace(wait=lambda: (_ for _ in ()).throw(error))
+    )
+    allocation = SimpleNamespace(
+        id="shared-private",
+        metadata=SimpleNamespace(
+            id="shared-private",
+            name="gateway-cluster-shared-private-ip",
+            parent_id="project-1",
+        ),
+        spec=SimpleNamespace(
+            ipv4_private=SimpleNamespace(subnet_id="subnet-1"),
+            ipv4_public=None,
+        ),
+        status=SimpleNamespace(state="ALLOCATED", assignment=None),
+    )
+    before = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_name": "gateway-cluster-shared-private-ip",
+            "present": False,
+        },
+    }
+    after = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "shared-private",
+            "allocation_name": "gateway-cluster-shared-private-ip",
+            "owner": None,
+            "parent_id": "project-1",
+            "present": True,
+            "private_subnet_id": "subnet-1",
+            "public_shape_present": False,
+            "resource_revision": "1",
+        },
+    }
+
+    with (
+        patch.object(
+            vm_mgr,
+            "_stable_vm_ha_effect_observation",
+            side_effect=(before, after),
+        ),
+        patch.object(
+            vm_mgr,
+            "_find_ha_allocation_by_name",
+            return_value=allocation,
+        ),
+    ):
+        allocation_id = vm_mgr._ensure_vm_ha_shared_allocation(client, _ha_spec(), "subnet-1")
+
+    assert allocation_id == "shared-private"
+
+
+@pytest.mark.parametrize(
+    ("parent_id", "private_subnet", "public_shape", "message"),
+    (
+        ("foreign-project", "subnet-1", None, "parent project"),
+        ("project-1", "foreign-subnet", None, "subnet"),
+        ("project-1", "subnet-1", SimpleNamespace(), "private and not public"),
+    ),
+)
+def test_shared_allocation_validator_rejects_foreign_shape(
+    parent_id,
+    private_subnet,
+    public_shape,
+    message,
+) -> None:
+    allocation = SimpleNamespace(
+        id="shared-private",
+        metadata=SimpleNamespace(
+            id="shared-private",
+            name="gateway-cluster-shared-private-ip",
+            parent_id=parent_id,
+        ),
+        spec=SimpleNamespace(
+            ipv4_private=SimpleNamespace(subnet_id=private_subnet),
+            ipv4_public=public_shape,
+        ),
+        status=SimpleNamespace(state="ALLOCATED", assignment=None),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        validate_vm_ha_shared_allocation(
+            allocation,
+            expected_allocation_id="shared-private",
+            expected_name="gateway-cluster-shared-private-ip",
+            expected_project_id="project-1",
+            expected_subnet_id="subnet-1",
+            expected_owner=None,
+        )
+
+
+def test_vm_ha_transaction_preflight_rejects_unapproved_current_state_drift(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
+    observation = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {"present": False},
+    }
+
+    with (
+        patch.object(vm_mgr, "observe_vm_ha_migration_state", return_value=observation),
+        pytest.raises(RuntimeError, match="approved current state changed"),
+    ):
+        vm_mgr._verify_vm_ha_transaction_preconditions(_ha_spec(), ["10.0.0.0/8"])
+
+
+def test_vm_ha_transaction_preflight_uses_v4_trusted_observation_for_recovery(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    journal = _install_vm_ha_journal(vm_mgr, tmp_path)
+    observation = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {"present": False},
+    }
+    assert journal.state.transaction is not None
+    journal.state = replace(
+        journal.state,
+        transaction=replace(
+            journal.state.transaction,
+            approval_kind="recovery",
+            current_state_digest="e" * 64,
+            observation=normalize_vm_ha_observation(observation),
+        ),
+    )
+
+    with patch.object(
+        vm_mgr,
+        "observe_vm_ha_migration_state",
+        return_value=observation,
+    ):
+        vm_mgr._verify_vm_ha_transaction_preconditions(_ha_spec(), ["10.0.0.0/8"])
+
+
+def test_vm_ha_transaction_preflight_allows_pending_effect_outcome_resolution(
+    tmp_path,
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    journal = _install_vm_ha_journal(vm_mgr, tmp_path)
+    observation = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {"present": False},
+    }
+    journal.begin(
+        "provision-shared-allocation",
+        observation=observation,
+        permitted_paths=("/shared_allocation/allocation_id",),
+    )
+
+    with patch.object(
+        vm_mgr,
+        "observe_vm_ha_migration_state",
+        return_value=observation,
+    ):
+        vm_mgr._verify_vm_ha_transaction_preconditions(
+            _ha_spec(),
+            ["10.0.0.0/8"],
+        )
+
+
+def test_shared_allocation_effect_allows_new_unattached_owner_shape(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    journal = _install_vm_ha_journal(vm_mgr, tmp_path)
+    before = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_name": "gateway-cluster-shared-private-ip",
+            "present": False,
+        },
+    }
+    after = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "shared-private",
+            "allocation_name": "gateway-cluster-shared-private-ip",
+            "owner": None,
+            "parent_id": "project-1",
+            "present": True,
+            "private_subnet_id": "subnet-1",
+            "public_shape_present": False,
+            "resource_revision": "1",
+        },
+    }
+    permitted = vm_mgr._vm_ha_effect_permitted_paths("provision-shared-allocation", before)
+
+    assert "/shared_allocation/owner" in permitted
+    journal.begin(
+        "provision-shared-allocation",
+        observation=before,
+        permitted_paths=permitted,
+    )
+    journal.complete(
+        "provision-shared-allocation",
+        resource_updates={"shared-allocation-id": "shared-private"},
+        observation=after,
+    )
+
+
+def test_failed_passive_replacement_effects_are_scoped_to_one_compute() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    vm_mgr._vm_ha_effect_spec = _ha_spec()
+    observation = {
+        "members": [
+            {"instance_name": "gateway-0", "present": True},
+            {
+                "aliases": [],
+                "boot_disk_id": "disk-1",
+                "compute_id": "compute-1",
+                "compute_revision": "11",
+                "instance_name": "gateway-1",
+                "network_interface_name": "eth0",
+                "parent_id": "project-1",
+                "present": True,
+                "primary_allocation_id": "primary-1",
+                "public_allocation_id": "public-1",
+                "public_ip": "203.0.113.11",
+                "subnet_id": "subnet-1",
+            },
+        ],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {"present": True},
+    }
+
+    delete_paths = vm_mgr._vm_ha_effect_permitted_paths(
+        "replace-failed-gateway-1-delete-compute",
+        observation,
+    )
+    create_paths = vm_mgr._vm_ha_effect_permitted_paths(
+        "replace-failed-gateway-1-create-compute",
+        observation,
+    )
+
+    assert delete_paths == (
+        "/members/1",
+        "/members/1/*",
+        "/members/1/aliases/*",
+    )
+    assert all(path.startswith("/members/1") for path in create_paths)
+    assert all(
+        path.startswith("/members/1")
+        for path in vm_mgr._vm_ha_effect_permitted_paths(
+            "replace-failed-2-gateway-1-create-compute",
+            observation,
+        )
+    )
+    assert (
+        vm_mgr._vm_ha_effect_permitted_paths(
+            "replace-failed-gateway-1-delete-boot-disk",
+            observation,
+        )
+        == ()
+    )
+
+
+def test_failed_passive_replacement_waits_for_pinned_ssh_readiness() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+
+    with (
+        patch.object(
+            vm_mgr,
+            "verify_vm_ha_existing_identities",
+            side_effect=[RuntimeError("unreachable"), None],
+        ) as verify,
+        patch("nebius_vpngw.deploy.vm_manager.time.sleep") as sleep,
+        patch(
+            "nebius_vpngw.deploy.vm_manager.time.monotonic",
+            side_effect=[0.0, 1.0, 2.0, 3.0],
+        ),
+    ):
+        vm_mgr._wait_for_vm_ha_member_ssh(
+            "gateway-1",
+            "203.0.113.11",
+            username="ubuntu",
+            timeout=300,
+        )
+
+    assert verify.call_count == 2
+    sleep.assert_called_once_with(5.0)
+
+
+def test_failed_passive_replacement_bounds_probe_and_sleep_to_one_deadline() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+
+    with (
+        patch.object(
+            vm_mgr,
+            "verify_vm_ha_existing_identities",
+            side_effect=RuntimeError("unreachable"),
+        ) as verify,
+        patch("nebius_vpngw.deploy.vm_manager.time.sleep") as sleep,
+        patch(
+            "nebius_vpngw.deploy.vm_manager.time.monotonic",
+            side_effect=[0.0, 0.0, 0.25, 0.5],
+        ),
+        pytest.raises(RuntimeError, match="did not reach pinned SSH readiness"),
+    ):
+        vm_mgr._wait_for_vm_ha_member_ssh(
+            "gateway-1",
+            "203.0.113.11",
+            username="ubuntu",
+            timeout=0.5,
+        )
+
+    assert verify.call_args.kwargs["probe_timeout"] == 0.5
+    sleep.assert_called_once_with(0.25)
+
+
+def test_failed_passive_replacement_never_retries_host_identity_failure() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+
+    with (
+        patch.object(
+            vm_mgr,
+            "verify_vm_ha_existing_identities",
+            side_effect=RuntimeError("SSH host identity verification failed"),
+        ) as verify,
+        patch("nebius_vpngw.deploy.vm_manager.time.sleep") as sleep,
+        pytest.raises(RuntimeError, match="identity verification failed"),
+    ):
+        vm_mgr._wait_for_vm_ha_member_ssh(
+            "gateway-1",
+            "203.0.113.11",
+            username="ubuntu",
+        )
+
+    verify.assert_called_once()
+    sleep.assert_not_called()
+
+
+def test_completed_effect_revalidation_does_not_require_a_removed_guard(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    journal = _install_vm_ha_journal(vm_mgr, tmp_path)
+    observation = {
+        "members": [],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {"present": False},
+    }
+    journal.begin(
+        "resolve-authoritative-route-targets",
+        observation=observation,
+        permitted_paths=(),
+    )
+    journal.complete(
+        "resolve-authoritative-route-targets",
+        observation=observation,
+    )
+
+    with patch.object(
+        vm_mgr,
+        "_stable_vm_ha_effect_observation",
+        side_effect=AssertionError("completed effect must not reopen its guard"),
+    ):
+        vm_mgr._complete_vm_ha_effect("resolve-authoritative-route-targets")
+
+
+def test_effect_guard_reports_only_unapproved_path_names(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    journal = _install_vm_ha_journal(vm_mgr, tmp_path)
+    before = {"shared_allocation": {"present": False}, "members": []}
+    journal.begin(
+        "provision-shared-allocation",
+        observation=before,
+        permitted_paths=("/shared_allocation/present",),
+    )
+
+    with pytest.raises(ValueError, match=r"/members/0/present"):
+        journal.complete(
+            "provision-shared-allocation",
+            observation={
+                "shared_allocation": {"present": True},
+                "members": [{"present": True}],
+            },
+        )
+
+
+def test_vm_ha_attach_effect_rejects_an_extra_unrelated_alias(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(
+        vm_mgr,
+        tmp_path,
+        bindings={"shared-allocation-id": "shared-private"},
+    )
+    vm_mgr._vm_ha_effect_spec = _ha_spec()
+    vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    before = {
+        "members": [
+            {
+                "aliases": [],
+                "compute_id": "compute-a",
+                "compute_revision": "11",
+                "instance_name": "gateway-0",
+                "network_interface_name": "eth0",
+                "present": True,
+            },
+            {
+                "aliases": [],
+                "compute_id": "compute-b",
+                "compute_revision": "12",
+                "instance_name": "gateway-1",
+                "network_interface_name": "eth0",
+                "present": True,
+            },
+        ],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "shared-private",
+            "owner": None,
+            "present": True,
+            "resource_revision": "5",
+        },
+    }
+    after = deepcopy(before)
+    after["members"][0]["aliases"] = ["shared-private", "foreign-alias"]
+    after["members"][0]["compute_revision"] = "13"
+    after["shared_allocation"]["owner"] = {
+        "compute_id": "compute-a",
+        "network_interface_name": "eth0",
+    }
+    after["shared_allocation"]["resource_revision"] = "6"
+
+    with patch.object(
+        vm_mgr,
+        "_stable_vm_ha_effect_observation",
+        side_effect=[before, after],
+    ):
+        vm_mgr._begin_vm_ha_effect("attach-shared-allocation-active")
+        with pytest.raises(RuntimeError, match="unrelated alias"):
+            vm_mgr._complete_vm_ha_effect("attach-shared-allocation-active")
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "changed_value"),
+    (
+        (None, None),
+        ("aliases", ["foreign-alias"]),
+        ("boot_disk_id", "foreign-disk"),
+        ("primary_allocation_id", "foreign-primary"),
+        ("public_allocation_id", "foreign-public"),
+        ("subnet_id", "foreign-subnet"),
+    ),
+)
+def test_vm_ha_compute_effect_validates_exact_create_footprint(
+    tmp_path, changed_field: str | None, changed_value: object
+) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(
+        vm_mgr,
+        tmp_path,
+        bindings={
+            "disk:gateway-0": "disk-0",
+            "primary-allocation:gateway-0:eth0": "primary-0",
+            "public-allocation:gateway-0:eth0": "public-0",
+            "shared-allocation-id": "shared-private",
+        },
+    )
+    vm_mgr._vm_ha_effect_spec = _ha_spec()
+    before = {
+        "members": [
+            {"instance_name": "gateway-0", "present": False},
+            {"instance_name": "gateway-1", "present": False},
+        ],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "shared-private",
+            "present": True,
+            "private_subnet_id": "subnet-1",
+        },
+    }
+    after = deepcopy(before)
+    after["members"][0] = {
+        "aliases": [],
+        "boot_disk_id": "disk-0",
+        "compute_id": "compute-0",
+        "compute_revision": "11",
+        "instance_name": "gateway-0",
+        "network_interface_name": "eth0",
+        "parent_id": "project-1",
+        "present": True,
+        "primary_allocation_id": "primary-0",
+        "public_allocation_id": "public-0",
+        "public_ip": "203.0.113.10",
+        "subnet_id": "subnet-1",
+    }
+    if changed_field is not None:
+        after["members"][0][changed_field] = changed_value
+
+    with patch.object(
+        vm_mgr,
+        "_stable_vm_ha_effect_observation",
+        side_effect=[before, after],
+    ):
+        vm_mgr._begin_vm_ha_effect("provision-gateway-0-compute")
+        if changed_field is None:
+            vm_mgr._complete_vm_ha_effect("provision-gateway-0-compute")
+        else:
+            with pytest.raises(RuntimeError, match="Compute create footprint"):
+                vm_mgr._complete_vm_ha_effect("provision-gateway-0-compute")
+
+
+def test_wait_vm_ha_operation_uses_sdk_poll_kwargs_without_duplicates() -> None:
+    from nebius.aio.operation import Operation
+    from nebius.api.nebius.common.v1 import Operation as OperationMessage
+    observed: dict[str, object] = {}
+
+    async def update_internal(**kwargs) -> None:
+        kwargs.pop("request_deadline", None)
+        kwargs.pop("authorization_deadline", None)
+        observed.update(kwargs)
+
+    class SynchronousChannel:
+        @staticmethod
+        def parent_id():
+            return None
+
+        @staticmethod
+        def run_sync(coroutine, _timeout):
+            return asyncio.run(coroutine)
+
+    operation = Operation(
+        "nebius.compute.v1.InstanceService.Update",
+        SynchronousChannel(),  # type: ignore[arg-type]
+        OperationMessage(id="operation-test"),
+    )
+    operation.done = MagicMock(side_effect=[False, False, False, True])  # type: ignore[method-assign]
+    operation.update = update_internal  # type: ignore[method-assign]
+
+    with patch(
+        "nebius_vpngw.deploy.vm_ha_cloud.VM_HA_OPERATION_POLL_INTERVAL_SECONDS",
+        1e-6,
+    ):
+        wait_vm_ha_operation(operation)
+
+    assert observed == {
+        "auth_timeout": 30.0,
+        "per_retry_timeout": 10.0,
+        "retries": 3,
+        "timeout": 30.0,
+    }
+
+
+def test_vm_ha_observation_requests_use_the_bounded_policy() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    instance_request = MagicMock(wait=MagicMock(return_value=SimpleNamespace(id="compute-0")))
+    instance_service = MagicMock(get_by_name=MagicMock(return_value=instance_request))
+    route_request = MagicMock(wait=MagicMock(return_value=SimpleNamespace(items=[])))
+    subnet_service = MagicMock(list_by_network=MagicMock(return_value=route_request))
+    allocation_request = MagicMock(wait=MagicMock(return_value=SimpleNamespace(items=[])))
+    allocation_service = MagicMock(list=MagicMock(return_value=allocation_request))
+
+    with (
+        patch(
+            "nebius.api.nebius.compute.v1.InstanceServiceClient",
+            return_value=instance_service,
+        ),
+        patch.object(
+            vm_mgr,
+            "get_ha_instance",
+            return_value=SimpleNamespace(id="compute-0"),
+        ),
+    ):
+        vm_mgr._get_ha_instance_by_name(object(), "gateway-0")
+
+    with (
+        patch.object(
+            vm_mgr,
+            "_resolve_gateway_network",
+            return_value=(object(), "network-1", object(), subnet_service),
+        ),
+        patch(
+            "nebius_vpngw.deploy.route_manager.RouteManager.resolve_vm_ha_route_targets",
+            return_value=(),
+        ),
+    ):
+        vm_mgr._resolve_vm_ha_route_targets(object(), _ha_spec(), ["10.0.0.0/8"])
+
+    assert vm_mgr._find_ha_allocation_by_name(allocation_service, "missing") is None
+
+    expected = {
+        "auth_timeout": 30.0,
+        "per_retry_timeout": 10.0,
+        "retries": 3,
+        "timeout": 30.0,
+    }
+    assert instance_service.get_by_name.call_args.kwargs == expected
+    assert subnet_service.list_by_network.call_args.kwargs == expected
+    assert allocation_service.list.call_args.kwargs == expected
+
+
 def test_vm_ha_operation_sync_propagates_failure() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     operation = SimpleNamespace(sync_wait=MagicMock(side_effect=OSError("operation failed")))
 
     with pytest.raises(OSError, match="operation failed"):
-        VMManager._sync_vm_ha_operation(operation)
+        vm_mgr._sync_vm_ha_operation(operation)
 
 
 def test_build_vm_ha_runtime_binding_rereads_exact_active_owner() -> None:
@@ -404,8 +1703,11 @@ def test_build_vm_ha_runtime_binding_rereads_exact_active_owner() -> None:
                 network_interfaces=[
                     SimpleNamespace(
                         name="eth0",
-                        ip_address=SimpleNamespace(
-                            allocation_id="shared-private" if suffix == "a" else ""
+                        ip_address=SimpleNamespace(allocation_id=f"primary-{suffix}"),
+                        aliases=(
+                            [SimpleNamespace(allocation_id="shared-private")]
+                            if suffix == "a"
+                            else []
                         ),
                     )
                 ]
@@ -457,8 +1759,11 @@ def test_build_vm_ha_runtime_binding_rejects_non_active_owner() -> None:
                 network_interfaces=[
                     SimpleNamespace(
                         name="eth0",
-                        ip_address=SimpleNamespace(
-                            allocation_id="shared-private" if suffix == "a" else ""
+                        ip_address=SimpleNamespace(allocation_id=f"primary-{suffix}"),
+                        aliases=(
+                            [SimpleNamespace(allocation_id="shared-private")]
+                            if suffix == "a"
+                            else []
                         ),
                     )
                 ]
@@ -475,7 +1780,7 @@ def test_build_vm_ha_runtime_binding_rejects_non_active_owner() -> None:
         patch.object(
             vm_mgr, "_get_ha_instance_by_name", side_effect=lambda _, name: instance(name)
         ),
-        pytest.raises(RuntimeError, match="not exact on configured active"),
+        pytest.raises(RuntimeError, match="owner does not match the exact member NIC"),
     ):
         vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
 
@@ -503,7 +1808,8 @@ def test_build_vm_ha_runtime_binding_rejects_conflicting_passive_compute_owner()
                 network_interfaces=[
                     SimpleNamespace(
                         name="eth0",
-                        ip_address=SimpleNamespace(allocation_id="shared-private"),
+                        ip_address=SimpleNamespace(allocation_id=f"primary-{suffix}"),
+                        aliases=[SimpleNamespace(allocation_id="shared-private")],
                     )
                 ]
             ),
@@ -540,7 +1846,7 @@ def test_initial_vm_ha_attachment_rejects_existing_passive_owner_without_mutatio
 
     with (
         patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
-        patch.object(vm_mgr, "set_ha_private_allocation", setter),
+        patch.object(vm_mgr, "set_ha_private_alias", setter),
         pytest.raises(RuntimeError, match="outside configured active"),
     ):
         vm_mgr._attach_vm_ha_shared_allocation_initially(
@@ -552,7 +1858,216 @@ def test_initial_vm_ha_attachment_rejects_existing_passive_owner_without_mutatio
     setter.assert_not_called()
 
 
-def test_vm_ha_instance_allocations_use_shared_id_only_on_configured_active() -> None:
+def test_managed_reapply_retains_exact_promoted_owner_without_mutation(tmp_path) -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    members = (
+        VMHALifecycleMember(
+            0,
+            "gateway-0",
+            "node-a",
+            "active",
+            "compute-a",
+            "eth0",
+            "203.0.113.10",
+            "11",
+            "disk-a",
+            "subnet-1",
+            "primary-a",
+            "public-a",
+        ),
+        VMHALifecycleMember(
+            1,
+            "gateway-1",
+            "node-b",
+            "passive",
+            "compute-b",
+            "eth0",
+            "203.0.113.11",
+            "12",
+            "disk-b",
+            "subnet-1",
+            "primary-b",
+            "public-b",
+            ("shared-private",),
+        ),
+    )
+    observation: dict[str, object] = {
+        "members": [
+            {
+                "aliases": [],
+                "boot_disk_id": "disk-a",
+                "compute_id": "compute-a",
+                "compute_revision": "11",
+                "instance_name": "gateway-0",
+                "network_interface_name": "eth0",
+                "parent_id": "project-1",
+                "present": True,
+                "primary_allocation_id": "primary-a",
+                "public_allocation_id": "public-a",
+                "public_ip": "203.0.113.10",
+                "subnet_id": "subnet-1",
+            },
+            {
+                "aliases": ["shared-private"],
+                "boot_disk_id": "disk-b",
+                "compute_id": "compute-b",
+                "compute_revision": "13",
+                "instance_name": "gateway-1",
+                "network_interface_name": "eth0",
+                "parent_id": "project-1",
+                "present": True,
+                "primary_allocation_id": "primary-b",
+                "public_allocation_id": "public-b",
+                "public_ip": "203.0.113.11",
+                "subnet_id": "subnet-1",
+            },
+        ],
+        "project_id": "project-1",
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "shared-private",
+            "allocation_name": "gateway-cluster-shared-private-ip",
+            "owner": {
+                "compute_id": "compute-b",
+                "network_interface_name": "eth0",
+            },
+            "parent_id": "project-1",
+            "present": True,
+            "private_subnet_id": "subnet-1",
+            "public_shape_present": False,
+            "resource_revision": "8",
+        },
+    }
+    bindings = vm_mgr._observation_resource_bindings(observation)
+    state = VMHALifecycleState(
+        status=VMHALifecycleStatus.PROVISIONING,
+        project_id="project-1",
+        gateway_name="gateway",
+        cluster_id="cluster",
+        allocation_id="shared-private",
+        allocation_name="gateway-cluster-shared-private-ip",
+        members=members,
+        route_runtime_id="route-runtime",
+        route_targets=vm_mgr._serialized_route_targets(_route_targets()),
+        transaction=VMHAMigrationTransaction(
+            operation_id="managed-reapply",
+            approval_kind="migration",
+            approval_digest="a" * 64,
+            desired_state_digest="b" * 64,
+            current_state_digest="c" * 64,
+            checkpoint="approved-intent",
+            pending_effect=None,
+            completed_effects=(),
+            resource_bindings=tuple(sorted(bindings.items())),
+            revision=1,
+            predecessor_sha256="d" * 64,
+            observation=normalize_vm_ha_observation(observation),
+        ),
+    )
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    store = VMHALifecycleStore(config_path)
+    store.write_verified(state)
+    journal = VMHALifecycleJournal(store, state)
+    vm_mgr.set_vm_ha_lifecycle_journal(journal)
+    vm_mgr._vm_ha_effect_spec = _ha_spec()
+    allocation = SimpleNamespace(
+        id="shared-private",
+        status=SimpleNamespace(
+            state="ASSIGNED",
+            assignment=SimpleNamespace(
+                network_interface=SimpleNamespace(instance_id="compute-b", name="eth0"),
+                load_balancer=None,
+            ),
+        ),
+    )
+    setter = MagicMock()
+
+    with (
+        patch.object(
+            vm_mgr,
+            "observe_vm_ha_migration_state",
+            return_value=deepcopy(observation),
+        ),
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(vm_mgr, "set_ha_private_alias", setter),
+    ):
+        vm_mgr._attach_vm_ha_shared_allocation_initially(
+            allocation_id="shared-private",
+            active_compute_id="compute-a",
+            active_network_interface_name="eth0",
+        )
+
+    setter.assert_not_called()
+    assert journal.state.transaction is not None
+    assert "attach-shared-allocation-active" in journal.state.transaction.completed_effects
+    assert (
+        dict(journal.state.transaction.resource_bindings)["shared-allocation-owner-compute"]
+        == "compute-b"
+    )
+
+    vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    vm_mgr._vm_ha_route_targets = _route_targets()
+
+    def instance(name: str) -> SimpleNamespace:
+        suffix = "a" if name.endswith("-0") else "b"
+        aliases = [SimpleNamespace(allocation_id="shared-private")] if suffix == "b" else []
+        return SimpleNamespace(
+            id=f"compute-{suffix}",
+            spec=SimpleNamespace(
+                network_interfaces=[SimpleNamespace(name="eth0", aliases=aliases)]
+            ),
+            status=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(
+                        ip_address=SimpleNamespace(
+                            address=f"10.0.0.{10 if suffix == 'a' else 11}/32"
+                        )
+                    )
+                ]
+            ),
+        )
+
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(
+            vm_mgr,
+            "_get_ha_instance_by_name",
+            side_effect=lambda _, name: instance(name),
+        ),
+    ):
+        binding = vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
+
+    assert [node.compute_id for node in binding.nodes] == ["compute-a", "compute-b"]
+
+    journal.state = replace(journal.state, status=VMHALifecycleStatus.ACTIVATING)
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(
+            vm_mgr,
+            "_get_ha_instance_by_name",
+            side_effect=lambda _, name: instance(name),
+        ),
+    ):
+        resumed_binding = vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
+
+    assert [node.compute_id for node in resumed_binding.nodes] == ["compute-a", "compute-b"]
+
+    journal.state = replace(journal.state, status=VMHALifecycleStatus.ACTIVE)
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(
+            vm_mgr,
+            "_get_ha_instance_by_name",
+            side_effect=lambda _, name: instance(name),
+        ),
+        pytest.raises(RuntimeError, match="not exact on configured active"),
+    ):
+        vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
+
+
+def test_vm_ha_instance_allocations_use_independent_primary_ids() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     vm_mgr._vm_ha_shared_allocation_id = "shared-private"
     provisioning = VMProvisioningConfig(
@@ -568,8 +2083,19 @@ def test_vm_ha_instance_allocations_use_shared_id_only_on_configured_active() ->
     )
 
     with (
-        patch.object(vm_mgr, "_ensure_public_allocation", return_value=("public", None)),
-        patch.object(vm_mgr, "_ensure_private_allocation") as per_node_private,
+        patch.object(
+            vm_mgr,
+            "_ensure_public_allocation",
+            return_value=("public", SimpleNamespace(id="public-allocation")),
+        ),
+        patch.object(
+            vm_mgr,
+            "_ensure_private_allocation",
+            side_effect=[
+                ("gateway-0-eth0-private-ip", SimpleNamespace(id="private-0")),
+                ("gateway-1-eth0-private-ip", SimpleNamespace(id="private-1")),
+            ],
+        ) as per_node_private,
     ):
         vm_mgr._ensure_instance_allocations(
             object(), object(), _ha_spec(), "gateway-0", 0, provisioning, [], {}
@@ -579,14 +2105,15 @@ def test_vm_ha_instance_allocations_use_shared_id_only_on_configured_active() ->
         )
 
     assert vm_mgr._private_alloc_ids == {
-        "gateway-0": ["shared-private"],
-        "gateway-1": [],
+        "gateway-0": ["private-0"],
+        "gateway-1": ["private-1"],
     }
-    per_node_private.assert_not_called()
+    assert per_node_private.call_count == 2
 
 
-def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread() -> None:
+def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread(tmp_path) -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
     spec = _ha_spec()
     provisioning = VMProvisioningConfig(
         subnet_id="subnet-1",
@@ -603,9 +2130,12 @@ def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread() -
         id="compute-a",
         spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
     )
-    binding = MagicMock()
+    binding = SimpleNamespace(route_runtime_id="route-runtime")
 
     with (
+        patch.object(vm_mgr, "_verify_vm_ha_transaction_preconditions"),
+        patch.object(vm_mgr, "_begin_vm_ha_effect"),
+        patch.object(vm_mgr, "_complete_vm_ha_effect"),
         patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
         patch.object(vm_mgr, "_resolve_client_apis", return_value=(None, None, None, object())),
         patch.object(vm_mgr, "_discover_vm_ha_members", return_value={}),
@@ -642,14 +2172,16 @@ def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread() -
     reread.assert_called_once()
 
 
-def test_vm_ha_attachment_failure_emits_no_runtime_binding() -> None:
+def test_vm_ha_attachment_failure_emits_no_runtime_binding(tmp_path) -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
     active = SimpleNamespace(
         id="compute-a",
         spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
     )
 
     with (
+        patch.object(vm_mgr, "_verify_vm_ha_transaction_preconditions"),
         patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
         patch.object(vm_mgr, "_resolve_client_apis", return_value=(None, None, None, object())),
         patch.object(vm_mgr, "_discover_existing_instances", return_value=[]),
@@ -680,10 +2212,12 @@ def test_vm_ha_attachment_failure_emits_no_runtime_binding() -> None:
     assert vm_mgr._vm_ha_shared_allocation_id is None
 
 
-def test_explicit_vm_ha_rejects_scaffold_fallback() -> None:
+def test_explicit_vm_ha_rejects_scaffold_fallback(tmp_path) -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    _install_vm_ha_journal(vm_mgr, tmp_path)
 
     with (
+        patch.object(vm_mgr, "_verify_vm_ha_transaction_preconditions"),
         patch.object(vm_mgr, "_build_sdk_client", return_value=None),
         pytest.raises(RuntimeError, match="failed closed"),
     ):
@@ -764,6 +2298,7 @@ def _former_member(
     index: int,
     marker: str | None,
     allocation_id: str = "",
+    alias_allocation_ids: tuple[str, ...] = (),
     compute_id: str | None = None,
     legacy_signature: bool = False,
 ):
@@ -789,6 +2324,9 @@ def _former_member(
                 SimpleNamespace(
                     name="eth0",
                     ip_address=SimpleNamespace(allocation_id=allocation_id),
+                    aliases=[
+                        SimpleNamespace(allocation_id=alias_id) for alias_id in alias_allocation_ids
+                    ],
                 )
             ],
         ),
@@ -835,6 +2373,12 @@ def _retained_lifecycle_state() -> VMHALifecycleState:
                 "compute-0",
                 "eth0",
                 "203.0.113.10",
+                "11",
+                "disk-0",
+                "subnet-1",
+                "primary-0",
+                "public-0",
+                ("shared-private",),
             ),
             VMHALifecycleMember(
                 1,
@@ -844,7 +2388,27 @@ def _retained_lifecycle_state() -> VMHALifecycleState:
                 "compute-1",
                 "eth0",
                 "203.0.113.11",
+                "12",
+                "disk-1",
+                "subnet-1",
+                "primary-1",
+                "public-1",
             ),
+        ),
+        route_runtime_id="route-runtime",
+        route_targets=("route-table-1:10.0.0.0/8",),
+        transaction=VMHAMigrationTransaction(
+            operation_id="fixture-operation",
+            approval_kind="migration",
+            approval_digest="a" * 64,
+            desired_state_digest="b" * 64,
+            current_state_digest="c" * 64,
+            checkpoint="fixture",
+            pending_effect=None,
+            completed_effects=(),
+            resource_bindings=(("shared-allocation-id", "shared-private"),),
+            revision=1,
+            predecessor_sha256=None,
         ),
     )
 
@@ -859,7 +2423,7 @@ def _former_identity_fixture():
         f"gateway-{index}": _former_member(
             index=index,
             marker=markers[index],
-            allocation_id="shared-private" if index == 0 else "",
+            alias_allocation_ids=("shared-private",) if index == 0 else (),
         )
         for index in range(2)
     }
@@ -869,7 +2433,7 @@ def _former_identity_fixture():
 
 def test_vm_ha_enrollment_cloud_init_persists_exact_member_identity() -> None:
     spec = _ha_spec()
-    identity = SimpleNamespace(cloud_init_entries=lambda: "  - path: /etc/ssh/ssh_host_vpngw_key\n")
+    identity = SimpleNamespace(cloud_init_entries=lambda: "  - path: /etc/ssh/vpngw_host_key\n")
     base = "#cloud-config\nwrite_files:\n  - content: |\n            Port 22\n"
     marker = render_provisioning_marker(spec, 0)
 
@@ -899,7 +2463,7 @@ def test_retained_ordinary_members_are_adopted_from_exact_lifecycle_and_runtime_
         f"gateway-{index}": _former_member(
             index=index,
             marker=None,
-            allocation_id="shared-private" if index == 0 else "",
+            alias_allocation_ids=("shared-private",) if index == 0 else (),
         )
         for index in range(2)
     }
@@ -938,6 +2502,42 @@ def test_retained_ordinary_members_are_adopted_from_exact_lifecycle_and_runtime_
     assert vm_mgr.former_vm_ha_candidate_provenance is FormerVMHAProvenance.LIFECYCLE_STATE
     assert service.list_requests == []
     assert len(service.get_requests) == 3
+
+
+def test_retained_lifecycle_rejects_shared_allocation_as_primary_and_alias() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    lifecycle = _retained_lifecycle_state()
+    service = _FormerAllocationService([], current=_former_allocation())
+    members = {
+        "gateway-0": _former_member(
+            index=0,
+            marker=None,
+            allocation_id="shared-private",
+            alias_allocation_ids=("shared-private",),
+        ),
+        "gateway-1": _former_member(index=1, marker=None),
+    }
+    identities = {f"gateway-{index}": _legacy_identity(index) for index in range(2)}
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
+    ):
+        vm_mgr.discover_former_vm_ha_candidate_members(spec, lifecycle_state=lifecycle)
+        with pytest.raises(RuntimeError, match="both primary and alias"):
+            vm_mgr.discover_former_vm_ha_members(
+                spec,
+                legacy_identities=identities,
+                lifecycle_state=lifecycle,
+            )
 
 
 def test_retained_lifecycle_compute_identity_mismatch_fails_closed() -> None:
@@ -979,7 +2579,7 @@ def test_removal_lifecycle_transition_rejects_stale_active_reversal() -> None:
         f"gateway-{index}": _former_member(
             index=index,
             marker=None,
-            allocation_id="shared-private" if index == 0 else "",
+            alias_allocation_ids=("shared-private",) if index == 0 else (),
         )
         for index in range(2)
     }

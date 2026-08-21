@@ -267,9 +267,7 @@ def test_inspector_admission_resume_reuses_sealed_nodes_while_bridge_node_joins(
         "policy, and server dry-run passed on 1 exact Node(s)."
     ]
     assert len(dry_runs) == 1
-    assert [item["spec"]["nodeName"] for item in dry_runs[0]["items"]] == [
-        "controller-node-0"
-    ]
+    assert [item["spec"]["nodeName"] for item in dry_runs[0]["items"]] == ["controller-node-0"]
     assert journal["security_contract"]["inspector"]["admission_nodes"] == [recorded_node]
     assert checkpoints == [True]
 
@@ -1105,6 +1103,208 @@ def test_runtime_census_partial_bulk_apply_always_deletes_exact_inspector_pods(
     assert delete[delete.index("-n") + 1] == CONTROLLER_INSPECTOR_NAMESPACE
     assert applied_names[0] in delete
     assert "--wait=true" in delete
+
+
+def test_runtime_census_transient_admission_transport_rebuilds_all_node_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def node(name: str, ordinal: int) -> dict[str, object]:
+        return {
+            "metadata": {
+                "name": name,
+                "uid": f"uid-{name}",
+                "resourceVersion": str(20 + ordinal),
+            },
+            "spec": {"providerID": f"nebius://compute/{name}"},
+            "status": {"nodeInfo": {"systemUUID": f"system-{name}"}},
+        }
+
+    current_nodes = [node("source-node", 0)]
+    terminal_pods: dict[str, dict[str, object]] = {}
+    targets_by_pod: dict[str, ControllerRuntimeCensusTarget] = {}
+    applied_node_sets: list[tuple[str, ...]] = []
+    deleted_pod_sets: list[tuple[str, ...]] = []
+
+    def json_from_command(
+        _runner: object,
+        args: Sequence[str],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        command = tuple(str(item) for item in args)
+        if "pods" in command and "--all-namespaces" in command:
+            return {"items": []}
+        if "nodes" in command:
+            return {"items": copy.deepcopy(current_nodes)}
+        if "pods" in command and CONTROLLER_INSPECTOR_NAMESPACE in command:
+            return {"items": copy.deepcopy(list(terminal_pods.values()))}
+        raise AssertionError(command)
+
+    def apply_objects(**kwargs: object) -> None:
+        nonlocal current_nodes
+        objects = kwargs["objects"]
+        assert isinstance(objects, tuple)
+        node_names = tuple(str(item["spec"]["nodeName"]) for item in objects)
+        applied_node_sets.append(node_names)
+        if len(applied_node_sets) == 1:
+            current_nodes = [node("replacement-node-a", 1), node("replacement-node-b", 2)]
+            raise RuntimeError(
+                "Error from server (InternalError): failed calling webhook "
+                '"mpod.kb.io": dial tcp 10.0.0.9:443: connect: no route to host'
+            )
+        for item in objects:
+            pod = copy.deepcopy(item)
+            metadata = pod["metadata"]
+            spec = pod["spec"]
+            assert isinstance(metadata, dict)
+            assert isinstance(spec, dict)
+            pod_name = str(metadata["name"])
+            node_name = str(spec["nodeName"])
+            live_node = next(
+                candidate
+                for candidate in current_nodes
+                if candidate["metadata"]["name"] == node_name
+            )
+            live_metadata = live_node["metadata"]
+            live_spec = live_node["spec"]
+            live_status = live_node["status"]
+            assert isinstance(live_metadata, dict)
+            assert isinstance(live_spec, dict)
+            assert isinstance(live_status, dict)
+            node_info = live_status["nodeInfo"]
+            assert isinstance(node_info, dict)
+            targets_by_pod[pod_name] = ControllerRuntimeCensusTarget(
+                node_name=node_name,
+                node_uid=str(live_metadata["uid"]),
+                node_resource_version=str(live_metadata["resourceVersion"]),
+                provider_id=str(live_spec["providerID"]),
+                system_uuid=str(node_info["systemUUID"]),
+                expected_processes=(),
+            )
+            metadata["uid"] = f"pod-uid-{pod_name}"
+            pod["status"] = {"phase": "Succeeded"}
+            terminal_pods[pod_name] = pod
+
+    def runner(
+        args: Sequence[str],
+        **_kwargs: object,
+    ) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        if "delete" in command:
+            names = tuple(
+                item for item in command[command.index("pod") + 1 :] if not item.startswith("--")
+            )
+            deleted_pod_sets.append(names)
+            for name in names:
+                terminal_pods.pop(name, None)
+            return migration.SoperatorMigrationCommandResult(command, 0, "", "")
+        if "logs" in command:
+            pod_name = command[command.index("logs") + 1].removeprefix("pod/")
+            target = targets_by_pod[pod_name]
+            output = "\n".join(
+                (
+                    f"schema={CONTROLLER_CENSUS_SCHEMA}",
+                    f"node_name={target.node_name}",
+                    f"node_uid={target.node_uid}",
+                    "expected_process_count=0",
+                    "slurmctld_count=0",
+                    "matched_expected_process_count=0",
+                    "unexpected_process_count=0",
+                    "missing_expected_process_count=0",
+                    "ambiguous_process_count=0",
+                    "inspected_process_count=1",
+                    "unreadable_process_count=0",
+                    f"expected_bindings_sha256={target.expected_bindings_sha256}",
+                    "",
+                )
+            )
+            return migration.SoperatorMigrationCommandResult(command, 0, output, "")
+        return migration.SoperatorMigrationCommandResult(command, 0, "", "")
+
+    monkeypatch.setattr(migration, "_json_from_command", json_from_command)
+    monkeypatch.setattr(migration, "_kubectl_apply_objects", apply_objects)
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    result = migration.drive_soperator_checkpoint_continuations(
+        lambda: migration._prove_controller_runtime_process_census(  # noqa: SLF001
+            expected_pods=(),
+            proof_label="system-node-rollout",
+            campaign_fingerprint="f" * 64,
+            kube_context="test-context",
+            command_runner=runner,
+        ),
+        sleep=lambda _seconds: None,
+    )
+
+    assert {item["node_name"] for item in result} == {
+        "replacement-node-a",
+        "replacement-node-b",
+    }
+    assert applied_node_sets == [
+        ("source-node",),
+        ("replacement-node-a", "replacement-node-b"),
+    ]
+    assert len(deleted_pod_sets) == 2
+    assert all(deleted_pod_sets)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    (
+        'failed calling webhook "mpod.kb.io": connect: connection refused',
+        'failed calling webhook "mpod.kb.io": no endpoints available for service',
+        'failed calling webhook "mpod.kb.io": connect: no route to host',
+    ),
+)
+def test_runtime_census_transient_admission_transport_classifier(detail: str) -> None:
+    assert migration._controller_census_admission_transport_is_transient(  # noqa: SLF001
+        RuntimeError(detail)
+    )
+
+
+def test_runtime_census_webhook_denial_remains_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def json_from_command(
+        _runner: object,
+        args: Sequence[str],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        command = tuple(str(item) for item in args)
+        if "pods" in command:
+            return {"items": []}
+        if "nodes" in command:
+            return {"items": [_node()]}
+        raise AssertionError(command)
+
+    def runner(
+        args: Sequence[str],
+        **_kwargs: object,
+    ) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return migration.SoperatorMigrationCommandResult(command, 0, "", "")
+
+    monkeypatch.setattr(migration, "_json_from_command", json_from_command)
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_apply_objects",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError('failed calling webhook "mpod.kb.io": admission denied by policy')
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="admission denied by policy"):
+        migration._prove_controller_runtime_process_census(  # noqa: SLF001
+            expected_pods=(),
+            proof_label="webhook-denial",
+            campaign_fingerprint="f" * 64,
+            kube_context="test-context",
+            command_runner=runner,
+        )
+
+    assert any("delete" in command for command in calls)
 
 
 def test_runtime_census_log_read_retries_transient_malformed_transport_output(

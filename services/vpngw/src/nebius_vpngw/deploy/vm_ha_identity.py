@@ -15,7 +15,11 @@ from enum import Enum
 
 from ..config_loader import GatewayGroupSpec
 from ..schema import VMHARole
-from .vm_ha_cloud import HACloudError, allocation_observation
+from .vm_ha_cloud import (
+    HACloudError,
+    allocation_observation,
+    network_interface_alias_allocation_ids,
+)
 from .vm_ha_lifecycle import (
     VMHALifecycleState,
     VMHALifecycleStatus,
@@ -319,9 +323,12 @@ def _read_former_allocation(
                 page_size=1000,
                 page_token=page_token,
             )
-            response = service.list(request)
-            if hasattr(response, "wait"):
-                response = response.wait()
+            pending_response = service.list(request)
+            response: t.Any = (
+                pending_response.wait()
+                if hasattr(pending_response, "wait")
+                else pending_response
+            )
             items.extend(list(getattr(response, "items", response) or []))
             next_page_token = str(getattr(response, "next_page_token", "") or "")
             if not next_page_token:
@@ -358,9 +365,10 @@ def _read_former_allocation(
     ):
         return None
     try:
-        current = service.get(GetAllocationRequest(id=allocation_id))
-        if hasattr(current, "wait"):
-            current = current.wait()
+        pending_current = service.get(GetAllocationRequest(id=allocation_id))
+        current: t.Any = (
+            pending_current.wait() if hasattr(pending_current, "wait") else pending_current
+        )
     except Exception as error:
         raise RuntimeError("Former VM-HA allocation evidence could not be re-read") from error
     if (
@@ -395,9 +403,12 @@ def _read_exact_former_allocation(
             GetAllocationRequest,
         )
 
-        current = AllocationServiceClient(client).get(GetAllocationRequest(id=allocation_id))
-        if hasattr(current, "wait"):
-            current = current.wait()
+        pending_current = AllocationServiceClient(client).get(
+            GetAllocationRequest(id=allocation_id)
+        )
+        current: t.Any = (
+            pending_current.wait() if hasattr(pending_current, "wait") else pending_current
+        )
     except Exception as error:
         raise RuntimeError("Former VM-HA allocation evidence could not be re-read") from error
     if (
@@ -647,10 +658,21 @@ def classify_former_vm_ha_evidence(
     attachments: list[tuple[str, str]] = []
     for instance, identity in zip(instances, identities, strict=True):
         interface = list(getattr(getattr(instance, "spec", None), "network_interfaces", []))[0]
-        attached_allocation_id = str(
+        primary_allocation_id = str(
             getattr(getattr(interface, "ip_address", None), "allocation_id", "") or ""
         )
-        if attached_allocation_id == allocation_id:
+        alias_allocation_ids = network_interface_alias_allocation_ids(
+            interface,
+            description=f"Former VM-HA member {identity[0]} NIC {identity[2]}",
+        )
+        attachment_matches = int(primary_allocation_id == allocation_id) + int(
+            allocation_id in alias_allocation_ids
+        )
+        if attachment_matches > 1:
+            raise RuntimeError(
+                "Former VM-HA allocation is ambiguously attached as both primary and alias"
+            )
+        if attachment_matches == 1:
             attachments.append((identity[1], identity[2]))
 
     try:

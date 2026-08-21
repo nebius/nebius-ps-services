@@ -1,6 +1,6 @@
 ---
 name: task-implementer
-description: "Requires explicit invocation to initialize or reopen a persistent per-project Git worktree workspace, run durable brownfield implementations through dependency waves, integrate pending generations, or remove an idle lane. Bound-session direct prompts may be captured into its canonical prompt as a non-blocking sidecar but never invoke this workflow. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
+description: "Requires explicit invocation for durable brownfield work in persistent project worktree lanes: initialize/reopen, run dependency waves, integrate, or remove idle lanes. Prompt capture never invokes it; not for one-shot work, SDLC, standalone Git, or generic parallel agents."
 ---
 
 # Task Implementer
@@ -878,6 +878,21 @@ selected-scope, outside-scope, textual, binary, and file-status statistics for
 both the run-local result and accumulated source-to-lane comparison; queued
 prompt status; and one structured next action. `ALREADY_COMPLETE` returns the
 same sealed bytes instead of recomputing current Git state.
+
+The generated `Task Implementer: Show Lane Status` task renders the separate
+hard-cut `lane-report-v2` read model as bounded human text; explicit `--json`
+returns that same concise projection. It reports persistent-lane generation
+totals, current or latest task/worker/wave progress, current and remaining
+steps, and one next public action. It does not expose or compute changed-file
+data, commits, branches, prompt content, private identities, state paths, or
+embedded summaries. Promotion totals require the owning wave's validated
+promotion head; committed or merged tasks remain in progress until then.
+
+Lane status must be strictly zero-write. Observe the complete bounded evidence
+set twice, emit only a matching pair, retry one pair after movement, and return
+`WORKSPACE_BUSY` if it remains unstable. Never acquire the scope lock, invoke
+lease-resource inspection, ensure or refresh a lane, checkpoint, integrate,
+write metadata, or run Git diff/statistics for status reporting.
 
 Render the exact primary-project invocation as
 `$task-implementer integrate "<primary-project-path>"`. If the source checkout

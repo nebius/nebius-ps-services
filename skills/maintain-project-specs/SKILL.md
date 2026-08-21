@@ -1,6 +1,6 @@
 ---
 name: maintain-project-specs
-description: Maintain canonical project requirements, design, and conditional project AGENTS.md lifecycle state for brownfield or greenfield work. Use when a selected project is missing docs/requirements.md or docs/design.md, when a user prompt changes project intent, when implementation changes require spec reconciliation, when former Task Implementer or Agentic SDLC spec ownership must be migrated, or when lifecycle hooks route contract planning or sealing here. This is the only semantic owner of project specs; Task Implementer and Agentic SDLC are adapters. Do not use for read-only questions after recording a bounded spec-impact waiver, or when the project has a committed disabled policy.
+description: "Maintain canonical requirements, design, and conditional AGENTS.md lifecycle when specs are missing, intent/implementation changes, ownership migrates, or hooks require planning/sealing. Sole spec owner; waive read-only work and honor disabled policy."
 ---
 
 # Maintain Project Specs

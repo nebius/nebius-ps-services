@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+merge-pr-positive-01,true,"Merge pull request 42 after verifying checks reviews and the head SHA."
+merge-pr-positive-02,true,"Use merge-pr to merge this ready GitHub PR without admin bypass."
+merge-pr-positive-03,true,"Confirm this reviewed PR is still mergeable and merge it now."
+merge-pr-negative-01,false,"Create a pull request from the current branch."
+merge-pr-negative-02,false,"Review pull request 42 and report readiness without merging."
+merge-pr-negative-03,false,"Merge this Agentic SDLC pull request through its promoted-SHA workflow."

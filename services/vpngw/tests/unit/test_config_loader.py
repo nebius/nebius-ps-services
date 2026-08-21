@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,7 @@ import yaml
 from nebius_vpngw.config_loader import (
     _detect_vendor,
     _validate_tunnel_inner_ips,
-    _validate_vm_ha_credential_sources,
+    _validate_vm_ha_nebius_credentials,
     load_local_config,
     merge_peer_configs_into_local_config,
     merge_with_peer_configs,
@@ -75,13 +76,13 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
                         "node_id": "gateway-a",
                         "instance_index": 0,
                         "role": "active",
-                        "credential_sources": _credential_sources("gateway-a"),
+                        "nebius_credentials_path": _credential_path("gateway-a"),
                     },
                     {
                         "node_id": "gateway-b",
                         "instance_index": 1,
                         "role": "passive",
-                        "credential_sources": _credential_sources("gateway-b"),
+                        "nebius_credentials_path": _credential_path("gateway-b"),
                     },
                 ],
             },
@@ -134,62 +135,161 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
     assert all("credential_sources" not in yaml.safe_dump(manifest) for manifest in manifests)
 
 
-def _credential_sources(node_id: str) -> dict[str, str]:
-    base = f"/operator-secrets/{node_id}"
-    return {
-        "certificate_authority": f"{base}/peer-ca.pem",
-        "certificate": f"{base}/peer.crt",
-        "private_key": f"{base}/peer.key",
-        "nebius_credentials": f"{base}/nebius-credentials.json",
-    }
+def _credential_path(node_id: str) -> str:
+    return f"/operator-secrets/{node_id}/nebius-credentials.json"
 
 
-def test_vm_ha_credential_preflight_accepts_regular_files_and_redacts_paths(
+def test_vm_ha_nebius_credential_preflight_accepts_json_and_redacts_paths(
     tmp_path: Path,
 ) -> None:
-    sources: dict[str, str] = {}
-    for name in ("certificate_authority", "certificate", "private_key", "nebius_credentials"):
-        source = tmp_path / name
-        source.write_bytes(f"fixture-{name}".encode())
-        sources[name] = str(source)
+    source = tmp_path / "nebius-credentials.json"
+    source.write_text('{"service_account_id":"fixture"}', encoding="utf-8")
+    source.chmod(0o600)
     config = {
         "gateway_group": {
             "vm_ha": {
                 "enabled": True,
-                "members": [{"node_id": "gateway-a", "credential_sources": sources}],
+                "members": [
+                    {
+                        "node_id": "gateway-a",
+                        "nebius_credentials_path": str(source),
+                    }
+                ],
             }
         }
     }
 
-    _validate_vm_ha_credential_sources(config)
+    _validate_vm_ha_nebius_credentials(config)
 
-    missing = tmp_path / "missing-private-value"
-    sources["private_key"] = str(missing)
+    missing = tmp_path / "missing-nebius-credentials"
+    config["gateway_group"]["vm_ha"]["members"][0]["nebius_credentials_path"] = str(
+        missing
+    )
     with pytest.raises(ValueError) as exc_info:
-        _validate_vm_ha_credential_sources(config)
+        _validate_vm_ha_nebius_credentials(config)
     assert str(missing) not in str(exc_info.value)
-    assert "private_key for gateway-a is unavailable" in str(exc_info.value)
+    assert "Nebius credentials for gateway-a are unavailable" in str(exc_info.value)
+
+
+def test_vm_ha_nebius_credential_preflight_accepts_distinct_member_files(
+    tmp_path: Path,
+) -> None:
+    members: list[dict[str, str]] = []
+    for node_id in ("gateway-a", "gateway-b"):
+        source = tmp_path / f"{node_id}.json"
+        source.write_text(json.dumps({"node": node_id}), encoding="utf-8")
+        source.chmod(0o600)
+        members.append({"node_id": node_id, "nebius_credentials_path": str(source)})
+    config = {
+        "gateway_group": {
+            "vm_ha": {
+                "enabled": True,
+                "members": members,
+            }
+        }
+    }
+
+    _validate_vm_ha_nebius_credentials(config)
 
 
 def test_vm_ha_credential_preflight_rejects_symlinks_without_reading_them(tmp_path: Path) -> None:
     real = tmp_path / "real"
-    real.write_bytes(b"fixture-secret")
+    real.write_text('{"credential":"fixture"}', encoding="utf-8")
+    real.chmod(0o600)
     link = tmp_path / "link"
     link.symlink_to(real)
-    sources = {name: str(real) for name in _credential_sources("node")}
-    sources["private_key"] = str(link)
 
-    with pytest.raises(ValueError, match="non-symlink regular file"):
-        _validate_vm_ha_credential_sources(
+    with pytest.raises(ValueError, match="are unavailable"):
+        _validate_vm_ha_nebius_credentials(
             {
                 "gateway_group": {
                     "vm_ha": {
                         "enabled": True,
-                        "members": [{"node_id": "gateway-a", "credential_sources": sources}],
+                        "members": [
+                            {
+                                "node_id": "gateway-a",
+                                "nebius_credentials_path": str(link),
+                            }
+                        ],
                     }
                 }
             }
         )
+
+
+@pytest.mark.parametrize("unsafe_mode", [0o644, 0o640, 0o660])
+def test_vm_ha_credential_preflight_requires_mode_0600_and_redacts_path(
+    tmp_path: Path,
+    unsafe_mode: int,
+) -> None:
+    unsafe = tmp_path / "nebius-credentials.json"
+    unsafe.write_text('{"credential":"fixture"}', encoding="utf-8")
+    unsafe.chmod(unsafe_mode)
+
+    with pytest.raises(ValueError, match="owner-only") as exc_info:
+        _validate_vm_ha_nebius_credentials(
+            {
+                "gateway_group": {
+                    "vm_ha": {
+                        "enabled": True,
+                        "members": [
+                            {
+                                "node_id": "gateway-a",
+                                "nebius_credentials_path": str(unsafe),
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+
+    assert str(unsafe) not in str(exc_info.value)
+
+
+def test_vm_ha_credential_preflight_rejects_cross_member_hardlink_aliases(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "gateway-a.json"
+    second = tmp_path / "gateway-b.json"
+    first.write_text('{"credential":"fixture"}', encoding="utf-8")
+    first.chmod(0o600)
+    os.link(first, second)
+    members = [
+        {"node_id": "gateway-a", "nebius_credentials_path": str(first)},
+        {"node_id": "gateway-b", "nebius_credentials_path": str(second)},
+    ]
+
+    with pytest.raises(ValueError, match="non-linked regular file") as exc_info:
+        _validate_vm_ha_nebius_credentials(
+            {"gateway_group": {"vm_ha": {"enabled": True, "members": members}}}
+        )
+
+    assert str(second) not in str(exc_info.value)
+
+
+def test_vm_ha_credential_preflight_rejects_malformed_json(tmp_path: Path) -> None:
+    source = tmp_path / "malformed.json"
+    source.write_text("not-json", encoding="utf-8")
+    source.chmod(0o600)
+
+    with pytest.raises(ValueError, match="not valid JSON") as exc_info:
+        _validate_vm_ha_nebius_credentials(
+            {
+                "gateway_group": {
+                    "vm_ha": {
+                        "enabled": True,
+                        "members": [
+                            {
+                                "node_id": "gateway-a",
+                                "nebius_credentials_path": str(source),
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+
+    assert str(source) not in str(exc_info.value)
 
 
 def test_template_and_vm_ha_example_match_the_schema() -> None:
@@ -245,6 +345,59 @@ def test_load_local_config_can_keep_missing_placeholders_for_bootstrap_commands(
     tunnels = loaded["connections"][0]["tunnels"]
     assert tunnels[0]["psk"] == "${GCP_TUNNEL_1_PSK}"
     assert tunnels[1]["psk"] == "${GCP_TUNNEL_2_PSK}"
+
+
+def test_load_local_config_can_keep_short_missing_tunnel_psks_for_status(
+    tmp_path: Path,
+    sample_config: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    variable = "PSK"
+    monkeypatch.delenv(variable, raising=False)
+    sample_config["connections"][0]["tunnels"][0]["psk"] = f"${{{variable}}}"
+    config_path = tmp_path / "status.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    loaded = load_local_config(
+        config_path,
+        allow_missing_tunnel_psk_placeholders=True,
+    )
+
+    assert loaded["connections"][0]["tunnels"][0]["psk"] == f"${{{variable}}}"
+
+
+def test_status_placeholder_policy_rejects_psk_variable_used_by_required_field(
+    tmp_path: Path,
+    sample_config: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    variable = "STATUS_PSK_AND_PROJECT_ID"
+    monkeypatch.delenv(variable, raising=False)
+    sample_config["project_id"] = f"${{{variable}}}"
+    sample_config["connections"][0]["tunnels"][0]["psk"] = f"${{{variable}}}"
+    config_path = tmp_path / "status-invalid.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=variable):
+        load_local_config(
+            config_path,
+            allow_missing_tunnel_psk_placeholders=True,
+        )
+
+
+def test_status_placeholder_policy_keeps_literal_psk_schema_validation(
+    tmp_path: Path,
+    sample_config: dict,
+) -> None:
+    sample_config["connections"][0]["tunnels"][0]["psk"] = "short"
+    config_path = tmp_path / "status-invalid-psk.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="at least 8 characters"):
+        load_local_config(
+            config_path,
+            allow_missing_tunnel_psk_placeholders=True,
+        )
 
 
 def test_detect_vendor_uses_known_template_hints() -> None:

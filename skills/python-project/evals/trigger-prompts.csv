@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+python-project-positive-01,true,"Scaffold a Python package with a src layout Ruff pytest and setuptools-scm."
+python-project-positive-02,true,"Harden this existing Python CLI project with Typer Pydantic and CI."
+python-project-positive-03,true,"Standardize this Python service's pyproject tests and systemd packaging."
+python-project-negative-01,false,"Write Nebius SDK automation for IAM and VPC resources."
+python-project-negative-02,false,"Create a Terraform module for this infrastructure."
+python-project-negative-03,false,"Optimize the speed of this existing pytest suite."

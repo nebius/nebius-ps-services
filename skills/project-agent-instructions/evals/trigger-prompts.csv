@@ -1,0 +1,13 @@
+id,should_trigger,prompt
+project-instructions-positive-01,true,"Maintain-project-specs routed the current receipt to decide whether this project needs durable agent instructions."
+project-instructions-positive-02,true,"Render the current lifecycle's needed project rules before implementation opens."
+project-instructions-positive-03,true,"Verify the terminal not-needed project-instructions decision for the selected project."
+project-instructions-positive-04,true,"Task Implementer or Agentic SDLC needs a project-instructions decision routed through maintain-project-specs as the sole direct owner."
+project-instructions-negative-01,false,"Create a generic AGENTS.md for this repository without a canonical spec receipt."
+project-instructions-negative-02,false,"Edit AGENTS.override.md with my personal preferences."
+project-instructions-negative-03,false,"Add task-specific implementation steps to the project instructions."
+project-instructions-negative-04,false,"Create a README for this project."
+project-instructions-negative-05,false,"Invoke project-agent-instructions directly without maintain-project-specs."
+project-instructions-negative-06,false,"Add a temporary rule for only this task."
+project-instructions-negative-07,false,"Update my global Codex AGENTS.md."
+project-instructions-negative-08,false,"Create an AGENTS.override.md in every subdirectory."

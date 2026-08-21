@@ -61,10 +61,14 @@ quality, protocol, or recovery failure for better throughput.
 Evaluate the narrow component before the whole system:
 
 - Model: Task quality, structured output, tool-call format, safety, and slices.
-- Provider adapter: Message mapping, stream reconstruction, tool calls,
-  structured output, error normalization, usage, cancellation, and data policy.
+- Pydantic AI model/provider path: Profile resolution, settings, message
+  mapping, stream reconstruction, tool calls, structured output, errors,
+  usage, cancellation, and data policy.
 - Agent kernel: State isolation, dependency injection, tool lifecycle, output
   validation, bounded execution, and model-provider substitution.
+- Provider-native runtime escape: Named harness requirement, facade mapping,
+  canonical-state independence, tool mediation, normalized events, lifecycle,
+  data policy, evaluation parity, and rollback to the portable path.
 - Workflow engine: Durable timers, retries, idempotency, cancellation,
   compensation, resume, replay, and version migration.
 - Skill or repository instruction: Triggering, scope, precedence, provenance,
@@ -133,10 +137,10 @@ sole judge for material claims without independent validation.
 
 ### Provider Portability Suite
 
-Run the same tests through each supported provider profile, including native
-OpenAI, Anthropic, Nebius Token Factory, and any gateway path selected for the
-product. Do not call an adapter portable merely because it accepts an API key
-and base URL.
+Run the same tests through each supported Pydantic AI model/provider profile,
+including OpenAI, Anthropic, Google, Nebius Token Factory, self-hosted, and any
+gateway path selected for the product. Do not call an adapter portable merely
+because it accepts an API key and base URL.
 
 Test:
 

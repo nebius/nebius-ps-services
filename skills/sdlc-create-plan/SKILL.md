@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-plan
-description: "Use only as part of the Agentic SDLC workflow; use when one ready feature needs a locked dependency-safe plan, or a classified post-evaluation repair needs immutable corrective plan vN+1 with preserved completed task definitions and appended corrective waves."
+description: "Use only as part of the Agentic SDLC workflow; lock a dependency-safe plan for one ready feature, or append immutable corrective waves in plan vN+1 after a classified evaluation failure."
 ---
 
 # Create Plan
@@ -138,8 +138,11 @@ a dependency-safe task graph.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

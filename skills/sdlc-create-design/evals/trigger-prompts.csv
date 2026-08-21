@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-design-positive-01,true,"Create canonical FEAT records for this active Agentic SDLC feature from current requirements and evidence."
+sdlc-design-positive-02,true,"Update the SDLC design through maintain-project-specs while preserving stable feature IDs."
+sdlc-design-positive-03,true,"Perform classifier-admitted failure-driven redesign for this active SDLC run."
+sdlc-design-negative-01,false,"Design a non-SDLC feature and produce an implementation plan."
+sdlc-design-negative-02,false,"Create the requirements for this Agentic SDLC prompt."
+sdlc-design-negative-03,false,"Edit docs design directly without the shared spec owner."

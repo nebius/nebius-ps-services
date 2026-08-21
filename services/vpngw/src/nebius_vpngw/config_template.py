@@ -44,19 +44,11 @@ gateway_group:
     #   - node_id: "gateway-a"
     #     instance_index: 0
     #     role: "active"
-    #     credential_sources:
-    #       certificate_authority: "/operator-secrets/gateway-a/peer-ca.pem"
-    #       certificate: "/operator-secrets/gateway-a/peer.crt"
-    #       private_key: "/operator-secrets/gateway-a/peer.key"
-    #       nebius_credentials: "/operator-secrets/gateway-a/nebius-credentials.json"
+    #     nebius_credentials_path: "/operator-secrets/gateway-a/nebius-credentials.json"
     #   - node_id: "gateway-b"
     #     instance_index: 1
     #     role: "passive"
-    #     credential_sources:
-    #       certificate_authority: "/operator-secrets/gateway-b/peer-ca.pem"
-    #       certificate: "/operator-secrets/gateway-b/peer.crt"
-    #       private_key: "/operator-secrets/gateway-b/peer.key"
-    #       nebius_credentials: "/operator-secrets/gateway-b/nebius-credentials.json"
+    #     nebius_credentials_path: "/operator-secrets/gateway-b/nebius-credentials.json"
   external_ips: []  # []=auto
   # Example (list per VM, inner list per NIC):
   # external_ips:

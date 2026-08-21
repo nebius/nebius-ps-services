@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import ssl
 import struct
@@ -20,6 +21,12 @@ from nebius_vpngw.agent.vm_ha import (
     StalePeerStateError,
     StateValidationError,
 )
+from nebius_vpngw.agent.vm_ha.mtls import (
+    ManagedMTLSStore,
+    MTLSOperationKind,
+    MTLSSnapshot,
+    PeerLeaf,
+)
 from nebius_vpngw.agent.vm_ha.transport import (
     MutualTLSPeerTransport,
     PeerTransportError,
@@ -27,6 +34,9 @@ from nebius_vpngw.agent.vm_ha.transport import (
     _decode_heartbeat,
     _encode_heartbeat,
 )
+
+_PEER_DER = b"managed-peer-node-b"
+_PEER_FINGERPRINT = hashlib.sha256(_PEER_DER).hexdigest()
 
 
 def _heartbeat(*, cluster_id: str = "cluster-a", sequence: int = 0) -> PeerHeartbeat:
@@ -40,11 +50,23 @@ def _heartbeat(*, cluster_id: str = "cluster-a", sequence: int = 0) -> PeerHeart
         configured_role="passive",
         observed_owner_id="node-a",
         generation_id=digest,
+        mtls_epoch=1,
+        certificate_fingerprint=_PEER_FINGERPRINT,
         digests=DigestSet(digest, "b" * 64, "c" * 64),
         service_healthy=True,
         route_ready=True,
         promotion_ready=False,
     )
+
+
+def _message(
+    heartbeat: PeerHeartbeat,
+    node_id: str = "node-b",
+    *,
+    fingerprint: str = _PEER_FINGERPRINT,
+    epoch: int = 1,
+) -> AuthenticatedPeerMessage:
+    return AuthenticatedPeerMessage(heartbeat, node_id, fingerprint, epoch)
 
 
 @dataclass
@@ -76,7 +98,7 @@ class MemoryReplayStore:
 
 def test_peer_exchange_accepts_authenticated_monotonic_advisory_state() -> None:
     heartbeat = _heartbeat()
-    transport = FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")])
+    transport = FakeTransport([_message(heartbeat)])
     exchange = PeerStateExchange(
         transport,
         cluster_id="cluster-a",
@@ -96,7 +118,7 @@ def test_peer_exchange_persists_replay_boundary_before_restart_acceptance(tmp_pa
     heartbeat = _heartbeat(sequence=7)
     store = AtomicGenerationStore(tmp_path / "ha")
     first = PeerStateExchange(
-        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        FakeTransport([_message(heartbeat)]),
         cluster_id="cluster-a",
         peer_node_id="node-b",
         replay_store=store,
@@ -104,7 +126,7 @@ def test_peer_exchange_persists_replay_boundary_before_restart_acceptance(tmp_pa
     first.receive(timeout_seconds=1)
 
     restarted = PeerStateExchange(
-        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        FakeTransport([_message(heartbeat)]),
         cluster_id="cluster-a",
         peer_node_id="node-b",
         replay_store=AtomicGenerationStore(tmp_path / "ha"),
@@ -118,7 +140,7 @@ def test_peer_exchange_accepts_first_observed_sequence_for_authenticated_new_boo
     initial = _heartbeat(sequence=9)
     heartbeat = PeerHeartbeat.from_mapping({**initial.to_dict(), "boot_id": "boot-b"})
     exchange = PeerStateExchange(
-        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        FakeTransport([_message(heartbeat)]),
         cluster_id="cluster-a",
         peer_node_id="node-b",
         replay_store=store,
@@ -133,7 +155,7 @@ def test_peer_exchange_accepts_first_observed_sequence_for_authenticated_new_boo
 
 def test_peer_exchange_rejects_unauthenticated_identity_and_wrong_outbound_cluster() -> None:
     heartbeat = _heartbeat()
-    transport = FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-c")])
+    transport = FakeTransport([_message(heartbeat, "node-c")])
     exchange = PeerStateExchange(
         transport,
         cluster_id="cluster-a",
@@ -176,7 +198,7 @@ def test_peer_exchange_rejects_stale_or_future_authenticated_timestamp(
     heartbeat = PeerHeartbeat.from_mapping({**heartbeat.to_dict(), "sent_at": sent_at})
     store = MemoryReplayStore()
     exchange = PeerStateExchange(
-        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        FakeTransport([_message(heartbeat)]),
         cluster_id="cluster-a",
         peer_node_id="node-b",
         replay_store=store,
@@ -198,7 +220,7 @@ def test_peer_exchange_accepts_fresh_timestamp_and_persists_after_validation() -
     )
     store = MemoryReplayStore()
     exchange = PeerStateExchange(
-        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        FakeTransport([_message(heartbeat)]),
         cluster_id="cluster-a",
         peer_node_id="node-b",
         replay_store=store,
@@ -212,84 +234,82 @@ def test_peer_exchange_accepts_fresh_timestamp_and_persists_after_validation() -
     assert store.state == replay
 
 
-@pytest.mark.parametrize(
-    ("factory", "purpose", "check_hostname"),
-    [
-        ("client_context", ssl.Purpose.SERVER_AUTH, True),
-        ("server_context", ssl.Purpose.CLIENT_AUTH, False),
-    ],
-)
-def test_mtls_contexts_require_peer_certificates_and_load_local_identity(
-    tmp_path: Path, factory: str, purpose: ssl.Purpose, check_hostname: bool
-) -> None:
-    ca = tmp_path / "ca.pem"
-    certificate = tmp_path / "node.pem"
-    private_key = tmp_path / "node-key.pem"
-    for path in (ca, certificate, private_key):
-        path.write_text("test fixture", encoding="ascii")
-    context = Mock(spec=ssl.SSLContext)
-    config = MutualTLSConfig(
-        certificate_authority=ca,
-        certificate=certificate,
-        private_key=private_key,
-        server_hostname="peer.internal",
+def _managed_store_pair(tmp_path: Path) -> tuple[ManagedMTLSStore, ManagedMTLSStore]:
+    operation_id = hashlib.sha256(b"transport-bootstrap").hexdigest()
+    first = ManagedMTLSStore(tmp_path / "node-a")
+    second = ManagedMTLSStore(tmp_path / "node-b")
+    first_receipt = first.prepare_identity(
+        operation_id=operation_id,
+        operation_kind=MTLSOperationKind.BOOTSTRAP,
+        cluster_id="cluster-a",
+        node_id="node-a",
+        compute_id="compute-a",
+        target_epoch=1,
     )
-    with patch("ssl.create_default_context", return_value=context) as create:
-        result = getattr(config, factory)()
+    second_receipt = second.prepare_identity(
+        operation_id=operation_id,
+        operation_kind=MTLSOperationKind.BOOTSTRAP,
+        cluster_id="cluster-a",
+        node_id="node-b",
+        compute_id="compute-b",
+        target_epoch=1,
+    )
+    first.stage_peer_leaf(
+        operation_id=operation_id,
+        peer_node_id="node-b",
+        peer_compute_id="compute-b",
+        peer_epoch=1,
+        certificate_pem=second_receipt.certificate_pem,
+    )
+    second.stage_peer_leaf(
+        operation_id=operation_id,
+        peer_node_id="node-a",
+        peer_compute_id="compute-a",
+        peer_epoch=1,
+        certificate_pem=first_receipt.certificate_pem,
+    )
+    first.activate_identity(operation_id)
+    second.activate_identity(operation_id)
+    return first, second
 
-    assert result is context
-    create.assert_called_once_with(purpose, cafile=str(ca))
+
+@pytest.mark.parametrize(
+    ("factory", "check_hostname"),
+    [("client_context", True), ("server_context", False)],
+)
+def test_mtls_contexts_load_vm_local_identity_and_exact_peer_leaf(
+    tmp_path: Path,
+    factory: str,
+    check_hostname: bool,
+) -> None:
+    first, _second = _managed_store_pair(tmp_path)
+    config = MutualTLSConfig(first.snapshot, server_hostname="node-b")
+
+    context, snapshot = getattr(config, factory)()
+
+    assert snapshot == first.snapshot()
     assert context.minimum_version == ssl.TLSVersion.TLSv1_2
     assert context.check_hostname is check_hostname
     assert context.verify_mode == ssl.CERT_REQUIRED
-    context.load_cert_chain.assert_called_once_with(str(certificate), str(private_key))
+    assert context.options & ssl.OP_NO_TICKET
 
 
-@pytest.mark.parametrize("path_value", [Path("relative.pem"), Path("../peer.pem")])
-def test_mtls_context_rejects_relative_credential_references(path_value: Path) -> None:
-    config = MutualTLSConfig(
-        certificate_authority=path_value,
-        certificate=Path("/missing-node.pem"),
-        private_key=Path("/missing-node-key.pem"),
-        server_hostname="peer.internal",
-    )
-
-    with pytest.raises(ValueError, match="absolute"):
-        config.client_context()
+def test_mtls_context_requires_stable_peer_hostname() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        MutualTLSConfig(lambda: Mock(), server_hostname="")
 
 
-def test_mtls_context_rejects_missing_file_without_disclosing_path_or_secret() -> None:
-    missing = Path("/definitely-missing/SECRET-KEY-BYTES.pem")
-    config = MutualTLSConfig(
-        certificate_authority=missing,
-        certificate=missing,
-        private_key=missing,
-        server_hostname="peer.internal",
-    )
+def test_mtls_context_redacts_snapshot_provider_failure() -> None:
+    def failed_snapshot() -> MTLSSnapshot:
+        raise ValueError("TEST-PRIVATE-KEY-BYTES at /secret/node-key.pem")
 
-    with pytest.raises(ValueError) as error:
-        config.client_context()
+    config = MutualTLSConfig(failed_snapshot, server_hostname="node-b")
 
-    assert str(missing) not in str(error.value)
-    assert "SECRET-KEY-BYTES" not in str(error.value)
-
-
-def test_mtls_context_redacts_credential_loader_failure(tmp_path: Path) -> None:
-    paths = tuple(tmp_path / name for name in ("ca.pem", "node.pem", "node-key.pem"))
-    for path in paths:
-        path.write_text("TEST-PRIVATE-KEY-BYTES", encoding="ascii")
-    context = Mock(spec=ssl.SSLContext)
-    context.load_cert_chain.side_effect = OSError(f"TEST-PRIVATE-KEY-BYTES at {paths[2]}")
-    config = MutualTLSConfig(*paths, server_hostname="peer.internal")
-
-    with (
-        patch("ssl.create_default_context", return_value=context),
-        pytest.raises(PeerTransportError) as error,
-    ):
+    with pytest.raises(PeerTransportError) as error:
         config.client_context()
 
     assert "TEST-PRIVATE-KEY-BYTES" not in str(error.value)
-    assert str(paths[2]) not in str(error.value)
+    assert "/secret/node-key.pem" not in str(error.value)
 
 
 def test_certificate_identity_requires_one_verified_node_uri() -> None:
@@ -343,13 +363,14 @@ class _FakeRawSocket:
 
 
 class _FakeTLSChannel(_FakeRawSocket):
-    def __init__(self, peer_node_id: str, inbound: bytes = b"") -> None:
+    def __init__(self, peer_node_id: str, inbound: bytes = b"", der: bytes = _PEER_DER) -> None:
         self._certificate = {"subjectAltName": (("URI", f"urn:nebius-vpngw:node:{peer_node_id}"),)}
+        self._der = der
         self._inbound = bytearray(inbound)
         self.sent = bytearray()
 
-    def getpeercert(self) -> dict[str, object]:
-        return self._certificate
+    def getpeercert(self, binary_form: bool = False) -> dict[str, object] | bytes:
+        return self._der if binary_form else self._certificate
 
     def sendall(self, value: bytes) -> None:
         self.sent.extend(value)
@@ -374,11 +395,34 @@ class _FakeTLSConfig:
     server_channel: _FakeTLSChannel
     server_hostname: str = "peer.internal"
 
-    def client_context(self) -> _FakeTLSContext:
-        return _FakeTLSContext(self.client_channel)
+    @staticmethod
+    def _snapshot() -> MTLSSnapshot:
+        peer = PeerLeaf(
+            node_id="node-b",
+            compute_id="compute-b",
+            epoch=1,
+            certificate_fingerprint=_PEER_FINGERPRINT,
+            spki_fingerprint="e" * 64,
+        )
+        return MTLSSnapshot(
+            cluster_id="cluster-a",
+            node_id="node-b",
+            compute_id="compute-b",
+            epoch=1,
+            certificate_fingerprint=_PEER_FINGERPRINT,
+            spki_fingerprint="f" * 64,
+            certificate_path=Path("/unused/certificate.pem"),
+            private_key_path=Path("/unused/private-key.pem"),
+            peers=(peer,),
+            peer_certificate_paths=(Path("/unused/peer.pem"),),
+            peer_certificate_pems=(b"unused",),
+        )
 
-    def server_context(self) -> _FakeTLSContext:
-        return _FakeTLSContext(self.server_channel)
+    def client_context(self) -> tuple[_FakeTLSContext, MTLSSnapshot]:
+        return _FakeTLSContext(self.client_channel), self._snapshot()
+
+    def server_context(self) -> tuple[_FakeTLSContext, MTLSSnapshot]:
+        return _FakeTLSContext(self.server_channel), self._snapshot()
 
 
 class _FakeListener(_FakeRawSocket):
@@ -516,7 +560,7 @@ def test_concrete_transport_rejects_untrusted_certificate_before_state() -> None
     )
 
     with (
-        patch.object(tls, "server_context", return_value=context),
+        patch.object(tls, "server_context", return_value=(context, tls._snapshot())),
         patch("socket.socket", return_value=_FakeListener()),
         pytest.raises(PeerTransportError) as error,
     ):

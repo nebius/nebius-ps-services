@@ -1,6 +1,6 @@
 ---
 name: nebius-grafana-query
-description: "Run read-only Nebius observability queries through an already-configured grafana-nebius Grafana MCP server authenticated as the pinned human user. Use automatically for explicit one-or-many tenant/project/resource scopes, datasource and dashboard discovery, PromQL metrics, Loki/LogQL logs, Tempo traces, or as the bounded structured evidence provider selected by troubleshoot or sdlc-evaluate. Never install or configure MCP, repair authentication, change IAM, issue static keys, query Control Plane Audit Logs, diagnose root cause, grade acceptance, or mutate Grafana; route direct-query setup and repair to $install-grafana-mcp-for-nebius."
+description: "Run read-only Nebius Grafana MCP queries for scoped dashboards, PromQL, Loki, or Tempo, including troubleshoot/SDLC evidence. Never install or configure MCP, repair auth/IAM, query audit logs, diagnose causes, grade acceptance, or mutate Grafana."
 ---
 
 # Nebius Grafana Query
@@ -252,7 +252,7 @@ pass/fail claims.
 - `references/evidence-provider.md`: embedded request schema, one-time
   readiness, cumulative fast/deep budgets, structured facts, and consumer
   boundaries.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
 - `evals/evidence-provider-tool-traces.json`: structured call-count,
   state-transition, cumulative-stage-budget, fixed-envelope, exact-cost,
   failure, and redaction eval fixtures.

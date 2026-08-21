@@ -127,10 +127,20 @@ remediation marker exists. Success, blocking, tool or coordination error,
 ordinary stop, unresolved work, and exhaustion all use the same concise report.
 An ordinary incomplete or malformed report records `advisory_incomplete` and
 continues; it does not request another turn, deny tools, or emit a generated
-fallback. Sensitive output receives one bounded redaction path. Exhaustion
-remains strict and preserves marker-derived blocker and attempt evidence in the
-same concise envelope. A host process that dies before Stop can only be reported
-after same-session resume.
+fallback. Prefer repository-relative inline labels, but inline or Markdown
+local targets may use repository-relative, native absolute, home-relative, or
+strict local `file:` syntax when canonical resolution keeps them inside the
+full Git repository root derived from the event working directory. Without a
+proven Git root, absolute, home-relative, and local `file:` forms remain unsafe.
+This allows sibling-project evidence while rejecting outside-root, symlink
+escape, and ambiguous or renderer-active link syntax. A contained format defect
+is advisory; sensitive content or an unsafe target records
+`sensitive_detected`, stops with one generic warning, and requests no automatic
+replacement report. Stop is terminal detection, not retroactive redaction of
+output already rendered by the host. Exhaustion remains strict, never truncates
+reference markup, and preserves public-safe marker-derived blocker and attempt
+evidence in the same concise envelope. A host process that dies before Stop can
+only be reported after same-session resume.
 
 For incidents, stabilization and diagnosis remain separate. A restart,
 rollback, failover, retry, cache clear, or scale change can mitigate impact but

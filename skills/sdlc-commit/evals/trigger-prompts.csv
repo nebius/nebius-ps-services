@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-commit-positive-01,true,"Seal and promote this fully validated Agentic SDLC feature integration tip."
+sdlc-commit-positive-02,true,"Use sdlc-commit after all dependency waves and downstream evidence pass."
+sdlc-commit-positive-03,true,"Fast-forward the unchanged SDLC promotion branch to the exact integration SHA without pushing."
+sdlc-commit-negative-01,false,"Create a normal local commit for the current repository changes."
+sdlc-commit-negative-02,false,"Commit and push this feature branch."
+sdlc-commit-negative-03,false,"Commit an SDLC feature before validation and UAT complete."

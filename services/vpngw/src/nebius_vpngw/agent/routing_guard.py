@@ -97,6 +97,11 @@ VM_HA_STATUS_PATH = Path("/var/lib/nebius-vpngw/vm-ha/status.json")
 BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 
 
+def _vm_ha_enabled(cfg: dict[str, Any]) -> bool:
+    vm_ha = cfg.get("vm_ha")
+    return isinstance(vm_ha, dict) and vm_ha.get("enabled") is not False
+
+
 def require_vm_ha_current_boot_ready(
     cfg: dict[str, Any],
     *,
@@ -111,8 +116,7 @@ def require_vm_ha_current_boot_ready(
     authority.
     """
 
-    vm_ha = cfg.get("vm_ha")
-    if not isinstance(vm_ha, dict):
+    if not _vm_ha_enabled(cfg):
         return
     try:
         boot_id = boot_id_path.read_text(encoding="utf-8").strip()
@@ -135,6 +139,176 @@ def require_vm_ha_current_boot_ready(
         and guard.get("data_plane_mode") == "active"
     ):
         raise RuntimeError("VM-HA controller is not ready for forwarding on the current boot")
+
+
+def _ipv4_forwarding_disabled() -> bool:
+    result = subprocess.run(
+        ["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True
+    )
+    return result.returncode == 0 and result.stdout.strip() == "0"
+
+
+def _require_vm_ha_passive_routing_authority(
+    cfg: dict[str, Any],
+    *,
+    guard_path: Path = VM_HA_STATUS_PATH.with_name("guard.json"),
+    boot_id_path: Path = BOOT_ID_PATH,
+) -> None:
+    if not _vm_ha_enabled(cfg):
+        raise RuntimeError("passive routing hygiene requires an enabled VM-HA manifest")
+    try:
+        boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+        guard = json.loads(guard_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("VM-HA passive routing authority is unavailable") from error
+    if not (
+        boot_id
+        and isinstance(guard, dict)
+        and guard.get("guard_boot_id") == boot_id
+        and guard.get("data_plane_mode") == "passive"
+        and _ipv4_forwarding_disabled()
+    ):
+        raise RuntimeError("VM-HA passive routing authority is not current and fenced")
+
+
+def enforce_vm_ha_passive_routing_hygiene_locked(
+    cfg: dict[str, Any],
+    *,
+    guard_path: Path = VM_HA_STATUS_PATH.with_name("guard.json"),
+    boot_id_path: Path = BOOT_ID_PATH,
+) -> None:
+    """Remove passive route-stealing artifacts while the routing lock is held."""
+
+    _require_vm_ha_passive_routing_authority(
+        cfg,
+        guard_path=guard_path,
+        boot_id_path=boot_id_path,
+    )
+    table_removed = _remove_table_220()
+    apipa_removed = _remove_broad_apipa_route()
+    rules = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
+    all_routes = subprocess.run(
+        ["ip", "-j", "-4", "route", "show", "table", "all"],
+        capture_output=True,
+        text=True,
+    )
+    apipa = subprocess.run(
+        ["ip", "route", "show", "169.254.0.0/16"],
+        capture_output=True,
+        text=True,
+    )
+    if (
+        rules.returncode != 0
+        or has_table_220_rule(rules.stdout)
+        or all_routes.returncode != 0
+        or table_220_routes_from_all_json(all_routes.stdout) != []
+        or apipa.returncode != 0
+        or apipa.stdout.strip()
+        or not _ipv4_forwarding_disabled()
+    ):
+        raise RuntimeError("VM-HA passive routing hygiene postcondition failed")
+    if table_removed or apipa_removed:
+        _flush_route_cache()
+
+
+def enforce_vm_ha_passive_routing_hygiene(
+    cfg: dict[str, Any],
+    *,
+    guard_path: Path = VM_HA_STATUS_PATH.with_name("guard.json"),
+    boot_id_path: Path = BOOT_ID_PATH,
+) -> None:
+    """Acquire the routing lock and enforce passive routing hygiene."""
+
+    lock_fd = acquire_routing_lock(blocking=False)
+    if lock_fd is None:
+        raise RuntimeError("VM-HA passive routing hygiene lock is busy")
+    try:
+        enforce_vm_ha_passive_routing_hygiene_locked(
+            cfg,
+            guard_path=guard_path,
+            boot_id_path=boot_id_path,
+        )
+    finally:
+        os.close(lock_fd)
+
+
+def _vm_ha_route_maintenance_mode(
+    cfg: dict[str, Any],
+    *,
+    status_path: Path = VM_HA_STATUS_PATH,
+    boot_id_path: Path = BOOT_ID_PATH,
+    guard_path: Path | None = None,
+) -> str:
+    """Return the exact currently authorized periodic routing mode."""
+
+    if not _vm_ha_enabled(cfg):
+        return "ordinary"
+    effective_guard_path = guard_path or status_path.with_name("guard.json")
+    try:
+        boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+        guard = json.loads(effective_guard_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("VM-HA route-maintenance authority is unavailable") from error
+    if not (
+        boot_id
+        and isinstance(guard, dict)
+        and guard.get("guard_boot_id") == boot_id
+    ):
+        raise RuntimeError("VM-HA route-maintenance authority is stale")
+    mode = guard.get("data_plane_mode")
+    if mode == "active":
+        require_vm_ha_current_boot_ready(
+            cfg,
+            status_path=status_path,
+            boot_id_path=boot_id_path,
+            guard_path=effective_guard_path,
+        )
+        return "active"
+    if mode == "passive":
+        _require_vm_ha_passive_routing_authority(
+            cfg,
+            guard_path=effective_guard_path,
+            boot_id_path=boot_id_path,
+        )
+        return "passive"
+    raise RuntimeError("VM-HA route maintenance requires active or fenced-passive authority")
+
+
+def require_vm_ha_route_maintenance_ready(
+    cfg: dict[str, Any],
+    *,
+    status_path: Path = VM_HA_STATUS_PATH,
+    boot_id_path: Path = BOOT_ID_PATH,
+    guard_path: Path | None = None,
+) -> None:
+    """Validate periodic route-maintenance authority without mutating routes."""
+
+    _vm_ha_route_maintenance_mode(
+        cfg,
+        status_path=status_path,
+        boot_id_path=boot_id_path,
+        guard_path=guard_path,
+    )
+
+
+def enforce_periodic_routing_invariants(cfg: dict[str, Any]) -> None:
+    """Run the role-appropriate route repair under the shared routing lock."""
+
+    lock_fd = acquire_routing_lock(blocking=False)
+    if lock_fd is None:
+        print("[RoutingGuard] Lock held; skipping")
+        return
+    try:
+        mode = _vm_ha_route_maintenance_mode(cfg)
+        if mode == "passive":
+            enforce_vm_ha_passive_routing_hygiene_locked(cfg)
+            return
+        _enforce_routing_invariants_locked(cfg)
+    finally:
+        try:
+            os.close(lock_fd)
+        except Exception:
+            pass
 
 
 def acquire_routing_lock(blocking: bool = True) -> int | None:
@@ -353,7 +527,7 @@ def _remove_table_220() -> bool:
 
     This function:
     1. Flushes all routes in table 220
-    2. Removes the policy routing rule (by table and by preference)
+    2. Removes only policy rules that select routing table 220
     3. Verifies removal (logs if still present)
 
     Returns:
@@ -361,13 +535,28 @@ def _remove_table_220() -> bool:
     """
     removed = False
 
-    # Check if table 220 rule exists before attempting removal
-    result = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
-    if "lookup 220" not in result.stdout and "pref 220" not in result.stdout:
-        # Clean state - nothing to do
+    rules = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
+    routes = subprocess.run(
+        ["ip", "-j", "-4", "route", "show", "table", "all"],
+        capture_output=True,
+        text=True,
+    )
+    table_rules = (
+        [line for line in rules.stdout.splitlines() if has_table_220_rule(line)]
+        if rules.returncode == 0
+        else []
+    )
+    has_rule = bool(table_rules)
+    table_routes = (
+        table_220_routes_from_all_json(routes.stdout)
+        if routes.returncode == 0
+        else None
+    )
+    has_routes = bool(table_routes)
+    if not has_rule and not has_routes:
         return False
 
-    # Flush all routes in table 220 first (important for clean removal)
+    # Flush table state independently of whether its policy rule is present.
     result = subprocess.run(
         ["ip", "route", "flush", "table", "220"], capture_output=True, text=True
     )
@@ -375,27 +564,82 @@ def _remove_table_220() -> bool:
         print("[RoutingGuard] Flushed table 220 routes")
         removed = True
 
-    # Remove routing rule by table lookup
-    result = subprocess.run(["ip", "rule", "del", "lookup", "220"], capture_output=True, text=True)
-    if result.returncode == 0:
-        print("[RoutingGuard] Removed policy rule: pref 220 from all lookup 220")
-        removed = True
-
-    # Fallback: Remove by preference number (some systems use pref instead of lookup)
-    result = subprocess.run(["ip", "rule", "del", "pref", "220"], capture_output=True, text=True)
-    if result.returncode == 0:
-        print("[RoutingGuard] Removed policy rule: pref 220 (fallback method)")
-        removed = True
+    for _rule in table_rules:
+        result = subprocess.run(
+            ["ip", "rule", "del", "lookup", "220"], capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print("[RoutingGuard] Removed policy rule selecting table 220")
+            removed = True
 
     # Verify removal
     result = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
-    if "220" in result.stdout:
+    remaining_routes = subprocess.run(
+        ["ip", "-j", "-4", "route", "show", "table", "all"],
+        capture_output=True,
+        text=True,
+    )
+    remaining_table_routes = (
+        table_220_routes_from_all_json(remaining_routes.stdout)
+        if remaining_routes.returncode == 0
+        else None
+    )
+    if has_table_220_rule(result.stdout) or remaining_table_routes != []:
         print("[RoutingGuard] ⚠ WARNING: Table 220 rule still present after removal attempt")
         print(f"[RoutingGuard] Current rules:\n{result.stdout}")
     elif removed:
         print("[RoutingGuard] ✓ Table 220 completely removed")
 
     return removed
+
+
+def has_table_220_rule(output: str) -> bool:
+    """Return whether an ``ip rule`` line selects exactly routing table 220.
+
+    Rule priority is deliberately ignored: ``220: ... lookup main`` is not a
+    table-220 rule, and exact token matching prevents ``lookup 2200`` from
+    being mistaken for ``lookup 220``.
+    """
+
+    for line in output.splitlines():
+        tokens = line.split()
+        if any(
+            token in {"lookup", "table"}
+            and index + 1 < len(tokens)
+            and tokens[index + 1] == "220"
+            for index, token in enumerate(tokens)
+        ):
+            return True
+    return False
+
+
+def table_220_routes_from_all_json(output: str) -> list[dict[str, Any]] | None:
+    """Return exact table-220 routes from one successful all-table JSON dump.
+
+    Linux reports a missing numeric table as an error when it is queried
+    directly.  Absence is the desired clean state, so callers instead read all
+    IPv4 tables successfully and select exact table-220 entries here.  Invalid
+    JSON remains unproven rather than being mistaken for an empty table.
+    """
+
+    try:
+        routes = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(routes, list):
+        return None
+    selected: list[dict[str, Any]] = []
+    for route in routes:
+        if not isinstance(route, dict):
+            return None
+        table = route.get("table")
+        if table is not None and (
+            isinstance(table, bool) or not isinstance(table, (int, str))
+        ):
+            return None
+        if str(table) == "220":
+            selected.append(route)
+    return selected
 
 
 def _remove_broad_apipa_route() -> bool:
@@ -969,8 +1213,12 @@ def get_routing_diagnostics() -> dict[str, Any]:
     diagnostics["table_220_rule_exists"] = "220" in result.stdout
 
     # Check table 220 routes
-    result = subprocess.run(["ip", "route", "show", "table", "220"], capture_output=True, text=True)
-    diagnostics["table_220_routes"] = [r for r in result.stdout.split("\n") if r.strip()]
+    result = subprocess.run(
+        ["ip", "route", "show", "table", "220"], capture_output=True, text=True
+    )
+    diagnostics["table_220_routes"] = [
+        route for route in result.stdout.split("\n") if route.strip()
+    ]
 
     # Check for broad APIPA route
     result = subprocess.run(

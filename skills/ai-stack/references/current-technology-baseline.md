@@ -4,7 +4,7 @@ Use this dated profile as a shortlist for a Python-first production AI system.
 It is not a universal stack and does not replace workload contracts, official
 source verification, compatibility tests, target evaluation, or owner review.
 
-Baseline date: 2026-08-14
+Baseline date: 2026-08-16
 
 ## Contents
 
@@ -73,26 +73,29 @@ Read `pytorch-training-stack.md` for the complete decision tree.
 
 | Capability | Baseline | Starting status | Switch condition |
 | --- | --- | --- | --- |
-| One intentionally selected provider | Narrow application-local seam around the native SDK | Conditional | An online or batch model workload selects one provider; multiple providers or platform policy creates semantic portability needs. |
-| Multiple providers or self-hosting | Internal capability-aware `ModelProvider` contract | Conditional | The application must route, fall back, self-host, satisfy regional policy, or share a model platform. |
-| OpenAI direct text or reasoning generation | Official OpenAI SDK plus Responses API | Conditional | OpenAI is approved and Responses supports the requested generation workload. |
-| OpenAI direct task-specific workload | Official OpenAI SDK plus the documented embeddings, audio, realtime, image, moderation, or other task API | Conditional | The workload is direct but not served by the selected Responses capability. |
-| Anthropic | Native adapter using the Messages API semantics | Conditional | Anthropic is an approved target. |
-| Nebius Token Factory | Verified OpenAI-compatible adapter and exact capability profile | Conditional | The selected model, endpoint, and adapter pass the same conformance suite. |
+| Portable Python direct-call behavior | Pydantic AI direct model API for `ModelResponse` control, or a no-tools single-request `Agent` for typed parsing, validation retries, or typed dependencies | Conditional | One request is sufficient and the model does not own continuation; select the primitive from required runtime services. |
+| Intentionally provider-specific direct access | Official provider SDK and exact task API | Conditional | A named provider feature or workload is required and portability is not a goal. |
+| Capability-aware multi-provider routing | Pydantic AI execution contract plus application-owned functional, operational, and governance catalog | Conditional | More than one eligible route, self-hosting, regional policy, fallback, or shared governance exists. |
+| OpenAI | Pydantic AI OpenAI model for the portable path; official OpenAI SDK for intentionally native task APIs | Conditional | OpenAI is an approved target and the exact required capabilities pass conformance. |
+| Anthropic | Pydantic AI Anthropic model for the portable path | Conditional | Anthropic is an approved target and provider-specific settings are explicit. |
+| Google | Pydantic AI Google model for the portable path | Conditional | Google is an approved target and provider-specific settings are explicit. |
+| Nebius Token Factory | Verified Pydantic AI OpenAI-compatible provider path and exact capability profile | Conditional | The selected model, endpoint, and adapter pass the same conformance suite. |
 | Self-hosted runtime | Verified adapter for the selected inference endpoint | Conditional | Open weights, data boundary, custom kernels, capacity, or economics justify ownership. |
-| Shared traffic and policy plane | `agentgateway` | Conditional | Several applications, providers, MCP servers, or agent services would otherwise duplicate routing and policy controls. |
+| Shared traffic and policy plane | Existing gateway, Pydantic AI Gateway, or `agentgateway` after comparison | Conditional | Several applications, providers, MCP servers, or agent services would otherwise duplicate routing and policy controls. |
 
 Changing only API key, base URL, and model name proves connectivity, not
 semantic compatibility. Record modalities, tool behavior, JSON Schema subset,
 streaming events, limits, reasoning controls, caching, safety metadata,
 residency, retention, errors, and rate limits per exact target.
 
-Automatic fallback is a separate evaluated deployment route. It must preserve
-required semantics and pass quality, safety, latency, tool, structured-output,
-and data-policy gates.
+Automatic fallback is a separate evaluated deployment route, not a retry. It
+must preserve required semantics and pass quality, safety, latency, tool,
+structured-output, data-policy, and replay-safety gates. Persist the complete
+route plan and assign one retry owner per failure class.
 
-Read `model-provider-contract.md` only when the full portability condition is
-met.
+Read `model-provider-contract.md` for multi-provider conformance, routing, or a
+proven cross-runtime contract. Read `provider-agnostic-agent-platform.md` for
+the portable application boundary.
 
 ## Agent Applications And Durability
 
@@ -102,28 +105,39 @@ when several steps call a model or tool.
 
 | Capability | Baseline | Starting status | Switch condition |
 | --- | --- | --- | --- |
-| OpenAI-native agent kernel | OpenAI Agents SDK | Conditional | The model must choose actions or observation-driven next steps and the system is intentionally OpenAI-first. |
-| Non-OpenAI or provider-neutral Python agent kernel | Pydantic AI | Conditional | A bounded typed agent using Anthropic, Gemini, another non-OpenAI provider, or a provider-neutral boundary is required. |
+| Portable Python agent kernel | Pydantic AI `Agent` | Conditional | A bounded typed agent using any supported approved provider is required. |
+| Portable specialist capability | Pydantic AI capability | Conditional | Reusable context, tool filtering, model selection, delegation, or instrumentation needs a composable runtime extension. |
+| Portable specialist harness | Pydantic AI Harness | Conditional | A Coder, Researcher, or custom specialist needs a richer portable workspace and lifecycle than one bounded agent. |
+| Provider-native agent runtime | OpenAI Agents SDK, Claude Agent SDK, Managed Agents, or another exact harness | Conditional | A named unique harness feature defeats the portable path and the separate runtime retains platform controls. |
 | Coding-focused engineering specialist | Codex SDK | Conditional | Engineering work needs coding-focused threads, repository operations, or programmatic Codex automation. |
 | Deep Codex product client | Codex app-server | Conditional | Product integration needs Codex authentication, conversation history, approvals, or streamed events; ordinary CI or jobs remain on the SDK path. |
 | Integration components | Selected LangChain packages | Conditional | Their maintained integrations remove more code than they add. |
-| Conventional model-tool loop | Selected OpenAI Agents SDK or Pydantic AI kernel | Conditional | The workload is genuinely agentic; switch to LangChain `create_agent` only when required maintained integrations measurably reduce total complexity. |
+| Conventional model-tool loop | Pydantic AI `Agent` | Conditional | The workload is genuinely agentic; switch only when a required integration or native harness measurably reduces total complexity. |
 | Explicit state graph | LangGraph | Conditional | Nodes, edges, typed state, branches, bounded cycles, checkpoints, interrupts, replay, or graph recovery must be first-class. |
-| Durable cross-service workflow | Temporal around the selected deterministic, agentic, or mixed control flow | Conditional | Timers, long approvals, external side effects, compensation, or process/infrastructure recovery are required. |
-| Claude-native coding or sandbox profile | Claude Agent SDK | Conditional | Claude-native filesystem, shell, sandbox, hooks, subagents, MCP, Skills, permissions, or resumable sessions define the workload. |
+| Durable cross-service workflow | Temporal, DBOS, Prefect, Restate, or the existing qualified owner around Pydantic AI activities | Conditional | Timers, long approvals, external side effects, compensation, or process/infrastructure recovery are required. |
 
-Choose one primary agent kernel for each genuinely agentic capability.
+Choose Pydantic AI as the primary portable kernel for each genuinely agentic
+Python capability. A provider-native harness is a separate runtime escape and
+must not be wrapped by Pydantic AI.
 LangChain and LangGraph are not competing whole-stack choices: current
 `create_agent` uses the LangGraph runtime, while direct LangGraph use is
 justified only when the application owns explicit graph semantics. Codex is a
 separate engineering specialist rather than the default kernel for general AI
 tasks.
 
-LangGraph may checkpoint deterministic or agent execution state. Temporal owns
-durable business-process state and side effects around direct calls,
-deterministic workflows, agents, or mixtures. Assign each retry, timeout,
-idempotency, and recovery responsibility to one layer; graph or durability
-requirements do not independently justify an agent.
+Keep the application runtime facade, canonical state, domain tools,
+authorization, route policy, budgets, telemetry, and evaluation outside the
+framework. Begin in-process; a shared platform service requires a scale,
+ownership, or policy trigger. Read `provider-agnostic-agent-platform.md` for
+the complete boundary and adoption sequence.
+
+LangGraph may checkpoint deterministic or agent execution state. One selected
+qualified workflow engine owns durable business-process state and side effects
+around direct calls, deterministic workflows, agents, or mixtures. Compare
+Temporal, DBOS, Prefect, Restate, and any existing qualified owner against the
+workload. Assign each retry, timeout, idempotency, and recovery responsibility
+to one layer; graph or durability requirements do not independently justify an
+agent.
 
 ## Capabilities And Interoperability
 

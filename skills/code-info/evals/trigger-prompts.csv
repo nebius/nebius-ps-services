@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+code-info-positive-01,true,"Summarize this local repository with feature test dependency and language counts."
+code-info-positive-02,true,"Count the CLI commands and subcommands in this project without changing files."
+code-info-positive-03,true,"Create a copy-paste-friendly size and package report for this GitHub repository."
+code-info-negative-01,false,"Review this branch for bugs and regressions."
+code-info-negative-02,false,"Research whether this framework is appropriate for our product."
+code-info-negative-03,false,"Refactor this repository to reduce its line count."

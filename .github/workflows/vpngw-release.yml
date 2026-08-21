@@ -119,13 +119,17 @@ jobs:
         run: |
           set -euo pipefail
           bash -n misc/gcp-vpngw.sh
+          bash -n misc/gcp-vpngw-vm-ha.sh
+          bash -n misc/gcp-vpngw-classic-vm-ha.sh
           bash -n misc/fix-vpngw-esp4.sh
           ./misc/gcp-vpngw.sh --help >/dev/null
+          ./misc/gcp-vpngw.sh --vm-ha-peer --help >/dev/null
+          ./misc/gcp-vpngw.sh --classic-vm-ha-peer --help >/dev/null
           ./misc/fix-vpngw-esp4.sh --help >/dev/null
 
       - name: Lint
         if: steps.state.outputs.release_exists == 'false'
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests misc/gcp_vpngw_vm_ha.py misc/gcp_vpngw_classic_vm_ha.py
 
       - name: Test
         if: steps.state.outputs.release_exists == 'false'

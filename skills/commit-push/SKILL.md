@@ -1,6 +1,6 @@
 ---
 name: commit-push
-description: Commit all current local changes across the whole Git repository on an unmanaged active non-default feature branch with repo-root git add -A, repair simple staged whitespace validation blockers when safe, generate or use a commit message, push the branch to origin, and report final worktree cleanliness. Reject worktree-managed children and route them to local integration. Use when the user explicitly asks to commit and push the current branch without opening a pull request.
+description: "Use only when explicitly asked to commit all repo changes and push an unmanaged non-default branch with repo-root staging and validation. Reject managed worktrees; do not open a PR."
 ---
 
 # Commit Push

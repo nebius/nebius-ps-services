@@ -1,6 +1,6 @@
 ---
 name: align
-description: "Use for project-wide alignment or post-change validation: reconcile code, wiring, tests, CI, CLI/help, config, docs, workflows, and project skills; run changed-scope code-review, lint/syntax, security, and regression gates. Integrate current thread, relevant Agent Memory, and task state before low-risk evidence-backed fixes. Do not use for skill-folder-only validation; use align-skill."
+description: "Align a project after changes across code, wiring, tests, CI, CLI/help, config, docs, workflows, and skills, with focused quality gates. Use align-skill for skill-folder-only work."
 ---
 
 # Align

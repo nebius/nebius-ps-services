@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-requirements
-description: "Use only as the Agentic SDLC requirements-authoring adapter to maintain-project-specs; use when user intent must create or update canonical REQ records in docs/requirements.md. Preserve stable REQ IDs and return validation to the shared owner."
+description: "Use only as part of the Agentic SDLC workflow; adapt user intent into canonical REQ records in docs/requirements.md through maintain-project-specs, preserving stable IDs and shared-owner validation."
 ---
 
 # Create Requirements

@@ -965,7 +965,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 "Task Implementer: New Prompt",
                 "Task Implementer: Prompt Queue",
                 "Task Implementer: Cancel Queued Prompt",
-                "Task Implementer: Show Pending Lane Changes",
+                "Task Implementer: Show Lane Status",
             ],
         )
         task = tasks["tasks"][0]
@@ -974,6 +974,27 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(Path(task["args"][0]).name, "prompt_workspace.py")
         self.assertIsInstance(task["args"], list)
         self.assertEqual(task["group"], {"kind": "build", "isDefault": True})
+        status_task = tasks["tasks"][3]
+        self.assertEqual(
+            status_task["args"],
+            [
+                str(Path(core.__file__).resolve().with_name("prompt_workspace.py")),
+                "lane-report",
+                "--workspace",
+                str(self.workspace),
+            ],
+        )
+        self.assertEqual(
+            status_task["presentation"],
+            {
+                "echo": False,
+                "reveal": "always",
+                "focus": False,
+                "panel": "dedicated",
+                "showReuseMessage": False,
+                "clear": True,
+            },
+        )
         self.assertNotIn("runOptions", task)
         self.assertNotIn("extensions", value)
         self.assertNotIn("security.workspace.trust", json.dumps(value))
@@ -1070,6 +1091,121 @@ class PromptWorkspaceTest(unittest.TestCase):
             pw.reuse_project_workspace(self.scope, self.codex_home)
         self.assertEqual(raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
         self.assertEqual(vscode_path.read_bytes(), before)
+
+    def test_older_three_task_workspace_is_tampered(self) -> None:
+        vscode_path = Path(self.workspace_result["vscode_workspace"])
+        previous = core.previous_workspace_document(
+            self.workspace,
+            self.lane_scope,
+            Path(core.__file__).resolve().with_name("prompt_workspace.py"),
+            Path(sys.executable).resolve(),
+        )
+        previous["tasks"]["tasks"] = previous["tasks"]["tasks"][:3]
+        core.write_atomic(vscode_path, core.stable_json(previous))
+        self.assertEqual(core.classify_generated_workspace(self.workspace), "tampered")
+
+    def test_lane_report_human_and_explicit_json_use_same_projection(self) -> None:
+        report = {
+            "schema": reporting.LANE_REPORT_SCHEMA,
+            "status": "managed",
+            "lane": {"state": "active"},
+            "generations": {
+                "active": 1,
+                "released_total": 2,
+                "integrated_total": 1,
+                "pending_integration": 1,
+                "finalization_pending": 0,
+            },
+            "current_run": {
+                "status": "running",
+                "phase": "workers_running",
+                "progress": {
+                    "tasks": {
+                        "total": 2,
+                        "promoted": 0,
+                        "pending": 0,
+                        "in_progress": 2,
+                        "blocked": 0,
+                        "superseded": 0,
+                        "remaining": 2,
+                    },
+                    "workers": {
+                        "total": 2,
+                        "planned": 0,
+                        "created": 0,
+                        "queued": 1,
+                        "active": 1,
+                        "finished": 0,
+                        "failed": 0,
+                        "superseded": 0,
+                    },
+                    "waves": {
+                        "total": 1,
+                        "promoted": 0,
+                        "active": 1,
+                        "active_ordinal": 1,
+                        "remaining": 1,
+                    },
+                },
+            },
+            "current_step": "Temporary workers are executing the active wave.",
+            "remaining_steps": ["Finish 2 remaining tasks"],
+            "next_action": {
+                "action": "run",
+                "readiness": "in_progress",
+                "invocation": '$task-implementer run "<prompt-file>"',
+                "instruction": "Continue the active Task Implementer run.",
+            },
+        }
+        human = io.StringIO()
+        machine = io.StringIO()
+        with (
+            mock.patch.object(pw, "lane_report", return_value=report) as lane_report,
+            mock.patch.object(pw.sys, "stdout", human),
+        ):
+            self.assertEqual(
+                pw.main(["lane-report", "--workspace", str(self.workspace)]), 0
+            )
+        with (
+            mock.patch.object(pw, "lane_report", return_value=report),
+            mock.patch.object(pw.sys, "stdout", machine),
+        ):
+            self.assertEqual(
+                pw.main(
+                    [
+                        "lane-report",
+                        "--workspace",
+                        str(self.workspace),
+                        "--json",
+                    ]
+                ),
+                0,
+            )
+        lane_report.assert_called_once_with(self.workspace)
+        self.assertEqual(human.getvalue(), reporting.render_lane_report(report))
+        self.assertEqual(json.loads(machine.getvalue()), report)
+
+    def test_unstable_lane_report_emits_no_partial_stdout(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                pw,
+                "lane_report",
+                side_effect=core.PromptWorkspaceError(
+                    "WORKSPACE_BUSY", "Task Implementer state is changing"
+                ),
+            ),
+            mock.patch.object(pw.sys, "stdout", stdout),
+            mock.patch.object(pw.sys, "stderr", stderr),
+        ):
+            result = pw.main(["lane-report", "--workspace", str(self.workspace)])
+        self.assertEqual(result, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(
+            stderr.getvalue(),
+            "WORKSPACE_BUSY: Task Implementer state is changing\n",
+        )
 
     def test_slug_rules(self) -> None:
         self.assertEqual(

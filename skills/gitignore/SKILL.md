@@ -1,6 +1,6 @@
 ---
 name: gitignore
-description: Create or update a project's .gitignore file with sensible defaults for macOS and VS Code, then extend it for detected stacks (for example Node, Python, Go, Rust, Java, Terraform). Use when the user asks to generate, fix, or standardize .gitignore.
+description: "Create, fix, or standardize a project's .gitignore with macOS/VS Code defaults and detected stack rules for Node, Python, Go, Rust, Java, Terraform, or others."
 ---
 
 # Gitignore

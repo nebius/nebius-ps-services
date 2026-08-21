@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: "Use for merging GitHub pull requests outside Agentic SDLC: verify PR checks, reviews, mergeability, branch state, and head SHA, then merge with gh pr merge without admin bypass. Use after create-pr or review-pr when the user explicitly asks to merge a ready PR."
+description: "Use only when explicitly asked to merge a ready GitHub PR outside Agentic SDLC after verifying checks, reviews, mergeability, branch state, and head SHA; never use admin bypass."
 ---
 
 # Merge PR

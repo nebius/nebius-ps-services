@@ -24,7 +24,8 @@ initial worktree state. Priority and auto-fix safety remain independent.
 - `references/quality-rubric.md`: neutral review rubric, severity model,
   blocking conditions, focused-fix validation, strict implementation-quality
   standards, and approval bar.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental invocation and runtime-check cases.
 - `scripts/test_code_review_contract.py`: deterministic contract checks for
   invocation modes, remediation safety, focused validation, reporting, and
   isolated installation.

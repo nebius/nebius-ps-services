@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-implement-positive-01,true,"Implement this locked Agentic SDLC feature plan through its dependency waves."
+sdlc-implement-positive-02,true,"Coordinate fresh isolated workers for each task in the active SDLC plan."
+sdlc-implement-positive-03,true,"Execute this diagnosis-bound corrective SDLC plan and rerun its regression oracle."
+sdlc-implement-negative-01,false,"Implement this ordinary one-file bug fix."
+sdlc-implement-negative-02,false,"Write tests first for the prepared SDLC feature."
+sdlc-implement-negative-03,false,"Change the locked SDLC plan while implementation is running."

@@ -17,8 +17,9 @@ changes as evidence-gated escalations.
   rubric.
 - `references/scaling-and-ci.md`: xdist, testmon, lanes, sharding, coverage,
   governance, and Pants guidance.
-- `evals/trigger-prompts.md`: should-trigger, should-not-trigger, and boundary
+- `evals/trigger-prompts.csv`: canonical should-trigger, should-not-trigger, and boundary
   examples.
+- `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 
 ## Boundaries
 

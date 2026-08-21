@@ -1,0 +1,9 @@
+id,should_trigger,prompt
+align-skill-positive-01,true,"Use align-skill to review and harden the existing skill under skills/release-notes."
+align-skill-positive-02,true,"Please improve this scaffolded Codex skill so its SKILL.md is lean, its trigger boundaries are precise, and it has its own evals."
+align-skill-positive-03,true,"Audit every skill in this local skills folder against our skill structure, safety, evaluation, and progressive-disclosure standards."
+align-skill-positive-04,true,"Review this GitHub skill repository in report-only mode and identify alignment gaps without changing it."
+align-skill-negative-01,false,"Create a brand-new skill named release-notes from scratch and choose its initial folder structure."
+align-skill-negative-02,false,"Align this entire application repository across code, tests, CI, configuration, and documentation."
+align-skill-negative-03,false,"Implement the retry bug in src/client.py and update its unit tests."
+align-skill-negative-04,false,"Review this pull request for correctness and merge readiness."

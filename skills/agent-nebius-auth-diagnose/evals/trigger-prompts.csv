@@ -1,0 +1,12 @@
+id,should_trigger,prompt
+auth-diagnose-positive-01,true,"A Nebius command was blocked because the current Codex Agent project selector is missing."
+auth-diagnose-positive-02,true,"Diagnose why the configured Nebius profile cannot authenticate this read-only quota check."
+auth-diagnose-positive-03,true,"The Nebius auth hook rejected this command and I need a read-only explanation."
+auth-diagnose-positive-04,true,"A Nebius command has no leading project selector and the default profile has no configured parent ID."
+auth-diagnose-positive-05,true,"The selected project credential is missing; diagnose the failure without changing anything."
+auth-diagnose-positive-06,true,"An explicit Nebius profile conflicts with selector-derived authentication; explain the safe retry."
+auth-diagnose-negative-01,false,"Create a Nebius service account and repair the missing credential."
+auth-diagnose-negative-02,false,"List GPU utilization from my configured Grafana datasource."
+auth-diagnose-negative-03,false,"Scaffold a Python application that uses the Nebius SDK."
+auth-diagnose-negative-04,false,"The current project selector and runtime authentication already work; continue the original task."
+auth-diagnose-negative-05,false,"Enumerate and modify tenant IAM memberships for this Nebius tenant."

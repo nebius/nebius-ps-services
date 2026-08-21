@@ -289,8 +289,15 @@ general workflow lock. A valid concise report is finalized only when the shared
 Stop arbiter has no peer lifecycle continuation. An ordinary incomplete or
 malformed report records `advisory_incomplete` and returns `continue: true`;
 it requests no correction, denies no later tool, and emits no fallback. A
-sensitive report may receive one bounded redaction correction. Process
-termination before Stop remains reportable only after a same-session resume.
+sensitive or unsafe ordinary report records `sensitive_detected`, emits one
+generic terminal warning, and requests no automatic replacement. A contained
+local-reference format defect remains advisory. This does not change the
+exhausted-budget branch, which retains its bounded report correction and
+terminal fallback. Marker-derived exhausted fallback fields use the same full
+Git-root containment policy as ordinary reports, normalize contained local
+targets to repository-relative form, and replace outside-root, unsafe, or
+symlink-escaping references with generic summaries. Process termination
+before Stop remains reportable only after a same-session resume.
 For an active resize, the hook records a pending authorization and admits only
 the exact `current.md` patch until the marker matches it while preserving the
 blocker, tranche, attempt ledger, counters, lifecycle, and timestamps. It then

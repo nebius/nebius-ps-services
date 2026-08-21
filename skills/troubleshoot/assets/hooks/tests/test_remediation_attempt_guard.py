@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,6 +29,8 @@ sys.modules[ARBITER_SPEC.name] = arbiter
 ARBITER_SPEC.loader.exec_module(arbiter)
 
 BLOCKER_KEY = "component|operation|error-class|boundary"
+
+
 def attempt(
     number: int,
     *,
@@ -139,11 +142,7 @@ def complete_report(
         f"Verification: verification {number} | Result: failed_same_blocker"
         for number in range(1, attempt_count + 1)
     ]
-    evidence = (
-        "Historical evidence summary unavailable."
-        if legacy_evidence
-        else None
-    )
+    evidence = "Historical evidence summary unavailable." if legacy_evidence else None
     evidence_lines = [
         f"- attempt-{number} | Evidence: {evidence or f'new evidence {number}'}"
         for number in range(1, attempt_count + 1)
@@ -224,7 +223,17 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 "prompt": prompt,
             }
         )
-        return guard.evaluate(self.payload)
+        output = guard.evaluate(self.payload)
+        self.assertNotEqual(
+            output.get("reason"),
+            "Troubleshoot prompt context exceeds its safe bound.",
+        )
+        hook_output = output.get("hookSpecificOutput")
+        if isinstance(hook_output, dict):
+            context = hook_output.get("additionalContext")
+            if isinstance(context, str):
+                self.assertLessEqual(len(context), guard.MAX_ADDITIONAL_CONTEXT_CHARS)
+        return output
 
     def authorization_data(self) -> dict[str, object]:
         authorization = guard.load_authorization_state(self.payload)
@@ -248,16 +257,39 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             "$troubleshoot diagnose the failure", turn_id="report-turn"
         )
         self.assertIn(
-            "concise terminal report",
+            "# Troubleshooting Report",
             output["hookSpecificOutput"]["additionalContext"],
         )
+        for classification in guard.GENERAL_REPORT_OUTCOMES:
+            self.assertIn(
+                classification, output["hookSpecificOutput"]["additionalContext"]
+            )
+        self.assertIn(
+            "`repo/path:line`",
+            output["hookSpecificOutput"]["additionalContext"],
+        )
+        for field in (
+            "Classification",
+            "Confidence",
+            "Fixed scope",
+            "Current state",
+            "Root cause",
+            "Changes made",
+            "Verified",
+            "Not verified",
+            "Owner",
+            "Action",
+            "Done when",
+        ):
+            self.assertIn(field, output["hookSpecificOutput"]["additionalContext"])
         obligation = self.report_obligation_data()
         self.assertEqual(obligation["schema"], guard.REPORT_OBLIGATION_SCHEMA)
         self.assertEqual(obligation["status"], "active")
-        self.assertEqual(obligation["corrections"], 0)
+        self.assertNotIn("corrections", obligation)
         obligation_file = guard.report_obligation_file_for_payload(self.payload)
         assert obligation_file is not None
         self.assertEqual(obligation_file.stat().st_mode & 0o777, 0o600)
+
         self.assertEqual(obligation_file.parent.stat().st_mode & 0o777, 0o700)
 
         self.payload.update(
@@ -271,10 +303,8 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertTrue(incomplete["continue"])
         self.assertNotIn("decision", incomplete)
         self.assertNotIn("systemMessage", incomplete)
-        self.assertEqual(
-            self.report_obligation_data()["status"], "advisory_incomplete"
-        )
-        self.assertEqual(self.report_obligation_data()["corrections"], 0)
+        self.assertEqual(self.report_obligation_data()["status"], "advisory_incomplete")
+        self.assertNotIn("corrections", self.report_obligation_data())
 
         self.payload.update(
             {
@@ -298,12 +328,74 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertTrue(complete["continue"])
         self.assertEqual(self.report_obligation_data()["status"], "delivered")
 
+    def test_every_prompt_contract_combination_fits_the_host_context_limit(
+        self,
+    ) -> None:
+        report_notice = guard.GENERAL_REPORT_NOTICE
+        for value in (
+            "Outcome",
+            "Root Cause And Fix",
+            "Verification",
+            "Next Action",
+            *guard.GENERAL_REPORT_OUTCOMES,
+            "Classification",
+            "Confidence",
+            "Fixed scope",
+            "Current state",
+            "Root cause",
+            "Changes made",
+            "Verified",
+            "Not verified",
+            "Owner",
+            "Action",
+            "Done when",
+        ):
+            self.assertIn(value, report_notice)
+
+        pending_profiles = (
+            {
+                "mode": "resize_active",
+                "attempt_limit": guard.MAX_ATTEMPT_LIMIT,
+                "time_limit_minutes": guard.MAX_TIME_LIMIT_MINUTES,
+                "authorization_id": "a" * 32,
+            },
+            {
+                "mode": "next_tranche",
+                "attempt_limit": guard.MAX_ATTEMPT_LIMIT,
+                "time_limit_minutes": guard.MAX_TIME_LIMIT_MINUTES,
+                "authorization_id": "a" * 32,
+            },
+        )
+        issues = (
+            (None, None),
+            ("the remediation marker is missing from current.md", "missing"),
+            ("the remediation marker is invalid: missing: blocker_summary", "invalid"),
+            (
+                "a causally independent blocker requires tranche 1 and a null "
+                "override_summary",
+                "valid",
+            ),
+            ("x" * 160, "valid"),
+        )
+        contexts = [report_notice + "\n" + guard._profile_context(10, 180, "a" * 32)]
+        for pending in pending_profiles:
+            for issue, state_kind in issues:
+                contexts.append(
+                    report_notice
+                    + "\n"
+                    + guard._pending_prompt_context(pending, issue, state_kind)
+                )
+        for context in contexts:
+            with self.subTest(length=len(context)):
+                self.assertLessEqual(len(context), guard.MAX_ADDITIONAL_CONTEXT_CHARS)
+
     def test_invalid_report_obligation_state_remains_fail_closed(self) -> None:
         self.evaluate_prompt("$troubleshoot", turn_id="tampered-report-state")
         obligation_file = guard.report_obligation_file_for_payload(self.payload)
         assert obligation_file is not None
         data = json.loads(obligation_file.read_text(encoding="utf-8"))
-        data["schema"] = "codex/troubleshoot-report-obligation-v1"
+        data["schema"] = guard.PREVIOUS_REPORT_OBLIGATION_SCHEMA
+        data["corrections"] = 0
         obligation_file.write_text(json.dumps(data), encoding="utf-8")
 
         self.payload.update(
@@ -316,6 +408,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         denied = guard.evaluate(self.payload)
         reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertIn("reporting state is invalid", reason)
+        self.assertIn("fresh Codex session", reason)
 
         self.payload.update(
             {
@@ -327,6 +420,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         blocked = self.evaluate_stop_with_arbiter()
         self.assertEqual(blocked["decision"], "block")
         self.assertIn("private report obligation is invalid", blocked["reason"])
+        self.assertIn("fresh Codex session", blocked["reason"])
 
     def test_general_report_accepts_every_terminal_classification(self) -> None:
         for index, classification in enumerate(guard.GENERAL_REPORT_OUTCOMES):
@@ -395,13 +489,17 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 self.assertFalse(guard._general_report_complete(report)[0])
 
     def test_evidence_appendix_is_optional_and_not_a_completion_gate(self) -> None:
-        report = complete_general_report("DIAGNOSED-FIXED") + "\n" + "\n".join(
-            [
-                "## Evidence Appendix",
-                "- Design: PASS",
-                "- Infrastructure: UNKNOWN",
-                "- Configuration: FAIL",
-            ]
+        report = (
+            complete_general_report("DIAGNOSED-FIXED")
+            + "\n"
+            + "\n".join(
+                [
+                    "## Evidence Appendix",
+                    "- Design: PASS",
+                    "- Infrastructure: UNKNOWN",
+                    "- Configuration: FAIL",
+                ]
+            )
         )
         self.assertEqual(guard._general_report_complete(report), (True, ""))
 
@@ -412,7 +510,226 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         )
         complete, issue = guard._general_report_complete(report)
         self.assertFalse(complete)
-        self.assertIn("sensitive value", issue)
+        self.assertEqual(issue, guard.REPORT_SAFETY_ISSUE)
+
+    def test_concise_report_enforces_repo_contained_local_reference_grammar(
+        self,
+    ) -> None:
+        fake_home = self.root / "home" / "tester"
+        repo = fake_home / "repo"
+        project_a = repo / "project-a"
+        project_b = repo / "project-b"
+        project_a.mkdir(parents=True)
+        project_b.mkdir()
+        evidence = project_b / "evidence.md"
+        evidence.write_text("safe\n", encoding="utf-8")
+        spaced_evidence = project_b / "evidence file.md"
+        spaced_evidence.write_text("safe\n", encoding="utf-8")
+        parenthesized_evidence = project_b / "evidence(foo).md"
+        parenthesized_evidence.write_text("safe\n", encoding="utf-8")
+        sensitive_names = (
+            "token=fake-test-value.md",
+            "credential=do-not-echo.md",
+            "credential%3Ddo-not-echo.md",
+            "AKIAABCDEFGHIJKLMNOP.md",
+            "db.internal.local.md",
+            "10.0.0.1",
+        )
+        for name in sensitive_names:
+            (project_b / name).write_text("safe\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "inside-link").symlink_to(project_b, target_is_directory=True)
+        outside = fake_home / "outside"
+        outside.mkdir()
+        outside_evidence = outside / "evidence.md"
+        outside_evidence.write_text("unsafe\n", encoding="utf-8")
+        (repo / "outside-link").symlink_to(outside, target_is_directory=True)
+        base = complete_general_report("UNRESOLVED")
+        root_cause = (
+            "The report hook enforced a broader contract than its owner required."
+        )
+
+        accepted_references = (
+            "`project-b/evidence.md:1`",
+            "[relative](project-b/evidence.md)",
+            f"[absolute]({evidence})",
+            "[home](~/repo/project-b/evidence.md)",
+            f"[file]({evidence.as_uri()})",
+            f"[space](<{spaced_evidence}>)",
+            "[balanced parens](project-b/evidence(foo).md)",
+            r"[escaped parens](project-b/evidence\(foo\).md)",
+            '[title](project-b/evidence.md "Public evidence")',
+            "[parenthesized title](project-b/evidence.md (Public evidence))",
+            "[inside symlink](inside-link/evidence.md)",
+            "[public guide](https://example.com/guide)",
+        )
+        with patch.dict(os.environ, {"HOME": str(fake_home)}):
+            for reference in accepted_references:
+                with self.subTest(reference=reference):
+                    report = base.replace(root_cause, f"Evidence: {reference}.")
+                    self.assertEqual(
+                        guard._general_report_complete(report, repo), (True, "")
+                    )
+            self.assertEqual(
+                guard._normalize_safe_local_references(
+                    f"[space](<{spaced_evidence}>)", repo
+                ),
+                "[space](<project-b/evidence file.md>)",
+            )
+
+        for prose in (
+            "Node.js remains supported.",
+            "Invoke /plan next.",
+            "The unmethoded route /api/v1/jobs remains descriptive prose.",
+            "The PASS/FAIL/UNKNOWN status vocabulary remains explicit.",
+            "The failing route is GET /api/v1/jobs.",
+        ):
+            with self.subTest(prose=prose):
+                report = base.replace(root_cause, prose)
+                self.assertEqual(
+                    guard._general_report_complete(report, repo), (True, "")
+                )
+
+        advisory_references = (
+            "project-b/evidence.md",
+            "[http](http://example.com/guide)",
+            "`http://example.com/guide`",
+            "http://example.com/guide",
+            "[mail](mailto:hello@example.com)",
+            "[dot](./project-b/evidence.md)",
+            f"[root]({repo})",
+        )
+        for reference in advisory_references:
+            with self.subTest(advisory=reference):
+                advisory = base.replace(root_cause, f"Evidence: {reference}.")
+                self.assertEqual(
+                    guard._general_report_complete(advisory, repo),
+                    (False, guard.REPORT_REFERENCE_FORMAT_ISSUE),
+                )
+
+        unsafe_references = (
+            "`../outside/evidence.md`",
+            f"[absolute]({outside_evidence})",
+            "[home](~/outside/evidence.md)",
+            f"[file]({outside_evidence.as_uri()})",
+            "[authority](file://host/path)",
+            f"[query]({evidence.as_uri()}?x=1)",
+            f"[fragment]({evidence.as_uri()}#L1)",
+            "[relative query](project-b/evidence.md?x=1)",
+            "[relative fragment](project-b/evidence.md#L1)",
+            "[other scheme](ssh://example.com/evidence.md)",
+            "[javascript](javascript:alert(1))",
+            "[javascript entity](javascript&#58;alert(1))",
+            "[javascript encoded](javascript%3Aalert(1))",
+            "[data](data:text/html,<script>alert(1)</script>)",
+            '<a href="javascript&#58;alert(1)">unsafe HTML</a>',
+            "[userinfo](https://user:pass@example.com/guide)",
+            "[private URL](https://10.0.0.1/guide)",
+            "[parenthesized escape](../outside(evidence).md)",
+            "[entity escape](..&#47;outside(evidence).md)",
+            "[entity secret](project-b/token&#61;fake-test-value.md)",
+            "[ambiguous](project-b/evidence.md",
+            '[bad title](project-b/evidence.md "title"',
+            f"[encoded]({repo.as_uri()}/project-a/%2e%2e/%2e%2e/outside/evidence.md)",
+            f"[double encoded]({repo.as_uri()}/project-a/%252e%252e/evidence.md)",
+            f"[nul]({repo.as_uri()}/project-b/evidence.md%00)",
+            f"[slash]({repo.as_uri()}/project-b%2fevidence.md)",
+            f"[backslash]({repo.as_uri()}/project-b%5cevidence.md)",
+            f"[malformed]({repo.as_uri()}/project-b/%ZZ)",
+            "[escape](outside-link/evidence.md)",
+            r"`C:\\Temp\\report.log`",
+            r"`\\server\share\report.log`",
+            r"`~\repo\project-b\evidence.md`",
+            "[token=fake-test-value](project-b/evidence.md)",
+            "[endpoint=worker.internal](project-b/evidence.md)",
+            *(f"[sensitive target](project-b/{name})" for name in sensitive_names),
+        )
+        with patch.dict(os.environ, {"HOME": str(fake_home)}):
+            for reference in unsafe_references:
+                with self.subTest(reference=reference):
+                    report = base.replace(root_cause, f"Evidence: {reference}.")
+                    self.assertEqual(
+                        guard._general_report_complete(report, repo),
+                        (False, guard.REPORT_SAFETY_ISSUE),
+                    )
+
+        self.assertEqual(guard.resolve_git_root(str(project_a)), str(repo.resolve()))
+        self.assertIsNone(guard.resolve_git_root(str(outside)))
+
+        for reference in (
+            f"`{evidence}`",
+            "`~/repo/project-b/evidence.md`",
+            f"`{evidence.as_uri()}`",
+        ):
+            with self.subTest(reference=reference):
+                report = base.replace(root_cause, f"Evidence: {reference}.")
+                self.assertEqual(
+                    guard._general_report_complete(report, None),
+                    (False, guard.REPORT_SAFETY_ISSUE),
+                )
+
+    def test_nested_cwd_uses_resolved_git_root_for_local_reference_stop_states(
+        self,
+    ) -> None:
+        repo = self.root / "repo"
+        project_a = repo / "project-a"
+        project_b = repo / "project-b"
+        nested = project_a / "src" / "nested"
+        nested.mkdir(parents=True)
+        project_b.mkdir(parents=True)
+        evidence = project_b / "evidence.md"
+        evidence.write_text("safe\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        outside = Path(self.tmp.name) / "nested-outside"
+        outside.mkdir()
+        (outside / "report.log").write_text("unsafe\n", encoding="utf-8")
+        (repo / "linked").symlink_to(outside, target_is_directory=True)
+
+        self.payload["cwd"] = str(nested)
+        self.evaluate_prompt("$troubleshoot", turn_id="safe-sibling")
+        safe = complete_general_report("UNRESOLVED").replace(
+            "The report hook enforced a broader contract than its owner required.",
+            f"Evidence: [sibling]({evidence}).",
+        )
+        self.payload.update(
+            {
+                "cwd": str(nested),
+                "hook_event_name": "Stop",
+                "turn_id": "safe-sibling",
+                "last_assistant_message": safe,
+                "stop_hook_active": False,
+            }
+        )
+        delivered = self.evaluate_stop_with_arbiter()
+        self.assertTrue(delivered["continue"])
+        self.assertNotIn("systemMessage", delivered)
+        self.assertEqual(self.report_obligation_data()["status"], "delivered")
+
+        self.evaluate_prompt("$troubleshoot", turn_id="unsafe-escape")
+        unsafe = complete_general_report("UNRESOLVED").replace(
+            "The report hook enforced a broader contract than its owner required.",
+            "Evidence: `linked/report.log`.",
+        )
+        self.payload.update(
+            {
+                "cwd": str(nested),
+                "hook_event_name": "Stop",
+                "turn_id": "unsafe-escape",
+                "last_assistant_message": unsafe,
+                "stop_hook_active": False,
+            }
+        )
+        stopped = self.evaluate_stop_with_arbiter()
+        self.assertFalse(stopped["continue"])
+        self.assertIn("unsafe", stopped["stopReason"])
+        self.assertNotIn(str(outside), stopped["systemMessage"])
+        self.assertNotIn("linked/report.log", stopped["systemMessage"])
+        self.assertEqual(self.report_obligation_data()["status"], "sensitive_detected")
+
+        self.payload["stop_hook_active"] = True
+        repeated = self.evaluate_stop_with_arbiter()
+        self.assertTrue(repeated["continue"])
+        self.assertNotIn("systemMessage", repeated)
 
     def test_exhaustion_marker_must_be_inside_outcome(self) -> None:
         report = complete_report().replace(
@@ -473,13 +790,11 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertTrue(output["continue"])
         self.assertNotIn("decision", output)
         self.assertNotIn("systemMessage", output)
-        self.assertEqual(
-            self.report_obligation_data()["status"], "advisory_incomplete"
-        )
+        self.assertEqual(self.report_obligation_data()["status"], "advisory_incomplete")
         self.payload["stop_hook_active"] = True
         self.assertTrue(self.evaluate_stop_with_arbiter()["continue"])
 
-    def test_sensitive_report_gets_one_redaction_correction_then_safe_fallback(
+    def test_sensitive_report_stops_once_without_automatic_replacement(
         self,
     ) -> None:
         self.evaluate_prompt("$troubleshoot", turn_id="sensitive-report-turn")
@@ -495,23 +810,88 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 "stop_hook_active": False,
             }
         )
-        correction = self.evaluate_stop_with_arbiter()
-        self.assertEqual(correction["decision"], "block")
-        self.assertIn("must be redacted", correction["reason"])
-        self.assertNotIn("do-not-echo", correction["reason"])
+        stopped = self.evaluate_stop_with_arbiter()
+        self.assertFalse(stopped["continue"])
+        self.assertNotIn("decision", stopped)
+        warning = stopped["systemMessage"]
+        self.assertNotIn("do-not-echo", warning)
+        self.assertNotIn("# Troubleshooting Report", warning)
+        self.assertIn("not request an automatic rewrite", warning)
+        self.assertEqual(self.report_obligation_data()["status"], "sensitive_detected")
 
         self.payload["stop_hook_active"] = True
-        fallback_output = self.evaluate_stop_with_arbiter()
-        self.assertFalse(fallback_output["continue"])
-        fallback = fallback_output["systemMessage"]
-        self.assertNotIn("do-not-echo", fallback)
-        self.assertEqual(guard._general_report_complete(fallback), (True, ""))
-        self.assertEqual(self.report_obligation_data()["status"], "fallback")
+        repeated = self.evaluate_stop_with_arbiter()
+        self.assertTrue(repeated["continue"])
+        self.assertNotIn("systemMessage", repeated)
+
+        self.payload.update(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "run-check"},
+            }
+        )
+        self.assertEqual(guard.evaluate(self.payload), {})
+
+    def test_report_status_write_failure_stops_without_echo_or_retry(self) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="report-write-failure")
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "turn_id": "report-write-failure",
+                "last_assistant_message": complete_general_report(),
+                "stop_hook_active": False,
+                guard.REPORT_FINALIZE_FIELD: True,
+            }
+        )
+        with patch.object(
+            guard,
+            "_close_report_obligation",
+            side_effect=guard.GuardStateError("private detail must not be echoed"),
+        ):
+            stopped = guard.evaluate(self.payload)
+        self.assertFalse(stopped["continue"])
+        self.assertNotIn("decision", stopped)
+        self.assertNotIn("private detail", stopped["systemMessage"])
+        self.assertNotIn("# Troubleshooting Report", stopped["systemMessage"])
+
+    def test_sensitive_status_write_failure_uses_only_generic_terminal_warning(
+        self,
+    ) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="sensitive-write-failure")
+        sensitive = complete_general_report("DIAGNOSED-FIXED").replace(
+            "The canonical local report-hook source boundary.",
+            "credential=never-reflect-this",
+        )
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "turn_id": "sensitive-write-failure",
+                "last_assistant_message": sensitive,
+                "stop_hook_active": False,
+            }
+        )
+        with patch.object(
+            guard,
+            "_close_report_obligation",
+            side_effect=guard.GuardStateError("private detail must not be echoed"),
+        ):
+            stopped = guard.evaluate(self.payload)
+        self.assertFalse(stopped["continue"])
+        self.assertNotIn("decision", stopped)
+        self.assertNotIn("never-reflect-this", stopped["systemMessage"])
+        self.assertNotIn("private detail", stopped["systemMessage"])
+        self.assertEqual(self.report_obligation_data()["status"], "active")
 
     def test_interrupted_obligation_survives_later_turn_until_reported(
         self,
     ) -> None:
         self.evaluate_prompt("$troubleshoot", turn_id="interrupted-turn")
+        resumed = self.evaluate_prompt("Resume safely.", turn_id="resumed-turn")
+        self.assertIn(
+            "earlier troubleshoot report remains undelivered",
+            resumed["hookSpecificOutput"]["additionalContext"],
+        )
         self.payload.update(
             {
                 "hook_event_name": "PreToolUse",
@@ -603,12 +983,14 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             "continue": False,
             "stopReason": "A peer Stop policy ended the host turn.",
         }
+        seen: list[str] = []
 
         def with_terminal_peer(
             path: Path,
             payload: dict[str, object],
             _deadline: float,
         ) -> dict[str, object]:
+            seen.append(path.name)
             if path.name == "remediation_attempt_guard.py":
                 return guard.evaluate(payload)
             if path.name == "project_specs_lifecycle.py":
@@ -618,7 +1000,124 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         with patch.object(arbiter, "_run_delegate", side_effect=with_terminal_peer):
             result = arbiter.evaluate(self.payload, hook_dir)
         self.assertEqual(result, terminal)
+        self.assertEqual(seen[: len(arbiter.DELEGATES)], list(arbiter.DELEGATES))
+        self.assertEqual(seen[-1], "remediation_attempt_guard.py")
         self.assertEqual(self.report_obligation_data()["status"], "delivered")
+
+    def test_terminal_peer_retains_precedence_and_surfaces_finalization_failure(
+        self,
+    ) -> None:
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": complete_general_report(),
+                "stop_hook_active": False,
+            }
+        )
+        hook_dir = Path(self.tmp.name) / "terminal-finalization-failure-hooks"
+        hook_dir.mkdir()
+        for delegate in arbiter.DELEGATES:
+            (hook_dir / delegate).write_text("# test delegate\n", encoding="utf-8")
+        terminal = {
+            "continue": False,
+            "stopReason": "A peer Stop policy ended the host turn.",
+        }
+
+        def finalization_fails(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                if payload.get(arbiter.REPORT_FINALIZE_FIELD):
+                    return {"continue": True}
+                return {"continue": True, arbiter.REPORT_READY_FIELD: True}
+            if path.name == "project_specs_lifecycle.py":
+                return terminal
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=finalization_fails):
+            result = arbiter.evaluate(self.payload, hook_dir)
+        self.assertEqual(result["stopReason"], terminal["stopReason"])
+        self.assertIn("delivery could not be recorded", result["systemMessage"])
+
+    def test_missing_finalization_ack_fails_closed_without_terminal_peer(
+        self,
+    ) -> None:
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": complete_general_report(),
+                "stop_hook_active": False,
+            }
+        )
+        hook_dir = Path(self.tmp.name) / "missing-finalization-ack-hooks"
+        hook_dir.mkdir()
+        for delegate in arbiter.DELEGATES:
+            (hook_dir / delegate).write_text("# test delegate\n", encoding="utf-8")
+
+        def missing_ack(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                if payload.get(arbiter.REPORT_FINALIZE_FIELD):
+                    return {"continue": True}
+                return {"continue": True, arbiter.REPORT_READY_FIELD: True}
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=missing_ack):
+            result = arbiter.evaluate(self.payload, hook_dir)
+        self.assertFalse(result["continue"])
+        self.assertIn("delivery could not be recorded", result["systemMessage"])
+
+    def test_first_terminal_result_keeps_precedence_while_all_peers_run(
+        self,
+    ) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="first-terminal")
+        sensitive = complete_general_report("DIAGNOSED-FIXED").replace(
+            "The canonical local report-hook source boundary.",
+            "credential=never-echo-this",
+        )
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "turn_id": "first-terminal",
+                "last_assistant_message": sensitive,
+                "stop_hook_active": False,
+            }
+        )
+        hook_dir = Path(self.tmp.name) / "all-delegate-hooks"
+        hook_dir.mkdir()
+        for delegate in arbiter.DELEGATES:
+            (hook_dir / delegate).write_text("# test delegate\n", encoding="utf-8")
+        seen: list[str] = []
+
+        def terminal_then_peers(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            seen.append(path.name)
+            if path.name == "remediation_attempt_guard.py":
+                return guard.evaluate(payload)
+            if path.name == "project_specs_lifecycle.py":
+                return {
+                    "continue": False,
+                    "stopReason": "A later peer terminal must not replace the first.",
+                }
+            if path.name == "stop_sdlc_continue.py":
+                return {"decision": "block", "reason": "Later continuation."}
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=terminal_then_peers):
+            result = arbiter.evaluate(self.payload, hook_dir)
+        self.assertEqual(seen, list(arbiter.DELEGATES))
+        self.assertFalse(result["continue"])
+        self.assertIn("sensitive or unsafe", result["stopReason"])
+        self.assertNotIn("later peer", result["stopReason"].casefold())
+        self.assertEqual(self.report_obligation_data()["status"], "sensitive_detected")
 
     def test_missing_marker_and_missing_session_fail_open(self) -> None:
         self.assertEqual(self.evaluate_pre_tool(), {})
@@ -2292,6 +2791,83 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         state = guard.load_guard_state(self.payload)
         self.assertEqual(guard._report_complete(fallback, state), (True, ""))
 
+    def test_exhausted_fallback_preserves_contained_and_redacts_escaping_references(
+        self,
+    ) -> None:
+        inside = self.root / "evidence" / "inside.log"
+        inside.parent.mkdir()
+        inside.write_text("safe\n", encoding="utf-8")
+        attempts = default_failed_attempts()
+        attempts[0]["new_evidence"] = f"`{inside}`"
+        self.write_state(
+            state_data(
+                attempts=attempts,
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        state = guard.load_guard_state(self.payload)
+        fallback = guard._fallback_report(state, "incomplete", self.root)
+        self.assertNotIn(str(inside), fallback)
+        self.assertIn("`evidence/inside.log`", fallback)
+        self.assertEqual(guard._report_complete(fallback, state, self.root), (True, ""))
+
+        bounded_fallback = "Evidence summary unavailable."
+        long_target = "evidence/" + ("nested-segment/" * 6) + "inside.log"
+        for reference in (
+            f"[long]({long_target})",
+            f"[long angle](<{long_target}>)",
+            f"`{long_target}`",
+            f"`{self.root}`",
+            "https://example.com/" + ("evidence-" * 12),
+        ):
+            with self.subTest(bounded_reference=reference):
+                self.assertEqual(
+                    guard._bounded_report_value(
+                        reference,
+                        bounded_fallback,
+                        project_root=self.root,
+                    ),
+                    bounded_fallback,
+                )
+
+        attempts = default_failed_attempts()
+        attempts[0]["new_evidence"] = f"[long]({long_target})"
+        self.write_state(
+            state_data(
+                attempts=attempts,
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        state = guard.load_guard_state(self.payload)
+        fallback = guard._fallback_report(state, "incomplete", self.root)
+        self.assertNotIn("[long]", fallback)
+        self.assertIn(bounded_fallback, fallback)
+        self.assertEqual(guard._report_complete(fallback, state, self.root), (True, ""))
+
+        outside = Path(self.tmp.name) / "exhausted-outside"
+        outside.mkdir()
+        (outside / "report.log").write_text("unsafe\n", encoding="utf-8")
+        (self.root / "linked").symlink_to(outside, target_is_directory=True)
+        attempts = default_failed_attempts()
+        attempts[0]["new_evidence"] = "`linked/report.log`"
+        self.write_state(
+            state_data(
+                attempts=attempts,
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        state = guard.load_guard_state(self.payload)
+        fallback = guard._fallback_report(state, "incomplete", self.root)
+        self.assertNotIn("linked/report.log", fallback)
+        self.assertIn("Evidence summary unavailable.", fallback)
+        self.assertEqual(
+            guard._report_complete(fallback, state, self.root),
+            (True, ""),
+        )
+
     def test_terminal_legacy_marker_gets_honest_fallback_without_repair(
         self,
     ) -> None:
@@ -2367,6 +2943,28 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             "/Users/private/path",
         ):
             self.assertNotIn(sensitive_value, fallback)
+
+    def test_exhausted_fallback_is_revalidated_before_emission(self) -> None:
+        state = guard.GuardState(
+            kind="valid",
+            state_file=None,
+            data=state_data(
+                attempts=default_failed_attempts(),
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            ),
+            exhausted=True,
+            stop_trigger="attempt_limit",
+        )
+        with patch.object(
+            guard,
+            "_fallback_report",
+            return_value="credential=do-not-echo [broken](../outside(file).md)",
+        ):
+            fallback = guard._validated_fallback_report(state, "incomplete", self.root)
+        self.assertNotIn("do-not-echo", fallback)
+        self.assertNotIn("outside(file).md", fallback)
+        self.assertEqual(guard._general_report_complete(fallback), (True, ""))
 
     def test_fallback_redacts_private_network_and_cloud_identifiers(self) -> None:
         for sensitive_value in (

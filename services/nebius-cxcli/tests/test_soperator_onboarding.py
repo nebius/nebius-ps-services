@@ -1066,6 +1066,57 @@ def test_resume_slurmcluster_identity_source_cleanup_accepts_before_and_after_de
     assert after_scope["identity_role"] == "target"
 
 
+def test_scope_resume_snapshot_source_cleanup_projects_checkpoint_source_identity() -> None:
+    target = _target_handoff_slurmcluster_resource()
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {"namespace": "soperator", "name": "login"},
+    }
+    snapshot = {
+        "cluster_identity": {
+            "kubernetes_uid": "kubernetes-uid",
+            "soperator_uid": "soperator-uid",
+            "slurmcluster_uid": "target-slurmcluster-uid",
+            "jail_filesystem_id": "filesystem-uid",
+        },
+        "soperator_resources": [target, service],
+    }
+
+    scoped = soperator_onboarding_module._scope_soperator_resume_snapshot_identity(  # noqa: SLF001
+        snapshot,
+        identity_scope=_resume_slurmcluster_scope(
+            mode="source-cleanup",
+            target_uid="target-slurmcluster-uid",
+        ),
+    )
+
+    assert snapshot["cluster_identity"]["slurmcluster_uid"] == "target-slurmcluster-uid"  # type: ignore[index]
+    assert scoped["cluster_identity"]["slurmcluster_uid"] == "slurmcluster-uid"
+    assert scoped["resume_slurmcluster_identity"]["identity_role"] == "target"
+    assert scoped["resume_slurmcluster_identity"]["target"]["uid"] == "target-slurmcluster-uid"
+    assert scoped["identity_soperator_resources"] == [target, service]
+
+
+def test_scope_resume_snapshot_rejects_foreign_target_uid_without_mutation() -> None:
+    target = _target_handoff_slurmcluster_resource(uid="foreign-target-uid")
+    snapshot = {
+        "cluster_identity": {"slurmcluster_uid": "foreign-target-uid"},
+        "soperator_resources": [target],
+    }
+
+    with pytest.raises(RuntimeError, match="live target SlurmCluster UID differs"):
+        soperator_onboarding_module._scope_soperator_resume_snapshot_identity(  # noqa: SLF001
+            snapshot,
+            identity_scope=_resume_slurmcluster_scope(
+                mode="source-cleanup",
+                target_uid="target-slurmcluster-uid",
+            ),
+        )
+
+    assert snapshot["cluster_identity"]["slurmcluster_uid"] == "foreign-target-uid"  # type: ignore[index]
+
+
 def test_resume_slurmcluster_identity_target_only_rejects_source_reappearance() -> None:
     scope = _resume_slurmcluster_scope(
         mode="target-only",

@@ -47,6 +47,21 @@ CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
 LOCK_PATH = Path("/run/nebius-vpngw/health-monitor.lock")
 
 
+def _vm_ha_observer_only(config: object) -> bool:
+    """Recognize both deployed runtime and operator-facing VM-HA config shapes."""
+
+    if not isinstance(config, dict):
+        return False
+    runtime_vm_ha = config.get("vm_ha")
+    if isinstance(runtime_vm_ha, dict):
+        return runtime_vm_ha.get("enabled") is not False
+    gateway_group = config.get("gateway_group")
+    if not isinstance(gateway_group, dict):
+        return False
+    operator_vm_ha = gateway_group.get("vm_ha")
+    return isinstance(operator_vm_ha, dict) and operator_vm_ha.get("enabled") is True
+
+
 @dataclass
 class TunnelStats:
     """Statistics for a single xfrm interface."""
@@ -87,6 +102,7 @@ class TunnelHealthMonitor:
         proactive_refresh_hours: int = 8,
         max_failures_before_restart: int = 2,
         ping_enabled: bool = False,
+        observer_only: bool = False,
     ) -> None:
         """Initialize tunnel health monitor.
 
@@ -102,6 +118,7 @@ class TunnelHealthMonitor:
         self.consecutive_failures: dict[str, int] = {}
         self.max_failures_before_restart = max_failures_before_restart
         self.ping_enabled = ping_enabled
+        self.observer_only = observer_only
 
         # Proactive refresh settings (optional, disabled by default)
         self.enable_proactive_refresh = enable_proactive_refresh
@@ -543,7 +560,7 @@ class TunnelHealthMonitor:
             results[tunnel_name] = health
 
             # Proactive refresh (optional, preventive maintenance)
-            if self.enable_proactive_refresh and health.is_healthy:
+            if self.enable_proactive_refresh and health.is_healthy and not self.observer_only:
                 last_refresh = self.last_proactive_refresh.get(tunnel_name, 0)
                 time_since_refresh = current_time - last_refresh
 
@@ -581,7 +598,12 @@ class TunnelHealthMonitor:
                         f"{self.consecutive_failures[tunnel_name]} consecutive checks"
                     )
 
-                    if self.restart_tunnel(tunnel_name):
+                    if self.observer_only:
+                        print(
+                            "[TunnelMonitor] VM-HA controller owns recovery; "
+                            f"observing {tunnel_name} without restart"
+                        )
+                    elif self.restart_tunnel(tunnel_name):
                         # Reset failure counter on successful restart
                         self.consecutive_failures[tunnel_name] = 0
                         # Give tunnel time to establish
@@ -621,7 +643,12 @@ class TunnelHealthMonitor:
                                 f"{self.consecutive_failures[tunnel_name]} consecutive checks"
                             )
 
-                            if self.restart_tunnel(tunnel_name):
+                            if self.observer_only:
+                                print(
+                                    "[TunnelMonitor] VM-HA controller owns recovery; "
+                                    f"observing {tunnel_name} without restart"
+                                )
+                            elif self.restart_tunnel(tunnel_name):
                                 self.consecutive_failures[tunnel_name] = 0
                                 time.sleep(5)
                                 health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
@@ -771,6 +798,7 @@ def main() -> None:
     config_max_failures = 2
     config_enabled = True
     config_ping_enabled = False
+    config_observer_only = False
 
     if args.config:
         try:
@@ -787,6 +815,7 @@ def main() -> None:
                     config_data = yaml.safe_load(f)
 
                 health_config = config_data.get("defaults", {}).get("health_monitoring", {})
+                config_observer_only = _vm_ha_observer_only(config_data)
 
                 if health_config:
                     # Override with config file values if not explicitly set via CLI
@@ -807,6 +836,8 @@ def main() -> None:
                     print(f"[TunnelMonitor]    proactive_refresh: {config_proactive}")
                     print(f"[TunnelMonitor]    max_failures_before_restart: {config_max_failures}")
                     print(f"[TunnelMonitor]    ping_enabled: {config_ping_enabled}")
+                    if config_observer_only:
+                        print("[TunnelMonitor]    recovery_owner: vm-ha-controller")
                     if config_proactive:
                         print(f"[TunnelMonitor]    refresh_hours: {config_refresh_hours}h")
         except Exception as e:
@@ -842,6 +873,7 @@ def main() -> None:
         proactive_refresh_hours=config_refresh_hours,
         max_failures_before_restart=config_max_failures,
         ping_enabled=config_ping_enabled,
+        observer_only=config_observer_only,
     )
 
     if args.once:

@@ -111,5 +111,6 @@ processes may own other power assertions.
 - `references/macos-launchagent.md`: Apple-backed behavior and verification.
 - `scripts/nosleep4mac.sh`: no-argument idempotent convergence helper.
 - `scripts/test-nosleep4mac.sh`: isolated fake-launchd regression tests.
-- `evals/trigger-prompts.md`: explicit activation and boundary examples.
+- `evals/trigger-prompts.csv`: explicit activation and boundary examples.
+- `evals/process-cases.md`: supplemental runtime and safety cases.
 - `agents/openai.yaml`: UI metadata and explicit-only policy.

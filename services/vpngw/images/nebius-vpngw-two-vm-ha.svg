@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1000" viewBox="0 0 1440 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Two-VM Nebius VPN Gateway with VM-level and tunnel-level high availability</title>
+  <desc id="desc">An explicit active-passive VM-HA pair uses nebius-vpngw0 and nebius-vpngw1. VM 0 owns tunnels 0 and 3, while VM 1 owns tunnels 2 and 1. A shared private allocation is attached only to the current owner. The former owner must be stopped and candidate allocation ownership confirmed before routes or forwarding move.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="7" stdDeviation="11" flood-color="#0b1220" flood-opacity="0.09"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto-start-reverse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-cyan" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto-start-reverse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-violet" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto-start-reverse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrow-amber" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto-start-reverse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-slate" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#64748b"/>
+    </marker>
+    <style>
+      text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #0f172a; }
+      .kicker { font-size: 13px; font-weight: 750; letter-spacing: 1.8px; text-transform: uppercase; }
+      .hero { font-size: 32px; font-weight: 760; letter-spacing: -0.4px; }
+      .subtitle { font-size: 16px; fill: #cbd5e1; }
+      .section { font-size: 13px; font-weight: 750; letter-spacing: 1.2px; text-transform: uppercase; fill: #64748b; }
+      .panel-title { font-size: 20px; font-weight: 730; }
+      .label { font-size: 14.5px; font-weight: 680; }
+      .small { font-size: 13px; fill: #475569; }
+      .tiny { font-size: 11.5px; fill: #64748b; }
+      .white { fill: #ffffff; }
+      .accent-kicker { fill: #6ee7b7; }
+      .on-emerald { fill: #a7f3d0; }
+      .on-green { fill: #bbf7d0; }
+      .on-violet { fill: #ddd6fe; }
+      .on-dark { fill: #cbd5e1; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1000" fill="#f5f7fb"/>
+  <rect x="32" y="30" width="1376" height="126" rx="24" fill="#0b1220"/>
+  <rect x="32" y="30" width="8" height="126" rx="4" fill="#34d399"/>
+  <text x="72" y="64" class="kicker accent-kicker">Reference architecture · Nebius VPN Gateway</text>
+  <text x="72" y="103" class="hero white">Two VMs with VM-level and tunnel-level high availability</text>
+  <text x="72" y="132" class="subtitle">The authoritative VM owner forwards; each member retains an independent preferred and standby tunnel.</text>
+  <g transform="translate(1064 63)">
+    <rect width="294" height="60" rx="14" fill="#10271f" stroke="#34d399" stroke-opacity="0.65"/>
+    <circle cx="29" cy="30" r="9" fill="#34d399"/>
+    <path d="M24,30 L28,34 L35,25" fill="none" stroke="#052e25" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="50" y="25" class="label white">VM-HA explicitly enabled</text>
+    <text x="50" y="44" class="tiny on-emerald">gateway_group.vm_ha.enabled: true</text>
+  </g>
+
+  <text x="50" y="198" class="section">Nebius network</text>
+  <text x="430" y="198" class="section">Gateway members</text>
+  <text x="1020" y="198" class="section">Peer HA VPN</text>
+
+  <g filter="url(#shadow)">
+    <rect x="50" y="218" width="300" height="650" rx="20" fill="#ffffff" stroke="#d8dee9"/>
+    <rect x="430" y="218" width="450" height="292" rx="20" fill="#ffffff" stroke="#86efac"/>
+    <rect x="430" y="576" width="450" height="292" rx="20" fill="#ffffff" stroke="#c4b5fd"/>
+    <rect x="1020" y="218" width="370" height="650" rx="20" fill="#ffffff" stroke="#d8dee9"/>
+  </g>
+
+  <g>
+    <rect x="50" y="218" width="300" height="72" rx="20" fill="#f0f5ff"/>
+    <rect x="50" y="270" width="300" height="20" fill="#f0f5ff"/>
+    <circle cx="84" cy="254" r="14" fill="#2563eb"/>
+    <circle cx="84" cy="254" r="6" fill="#bfdbfe"/>
+    <text x="110" y="251" class="panel-title">Nebius VPC</text>
+    <text x="110" y="270" class="tiny">one stable route next hop</text>
+
+    <rect x="78" y="320" width="244" height="90" rx="14" fill="#f8fafc" stroke="#d8dee9"/>
+    <text x="102" y="353" class="label">Workload routes</text>
+    <text x="102" y="378" class="small">Remote prefixes target the</text>
+    <text x="102" y="398" class="small">shared private allocation</text>
+
+    <line x1="200" y1="410" x2="200" y2="458" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+
+    <rect x="78" y="466" width="244" height="120" rx="14" fill="#ecfdf5" stroke="#6ee7b7"/>
+    <text x="200" y="502" text-anchor="middle" class="label" fill="#065f46">Shared private allocation</text>
+    <text x="200" y="528" text-anchor="middle" class="small">attached to one VM only</text>
+    <rect x="112" y="546" width="176" height="25" rx="12.5" fill="#d1fae5"/>
+    <text x="200" y="563" text-anchor="middle" class="tiny" fill="#047857">authoritative ownership</text>
+
+    <rect x="78" y="678" width="244" height="146" rx="14" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="102" y="713" class="label" fill="#9a3412">Ownership invariants</text>
+    <circle cx="104" cy="742" r="3.5" fill="#f97316"/>
+    <text x="118" y="746" class="small">Tunnel role ≠ VM ownership</text>
+    <circle cx="104" cy="772" r="3.5" fill="#f97316"/>
+    <text x="118" y="776" class="small">No active-active forwarding</text>
+    <circle cx="104" cy="802" r="3.5" fill="#f97316"/>
+    <text x="118" y="806" class="small">No Nebius VPC ECMP</text>
+  </g>
+
+  <g>
+    <rect x="430" y="218" width="450" height="82" rx="20" fill="#14532d"/>
+    <rect x="430" y="280" width="450" height="20" fill="#14532d"/>
+    <circle cx="468" cy="258" r="16" fill="#bbf7d0"/>
+    <rect x="460" y="250" width="16" height="16" rx="3" fill="#16a34a"/>
+    <text x="498" y="254" class="panel-title white">nebius-vpngw0</text>
+    <text x="498" y="276" class="tiny on-green">configured active · current owner · forwarding on</text>
+    <rect x="734" y="240" width="118" height="28" rx="14" fill="#dcfce7"/>
+    <text x="793" y="259" text-anchor="middle" class="tiny" fill="#166534">PUBLIC IP A</text>
+
+    <rect x="458" y="326" width="394" height="66" rx="14" fill="#eff6ff" stroke="#93c5fd"/>
+    <rect x="458" y="326" width="7" height="66" rx="3.5" fill="#2563eb"/>
+    <circle cx="486" cy="359" r="8" fill="#2563eb"/>
+    <text x="508" y="354" class="label">Tunnel 0 · active role</text>
+    <text x="508" y="375" class="tiny">peer interface 0 · preferred path</text>
+
+    <rect x="458" y="416" width="394" height="66" rx="14" fill="#ecfeff" stroke="#67e8f9"/>
+    <rect x="458" y="416" width="7" height="66" rx="3.5" fill="#0891b2"/>
+    <circle cx="486" cy="449" r="8" fill="#0891b2"/>
+    <text x="508" y="444" class="label">Tunnel 3 · passive role</text>
+    <text x="508" y="465" class="tiny">peer interface 1 · tunnel standby</text>
+  </g>
+
+  <g>
+    <rect x="430" y="576" width="450" height="82" rx="20" fill="#4c1d95"/>
+    <rect x="430" y="638" width="450" height="20" fill="#4c1d95"/>
+    <circle cx="468" cy="616" r="16" fill="#ddd6fe"/>
+    <rect x="460" y="608" width="16" height="16" rx="3" fill="#7c3aed"/>
+    <text x="498" y="612" class="panel-title white">nebius-vpngw1</text>
+    <text x="498" y="634" class="tiny on-violet">configured passive · non-owner · forwarding off</text>
+    <rect x="734" y="598" width="118" height="28" rx="14" fill="#ede9fe"/>
+    <text x="793" y="617" text-anchor="middle" class="tiny" fill="#5b21b6">PUBLIC IP B</text>
+
+    <rect x="458" y="684" width="394" height="66" rx="14" fill="#f5f3ff" stroke="#c4b5fd"/>
+    <rect x="458" y="684" width="7" height="66" rx="3.5" fill="#7c3aed"/>
+    <circle cx="486" cy="717" r="8" fill="#7c3aed"/>
+    <text x="508" y="712" class="label">Tunnel 2 · active role</text>
+    <text x="508" y="733" class="tiny">peer interface 0 · preferred after promotion</text>
+
+    <rect x="458" y="774" width="394" height="66" rx="14" fill="#fffbeb" stroke="#fcd34d"/>
+    <rect x="458" y="774" width="7" height="66" rx="3.5" fill="#d97706"/>
+    <circle cx="486" cy="807" r="8" fill="#d97706"/>
+    <text x="508" y="802" class="label">Tunnel 1 · passive role</text>
+    <text x="508" y="823" class="tiny">peer interface 1 · tunnel standby</text>
+  </g>
+
+  <line x1="322" y1="500" x2="430" y2="278" stroke="#059669" stroke-width="4.5" marker-end="url(#arrow-green)"/>
+  <rect x="340" y="366" width="88" height="40" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <text x="384" y="383" text-anchor="middle" class="tiny" fill="#047857">CURRENT</text>
+  <text x="384" y="398" text-anchor="middle" class="tiny" fill="#047857">ATTACHMENT</text>
+
+  <line x1="322" y1="552" x2="430" y2="630" stroke="#64748b" stroke-width="3.5" stroke-dasharray="9 8" marker-end="url(#arrow-slate)"/>
+  <rect x="338" y="577" width="90" height="40" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="383" y="594" text-anchor="middle" class="tiny">PROMOTION</text>
+  <text x="383" y="609" text-anchor="middle" class="tiny">TARGET</text>
+
+  <g>
+    <rect x="1020" y="218" width="370" height="72" rx="20" fill="#f0fdfa"/>
+    <rect x="1020" y="270" width="370" height="20" fill="#f0fdfa"/>
+    <circle cx="1054" cy="254" r="14" fill="#0f766e"/>
+    <circle cx="1054" cy="254" r="6" fill="#99f6e4"/>
+    <text x="1080" y="251" class="panel-title">Peer HA VPN</text>
+    <text x="1080" y="270" class="tiny">four tunnels · two peer interfaces</text>
+
+    <rect x="1052" y="326" width="306" height="66" rx="14" fill="#f8fafc" stroke="#93c5fd"/>
+    <rect x="1070" y="345" width="56" height="28" rx="14" fill="#dbeafe"/>
+    <text x="1098" y="364" text-anchor="middle" class="tiny" fill="#1d4ed8">IF 0</text>
+    <text x="1144" y="355" class="label">Tunnel 0 ↔ VM 0</text>
+    <text x="1144" y="376" class="tiny">preferred path</text>
+
+    <rect x="1052" y="416" width="306" height="66" rx="14" fill="#f8fafc" stroke="#67e8f9"/>
+    <rect x="1070" y="435" width="56" height="28" rx="14" fill="#cffafe"/>
+    <text x="1098" y="454" text-anchor="middle" class="tiny" fill="#0e7490">IF 1</text>
+    <text x="1144" y="445" class="label">Tunnel 3 ↔ VM 0</text>
+    <text x="1144" y="466" class="tiny">tunnel standby</text>
+
+    <rect x="1052" y="684" width="306" height="66" rx="14" fill="#f8fafc" stroke="#c4b5fd"/>
+    <rect x="1070" y="703" width="56" height="28" rx="14" fill="#ede9fe"/>
+    <text x="1098" y="722" text-anchor="middle" class="tiny" fill="#5b21b6">IF 0</text>
+    <text x="1144" y="713" class="label">Tunnel 2 ↔ VM 1</text>
+    <text x="1144" y="734" class="tiny">preferred after promotion</text>
+
+    <rect x="1052" y="774" width="306" height="66" rx="14" fill="#f8fafc" stroke="#fcd34d"/>
+    <rect x="1070" y="793" width="56" height="28" rx="14" fill="#fef3c7"/>
+    <text x="1098" y="812" text-anchor="middle" class="tiny" fill="#a16207">IF 1</text>
+    <text x="1144" y="803" class="label">Tunnel 1 ↔ VM 1</text>
+    <text x="1144" y="824" class="tiny">tunnel standby</text>
+
+    <rect x="1052" y="536" width="306" height="84" rx="14" fill="#f8fafc" stroke="#d8dee9"/>
+    <text x="1205" y="566" text-anchor="middle" class="label">Peer route selection</text>
+    <text x="1205" y="590" text-anchor="middle" class="small">follows the authoritative</text>
+    <text x="1205" y="610" text-anchor="middle" class="small">Nebius VM owner</text>
+  </g>
+
+  <line x1="852" y1="359" x2="1052" y2="359" stroke="#2563eb" stroke-width="5" marker-start="url(#arrow-blue)" marker-end="url(#arrow-blue)"/>
+  <line x1="852" y1="449" x2="1052" y2="449" stroke="#0891b2" stroke-width="4" stroke-dasharray="10 8" marker-start="url(#arrow-cyan)" marker-end="url(#arrow-cyan)"/>
+  <line x1="852" y1="717" x2="1052" y2="717" stroke="#7c3aed" stroke-width="5" marker-start="url(#arrow-violet)" marker-end="url(#arrow-violet)"/>
+  <line x1="852" y1="807" x2="1052" y2="807" stroke="#d97706" stroke-width="4" stroke-dasharray="10 8" marker-start="url(#arrow-amber)" marker-end="url(#arrow-amber)"/>
+
+  <g>
+    <rect x="50" y="902" width="1340" height="70" rx="18" fill="#101827"/>
+    <rect x="50" y="902" width="8" height="70" rx="4" fill="#34d399"/>
+    <text x="86" y="930" class="label white">Safe promotion order</text>
+    <text x="86" y="953" class="small on-dark">1 · Former owner Stopped</text>
+    <line x1="260" y1="947" x2="304" y2="947" stroke="#475569" stroke-width="2" marker-end="url(#arrow-slate)"/>
+    <text x="326" y="953" class="small on-dark">2 · Move shared allocation</text>
+    <line x1="530" y1="947" x2="574" y2="947" stroke="#475569" stroke-width="2" marker-end="url(#arrow-slate)"/>
+    <text x="596" y="953" class="small on-dark">3 · Confirm candidate ownership</text>
+    <line x1="840" y1="947" x2="884" y2="947" stroke="#475569" stroke-width="2" marker-end="url(#arrow-slate)"/>
+    <text x="906" y="953" class="small on-dark">4 · Reconcile routes and enable forwarding</text>
+  </g>
+</svg>

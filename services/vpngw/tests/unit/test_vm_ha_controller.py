@@ -17,7 +17,10 @@ from nebius_vpngw.agent.vm_ha_controller import (
     HAState,
     LocalReadiness,
     RecoverableController,
+    RepairAttempt,
     RouteReconciliationContext,
+    TransferContinuity,
+    TransferIntent,
     VMHAController,
 )
 
@@ -41,6 +44,8 @@ def _peer(
         configured_role=configured_role,
         observed_owner_id=node_id,
         generation_id=generation_id,
+        mtls_epoch=1,
+        certificate_fingerprint="d" * 64,
         digests=digests,
         service_healthy=True,
         route_ready=True,
@@ -79,6 +84,7 @@ def _owned_cloud() -> CloudObservation:
         absent=True,
         attached=True,
         confirmed=True,
+        ownership_epoch="42",
     )
 
 
@@ -96,7 +102,6 @@ def _snapshot(**changes: object) -> ControllerSnapshot:
         peer_received_at=99.0,
         apply_locked=False,
         emergency_active_only=False,
-        manual_failback_requested=False,
         readiness=LocalReadiness(True, True, True, True),
         cloud=_cloud(),
         guard_boot_id="local-boot",
@@ -119,6 +124,34 @@ def _reconciled(
     return replace(context, operation_id=operation_id)
 
 
+def _proven_transfer_checkpoint(
+    snapshot: ControllerSnapshot,
+    *,
+    state: HAState = HAState.PROMOTING,
+    ownership_incarnation: int = 0,
+    ownership_confirmed: bool = True,
+) -> ControllerCheckpoint:
+    post_revision = snapshot.cloud.ownership_epoch
+    assert post_revision.isdecimal() and int(post_revision) > 1
+    return ControllerCheckpoint(
+        state=state,
+        suspect_since=90.0,
+        ownership_incarnation=ownership_incarnation,
+        transfer_continuity=TransferContinuity(
+            attach_operation_id="durable-attach-operation",
+            allocation_id=snapshot.cloud.allocation_id,
+            former_owner_node_id=snapshot.peer_node_id,
+            candidate_node_id=snapshot.local_node_id,
+            generation_id=snapshot.local_generation_id,
+            digests=snapshot.local_digests,
+            ownership_incarnation=ownership_incarnation,
+            pre_attach_revision=str(int(post_revision) - 1),
+            post_attach_revision=post_revision,
+            ownership_confirmed=ownership_confirmed,
+        ),
+    )
+
+
 def test_route_target_runtime_change_invalidates_reconciliation(policy: VMHAController) -> None:
     snapshot = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.PASSIVE)
     changed = replace(
@@ -126,7 +159,7 @@ def test_route_target_runtime_change_invalidates_reconciliation(policy: VMHACont
         route_runtime_id="route-runtime-b",
         routes_reconciled_context=_reconciled(snapshot),
     )
-    result = policy.decide(changed, ControllerCheckpoint())
+    result = policy.decide(changed, _proven_transfer_checkpoint(changed))
     assert result.action is not None
     assert result.action.kind is ActionKind.RECONCILE_ROUTES
 
@@ -178,6 +211,67 @@ def test_initial_owner_enters_passive_before_promotion_readiness(
     assert decision.action.kind is ActionKind.ENTER_PASSIVE
     assert decision.reasons == ("owner-must-materialize-passive-dataplane",)
     assert not decision.forwarding_enabled
+
+
+def test_static_cold_standby_can_enter_only_the_fenced_transfer_chain(
+    policy: VMHAController,
+) -> None:
+    cold = LocalReadiness(
+        True,
+        False,
+        True,
+        False,
+        candidate_preparation_required=True,
+        cold_standby_ready=True,
+    )
+    decision = policy.decide(
+        _snapshot(
+            readiness=cold,
+            transfer_intent=TransferIntent.PLANNED_FAILOVER,
+        ),
+        ControllerCheckpoint(),
+    )
+
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.STOP_FORMER_OWNER
+    assert not decision.forwarding_enabled
+
+
+def test_static_candidate_prepares_tunnel_only_after_exact_transfer_confirmation(
+    policy: VMHAController,
+) -> None:
+    cold = LocalReadiness(
+        True,
+        False,
+        True,
+        False,
+        candidate_preparation_required=True,
+        cold_standby_ready=True,
+    )
+    snapshot = _snapshot(
+        cloud=_owned_cloud(),
+        readiness=cold,
+        transfer_intent=TransferIntent.PLANNED_FAILOVER,
+    )
+    checkpoint = _proven_transfer_checkpoint(snapshot)
+
+    prepare = policy.decide(snapshot, checkpoint)
+
+    assert prepare.action is not None
+    assert prepare.action.kind is ActionKind.PREPARE_CANDIDATE_DATAPLANE
+    assert prepare.action.takeover_fence_required
+    assert snapshot.cloud.former_owner_compute_state is ComputeState.STOPPED
+    assert snapshot.cloud.transfer_complete(snapshot.local_node_id)
+
+    warmed = replace(
+        snapshot,
+        readiness=LocalReadiness(True, True, True, True),
+    )
+    routes = policy.decide(warmed, prepare.checkpoint)
+
+    assert routes.action is not None
+    assert routes.action.kind is ActionKind.RECONCILE_ROUTES
+    assert not routes.forwarding_enabled
 
 
 def test_timeout_boundary_begins_bounded_suspicion(policy: VMHAController) -> None:
@@ -245,7 +339,7 @@ def test_fencing_and_transfer_order_is_strict(policy: VMHAController) -> None:
                 absent=True,
                 attached=True,
             ),
-            ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
+            ActionKind.DETACH_CANDIDATE_FOR_REPROOF,
         ),
     )
     for cloud, expected in cases:
@@ -322,7 +416,8 @@ def test_routes_then_forwarding_require_exact_candidate_ownership(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud(), peer_received_at=80.0)
-    routes = policy.decide(owned, ControllerCheckpoint())
+    checkpoint = _proven_transfer_checkpoint(owned)
+    routes = policy.decide(owned, checkpoint)
     assert routes.action is not None
     assert routes.action.kind is ActionKind.RECONCILE_ROUTES
 
@@ -331,7 +426,7 @@ def test_routes_then_forwarding_require_exact_candidate_ownership(
             owned,
             routes_reconciled_context=_reconciled(owned, operation_id=routes.action.operation_id),
         ),
-        ControllerCheckpoint(),
+        checkpoint,
     )
     assert forwarding.action is not None
     assert forwarding.action.kind is ActionKind.ENABLE_ACTIVE
@@ -342,7 +437,7 @@ def test_routes_then_forwarding_require_exact_candidate_ownership(
             routes_reconciled_context=_reconciled(owned),
             data_plane_mode=DataPlaneMode.ACTIVE,
         ),
-        ControllerCheckpoint(),
+        checkpoint,
     )
     assert active.state is HAState.ACTIVE
     assert active.action is None
@@ -352,7 +447,7 @@ def test_routes_then_forwarding_require_exact_candidate_ownership(
 def test_checkpointed_enable_completion_remains_valid(policy: VMHAController) -> None:
     owned = _snapshot(cloud=_owned_cloud())
     routed = replace(owned, routes_reconciled_context=_reconciled(owned))
-    enable = policy.decide(routed, ControllerCheckpoint())
+    enable = policy.decide(routed, _proven_transfer_checkpoint(routed))
     assert enable.action is not None
     assert enable.action.kind is ActionKind.ENABLE_ACTIVE
 
@@ -367,10 +462,173 @@ def test_checkpointed_enable_completion_remains_valid(policy: VMHAController) ->
     assert completed.checkpoint.pending_action is None
 
 
+def test_exact_owner_gets_one_bounded_local_repair_before_fencing(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(
+        now=100.0,
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        readiness=LocalReadiness(True, True, False, True),
+    )
+    checkpoint = _proven_transfer_checkpoint(owned)
+    owned = replace(
+        owned,
+        routes_reconciled_context=_reconciled(
+            owned, ownership_incarnation=checkpoint.ownership_incarnation
+        ),
+    )
+
+    started = policy.decide(owned, checkpoint)
+
+    assert started.state is HAState.REPAIRING
+    assert started.action is not None
+    assert started.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    assert started.action.repair_reasons == ("bgp-not-ready",)
+    assert started.action.repair_deadline_at == 105.0
+    assert started.checkpoint.repair_attempt is not None
+    assert started.checkpoint.repair_attempt.operation_id == started.action.operation_id
+
+    completed = policy.decide(
+        replace(
+            owned,
+            now=101.0,
+            completed_effect_operation_id=started.action.operation_id,
+        ),
+        started.checkpoint,
+    )
+    assert completed.action is None
+    assert completed.state is HAState.REPAIRING
+    assert completed.checkpoint.repair_attempt == started.checkpoint.repair_attempt
+
+    exhausted = policy.decide(replace(owned, now=104.0), completed.checkpoint)
+    assert exhausted.action is not None
+    assert exhausted.action.kind is ActionKind.DISABLE_ACTIVE
+    assert exhausted.checkpoint.repair_attempt is not None
+
+    fenced = policy.decide(
+        replace(owned, now=104.1, data_plane_mode=DataPlaneMode.BLOCKED),
+        exhausted.checkpoint,
+    )
+    assert fenced.action is None
+    assert fenced.state is HAState.REPAIR_EXHAUSTED
+
+
+def test_unhealthy_fresh_owner_heartbeat_starts_suspicion_without_skipping_stop(
+    policy: VMHAController,
+) -> None:
+    unhealthy = replace(
+        _peer(),
+        route_ready=False,
+        promotion_ready=False,
+    )
+    first = policy.decide(
+        _snapshot(peer_heartbeat=unhealthy, peer_received_at=99.0),
+        ControllerCheckpoint(),
+    )
+    assert first.state is HAState.SUSPECT
+    assert first.reasons == ("peer-heartbeat-unhealthy",)
+
+    transfer = policy.decide(
+        _snapshot(now=105.0, peer_heartbeat=unhealthy, peer_received_at=104.0),
+        first.checkpoint,
+    )
+    assert transfer.action is not None
+    assert transfer.action.kind is ActionKind.STOP_FORMER_OWNER
+
+
+def test_repair_success_requires_two_observations_and_keeps_attempt_consumed(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        readiness=LocalReadiness(True, True, False, True),
+    )
+    checkpoint = _proven_transfer_checkpoint(owned)
+    owned = replace(
+        owned,
+        routes_reconciled_context=_reconciled(
+            owned, ownership_incarnation=checkpoint.ownership_incarnation
+        ),
+    )
+    started = policy.decide(owned, checkpoint)
+    assert started.action is not None
+    healthy = replace(
+        owned,
+        now=101.0,
+        readiness=LocalReadiness(True, True, True, True),
+        completed_effect_operation_id=started.action.operation_id,
+    )
+
+    first = policy.decide(healthy, started.checkpoint)
+    assert first.state is HAState.REPAIRING
+    assert first.checkpoint.repair_attempt is not None
+    assert first.checkpoint.repair_attempt.healthy_observations == 1
+
+    second = policy.decide(replace(healthy, now=101.25), first.checkpoint)
+    assert second.state is HAState.ACTIVE
+    assert second.checkpoint.repair_attempt is not None
+    assert second.checkpoint.repair_attempt.healthy_observations == 2
+
+    flapped = policy.decide(
+        replace(
+            owned,
+            now=102.0,
+            readiness=LocalReadiness(False, True, False, True),
+        ),
+        second.checkpoint,
+    )
+    assert flapped.checkpoint.repair_attempt is not None
+    assert flapped.checkpoint.repair_attempt.deadline_at == 105.0
+    assert flapped.checkpoint.repair_attempt.failure_fingerprint == ("bgp-not-ready",)
+    assert flapped.checkpoint.repair_attempt.healthy_observations == 0
+    assert flapped.checkpoint.repair_attempt.healthy_since is None
+
+    reset = policy.decide(replace(healthy, now=161.0), second.checkpoint)
+    assert reset.state is HAState.ACTIVE
+    assert reset.checkpoint.repair_attempt is None
+
+
+def test_redundant_path_degradation_keeps_exact_owner_forwarding_without_repair(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        readiness=LocalReadiness(
+            True,
+            True,
+            True,
+            True,
+            path_degraded=True,
+            degraded_reasons=("redundant-bgp-session-unavailable",),
+        ),
+    )
+    checkpoint = _proven_transfer_checkpoint(owned)
+    owned = replace(
+        owned,
+        routes_reconciled_context=_reconciled(
+            owned, ownership_incarnation=checkpoint.ownership_incarnation
+        ),
+    )
+
+    result = policy.decide(owned, checkpoint)
+
+    assert result.state is HAState.DEGRADED_PATH
+    assert result.action is None
+    assert result.forwarding_enabled
+    assert result.checkpoint.repair_attempt is None
+
+
 def test_allocation_replacement_invalidates_route_reconciliation_before_forwarding(
     policy: VMHAController,
 ) -> None:
-    owned = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.ACTIVE)
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        peer_received_at=80.0,
+    )
     owned = replace(owned, routes_reconciled_context=_reconciled(owned))
     replacement = replace(
         owned,
@@ -381,22 +639,26 @@ def test_allocation_replacement_invalidates_route_reconciliation_before_forwardi
         ),
     )
 
-    disable = policy.decide(replacement, ControllerCheckpoint())
+    disable = policy.decide(replacement, _proven_transfer_checkpoint(owned))
     assert disable.action is not None
     assert disable.action.kind is ActionKind.DISABLE_ACTIVE
     assert not disable.forwarding_enabled
 
     disabled = replace(replacement, data_plane_mode=DataPlaneMode.PASSIVE)
-    reconcile = policy.decide(disabled, disable.checkpoint)
-    assert reconcile.action is not None
-    assert reconcile.action.kind is ActionKind.RECONCILE_ROUTES
-    assert not reconcile.forwarding_enabled
+    reproof = policy.decide(disabled, disable.checkpoint)
+    assert reproof.action is not None
+    assert reproof.action.kind is ActionKind.DETACH_CANDIDATE_FOR_REPROOF
+    assert not reproof.forwarding_enabled
 
 
 def test_ownership_loss_and_reacquisition_requires_fresh_route_reconciliation(
     policy: VMHAController,
 ) -> None:
-    owned = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.ACTIVE)
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        peer_received_at=80.0,
+    )
     owned = replace(owned, routes_reconciled_context=_reconciled(owned))
 
     lost = replace(
@@ -407,7 +669,7 @@ def test_ownership_loss_and_reacquisition_requires_fresh_route_reconciliation(
             absent=True,
         ),
     )
-    disable = policy.decide(lost, ControllerCheckpoint())
+    disable = policy.decide(lost, _proven_transfer_checkpoint(owned))
     assert disable.action is not None
     assert disable.action.kind is ActionKind.DISABLE_ACTIVE
     assert disable.checkpoint.ownership_continuity_invalidated
@@ -417,35 +679,18 @@ def test_ownership_loss_and_reacquisition_requires_fresh_route_reconciliation(
         owned,
         data_plane_mode=DataPlaneMode.PASSIVE,
     )
-    reconcile = policy.decide(reacquired, disable.checkpoint)
-    assert reconcile.action is not None
-    assert reconcile.action.kind is ActionKind.RECONCILE_ROUTES
-    assert reconcile.action.ownership_incarnation == 1
-    assert not reconcile.forwarding_enabled
-
-    stale = policy.decide(reacquired, reconcile.checkpoint)
-    assert stale.action == reconcile.action
-    assert stale.reasons == ("replaying-checkpointed-action",)
-
-    current = replace(
-        reacquired,
-        routes_reconciled_context=_reconciled(
-            reacquired,
-            operation_id=reconcile.action.operation_id,
-            ownership_incarnation=reconcile.action.ownership_incarnation,
-        ),
-    )
-    enable = policy.decide(current, reconcile.checkpoint)
-    assert enable.action is not None
-    assert enable.action.kind is ActionKind.ENABLE_ACTIVE
-    assert not enable.checkpoint.ownership_continuity_invalidated
+    reproof = policy.decide(reacquired, disable.checkpoint)
+    assert reproof.action is not None
+    assert reproof.action.kind is ActionKind.DETACH_CANDIDATE_FOR_REPROOF
+    assert reproof.action.ownership_incarnation == 1
+    assert not reproof.forwarding_enabled
 
 
 def test_route_failure_replays_without_enabling_forwarding(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
-    first = policy.decide(owned, ControllerCheckpoint())
+    first = policy.decide(owned, _proven_transfer_checkpoint(owned))
     assert first.action is not None
     assert first.action.kind is ActionKind.RECONCILE_ROUTES
 
@@ -459,11 +704,15 @@ def test_restart_cannot_clear_loss_invalidation_from_old_route_action(
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
     owned = replace(owned, routes_reconciled_context=_reconciled(owned))
+    checkpoint = _proven_transfer_checkpoint(
+        owned,
+        ownership_incarnation=1,
+    )
     reconcile = policy.decide(
         owned,
-        ControllerCheckpoint(
+        replace(
+            checkpoint,
             ownership_continuity_invalidated=True,
-            ownership_incarnation=1,
         ),
     )
     assert reconcile.action is not None
@@ -491,16 +740,45 @@ def test_invalidated_route_evidence_requires_fresh_reconciliation(
 
     decision = policy.decide(
         replace(owned, routes_reconciled_context=stale_context),
-        ControllerCheckpoint(
+        replace(
+            _proven_transfer_checkpoint(owned, ownership_incarnation=1),
             ownership_continuity_invalidated=True,
-            ownership_incarnation=1,
         ),
     )
 
     assert decision.action is not None
     assert decision.action.kind is ActionKind.RECONCILE_ROUTES
     assert decision.action.ownership_incarnation == 1
+    assert decision.action.takeover_fence_required is True
     assert decision.checkpoint.ownership_continuity_invalidated
+
+
+def test_historical_incarnation_does_not_turn_same_owner_reapply_into_takeover(
+    policy: VMHAController,
+) -> None:
+    snapshot = _snapshot(
+        configured_role=ConfiguredRole.ACTIVE,
+        peer_heartbeat=replace(
+            _peer(configured_role="passive"),
+            observed_owner_id="node-b",
+            promotion_ready=False,
+        ),
+        cloud=replace(
+            _owned_cloud(),
+            former_owner_compute_state=ComputeState.RUNNING,
+        ),
+    )
+    checkpoint = ControllerCheckpoint(
+        ownership_incarnation=3,
+        established_ownership_context=snapshot.ownership_context,
+    )
+
+    decision = policy.decide(snapshot, checkpoint)
+
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.RECONCILE_ROUTES
+    assert decision.action.ownership_incarnation == 3
+    assert decision.action.takeover_fence_required is False
 
 
 def test_checkpoint_before_route_effect_cannot_accept_stale_matching_context(
@@ -513,9 +791,9 @@ def test_checkpoint_before_route_effect_cannot_accept_stale_matching_context(
         ownership_incarnation=1,
     )
     snapshot = replace(owned, routes_reconciled_context=stale_context)
-    checkpoint = ControllerCheckpoint(
+    checkpoint = replace(
+        _proven_transfer_checkpoint(snapshot, ownership_incarnation=1),
         ownership_continuity_invalidated=True,
-        ownership_incarnation=1,
     )
 
     scheduled = policy.decide(snapshot, checkpoint)
@@ -573,7 +851,7 @@ def test_checkpointed_route_effect_is_cancelled_when_ownership_epoch_changes(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
-    first = policy.decide(owned, ControllerCheckpoint())
+    first = policy.decide(owned, _proven_transfer_checkpoint(owned))
     assert first.action is not None
     assert first.action.kind is ActionKind.RECONCILE_ROUTES
 
@@ -591,7 +869,7 @@ def test_checkpointed_promotion_effect_revalidates_failover_gates(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
-    first = policy.decide(owned, ControllerCheckpoint())
+    first = policy.decide(owned, _proven_transfer_checkpoint(owned))
     assert first.action is not None
     assert first.action.kind is ActionKind.RECONCILE_ROUTES
 
@@ -611,7 +889,7 @@ def test_owner_generation_drift_is_degraded_but_does_not_disable_serving(
     )
     decision = policy.decide(
         replace(snapshot, routes_reconciled_context=_reconciled(snapshot)),
-        ControllerCheckpoint(),
+        _proven_transfer_checkpoint(snapshot),
     )
     assert decision.state is HAState.DEGRADED
     assert decision.action is None
@@ -633,12 +911,13 @@ def test_owner_generation_drift_is_degraded_but_does_not_disable_serving(
 def test_new_owner_cannot_finish_promotion_while_failover_is_disabled(
     policy: VMHAController, changes: dict[str, object], reason: str
 ) -> None:
+    snapshot = _snapshot(
+        cloud=_owned_cloud(),
+        **changes,
+    )
     decision = policy.decide(
-        _snapshot(
-            cloud=_owned_cloud(),
-            **changes,
-        ),
-        ControllerCheckpoint(state=HAState.PROMOTING),
+        snapshot,
+        _proven_transfer_checkpoint(snapshot),
     )
     assert decision.state is HAState.BLOCKED
     assert decision.action is None
@@ -780,7 +1059,8 @@ def test_failback_to_configured_active_requires_manual_intent(
     assert automatic.reasons == ("manual-failback-required",)
 
     manual = policy.decide(
-        replace(snapshot, manual_failback_requested=True), ControllerCheckpoint()
+        replace(snapshot, transfer_intent=TransferIntent.PLANNED_FAILBACK),
+        ControllerCheckpoint(),
     )
     assert manual.action is not None
     assert manual.action.kind is ActionKind.STOP_FORMER_OWNER
@@ -790,13 +1070,60 @@ def test_manual_failback_intent_is_rejected_on_configured_passive(
     policy: VMHAController,
 ) -> None:
     decision = policy.decide(
-        _snapshot(manual_failback_requested=True),
+        _snapshot(transfer_intent=TransferIntent.PLANNED_FAILBACK),
         ControllerCheckpoint(),
     )
 
     assert decision.state is HAState.BLOCKED
     assert decision.action is None
     assert decision.reasons == ("manual-failback-invalid-for-passive-role",)
+
+
+def test_manual_failover_intent_bypasses_only_healthy_peer_suppression(
+    policy: VMHAController,
+) -> None:
+    decision = policy.decide(
+        _snapshot(transfer_intent=TransferIntent.PLANNED_FAILOVER),
+        ControllerCheckpoint(),
+    )
+
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.STOP_FORMER_OWNER
+    assert decision.reasons == ("former-owner-must-be-stopped",)
+
+
+def test_manual_failover_intent_is_rejected_on_configured_active(
+    policy: VMHAController,
+) -> None:
+    decision = policy.decide(
+        _snapshot(
+            configured_role=ConfiguredRole.ACTIVE,
+            peer_heartbeat=_peer(configured_role="passive"),
+            transfer_intent=TransferIntent.PLANNED_FAILOVER,
+        ),
+        ControllerCheckpoint(),
+    )
+
+    assert decision.state is HAState.BLOCKED
+    assert decision.action is None
+    assert decision.reasons == ("manual-failover-invalid-for-active-role",)
+
+
+def test_automatic_failover_intent_is_rejected_on_configured_active(
+    policy: VMHAController,
+) -> None:
+    decision = policy.decide(
+        _snapshot(
+            configured_role=ConfiguredRole.ACTIVE,
+            peer_heartbeat=_peer(configured_role="passive"),
+            transfer_intent=TransferIntent.AUTOMATIC_FAILOVER,
+        ),
+        ControllerCheckpoint(),
+    )
+
+    assert decision.state is HAState.BLOCKED
+    assert decision.action is None
+    assert decision.reasons == ("manual-failover-invalid-for-active-role",)
 
 
 def test_crash_replay_reuses_operation_id_until_postcondition(
@@ -820,6 +1147,58 @@ def test_crash_replay_reuses_operation_id_until_postcondition(
     assert completed.action.operation_id != first.action.operation_id
 
 
+def test_automatic_suspicion_cancels_before_effect_but_is_sticky_after_effect(
+    policy: VMHAController,
+) -> None:
+    first = policy.decide(
+        _snapshot(now=110.0, peer_received_at=80.0),
+        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+    )
+    assert first.action is not None
+    assert first.action.kind is ActionKind.STOP_FORMER_OWNER
+    recovered_peer = _snapshot(now=110.0, peer_received_at=109.0)
+
+    cancelled = policy.decide(recovered_peer, first.checkpoint)
+    assert cancelled.action is None
+    assert cancelled.state is HAState.BLOCKED
+
+    sticky = policy.decide(
+        replace(
+            recovered_peer,
+            transfer_intent=TransferIntent.AUTOMATIC_FAILOVER,
+            transfer_effect_started=True,
+        ),
+        first.checkpoint,
+    )
+    assert sticky.action == first.action
+    assert sticky.reasons == ("replaying-checkpointed-action",)
+
+
+def test_planned_request_disappearance_cannot_cancel_started_lineage(
+    policy: VMHAController,
+) -> None:
+    first = policy.decide(
+        _snapshot(transfer_intent=TransferIntent.PLANNED_FAILOVER),
+        ControllerCheckpoint(),
+    )
+    assert first.action is not None
+
+    sticky = policy.decide(
+        _snapshot(
+            transfer_intent=TransferIntent.PLANNED_FAILOVER,
+            transfer_effect_started=True,
+        ),
+        first.checkpoint,
+    )
+
+    assert sticky.action == first.action
+
+
+def test_started_transfer_requires_exact_typed_lineage() -> None:
+    with pytest.raises(ValueError, match="typed intent"):
+        _snapshot(transfer_effect_started=True)
+
+
 @pytest.mark.parametrize("kind", list(ActionKind))
 def test_forged_pending_operation_is_rejected_before_postcondition(
     policy: VMHAController,
@@ -834,6 +1213,11 @@ def test_forged_pending_operation_is_rejected_before_postcondition(
         if kind in {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
         else snapshot.local_node_id
     )
+    repair_kwargs = (
+        {"repair_deadline_at": snapshot.now + 5.0, "repair_reasons": ("bgp-not-ready",)}
+        if kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+        else {}
+    )
     forged = ControllerAction(
         kind=kind,
         operation_id="forged-operation",
@@ -843,6 +1227,7 @@ def test_forged_pending_operation_is_rejected_before_postcondition(
         ownership_epoch=snapshot.cloud.ownership_epoch,
         generation_id=snapshot.local_generation_id,
         digests=snapshot.local_digests,
+        **repair_kwargs,
     )
     if kind is ActionKind.RECONCILE_ROUTES:
         snapshot = replace(
@@ -853,9 +1238,65 @@ def test_forged_pending_operation_is_rejected_before_postcondition(
             ),
         )
 
-    checkpoint = ControllerCheckpoint(sequence=7, pending_action=forged)
+    repair_attempt = (
+        RepairAttempt(
+            operation_id=forged.operation_id,
+            owner_node_id=snapshot.local_node_id,
+            allocation_id=snapshot.cloud.allocation_id,
+            ownership_epoch=snapshot.cloud.ownership_epoch,
+            ownership_incarnation=0,
+            generation_id=snapshot.local_generation_id,
+            boot_id=snapshot.boot_id,
+            failure_fingerprint=("bgp-not-ready",),
+            started_at=snapshot.now,
+            deadline_at=snapshot.now + 5.0,
+        )
+        if kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+        else None
+    )
+    checkpoint = ControllerCheckpoint(
+        sequence=7,
+        pending_action=forged,
+        repair_attempt=repair_attempt,
+    )
     with pytest.raises(ValueError, match="pending action does not match"):
         policy.decide(snapshot, checkpoint)
+
+
+def test_pending_repair_action_must_match_its_persisted_attempt() -> None:
+    snapshot = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.ACTIVE)
+    operation_id = "local-boot:7:repair-local-dataplane:node-b"
+    attempt = RepairAttempt(
+        operation_id=operation_id,
+        owner_node_id=snapshot.local_node_id,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        ownership_incarnation=0,
+        generation_id=snapshot.local_generation_id,
+        boot_id=snapshot.boot_id,
+        failure_fingerprint=("bgp-not-ready",),
+        started_at=snapshot.now,
+        deadline_at=snapshot.now + 5.0,
+    )
+    action = ControllerAction(
+        kind=ActionKind.REPAIR_LOCAL_DATAPLANE,
+        operation_id=operation_id,
+        boot_id=snapshot.boot_id,
+        target_node_id=snapshot.local_node_id,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+        repair_deadline_at=snapshot.now + 6.0,
+        repair_reasons=attempt.failure_fingerprint,
+    )
+
+    with pytest.raises(ValueError, match="does not match its durable attempt"):
+        ControllerCheckpoint(
+            sequence=7,
+            pending_action=action,
+            repair_attempt=attempt,
+        )
 
 
 def test_forged_pending_route_context_cannot_complete_from_matching_marker(
@@ -1391,6 +1832,7 @@ def test_attach_completion_advances_to_authoritative_candidate_revision(
     assert routes.action is not None
     assert routes.action.kind is ActionKind.RECONCILE_ROUTES
     assert routes.action.ownership_epoch == "42"
+    assert routes.action.takeover_fence_required is True
 
     routed = replace(
         confirmed,
@@ -1404,6 +1846,43 @@ def test_attach_completion_advances_to_authoritative_candidate_revision(
     assert enable.action is not None
     assert enable.action.kind is ActionKind.ENABLE_ACTIVE
     assert enable.action.ownership_epoch == "42"
+
+
+def test_attach_completion_still_checkpoints_confirmation_after_exact_reread(
+    policy: VMHAController,
+) -> None:
+    detached = _snapshot(
+        now=110.0,
+        peer_received_at=80.0,
+        cloud=_cloud(
+            owner=None,
+            state=ComputeState.STOPPED,
+            absent=True,
+            ownership_epoch="41",
+        ),
+    )
+    attach = policy.decide(
+        detached,
+        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+    )
+    observed = replace(
+        detached,
+        cloud=_cloud(
+            owner="node-b",
+            state=ComputeState.STOPPED,
+            absent=True,
+            attached=True,
+            confirmed=True,
+            ownership_epoch="42",
+        ),
+    )
+
+    confirmation = policy.decide(observed, attach.checkpoint)
+
+    assert confirmation.action is not None
+    assert confirmation.action.kind is ActionKind.CONFIRM_CANDIDATE_OWNERSHIP
+    assert confirmation.checkpoint.transfer_continuity is not None
+    assert not confirmation.checkpoint.transfer_continuity.ownership_confirmed
 
 
 @pytest.mark.parametrize(
@@ -1423,7 +1902,6 @@ def test_attach_completion_advances_to_authoritative_candidate_revision(
         {"former_owner_compute_state": ComputeState.RUNNING},
         {"former_attachment_absent": False},
         {"candidate_attachment_exact": False},
-        {"ownership_re_read_exact": True},
     ],
 )
 def test_attach_completion_rejects_incomplete_or_stale_observation(
@@ -1518,7 +1996,7 @@ def test_restart_cancels_old_boot_effect_and_reinstalls_guard(
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
     owned = replace(owned, routes_reconciled_context=_reconciled(owned))
-    enable = policy.decide(owned, ControllerCheckpoint())
+    enable = policy.decide(owned, _proven_transfer_checkpoint(owned))
     assert enable.action is not None
     assert enable.action.kind is ActionKind.ENABLE_ACTIVE
 
@@ -1559,6 +2037,65 @@ def test_dual_suspicion_never_authorizes_two_active_nodes(policy: VMHAController
     assert candidate_decision.state is HAState.SUSPECT
 
 
+def test_promoted_passive_retains_active_authority_from_exact_establishment_proof(
+    policy: VMHAController,
+) -> None:
+    promoted = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+    )
+    promoted = replace(promoted, routes_reconciled_context=_reconciled(promoted))
+
+    decision = policy.decide(
+        promoted,
+        ControllerCheckpoint(
+            state=HAState.ACTIVE,
+            established_ownership_context=promoted.ownership_context,
+        ),
+    )
+
+    assert decision.state is HAState.ACTIVE
+    assert decision.action is None
+    assert decision.forwarding_enabled
+    assert decision.checkpoint.established_ownership_context == promoted.ownership_context
+
+
+def test_apply_owner_adoption_establishes_promoted_owner_before_unlock(
+    policy: VMHAController,
+) -> None:
+    cloud = replace(
+        _owned_cloud(),
+        former_owner_compute_state=ComputeState.RUNNING,
+    )
+    locked = _snapshot(
+        cloud=cloud,
+        apply_locked=True,
+        apply_owner_adoption=True,
+        data_plane_mode=DataPlaneMode.PASSIVE,
+    )
+
+    fenced = policy.decide(
+        locked,
+        ControllerCheckpoint(
+            state=HAState.BLOCKED,
+            ownership_continuity_invalidated=True,
+            ownership_incarnation=1,
+        ),
+    )
+
+    assert fenced.state is HAState.BLOCKED
+    assert fenced.action is None
+    assert fenced.reasons == ("apply-lock-held",)
+    assert fenced.checkpoint.established_ownership_context == locked.ownership_context
+    assert fenced.checkpoint.ownership_continuity_invalidated is False
+
+    unlocked = policy.decide(replace(locked, apply_locked=False), fenced.checkpoint)
+
+    assert unlocked.state is HAState.PROMOTING
+    assert unlocked.action is not None
+    assert unlocked.action.kind is ActionKind.RECONCILE_ROUTES
+
+
 @pytest.mark.parametrize(
     "pending_kind",
     [
@@ -1574,6 +2111,18 @@ def test_runtime_disables_active_dataplane_before_pending_mutation_replay(
     pending_kind: ActionKind,
 ) -> None:
     transfer_checkpoint = ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0)
+    confirm_snapshot = _snapshot(
+        now=110.0,
+        peer_received_at=80.0,
+        cloud=_cloud(
+            owner="node-b",
+            state=ComputeState.STOPPED,
+            absent=True,
+            attached=True,
+            ownership_epoch="42",
+        ),
+    )
+    reconcile_snapshot = _snapshot(cloud=_owned_cloud())
     cases = {
         ActionKind.STOP_FORMER_OWNER: (
             _snapshot(now=110.0, peer_received_at=80.0),
@@ -1600,21 +2149,15 @@ def test_runtime_disables_active_dataplane_before_pending_mutation_replay(
             transfer_checkpoint,
         ),
         ActionKind.CONFIRM_CANDIDATE_OWNERSHIP: (
-            _snapshot(
-                now=110.0,
-                peer_received_at=80.0,
-                cloud=_cloud(
-                    owner="node-b",
-                    state=ComputeState.STOPPED,
-                    absent=True,
-                    attached=True,
-                ),
+            confirm_snapshot,
+            _proven_transfer_checkpoint(
+                confirm_snapshot,
+                ownership_confirmed=False,
             ),
-            transfer_checkpoint,
         ),
         ActionKind.RECONCILE_ROUTES: (
-            _snapshot(cloud=_owned_cloud()),
-            ControllerCheckpoint(),
+            reconcile_snapshot,
+            _proven_transfer_checkpoint(reconcile_snapshot),
         ),
     }
     passive_snapshot, initial_checkpoint = cases[pending_kind]
@@ -1705,7 +2248,7 @@ def test_runtime_disables_active_dataplane_when_pending_enable_loses_authority()
             return self.value
 
     class Checkpoints:
-        value = ControllerCheckpoint()
+        value = _proven_transfer_checkpoint(owned)
 
         def load(self) -> ControllerCheckpoint:
             return self.value

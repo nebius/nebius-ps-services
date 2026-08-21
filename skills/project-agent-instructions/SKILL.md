@@ -1,6 +1,6 @@
 ---
 name: project-agent-instructions
-description: "Use only when explicitly routed by maintain-project-specs with its current canonical requirements/design receipt; conditionally render, create, refresh, adopt, or retire a concise selected-project AGENTS.md with deterministic rules, explicit ownership, deferred terminal sealing, and fail-closed recovery."
+description: "Use only when maintain-project-specs routes a current spec receipt to render, create, refresh, adopt, or retire selected-project AGENTS.md rules with deterministic ownership, sealing, and recovery."
 ---
 
 # Project Agent Instructions
@@ -126,7 +126,16 @@ state must never be committed.
    `retire` approval before removing an intact managed region that is no longer
    needed. Never migrate v1 or v2 markers automatically.
 6. Before implementation, run `render` and pass its exact private rules file
-   to `maintain-project-specs plan`. Do not mutate the repository yet.
+   to `maintain-project-specs plan`. Do not mutate the repository yet. Render
+   rejects a disposition that conflicts with the inspected target before it
+   publishes evidence. If the current-session decision is revised, changed
+   rules replace the prior private rules only under the private-bundle render
+   lock and after the final compare-and-swap revalidates the exact predecessor
+   state and rules bytes. Rerun the exact same render only when it returns
+   `RENDER_STATE_PUBLICATION_INCOMPLETE`; that result means rules are current
+   but their matching state I/O publication did not complete. The equal-bytes
+   retry re-syncs the private parent directory if replacement completed before
+   its directory sync failed. Never delete or overwrite that evidence directly.
 7. After final requirements/design reconciliation, run `apply`, then `verify`
    as the terminal seal mutation. Never write or delete `AGENTS.md` directly.
 8. If state reports `reload_required: true`, stop the current execution
@@ -220,6 +229,9 @@ state must never be committed.
 - `LEGACY_GENERATED_FILE`: v1 state needs manual resolution.
 - `EXISTING_INSTRUCTIONS_GAP` or `INSTRUCTION_CONFLICT`: human-owned active
   instructions require a proposed human resolution.
+- `RENDER_STATE_PUBLICATION_INCOMPLETE`: rerun the exact same render once to
+  finish matching state publication and durability; do not alter its private
+  evidence.
 - `UNSAFE_TARGET`, `CONCURRENT_MODIFICATION`, or `STALE_GENERATED_FILE`: stop
   without bypassing the helper.
 

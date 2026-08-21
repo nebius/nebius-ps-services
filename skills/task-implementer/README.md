@@ -175,16 +175,22 @@ current directory, VS Code window, or checked-out worktree.
    Keep the lane for more managed work, or remove an idle fully integrated lane
    with `$task-implementer workspace remove [project-folder]` from outside it.
 
-The generated editor task `Task Implementer: Show Pending Lane Changes` is a
-manual inspection-only view. It shows the source branch, a redacted managed-lane
-branch label, both commits, active
-and pending-generation state, aggregate project-relative file changes, ordered
-sealed summaries for pending generations, and the exact next public action.
-It never adds the primary checkout to the workspace or creates a dirty overlay.
-Older pending generations without a sealed report display
-`summary unavailable for legacy generation`; the current aggregate comparison
-remains available. `lane-report` is an internal helper command, not a sixth
-public Task Implementer action.
+The generated editor task `Task Implementer: Show Lane Status` is a manual,
+inspection-only view. It prints a short human report with persistent-lane and
+generation state, current or latest task/worker/wave progress, the current and
+remaining steps, and the exact next public action. Explicit `--json` returns
+the same concise `lane-report-v2` projection for machine callers. It never
+lists changed files or statistics, branches, commits, prompt content, private
+identities, state paths, or embedded summaries.
+
+Lane status takes two matching bounded observations and retries one complete
+pair if state moves. Continued movement returns `WORKSPACE_BUSY`. It does not
+take the workspace lock, inspect the mutating lease-resource path, compute a
+Git diff, add the primary checkout, or create an overlay. Current-run totals
+come from coordinator, wave, and task-plane state; a task is promoted only
+after its wave records a valid promotion head. Legacy-only pending history is
+reported as unavailable rather than reconstructed. `lane-report` remains an
+internal helper command, not a sixth public Task Implementer action.
 
 ### What "Clean" Means
 
@@ -804,6 +810,8 @@ secrets, or internal IDs.
 
 - `SKILL.md`: explicit five-action coordinator contract.
 - `agents/openai.yaml`: UI metadata and explicit-only policy.
+- `evals/trigger-prompts.csv`: canonical explicit-invocation routing cases.
+- `evals/workflow-cases.md`: supplemental workflow and boundary expectations.
 - `references/prompt-workspace.md`: private storage, routing, current state, errors,
   and sandbox behavior.
 - `references/implementation-loop.md`: task analysis, wave lifecycle, worker,

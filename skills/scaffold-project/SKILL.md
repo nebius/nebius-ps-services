@@ -1,6 +1,6 @@
 ---
 name: scaffold-project
-description: "Use only when the user explicitly asks to plan, create, merge, or standardize a complete greenfield or brownfield repository scaffold after its architecture and technology stack are approved. Normalize logical capabilities into materialization and runtime units, assign one content owner per path, collect exact candidates from specialist skills, finalize a digest-bound private plan, and apply it through the guarded executor only after explicit digest approval. Do not use for stack selection, feature implementation, isolated component work, Agentic SDLC, or destructive repository rewrites."
+description: "Use only when the user explicitly asks to plan, create, merge, or standardize a complete repo scaffold after architecture/stack approval using path ownership and an approved plan. Not for stack selection, feature work, SDLC, or destructive rewrites."
 ---
 
 # Scaffold Project

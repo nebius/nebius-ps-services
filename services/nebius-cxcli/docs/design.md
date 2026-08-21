@@ -4,7 +4,7 @@
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
 ## Project Design Contract
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=10 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=11 -->
 ### FEAT-001: Exact manager-pause recovery and succession
 
 #### Requirements Covered
@@ -225,9 +225,82 @@ and unrelated Soperator phases remain unchanged.
 - TDD-009: Post-switch resume accepts the retained same-generation active-slot pause only after replaying the exact completed target-handoff adoption and reuse lineage. It checkpoints one post-switch continuous-reuse receipt and is write-free on replay; missing handoff receipts, incomplete passive, active, or target-handoff lifecycles, chronology drift, target drift, receipt drift, or any campaign, manager, generation, spec, render, prerequisite, or owner mismatch performs no checkpoint write.
 - TDD-010: Accounting command-fence accepts that retained pause either directly after reconstructing the completed target-handoff authority and replaying the sealed handoff adoption and handoff reuse lineage with the exact verified target Helm intent/proof, compatible semantic drift, source/target bindings, and chronology, or after reconstructing an exact completed `post-switch-resume` authority whose sealed reuse receipt chronologically precedes the resumed accounting apply and prerequisite-ready markers. It checkpoints one accounting reuse receipt and is write-free on replay; missing handoff evidence, incomplete or drifted Helm proof, pre-completion intent or apply, binding drift, incomplete or unsealed post-switch state, reuse-order drift, or any upstream authority drift performs no checkpoint write.
 - TDD-011: The post-switch started-gate continuation, both post-Jail in-place completion branches, and later active-bridge service replay route a retained verified bootstrap pause or checkpointed rearm through one authority-aware fence. The retained pause is replaced only when it is the exact predecessor of the immutable-child and post-retirement target-compatibility restored-manager rearm contract and the complete bridge journal has the same campaign, exact stage owner and epoch, and permanent source-restart fence. Rearm reconstruction recognizes the producer's two exact crash-safe receipt stages: an interrupted `target-compatibility-intent` that still passes the child-handoff-gap proof, or a completed `target-compatibility-active` receipt that passes the terminal stable, writer-zero, jail-boundary, post-retirement binding, accounting-retirement, manager identity, spec, and generation validators. An exact historical direct bridge owner is removed only in the same checkpoint that seals its predecessor/adoption hashes and `rearm-authorized`; replay validates that receipt against the same epoch or exact immediate source-to-target successor and rejects a reappearing or drifted owner. Initial conversion and crash replay from `rearm-authorized`, `accepted`, `terminating`, or `verified` all reject journal, campaign, owner, epoch, restart-fence, target, UID, replica, spec, terminal generation, reserialization chain, chronology, receipt, or competing-authority drift without mutation. A producer-to-consumer regression uses the completed active receipt without mocking rearm reconstruction and proves the service replay checkpoints rearm authority before manager or controller-gate mutation; terminal receipt, live authority, and predecessor drift remain write-free failures.
-- TDD-012: Legacy-rootfs health after an exact target command gate recognizes that the selected target login still has a target-only config whose intentionally inert controller must report DOWN. At the exact source-HA/verified-gate boundary it bypasses that unusable client path and invokes the existing strict bridge proof: validate the complete campaign-bound journal, authority owner and epoch, two-replica workload, exact Pod/image/shared-state identities, cluster-wide slurmctld exclusivity, source takeover roles and unique active runtime marker, standby process, and live `squeue` RPC from the active bridge. Ordinary pre-gate health retains the exact login path. Missing or drifted campaign, journal, role, Pod, image, target gate, gate Pod lineage, primary marker, exclusivity, or queue evidence remains pending and never falls back to the target-only login.
+- TDD-012: Legacy-rootfs health after an exact target command gate recognizes that the selected target login still has a target-only config whose intentionally inert controller must report DOWN. At the exact source-HA/verified-gate boundary it bypasses that unusable client path and invokes the existing strict bridge proof: validate the complete campaign-bound journal, authority owner and epoch, two-replica workload, exact Pod/image/shared-state identities, cluster-wide slurmctld exclusivity, source takeover roles and unique active runtime marker, standby process, and live `squeue` RPC from the active bridge. When the journal advances to `target-ha-active`, that stage remains a hard direct-bridge boundary: validate the campaign, target owner, epoch, permanent source-restart fence, accepted two-replica StatefulSet UID and exact image, both exact live Pod identities admitted by the journal or its sealed authentication-restart successor, exclusivity, and the active/standby mapping from a direct bridge `scontrol ping`, then run `squeue --noheader` directly in the active Pod. A second exact Pod snapshot after the queue probe must resolve to the same canonical runtime bindings, preventing a StatefulSet name reuse or restart from crossing the proof. Ordinary pre-gate health retains the exact login path. Missing or drifted campaign, journal, owner, epoch, workload, role, Pod, image, target gate, gate Pod lineage, primary marker, exclusivity, or queue evidence remains pending and never falls back to a retained login route.
 - TDD-013: The direct active-slot Jail rebind first runs the existing strict accounting-writer successor validator when its prepared fence predates a verified target-writer restore. A fixture with an empty Jail intent/rebind collection, the same target UID, a one-generation successor, exact enabled/restored writer receipts sharing one resource version, unchanged zero-writer and login-submount contracts, exact source retirement, and only the canonical SlurmDBD command/args restoration checkpoints `post_accounting_writer_restore_rebind` before recovering the boundary intent or rebind. Replay is write-free. Any unrelated spec change, skipped generation, target or deployment UID drift, non-Ready writer, resource-version mismatch, source-retirement drift, or altered writer command remains pending with the prior fence and boundary collections unchanged.
-- TDD-014: Direct Jail-boundary compatibility revalidation and its SConfig writer pulse select the latest exact manager authority instead of unconditionally consuming the immutable-child restore count. The borrowed-rearm route requires the phase's selected `in-place-service-manager-pause-rearm/v1` journal to equal a freshly reconstructed terminal target-compatibility rearm contract, remain sealed and verified for the immutable manager and target bindings, prove the live manager at its exact zero-replica generation and non-replica spec, and retain the exact verified target-controller command gate, workload and Pod lineage under the checkpointed source-HA bridge. When the checkpoint still says compatible but the live ConfigMap is full-target, recovery accepts only the same ConfigMap UID and exact full-target content/data fingerprints produced by the compatibility stage, verifies that stage's completed manager pause/restore cycle at the rearm contract's immediately prior restore generation, and durably records that classification before the boundary trial or pulse. Before any ConfigMap or SConfig mutation, cxcli seals the manager, target, bridge, and gate identities and authority fingerprints in the boundary refresh's `manager_transition`. An exact receipt skips both the boundary-local manager pause and restore, transforms only the checkpointed full-target/compatible ConfigMap boundary, permits only the SConfig `0 -> 1 -> 0` pulse, returns the active variant to compatible, and revalidates the unchanged rearm at completion. If a rearm journal is present but any contract, target, manager, generation, resource version, spec, bridge, gate, workload, Pod, ConfigMap, or live-zero proof differs, recovery remains pending before the pulse rather than falling back to the historical immutable-child replica count. The original local pause/restore cycle remains the single path when no later rearm exists.
+- TDD-014: Direct Jail-boundary compatibility revalidation and its SConfig writer pulse select the latest exact manager authority instead of unconditionally consuming the immutable-child restore count. The borrowed-rearm route requires the phase's selected `in-place-service-manager-pause-rearm/v1` journal to equal a freshly reconstructed terminal target-compatibility rearm contract, remain sealed and verified for the immutable manager and target bindings, prove the live manager at its exact zero-replica generation and non-replica spec, and retain the exact verified target-controller command gate, workload and Pod lineage under the checkpointed source-HA bridge. A later target-HA replay keeps that original source epoch only through the already verified boundary-local `manager_transition`: its material fingerprint must equal an exact-key full-target borrowed-rearm recovery, its pause generation and predecessor must match, and the bridge's final two unique history records must be the canonical source and target writer-scale acceptances ordered after recovery and transition verification. Before selecting that successor as authority, cxcli durably writes `borrowed_rearm_target_bridge_successor`; its exact semantic hash covers the complete recovery and transition fingerprints, both selected history-entry fingerprints, source and target epochs, and pause generations. Existing receipts must reproduce the same material exactly and replay write-free; an absent receipt requires a checkpoint writer, while any extra field, changed timestamp, reordered history, or semantic-hash drift fails before protected mutation. The later bridge-client ConfigMap is a second canonical source only through `bridge_client_config_source`: its material derives from the current target-HA owner and epoch, the controller version transition's target config digest, the exact verified active-slot writer predecessor at zero, the selected manager pause, immutable target and manager identities, the exact login SConfig writer refresh, and an exact-key verified per-Pod login rollout. Receipt creation additionally requires the live ConfigMap UID and full-data fingerprint to match that material. Its semantic hash binds the complete transition, boundary refresh, writer refresh, rollout, identities, and digests before compatibility revalidation or writer release; missing writers, target/version drift, generation gaps, chronology changes, extra rollout fields, data drift, or receipt drift remain pending. When the checkpoint still says compatible but the live ConfigMap is full-target, recovery accepts only the same ConfigMap UID and exact full-target content/data fingerprints produced by the compatibility stage, verifies that stage's completed manager pause/restore cycle at the rearm contract's immediately prior restore generation, and durably records that classification before the boundary trial or pulse. Before any ConfigMap or SConfig mutation, cxcli seals the manager, target, bridge, and gate identities and authority fingerprints in the boundary refresh's `manager_transition`. An exact receipt skips both the boundary-local manager pause and restore, transforms only the checkpointed full-target/compatible ConfigMap boundary, permits only the SConfig `0 -> 1 -> 0` pulse, returns the active variant to compatible, and revalidates the unchanged rearm at completion. If a rearm journal is present but any contract, target, manager, generation, resource version, spec, bridge, history, chronology, receipt, gate, workload, Pod, ConfigMap, or live-zero proof differs, recovery remains pending before the pulse rather than falling back to the historical immutable-child replica count. The original local pause/restore cycle remains the single path when no later rearm exists.
+
+- TDD-015: `bridge_client_config_source` validates both canonical terminal shapes emitted by `login_config_rollout`: a direct record has only current UID, status, config digest, and verification time; a replacement record additionally has exact source and replacement UIDs with current UID equal to replacement UID. Its only optional top-level field is the exact producer session-selection record naming a checkpointed Pod. The source material fingerprints the full selected manager pause, its positive generation, the selected target-history record, a handoff predecessor containing its acceptance time and config identity, the version transition, boundary refresh, writer refresh, and complete rollout. Tests seal a receipt and independently drift its semantic hash, fields, authority epoch, history time, handoff time, pause generation, and rollout; each must fail write-free. Released-stage replay requires that existing exact receipt, while first adoption remains restricted to `target-compatibility-active` and a matching live ConfigMap.
+
+- TDD-016: The bridge-client propagation producer canonicalizes both `recreating` and `ready-awaiting-config` recovery records when the live replacement already exposes the expected config, retaining only source UID, replacement/current UID, digest, status, and verification time. A producer-to-consumer test starts from both crash shapes, completes through the real propagation function, and feeds the terminal rollout to the source validator. Empty and non-mapping `session_selection` values are explicit negative controls and remain write-free.
+
+- TDD-017: The bridge-client receipt material validates the exact terminal `login_config_writer_refresh` shape before fingerprinting it and admits only the producer's optional distinct predecessor digest. Timestamp validation covers the complete writer lifecycle and crosses into the rollout: writer intent, scale-up intent, writer-ready and file proof, scale-down intent, zero, writer verification, each Pod verification, then aggregate rollout verification. Negative controls add a foreign refresh field, reorder scale-down before scale-up, and place a Pod verification before writer verification; none may produce material or checkpoint writes.
+
+- TDD-018: `_legacy_rootfs_bridge_client_boundary_deployment_successor` derives a narrow rebind successor only from an exact `bridge_client_config_source` material/receipt pair. It requires the original boundary refresh to end at rebind generation plus two, the login writer refresh to start there and advance exactly two generations, and unchanged Deployment UID/spec. Every protected accounting-restore, login-restore, or writer-release consumer first validates the live ConfigMap against the checkpointed UID and exact target SlurmCluster controller owner, then seals or replays that source receipt before deriving the Deployment successor. The ordinary existing-rebind branch applies the same producer-before-consumer ordering only when `active-slot-switch` has an exact verified boundary zero at rebind generation plus two, the exact verified login writer refresh advances that same Deployment to generation plus four at zero, and the live UID/spec/generation/replicas reproduce that later state. It then reads the bound ConfigMap, verifies its checkpointed UID and exact target owner, seals or replays the source, derives the successor, and invokes the unchanged crash-state gate; the original boundary-zero state and non-active boundaries do not read or checkpoint that source. `_require_legacy_rootfs_boundary_pulse_deployment_state` accepts that successor only for an already verified boundary refresh at the later zero generation. Positive coverage drives both the protected accounting path and ordinary existing-rebind path through the real source-receipt producer and Deployment-successor consumer; negative controls reject missing ConfigMaps, live ConfigMap UID or owner drift, Slurm content or unrelated-data drift without a receipt write, preserve source-free non-candidate replay, and independently drift every successor field, generation, Deployment UID, spec, receipt hash, writer fingerprint, and shape.
+
+- TDD-019: `_legacy_rootfs_compatibility_login_digest_candidates` centralizes the exact allowed digest set. It always requires the compatible digest, requires both active variant fields to be explicitly present and canonical, adds full-target only for the existing transition/classification proof, and adds the sealed bridge-client digest only while both variants equal `compatible` and the transition key is truly absent. A present transition must be a non-empty mapping before it can participate in the existing full-target route. Unit controls cover exact admission, later full-target exclusion, missing or empty variants, empty and non-mapping transitions, extra source keys, wrong schema, and malformed config/data hashes; existing full-target tests preserve their prior candidate set with explicit variants.
+
+- TDD-020: `_reconcile_in_place_bridge_client_config_observation` treats an exact canonical-adoption successor as a typed successor only inside its existing exact successor validator. The before-first-propagation replay still requires `accepted`, absent propagation, matching recorded and observed digest, bound target and ConfigMap, the producer's exact `0/0` same-digest shape, and a present verified same-digest rollout with a non-empty timestamp. A second positive crash-window test supplies the exact verified propagation producer record while the handoff remains `accepted`; that route continues only because the pre-existing complete predecessor validator succeeds. Dedicated negative controls reject absent, empty, pending, and partial-propagation rollout state, while existing drift controls retain rejection for rollout/config identity drift, transformed or mixed canonical shapes, and untyped observations.
+
+- TDD-021: `_legacy_rootfs_bridge_client_config_source_successor_material` is the only path that can retain a sealed `bridge_client_config_source` after a canonical-adoption handoff advances. It first validates the original receipt as a strict self-sealed record, then requires the freshly reconstructed source material to equal every original field except the handoff and rollout fingerprints. The current phase must contain the exact same-target, same-ConfigMap, same-digest `0/0` canonical successor. The normal chronology requires canonical adoption after the original source receipt and writer proof, followed by the current handoff and terminal rollout. A second exact chronology covers the ordinary later-generation rebind that seals its source after canonical adoption and the accepted handoff already exist: the receipt's handoff fingerprint must reconstruct that same handoff with only `status=accepted`; handoff acceptance, writer verification, rollout verification, source acceptance, and the later handoff verification must be causally ordered; and the writer and rollout fingerprints must remain unchanged. Only this late-source chronology may use an unchanged rollout fingerprint to prove a handoff-only successor. `_checkpoint_legacy_rootfs_bridge_client_config_source` writes `bridge_client_config_source_successor` only while target compatibility remains active; its strict semantic hash binds the original receipt hash and both old and current handoff/rollout fingerprints, and later calls reproduce that material without rewriting either receipt. To keep the successor reproducible, `_ensure_in_place_bridge_client_configuration` records a new handoff acceptance only when the live ConfigMap patch changes data, and `_repair_in_place_login_bridge_config_propagation` preserves an already exact terminal Pod/aggregate rollout instead of refreshing verification timestamps. Focused tests drive the late-source transition through the ordinary existing-rebind path, prove write-free successor replay, and reject original/successor receipt drift, malformed canonical shape, target or ConfigMap drift, accepted-handoff fingerprint drift, writer/rollout drift, invalid Pod UID lineage, and reordered chronology without a checkpoint or protected mutation.
+
+- TDD-022: `_target_helm_admission_rearmed_manager_pause_reuse_material` is the canonical third continuous-pause predecessor path after bootstrap-pause reuse and before superseded-standard-pause reuse. It accepts only a rolling-phase `in-place-service-manager-pause-rearm/v1` journal that equals the freshly reconstructed immutable-child plus terminal target-compatibility producer contract, is terminal and exact-key, has the expected single repause generation or the producer's exact verified Helm resume/repause successor, and matches the live bootstrap authority's manager UID, replicas, spec, generation, campaign, target, chart, values, prerequisites, prerequisite UIDs, manager render, restore values, and chronology. The ordered boundary chain begins with `post-switch-resume`, followed by login surge restore, login Slurm-config projection, and OpenMetrics restore, so a product-owned rearm written after accounting can authenticate post-switch and remain the predecessor for later released-writer recovery. Reconciliation repeats the target SlurmCluster binding proof before sealing or replaying the semantic-hash receipt, leaves the rearm journal owned by rolling, and never falls through to the post-switch-only manager successor path. A live-shaped fail-first test covers direct post-switch receipt creation, write-free replay, and successor recovery after exact writer release; an exact Helm-repause test covers the only later generation variant; unknown journal fields, generation/spec drift, producer drift, target drift, chronology drift, and a self-consistent but semantically changed receipt all fail before a checkpoint or target-binding acceptance.
+
+- TDD-023: `_checkpoint_legacy_rootfs_bridge_client_config_source` treats a product-owned session-free login replacement or exact protected login-surge removal after the sealed canonical-adoption source successor as a distinct append-only producer transition, not as mutable reinterpretation of either sealed receipt. It first self-validates the immutable source and canonical-successor receipts and reproduces their stable target, ConfigMap, manager, pause, target-HA, boundary-refresh, writer-refresh, and canonical no-op adoption bindings. It then accepts only the strict replacement and surge-removal producer schemas. Starting from the exact current consumer identities sorted by role and name, it reverse-replays every record: each replacement must match the recorded replacement Pod/node/container before restoring its predecessor UID/container, while a removal must follow a successor prefix already covered by the latest validated durable receipt and reconstruct the exact historical rollout UID, node, container, target, workload, configured/surge count, and config identity. An unsealed replacement and removal cannot self-authenticate in one new receipt. Each reconstructed predecessor must equal the preceding record's replacement projection, and the terminal consumers must equal the historical rollout minus exactly the proven removals. Removal chronology orders restore start, owner and workload verification, restored observation, terminal rollout, producer acceptance, propagation revalidation, and terminal handoff. `_repair_in_place_login_bridge_config_propagation` treats that exact mixed lineage as a terminal replay and preserves the sealed rollout timestamp instead of refreshing it because the historical removed Pod remains in the rollout journal. When its serial observer has just normalized a later exact login replacement, it first reloads the bound live ConfigMap and invokes the canonical source producer so the new producer prefix is durably sealed before the same function consumes the historical removal proof. The lineage parser accepts the worker producer's final `checkpointed-mixed-target-client-replacements` event only when every entry is `target-worker` and `_in_place_worker_bridge_config_pod_successors` reproduces its prior/current UID, node, boundary, and predecessor/current container identity from the verified bridge-config or typed-GRES rebind. Reverse replay restores those worker identities before validating the earlier login edges. `live_rpc_verified=true` is admitted only for that exact terminal mixed event with the sealed controller-gap binding and non-empty ping/config hashes for every consumer. `bridge_client_config_source_rollout_successors` is an ordered semantic-hash chain: every entry binds both immutable predecessor receipts, its predecessor chain hash and rollout fingerprint, an exact producer-record prefix, and the resulting canonical handoff and rollout fingerprints. Exact replay is write-free; a later producer advance appends one receipt while target compatibility remains active. Because v1 receipts do not retain a predecessor rollout identity projection, bounded pre-fix observation recovery never infers an aggregate-only change from unequal hashes. It instead writes one separate `legacy-rootfs-bridge-client-rollout-observation-recovery/v1` receipt after independently reading the exact login OpenKruise workload and every retained live login Pod, proving target/workload ownership, workload generation, Pod UID/node/container identity, Running/Ready state, zero restarts, and the exact jailed Slurm config digest. Removed Pods remain authorized only by the already sealed removal edge; the recovery rollout must use direct canonical Pod records without session selection or rewritten replacement history. The companion binds the full rollout, its identity projection, the predecessor receipt and producer prefix, and live observations; the sealed rollout, existing propagation, and existing handoff instants must strictly precede recovery start, observation, and receipt acceptance, and recovery does not modify those aggregate timestamps. A same-count v2 rollout successor is valid only when it references that exact companion; the companion is checkpointed first so the crash window is replayable, the v2 receipt is checkpointed second, exact replay writes nothing, and any second same-count recovery is rejected. A later post-v2 suffix is admitted without weakening the chain only when its final event fingerprints the current canonical consumers, each RPC-inclusive intermediate replacement hash equals the next event's recorded predecessor hash, reverse replay validates every strict login and worker transition, no removal is introduced after the sealed v2 prefix, the reconstruction rejoins the exact sealed prefix, and the predecessor rollout's timestamp-free identity projection equals the companion receipt. This preserves the earlier receipt and converts the already-exposed pre-fix checkpoint through a read-only live attestation rather than reinterpreting mutable journal data. In the protected login-restore branch, the canonical source producer runs before the boundary-deployment successor consumer, which additionally binds the latest rollout-successor hash. Focused live-shaped tests prove append, companion/v2 crash-safe replay, producer-before-consumer ordering at both the protected rebind and serial observer boundaries, strict mixed-worker admission, RPC-inclusive post-v2 suffix recovery, durable removal anchoring, terminal timestamp preservation, same-count observation recovery, and downstream binding, then independently drift receipt shape/hash, producer identity, suffix links/projection, removal anchor, mixed role/boundary/UID, live-RPC authority, workload owner, Pod readiness/container/config, per-Pod history/timestamps, equal-instant chronology, current consumer identity, and rollout UID to prove rejection before protected mutation.
+
+- TDD-024: `_legacy_rootfs_login_restore_pre_owner_jail_boundary_successor_is_exact` closes the protected-dispatch crash window in which Helm has deployed the configured-count restore head but `_reconcile_in_place_login_restore_slurmcluster_owner` has not yet sealed its owner. The helper is read-only and is used only by the active-slot direct rebind. It requires an absent owner, an exact verified post-switch role repair, a `restoring` reconciliation, prepared restore intent, complete protected bootstrap, exact deployed head and stored values, current Helm-to-live proof, canonical protected root/head history and revision manifests, the defaulted login-size-only transition, target UID, configured login replicas, zero SConfig writer, unchanged Jail/maintenance/submount controls, and live generation exactly two beyond the boundary rebind: one role-repair generation followed by one restore generation. It returns false on any incomplete or drifted producer and never checkpoints; ordinary restore processing remains responsible for sealing the owner. `_legacy_rootfs_login_restore_jail_boundary_successor_is_exact` handles the durable path and derives its expected generation delta from exact role-repair authority: two generations for the composed role-repair-to-restore chain and one for a direct restore. `_revalidate_legacy_rootfs_target_cr_fence` continues to require the sealed owner path, while `_rebind_legacy_rootfs_target_compatibility_after_jail_helm` admits the transient proof only before historical role-repair drift classification and then runs the unchanged ConfigMap source, Deployment successor, and source-fence consumers. The normal Jail PVC, volume-source, maintenance, and login-submount checks still run after successor classification. The original rebind, accounting-restore successor, role-repair successor, pre-owner restore successor, and sealed-owner restore successor remain distinct canonical branches; no receipt is rewritten. Fail-first coverage reproduces the exact protected pre-owner crash window and direct rebind routing, retains the direct one-generation owner path, proves the composed two-generation owner path, and independently drifts owner presence, reconciliation, values, generation, replicas, role-repair authority, and protected material before any checkpoint or worker mutation.
+
+- TDD-025: Observation recovery separates immutable historical proof from current-state admission. `_legacy_rootfs_bridge_client_rollout_observation_recovery_receipt_is_self_exact` validates the companion schema, semantic hash, predecessor/source/producer bindings, sealed rollout and canonical-handoff fingerprints, timestamp-free identity projection, live observation fingerprint, explicitly superseded aggregate/per-Pod timestamp fields, and strict chronology without consulting mutable phase state. `_legacy_rootfs_bridge_client_rollout_observation_recovery_receipt_is_current` additionally requires the current rollout, propagation, handoff, and canonical handoff projection only while the companion is the latest recovery candidate. The live observer preserves all-client propagation and handoff timestamps, orders them before recovery start and Pod observation, and never converts login-only checks into global revalidation. Historical v2 chain validation matches the v2 rollout/handoff fingerprints to its self-validating companion; later exact producer records therefore append a normal count-advancing v1 receipt. Focused tests change per-Pod timestamp metadata before recovery, reject it after sealing, prove propagation/handoff immutability, extend a historical v2 with a later replacement, and reject same-instant alternate-offset chronology.
+
+- TDD-026: `_restore_in_place_jail_login_surge` reloads `in_place_login_surge_reconciliation` from the rolling phase immediately before terminalization, preserving the `restore_started_at` checkpoint written by a same-invocation Helm dispatch. If the entry is already `restored` and fresh live observation is configured/configured, the reconciler requires its canonical schema, locked counts and target, restore-values fingerprint, exact three-field configured/configured observation, and ordered start/observation/completion timestamps, then returns the existing mapping without a checkpoint write; drift raises pending instead of rewriting observation time. `_legacy_rootfs_bridge_client_login_consumer_successors` contains the sole recovery edge for a pre-fix replay that already advanced that terminal observation after sealing the rollout producer. It requires the current latest receipt to equal the exact anchored chain head, finds exactly one v2 companion successor in that chain, validates the companion against the v2's preceding receipt and producer-count prefix, and keeps that prefix authoritative even when later exact producer events have appended normal receipts. The current restore observation must retain the configured counts strictly after v2 acceptance and `restored_at` must follow it. The v2, companion, and every later receipt remain immutable; missing/duplicate/tampered authority, prefix drift, count drift, pre-v2 observation, or reversed completion time rejects without a write. Focused tests cover same-invocation start preservation, byte-stable terminal replay, the live-shaped later-observation checkpoint, a later count-advancing producer and replay, and each fail-closed authority and chronology drift.
+
+- TDD-027: After selecting an active or released bridge and requiring its durable checkpoint writer, `_release_legacy_rootfs_sconfig_writer_after_slot_verification` invokes `_reconcile_in_place_login_helm_webhook_bridge_cleanup` before handoff or current release-state validation, so a process crash after a successful patch but before protected cleanup cannot leave an untracked endpoint when replay observes the already-restored positive size. `_patch_legacy_rootfs_sconfig_writer_with_webhook_bridge` is the only dispatch path for the zero-to-original target SConfig writer release. It requires a writable campaign checkpoint and durable checkpoint writer and reproduces the exact immutable target binding and release intent. It then uses `_run_in_place_login_helm_with_webhook_bridge` with boundary `legacy-rootfs-sconfig-writer-release`; the existing bridge lifecycle derives one temporary Deployment from the exact paused manager, proves the webhook Service endpoint and server-side SlurmCluster/NodeSet admission while failure policy remains `Fail`, repeats manager-pause and isolation gates, and retires the exact Deployment lineage in `finally`. The operation's live-boundary callback re-reads the bound target and compares name, UID, resourceVersion, generation, zero SConfig size, and the stable non-size spec fingerprint before the existing resourceVersion-guarded merge patch restores the positive writer size. Unit coverage requires crash-left cleanup before handoff/release-state validation and bridge readiness before patch, asserts the exact patch payload, and independently drifts UID, resourceVersion, generation, size, and stable spec to prove mutation-free rejection.
+
+- TDD-028: `_release_legacy_rootfs_sconfig_deployment_after_target_admission` owns the workload half of final writer release. It runs only after the release loop has revalidated the admitted target generation and stable spec, then reuses `_ensure_in_place_target_manager_paused` and `_legacy_rootfs_target_sconfig_binding` to prove that the paused manager cannot perform the transition and that the existing zero-replica Deployment and ServiceAccount remain the exact target-owned objects. Before scaling, it writes `target_writer_release.deployment_scale` with an exact schema/key set and semantic hash over the target UID/generation/resourceVersion, Deployment UID/resourceVersion/from-and-expected generations/non-replica spec, ServiceAccount name/UID, replica transition, and intent time. It invokes `_kubectl_scale_namespace_resource` with both `current_replicas=0` and the checkpointed Deployment resourceVersion, then accepts only the same UID/spec at the exact next generation and original positive replica count before sealing the successor. Intent replay may recover the exact post-dispatch successor; terminal replay validates the sealed historical material while allowing later status resourceVersions and separately fenced post-release target advances, with the caller retaining the live target/config/readiness checks. Unit coverage proves dispatch ordering and payload, crash recovery, write-free terminal replay, later fenced target/Deployment observation, absent-intent rejection, and independent extra-field, target-resourceVersion, Deployment-UID, generation, and spec drift before mutation.
+
+- TDD-029: `_legacy_rootfs_target_writer_release_successor_is_exact` is the sole positive-size successor admitted while target compatibility is active or its exact writer release has terminalized. It exact-key validates `target_writer_release` by status, binds every target, Deployment, ServiceAccount, ConfigMap, rootfs, and config-digest field back to the compatibility stage, requires the intent resource version to equal the sealed login-restore owner successor, and accepts a refreshed patch resource version only with its ordered refresh timestamp. The `intent` path preserves the crash window around the target-size patch and admits only exact optional child receipts. The `verified` path requires the bridge itself to be `released`, requires complete exact verified Deployment-scale and runtime receipts, binds the release target resourceVersion to the scale's target observation, requires non-empty ready-Pod and release identities, and orders both child completions before release verification and bridge release. It reconstructs the zero-size predecessor from the current live target, requires the current generation to be exactly one beyond that predecessor with an unchanged fence fingerprint, and routes the reconstructed resource through `_legacy_rootfs_login_restore_jail_boundary_successor_is_exact`; no mutable live observation alone can create the lineage. `_revalidate_legacy_rootfs_target_cr_fence` and `_rebind_legacy_rootfs_target_compatibility_after_jail_helm` use the same helper before their historical accounting/manager recovery branches. The direct rebind then proves the exact target-owned Deployment, ServiceAccount, Jail mount, prior pulse and bridge-client Deployment successor. `_legacy_rootfs_sconfig_writer_release_deployment_scale_is_exact` validates each present scale's exact schema, semantic hash, identities, generations, replica transition, and chronology before any bridge-client source checkpoint; live state must be either its exact zero predecessor or exact next-generation positive successor. Focused coverage replays both the intent crash window and terminal live generation-8/size-1 state, proves no recovery branch or write is used, rejects malformed child receipts before source-lineage production, and independently drifts every release status, identity, digest, generation, size, resource version, chronology, and key-set boundary.
+- TDD-030: `_target_helm_live_sconfig_writer_release_successor` is the sole Helm-proof adapter for the positive-size target recognized by TDD-029. It reads the existing bridge state without creating checkpoint data, proves the live target identity and canonical writer-release successor through `_legacy_rootfs_target_writer_release_successor_is_exact`, rewrites only `sConfigController.node.size` to zero in an in-memory predecessor copy, and requires that predecessor fingerprint to equal the installed Helm spec after OpenAPI defaulting and any independently verified SlurmDBD command-fence override. `_prove_target_soperator_helm_apply` retains its strict default behavior and invokes the adapter only when both the current checkpoint and an explicit caller-local opt-in are supplied; the protected login-surge restore revalidation is the only opted-in caller. A successful proof adds one typed successor projection containing the zero-to-original size transition, exact generations, release-intent fingerprint, active rebind fingerprint, and predecessor-spec fingerprint, which is thereby covered by the existing immutable Helm-proof fingerprint. Focused coverage proves the default path still rejects the delta, the exact producer accepts it without mutating checkpoint or phase state, and producer failure or any additional live-spec drift remains pending.
+
+- TDD-031: `_checkpoint_legacy_rootfs_sconfig_writer_release_runtime_config` owns the only release-runtime receipt admitted while the target manager remains paused and the target-HA bridge is authoritative. It first exact-validates the previously sealed bridge-client source and requires the live ConfigMap name, UID, Slurm digest, and complete data fingerprint to equal that source. The exact-key semantic-hash receipt binds target and ConfigMap identities, the bridge-client source fingerprint, the shared immutable writer-release intent fingerprint, the deferred full-target digest/data fingerprint, reason `manager-paused-bridge-client-runtime`, and acceptance after intent. `_legacy_rootfs_target_writer_release_successor_is_exact` validates any present child receipt before admitting the positive-size successor, while `_release_legacy_rootfs_sconfig_writer_after_slot_verification` uses the receipt's digest as the achievable runtime boundary before waiting for Ready/Jail delivery. A separately sealed later OpenMetrics/full-target transition keeps its existing digest path. The release-runtime receipt never advances or claims full-target, REST, or controller recovery. Creation occurs only when the key is absent and a durable writer exists; malformed present state or any identity, data, lineage, deferred digest, intent, chronology, extra-field, or semantic drift fails before a checkpoint or infrastructure mutation. Focused tests prove single-write creation, exact write-free replay, bridge-runtime versus deferred-full separation, and each drift boundary.
+- TDD-032: `_legacy_rootfs_bridge_client_post_release_rollout_append_is_exact` is the only adapter that lets `_checkpoint_legacy_rootfs_bridge_client_config_source` append a count-advancing rollout receipt after `legacy_rootfs_slurm_config_bridge.status` becomes `released`. It requires an already anchored non-empty rollout chain and a non-empty suffix, matches both immutable source semantic hashes, requires the release proof to follow the chain head, and requires every suffix event to follow both release verification and `released_at` strictly. The release is exact-key and binds the source target/ConfigMap plus stage Deployment, ServiceAccount, rootfs, all compatible/pre-metrics/full digests, single generation advance, resource versions, non-empty Ready Pod, and intent chronology. Existing strict child validators reproduce the semantic-hash Deployment-scale and bridge-client runtime receipts before admission. The original source, canonical successor, observation recovery, first rollout receipt, same-count successor, and every pre-release or drifted suffix remain prohibited after release. Focused tests vary release shape, identities, scale/runtime hashes, chronology, and prefix count; the current real checkpoint is read-only evaluated before replay, and exact append writes only the new receipt.
+
+- TDD-033: `_in_place_login_restore_writer_release_successor_proof_is_exact` is the only adapter by which `_in_place_login_surge_terminal_open_metrics_successor_is_exact` accepts the restore workflow's strengthened `intent-bound+verified-sconfig-writer-release-successor` Helm proof. It validates the embedded exact-key successor against the released bridge and terminal writer-release journals, reproduces target sizes/generations plus release-intent and active-rebind fingerprints, revalidates both semantic-hash child receipts, retrieves the exact historical Helm revision, applies CRD defaults, and requires the reconstructed predecessor spec fingerprint to match. `_legacy_rootfs_target_writer_release_chronology_is_exact` anchors both `released_at` and `verified_at` after immutable intent, Deployment-scale, and runtime acceptance instead of treating a later no-op observation as a new release transition. `_release_legacy_rootfs_sconfig_writer_after_slot_verification` therefore preserves an existing terminal `verified_at` on replay. The original plain `intent-bound` proof remains its single canonical pre-release path; all partial, extended, foreign, reordered, identity, generation, semantic-hash, historical-spec, or prerequisite-chronology drift fails before protected mutation. Focused tests cover exact strengthened replay, a later already-recorded verification observation, timestamp preservation, and each receipt, semantic, lineage, history, and chronology boundary.
+
+- TDD-034: `_legacy_rootfs_slurm_config_bridge_text` recognizes exactly `_LEGACY_SLURM_PLUGIN_DIR` and `_TARGET_SLURM_PLUGIN_DIR` as admissible PluginDir inputs, counts either as the single required directive, and always renders `_TARGET_SLURM_PLUGIN_DIR`. This preserves the original legacy-to-target transform while admitting the product's own already-canonical PluginDir when the post-OpenMetrics producer adds the one exact `MetricsType=metrics/openmetrics` line. Removing that line makes the compatibility payload distinct; the downstream post-OpenMetrics receipt keeps its existing `metrics_type=1, plugin_dir=1` lineage. `_legacy_rootfs_slurm_config_bridge_payload` still treats a fully canonical no-MetricsType input as no-op adoption. `_release_legacy_rootfs_sconfig_writer_after_slot_verification` now validates the immutable bridge-client source before post-OpenMetrics binding and uses `_legacy_rootfs_post_open_metrics_release_runtime_is_current` to classify only the exact semantic-hash writer-release runtime as a deferred full-config state. That state remains write-free and does not mint a post-OpenMetrics receipt; once distinct full data appears, the existing strict binder owns it. Every foreign, missing, duplicate, ambiguous, runtime-drifted, or source-drifted state remains fail-closed. Focused tests cover both exact source paths, the live-shaped canonical-plus-MetricsType projection, sealed-runtime reuse and drift, and the existing negative table.
+- TDD-035: `_gpu_typed_gres_generic_handoff_worker_successor_is_exact` owns the worker-identity half of typed-GRES target-HA predecessor admission. It preserves the original direct comparison for an untouched generic rollout successor. If the current worker has advanced, it requires the rebind's immutable predecessor to equal the base rollover old Pod by UID, node, NodeSet, and StatefulSet UID, requires the current successor to equal the base replacement on the same fields, and delegates the complete receipt, fingerprint, Ready process, checkpoint-gap, and all-worker proof to `_gpu_typed_gres_checkpointed_base_rebind`. `_ensure_gpu_typed_gres_target_ha_config_recovery` applies that exact selector to every requested worker before invoking the existing propagation producer. Focused coverage reproduces the live-shaped rebound predecessor, proves it reaches the producer without a checkpoint or Pod mutation, and rejects a foreign predecessor or absent exact rebind.
+- TDD-036: `_cleanup_target_bridge_cluster_id_marker_stager` treats the stored stager resourceVersion as historical intent evidence, not a terminal delete precondition. It derives the only admissible cleanup image from the exact immutable source binding for an adopted preexisting stager or from the one immutable current bridge-role image for a repair-created stager. Before each delete attempt it re-reads the named Pod and calls `_target_bridge_cluster_id_marker_stager_binding` to reproduce the Ready inert command, image, non-escalating root security context, controller-state PVC, name, and checkpointed UID. It uses the fresh resourceVersion for four bounded UID/resourceVersion attempts; after repeated HTTP 409 status churn, one UID-only delete remains safe because the immediately preceding full revalidation proves the same object and the UID precondition rejects replacement. Missing expected UID is idempotent success, while a replacement UID, foreign material, ambiguous image provenance, or non-409 failure prevents `stager_deleted_at` and any completion checkpoint. Focused coverage reproduces the live container-restart resourceVersion advance, persistent churn fallback, resumable replay, and identity/image drift before mutation.
+- TDD-037: `_legacy_rootfs_post_open_metrics_typed_gres_runtime` is the sole adapter for the canonical no-MetricsType ConfigMap that typed-GRES target-HA recovery has already accepted after the immutable bridge-client release runtime was sealed. It first delegates predecessor/successor lifecycle validation to `_gpu_typed_gres_accepted_compatibility_successor_sha256`, then exact-key validates the accepted worker-init source, binds its target/config key/name/UID/accepted resourceVersion and owner to the live target-owned ConfigMap, requires the Slurm digest to equal that source's target digest, and reproduces the verified client-handoff preservation fingerprints against the bridge successor and worker-init projection. The accepted Kubernetes resourceVersion fences the complete target ConfigMap state without incorrectly equating its non-Slurm data to the temporary bridge ConfigMap's separately sealed material. Only a canonical target PluginDir with required controller headers and no MetricsType is admitted. `_release_legacy_rootfs_sconfig_writer_after_slot_verification` uses the returned digest/data pair instead of calling the strict post-OpenMetrics binder, mutable bridge-client source producer, or compatibility transform; it threads that pair through release-intent, allowed-variant, expected-runtime, Jail, and readiness checks without writing a new receipt. The strict binder remains the only owner for a distinct full payload containing MetricsType. Focused fail-first coverage reproduces the accepted live successor and proves the binder and source producer are skipped, exact replay is write-free at classification, and independent receipt, target, owner, UID, resourceVersion, data-plus-resourceVersion, digest, lifecycle, preservation, and MetricsType drift remains mutation-free and fail-closed.
+- TDD-038: `_legacy_rootfs_typed_gres_historical_bridge_client_source` is the sole historical-source adapter for post-OpenMetrics typed-GRES replay. It self-validates the immutable original source receipt, binds its target and ConfigMap UIDs to the released stage, reproduces the exact semantic-hash `runtime_config` against that source and the immutable writer-release intent, and requires source acceptance before release intent. `_release_legacy_rootfs_sconfig_writer_after_slot_verification` evaluates this historical authority separately from the current bridge-client lineage: only a successful current typed-GRES runtime proof may consume it, while generic release-runtime and strict full-config paths continue to require the current lineage. This prevents the product-owned `typed_gres_recovery_preservation` addition from invalidating its own historical predecessor without admitting an unsealed or stale source. Focused tests make the current lineage resolver return empty after the preservation transition, prove the exact historical runtime still reaches the typed deferral without binder/source/transform calls or writes, and reject source schema, semantic hash, target/ConfigMap identity, release runtime, intent, and chronology drift.
+- TDD-039: `_in_place_accounting_munge_marker_bridge_successor_is_exact` is the only adapter between the immutable verified accounting Munge runtime and the dual-controller generation produced by `_repair_target_bridge_cluster_id_marker`. It first requires `bridge_pods` to be the sole changed runtime-contract field and exact-key validates the original verified runtime and accounting writer. It then binds the old Pod set to `target_cluster_id_marker_repair.predecessor_pods`, the current live contract to the journal's two active/standby role records, and both generations to the same accepted two-replica StatefulSet. The adapter self-validates the sealed pre-Slurm queue and accounting authority hashes and semantics, requires the accounting authority to fingerprint the unchanged runtime and writer, reproduces target/database/registered-ID bindings and the exact authenticated successor probe, and orders the complete marker-repair lifecycle around the recorded role observations. `_repair_in_place_accounting_munge_runtime_after_cas` never rewrites the historical runtime; after exact admission its existing verified branch re-reads the same writer and performs a fresh cross-Munge probe using the new bridge Pod set. Any other stable-field or receipt drift follows the existing recovery-required path before checkpoint or infrastructure mutation. Focused tests reproduce the live two-Pod successor and reject non-bridge, authority, repair status, predecessor, StatefulSet, role fingerprint, accounting proof/runtime, probe, target, and chronology drift without writes.
+- TDD-040: `_gpu_typed_gres_preserved_predecessor_client_handoff_sha256` is the read-only ownership adapter between the immutable generic worker-config rollout and the staged typed-GRES successor. It first reuses the accepted typed-GRES compatibility validator, then exact-key validates the accepted or verified bridge successor and preservation receipt, self-validates the bridge predecessor and immutable successor fingerprints, and reproduces the worker-init projection. An optional preservation rebind is admitted only with its reconstructed prior receipt plus exact-key worker-lineage and bridge-authority rebinds, self-consistent predecessor/current successor and authority fingerprints, and strictly ordered lineage, authority, and preservation verification instants; a recomputed outer hash cannot authenticate semantically forged rebind material. `_ensure_gpu_typed_gres_target_ha_config_recovery` skips `_repair_in_place_worker_bridge_config_propagation` only when this adapter returns the exact recovery target digest; otherwise the original predecessor producer remains mandatory. After admission the recovery path still independently re-reads worker/controller identities, ConfigMaps and Jail digests, regenerates effective worker probes, validates the paused zero-allocation queue and controller lineage, and owns reconfigure, one checkpointed signal, and registration verification. Focused fail-first coverage reproduces the accepted-successor replay that previously compared live worker state to the predecessor digest, proves write-free advancement to successor-specific validation, and rejects preservation, bridge-successor, recovery, worker-init, compatibility-shape, extra-key, fingerprint, rebind-shape, authority, worker-lineage, and chronology drift without mutation.
+- TDD-041: `_rebind_gpu_typed_gres_target_ha_controller_projection` is the only composite adapter for an accepted typed-GRES successor that simultaneously observes the exact marker-repair Pod transition and a later exact generic client-handoff projection. It first gives `_rebind_gpu_typed_gres_target_ha_controller_lineage` a candidate in which every non-Pod successor field remains at its immutable intent value, so the existing marker, role, process, queue, ConfigMap, Jail, and chronology validator still owns the two-Pod transition. `_checkpoint_gpu_typed_gres_target_ha_predecessor_observation` then exact-key and semantic-hash seals the unchanged successor fingerprint, full stored and current predecessor projections and their hashes, exact controller-lineage and preservation fingerprints, target config/material, live jailed digest set, and acceptance after both child proofs. Only after both durable children validate does the adapter restore the local comparison candidate's Pod and predecessor fields to the immutable accepted successor; it never changes that successor, recovery successor hash, generic handoff, or preservation. Existing worker-lineage, raw-projection, authority, and stable-authority adapters retain their isolated changed-field ownership. The fail-first orchestration test reproduces the live three-field combination and proves controller then observation checkpoint ordering; focused receipt tests cover exact creation, crash-safe replay, semantic self-validation, and controller, preservation, projection, config/material/Jail, extra-field, unrelated-successor-field, and chronology drift before Slurm or worker mutation.
+- TDD-042: `_ensure_target_sconfig_jwt_consumer_fresh` runs inside validation hold before aggregate GPU, Soperator, and safety reporting. It derives an immutable JWT binding from the exact target-singleton authority, target SlurmCluster handoff, target Secret handoff, and controller token-smoke proof; independently reads and fingerprints the one-replica SConfig Deployment and its ServiceAccount-bound Ready zero-restart Pod; and binds the target-owned main and ownerless topology JailedConfig identities. A pre-handoff Pod produces an exact-key semantic-hash restart intent before `_command_runner_uid_preconditioned_delete` applies UID and resourceVersion preconditions. Crash replay accepts only the same source or one distinct Ready same-Deployment successor. Completion requires both JailedConfigs to report `UpdateActionsCompleted=True` no earlier than the successor start, then seals the successor runtime and condition observations; exact terminal replay is write-free. A post-handoff Pod is adopted only with the same authoritative success conditions. `_VALIDATION_HOLD_REVISION` advances so an older passed phase re-enters this proof. `_ROLLING_COMPUTE_VALUES_REVISION` advances independently: `_patch_target_slurm_runtime` removes every prior `PluginDir` spelling and appends exactly one canonical `/usr/lib/x86_64-linux-gnu/slurm` directive, while removing the exact invalid literal dynamic-node template and rejecting unknown template syntax. Managed CPU/GPU component profiles emit the same canonical directive because their supported Nebius Slurm 25 client images place `chroot.so` in that multiarch directory. Existing completed-cutover reconciliation owns the guarded Helm reapply, Slurm quiet window, and post-cleanup partition restore; no direct live ConfigMap or SlurmCluster patch is introduced. Completed Jail verification then independently requires login-side `scontrol ping` and `sbatch --test-only`, so the values replay cannot hide a missing SPANK runtime. Focused tests cover stale restart, exact adoption, write-free replay, successor drift, canonical runtime/catalog rendering, submission proof, and unknown-template rejection.
+- TDD-043: `_restore_in_place_target_manager_after_singleton_handoff` continues to validate the immutable post-singleton apply intent, target binding, final-values proof/provenance, exact release revision, manager UID/spec, and paused-to-restored generation. When its current requested values fingerprint differs from that historical intent because `_ROLLING_COMPUTE_VALUES_REVISION` advanced, it reads the deployed release's stored values and accepts them only when their effective fingerprint exactly reproduces the intent. Those installed predecessor values are passed to `_final_values_manager_restore_intent_material`; the newer desired payload is not reclassified as part of the completed restore and remains owned by the existing revisioned values-reapply state machine. A stored-values mismatch fails before any Helm, manager, Pod, or worker mutation. Regression coverage replays a terminal restore with a later desired payload, proves the installed predecessor is selected, and rejects implicit restore replay.
+- TDD-044: `_checkpoint_completed_partition_restore_plan` is the completed-restore adapter used before any restore or bridge-cleanup replay. It parses and self-validates the immutable restored target records, reconstructs their hash only with the exact remaining retired-source journal, and requires exact counts, sorted retired names, intent/completion timestamps, `UP -> DOWN` ownership records, and full fingerprint validity. A current target observation may differ only in Slurm fields excluded by `slurm_partition_owned_fields_match`; the exact target-singleton runtime-reassertion validator must prove the sealed restored records as the target-only successor of the canonical phase observation while the active Slurm pause journal contains exactly the retired-source records. When no GPU target-retirement authority exists, the same adapter instead requires an empty active pause journal, no retired names, and byte-exact equality between every sealed record and the complete canonical phase journal. `_checkpoint_effective_slurm_partition_restore_plan` returns that sealed receipt without rewriting it. `_checkpoint_post_bridge_rolling_values_reconciliation` then prevents a cleaned bridge from advancing to terminal segment completion when `_ROLLING_COMPUTE_VALUES_REVISION` is stale: it keeps rolling/source retirement complete, invalidates validation and both post-upgrade checks, marks final health pending, and checkpoints a continuation so the next unchanged-command replay enters `_reconcile_completed_compute_cutover` at the first safe post-bridge boundary. Exact current-revision replay is write-free; receipt, ownership, hash, successor, authority, config, or chronology drift remains recovery-required.
+- TDD-045: `_accounting_handoff_assert_target_writer_ready` separates immutable accounting-writer authority from Kubernetes rollout status. Before considering readiness, it validates the exact target binding and enabled SlurmCluster, restored checkpointed SlurmDBD writer command/args, Deployment owner and UID, positive desired replicas and generation, selector, one exact accounting container in the Deployment template, and the name/UID, Deployment-owned ReplicaSet lineage, and exact writer container command/args of every matching Pod. Identity or configuration failures continue to raise `SoperatorMigrationPhasePending`. If those checks pass but observed generation, replica counters, Pod cardinality, deletion state, phase, or Ready condition have not converged, the function raises `SoperatorMigrationCheckpointContinuation` at the `accounting-writer-converging` boundary. Its progress fingerprint contains only Deployment/Pod rollout observations; its absolute deadline is bound to the target UID, Deployment UID, and generation, with two-second reads and the shared 15-minute stall/deadline guards. The top-level continuation driver reruns the checkpointed operation, so a revisioned Helm rollout proceeds when the same writer becomes Ready without another mutation or fabricated receipt. Focused coverage proves the Pending-to-Ready transition and immediate rejection of a foreign selector Pod and command drift.
+- TDD-046: `_patch_target_slurm_runtime` removes the exact `AutoDetect=nvidia` entry from each target NodeSet `gresConfig` while preserving every other directive, in the same canonical pass that removes the invalid literal dynamic-node template and normalizes the supported-image PluginDir to the single multiarch path. Because SConfig retains a global NVIDIA autodetection default, `_target_nodeset_explicit_gpu_gres_config` parses the exact untyped or typed static GPU GRES token and replaces only that legacy entry with deterministic node-specific `AutoDetect=off Name=gpu`, optional proven `Type`, and a `/dev/nvidia` range from zero through the proven count minus one; it fails before value mutation when no exact positive count exists and does not add a duplicate when a customer already supplied an explicit GPU entry. The component catalog emits the explicit eight-device form and canonical PluginDir, and `_ROLLING_COMPUTE_VALUES_REVISION` advances so an already completed cutover re-enters the checkpointed Helm/Slurm reconciliation path before completed Jail action reconciliation. `_reconcile_slurm_worker_runtime_identity` searches each `scontrol show node` result for the complete exact legacy `Extra=InstanceId={{ .PodName }}` token sequence and issues `scontrol update NodeName=... Extra=` only for that known cxcli predecessor while retaining its existing exact Ready worker-Pod-derived `NodeAddr` and `InstanceId` inputs. `_slurm_worker_runtime_identity_snapshot` records `legacy_dynamic_extra` as present or absent without classifying another Extra value as legacy, and `_ensure_final_slurm_worker_runtime_identity` refuses its terminal proof until every current worker reports absent. Tests cover canonical PluginDir normalization/rendering, typed and untyped explicit device generation with another directive preserved, missing-count refusal, exact-versus-customer Extra parsing, the generated clear command, and post-reconcile refusal while legacy state remains.
+- TDD-047: `_verified_legacy_rootfs_post_open_metrics_topology_replay` treats a current revisioned target-values proof with a Helm revision strictly newer than `post_singleton_values_proof` as the only current candidate. The usual exact proof/promoted-proof equality, target binding, compatible semantic drift, live target-spec fingerprint, values fingerprint, installed-manifest fingerprint, and positive revision checks still run; a malformed newer claim cannot fall back to stale final-values evidence. `_repair_gpu_driver_jail_init_loader_for_target_workers` validates an existing verified sysfs repair but defers its reuse return when `post_repair_helm_reconciliation` exists, allowing the existing append-only downstream-promotion logic to archive the old OpenMetrics receipt and bind the exact current topology/Helm proof first. Focused regressions reproduce the live stale-final/newer-revision selection, promoted-proof drift, and verified-sysfs early-return ordering while retaining the existing history and downstream drift controls.
+- TDD-048: `_patch_accounting_mariadb_storage` creates an exact mapping-valued `mariadbOperator.metrics` block and uses `setdefault` to disable it only when the target values did not already declare `enabled`. Explicit `true` remains an opt-in, while a non-mapping metrics value raises `SoperatorMigrationPhasePending`. Every component-profile default records `metrics.enabled: false`, so normal rendered and live migration values agree and do not ask MariaDB Operator to reconcile a missing ServiceMonitor CRD. Focused tests cover default-disabled and explicit-enabled inputs; the render suite validates the catalog shape.
+- TDD-049: `_legacy_rootfs_bridge_client_post_open_metrics_live_source_is_exact` is the sole later-live-payload adapter for the immutable bridge-client source consumer. It requires the already present post-OpenMetrics receipt to bind the live ConfigMap name, UID, Slurm digest, and full-data fingerprint to the original source and compatibility stage; then it reads the exact current target and invokes `_legacy_rootfs_bind_post_open_metrics_config` only on a deep copy of the rolling phase. Admission requires that strict binder to reproduce the checkpointed receipt byte-for-byte without invoking its copied writer. `_legacy_rootfs_bridge_client_post_open_metrics_historical_lineage_is_exact` separately reproduces the original source through the sealed released-writer runtime, self-validates the immutable canonical source successor without requiring a still-active bridge, and replays the complete append-only rollout-successor receipt chain against the current producer journal and any sealed observation recovery. `_checkpoint_legacy_rootfs_bridge_client_config_source` returns the historical source projection only when both proofs pass. No receipt is rewritten or synthesized. Focused tests cover exact write-free replay plus released-writer, canonical-successor, rollout-chain, proof, data, UID, and integration drift.
+- TDD-050: `_reconcile_target_mariadb_metrics_after_values_reapply` runs after the released SConfig/post-OpenMetrics proof and only when the current target has accounting and MariaDB enabled with metrics explicitly false. It binds the promoted current-revision Helm proof, target identity/generation, exact MariaDB API identity and sole SlurmCluster controller owner, and a stable fingerprint of the complete MariaDB spec with only a present `metrics.enabled` removed. A live true child produces a durable intent before a resourceVersion-bearing merge patch of that one boolean, followed by the exact one-generation successor and unchanged stable-spec proof. Because the MariaDB Operator API serializes both its optional metrics block and false `enabled` zero value with `omitempty`, explicit false, an absent metrics block, an empty block, and a mapping without `enabled` are the same canonical disabled observation and produce a verified-existing receipt without mutation. A present non-boolean `enabled` or non-mapping metrics value remains malformed instead of being coerced. Terminal replay revalidates the same UID, generation, values proof, and stable spec without mutation. When the current values revision is later than the immutable action receipt, `_legacy_rootfs_guarded_values_replay_generation_for_proof` reads only an already exact recursive guarded-values receipt and returns one unique generation for the journal's recorded revision and proof fingerprint. The reconciler uses that historical generation/proof as the immutable journal common fields while independently retaining the current promoted-proof and desired-disabled gates; it neither rewrites nor appends to the action receipt. Focused tests prove all canonical disabled encodings, malformed-value rejection, intent-before-CAS ordering, an omitted-false CAS successor, mutation guard use, exact replay, exact advanced-revision replay, and historical chain/proof/checkpoint drift rejection.
+- TDD-051: `_restore_checkpointed_login_load_balancer_allocation_values` distinguishes a dual-CR handoff from a same-CR upgrade by the exact rolling source/target binding. For dual CRs it preserves the allocation only in the checkpointed original Service, writes JSON-merge null tombstones for only the two cxcli-owned load-balancer annotations under `slurmNodes.login.sshdServiceAnnotations`, and forces `slurmNodes.login.sshdServiceType=NodePort`, the non-LoadBalancer type accepted by the installed Soperator; same-CR values keep the prior behavior. Rolling-values revision 26 supersedes revision 25 because omission could not delete a live-only annotation absent from Helm's predecessor manifest. Revision 27 closes the producer-order gap by making `stabilize_soperator_login_load_balancer_allocations` restore the checkpointed target projection after its generic same-CR allocation persistence, while retaining the independently verified source Service and allocation decision. The ordinary guarded Helm workflow then applies the tombstones, and `_without_target_shadow_login_annotation_tombstones` removes only those two exact null markers from the expected live-spec projection after the API performs deletion; unrelated nulls remain drift. `_reconcile_dual_cr_login_service_roles` binds the preserved Service from `retained_login_service_bindings` and the exact target-owned release-qualified Service, requires identical target selectors and Ready endpoint Pod UIDs, and proves the preserved UID/ClusterIP/ingress/allocation plus the target SlurmCluster and Service UID/controller owner/NodePort/selector/ClusterIP contract. When that exact target Service retains only the preserved allocation annotation and its matching internal-type annotation, the reconciler creates a semantic-hash `dual_cr_login_service_shadow_cleanup` intent, checkpoints dispatch with the observed resourceVersion, calls the existing mutation guard, and issues one JSON patch that tests the UID, resourceVersion, NodePort type, and every copied value before removing only those keys. It accepts an interrupted post-patch replay only after re-reading the exact Service and proving the complete owner, selector, ClusterIP, NodePort, empty ingress, and annotation-absence result; then it checkpoints verification before sealing the ordinary role receipt. Verified replay is write- and mutation-free, while reappearance, foreign values, target-CR annotations, receipt drift, or post-patch role drift fails closed. `_assert_login_service_identity_preserved` always keeps retained Service UID and ClusterIP immutable, but evaluates load-balancer address/type/ingress/allocation fields only for a checkpointed `LoadBalancer` or a legacy checkpoint whose Service type is absent. This prevents copied metadata on an explicit target `NodePort` or `ClusterIP` Service from acquiring continuity authority while preserving the strict source-LoadBalancer fence. After source cleanup, `_completed_login_allocation_successor_binding` admits only the same archived target Service UID promoted from its sealed `NodePort` role to the live final `LoadBalancer`, with the validated campaign identity transition and one self-exact archived source-allocation decision, and binds the archived preserved Service name, UID, allocation, and type. Stabilization may replace only that exact historical allocation. If both exact Services remain live, it verifies both but marks the preserved source decision non-persisted, reapplies the target successor after processing every Service so list order cannot change the result, and stores only persisted target decisions in current continuity. The current target decision and Service identity then make later value reconstruction idempotent instead of restoring dual-CR tombstones. Focused tests cover generic stabilization ordering, values generation, tombstone/live-spec proof normalization, live conversion, same-CR preservation, the exact post-retirement single- and dual-LoadBalancer successor cases, target/receipt/transition/source-identity drift, downstream non-LoadBalancer cleanup, strict LoadBalancer preservation, crash recovery, exact replay, and every receipt/identity/owner/type/selector/endpoint/annotation drift.
+- TDD-052: `_SOURCE_SLURM_CHILD_RESOURCE_TYPES` includes the MariaDB `Database`, `User`, and `Grant` APIs so new pre-orphan inventory and the existing UID-preconditioned cleanup graph capture them through their MariaDB or SlurmCluster controller owners. `_reconcile_retired_source_mariadb_dependents` handles only an immutable v1 inventory that predates those kinds: it derives the exact allowlisted dependent names from the sealed source MariaDB identity, requires the accepted source-MariaDB controller deletion, completed source retirement, and exact materialized target database, lists all three APIs, and accepts only the complete ownerless set with a source `mariaDbRef`. It checkpoints an exact semantic-hash intent before UID/resourceVersion-preconditioned deletion. A bounded stalled-finalizer path re-reads the same terminating UID/spec and compare-and-set removes only the kind-specific MariaDB Operator finalizer before absence proof. The verified semantic-hash receipt revalidates target and retirement authority and requires every captured UID absent. Focused regressions cover intent-before-delete, finalizer recovery, exact replay, replacement and extra dependents, owner/reference/spec/finalizer drift, and no-write rejection.
+- TDD-053: `_legacy_rootfs_guarded_values_replay_successor` is the sole adapter from an immutable post-OpenMetrics topology replay at rolling-values revision N through an exact contiguous revision M. It reconstructs every intermediate replay from the stable target/ConfigMap projection and that revision's verified intent-bound Helm proof, requires the endpoint proof to equal the promoted proof, compatible semantic drift throughout, one target-generation increment per revision, strictly advancing Helm revisions and proof verification instants, and no stable-field change. The v2 `_legacy_rootfs_guarded_values_replay_successor_receipt` semantic-hash seals predecessor/current replay and proof fingerprints plus the revision, generation, replay fingerprint, and proof fingerprint of every edge; when a predecessor receipt exists it is embedded and recursively revalidated. `_legacy_rootfs_guarded_values_replay_successor_receipt_is_exact` reconstructs the receipt's sealed current replay from its own revision, generation, and proof rather than comparing it to a later outer replay. It admits a carried receipt only across one exact next-revision, proof-bound, same-generation Helm replay whose proof revision and verification instant strictly advance after receipt acceptance; skipped revisions, generation changes, or proof/value drift fail closed. `_legacy_rootfs_bind_post_open_metrics_config` validates that predecessor against the checkpointed replay before carrying or superseding it, and `_legacy_rootfs_guarded_values_replay_root_generation` walks only that already exact recursive receipt chain to recover the oldest sealed generation for the immutable outer proof. Every outer post-OpenMetrics field remains unchanged, and an arbitrary older generation remains invalid. Focused tests cover both one-step and revision-23-to-25 recovery, the carried no-generation predecessor followed by a generation-changing successor, a two-level receipt whose outer generation is the oldest predecessor, and rejection of missing or drifted intermediate proof, non-contiguous revision, generation, Helm, chronology, intent/proof/promotion, target, semantic-drift, values, manifest, live-spec, ConfigMap, receipt-field, outer-generation, and semantic-hash drift before mutation.
+- TDD-054: `_checkpoint_completed_partition_restore_plan` recognizes a post-cleanup values-reapply pause as a distinct overlay rather than rebuilding the immutable final restore. It exact-parses `values_reapply_slurm_paused_partitions`, requires the bridge stage to be `partitions-restored` or `cleaned`, requires every overlay name to be canonical target-only and every payload to equal its sealed restored target record and any still-active global record, subtracts only the active overlay, and then applies the existing counts, retired-name, hash, timestamp, and ownership checks to the sealed restore plus the remaining retired-source journal. `_checkpoint_target_partition_successor_inventory_is_exact` continues to require the full target-singleton/config/controller-gap reassertion lineage; for a terminal bridge it accepts `cleaned` only with the completed restore and exact phase overlay, and reconstructs the producer's target-first then controller-gap fingerprint while independently requiring the global active journal to match the effective record inventory. `_controller_bridge_cleanup_require_preservation_receipt_binding` self-validates the historical pre-cleanup action-generation and preservation receipt without asserting that invalidated terminal health is current. `_controller_bridge_require_partition_restore_binding` retains current-health validation by default; only `_restore_post_cleanup_values_reapply_slurm_pause` explicitly selects historical-receipt validation before it compare-and-set restores the phase overlay, records the decision, removes it from both journals, and seals the post-cleanup restore receipt. All destructive cleanup and ordinary final-restore callers retain the current-health default. Focused tests reproduce the live cleaned bridge with an aggregate-TRES-only target observation, including the crash window where the global decision was already recorded and the intentional pending-health state, and reject overlay absence, extra or source names, payload drift, stage drift, reassertion drift, and historical receipt drift without writes.
+- TDD-055: `_historical_values_reapply_proof_for_worker_revision` selects exactly one verified target-values Helm intent/proof whose prepared and terminal timestamps enclose the live ControllerRevision creation and whose semantic record proves no unclassified target drift. `_post_values_worker_config_proof` independently exact-validates the immutable post-OpenMetrics ConfigMap receipt, its complete config projection, and either its current topology or the complete contiguous guarded successor-chain proof from that historical topology through the current revision; it requires the producer-appended `jail_digest_verified_at` field and proves that attestation is at or after the receipt's terminal verification, rather than rejecting the legitimate later field or admitting a receipt that predates its jailed-file proof. A later non-worker values revision does not rewrite the immutable config receipt merely to authenticate a worker. After the recursive successor receipt is exact, this consumer reuses `_legacy_rootfs_guarded_values_replay_root_generation` so the immutable outer proof remains bound to the oldest sealed predecessor instead of the latest receipt edge. When final-runtime normalization is present, it removes the nested final-runtime receipt before validating the promoted guarded replay, independently validates that receipt against the normalization and historical outer hashes, retains the predecessor config digest expected on the not-yet-replaced worker, and marks the aggregate proof as an exact normalized successor. `_verified_post_values_reapply_worker_successor` composes those proofs with the complete final-runtime successor map and aggregate identity receipt, live StatefulSet/NodeSet/ControllerRevision/template identity, exact target or Helm-owned NodeSet lineage, Running/Ready zero-restart Pod and container identity, and a direct jailed-config digest read. It checkpoints one exact-key semantic-hash successor under the immutable-child worker state before the rollover consumer advances from the final-runtime UID to the current UID. `_verified_sealed_immutable_child_historical_delete_post_values_replacement` is the read-only adapter for a later historical-delete replay: it first revalidates the immutable historical successor and typed-GRES rebind, then reruns the existing post-values live proof with checkpoint writing disabled. `_post_values_reapply_worker_successor_receipt_matches_material` permits an existing self-exact immutable receipt to retain only its original outer and topology fingerprints when the normalized successor is exact; every live-derived identity, revision, Helm, config, container, history, and timestamp field must equal the recomputed material, and both current aggregate fingerprints must differ. The adapter reconstructs one exact replacement history from the rebound UID through an optional independently verified completed-rollout binding, the final-runtime projection sealed by the post-values receipt, and the receipt-bound current UID; it requires exact history equality and ordered historical verification, rebind, runtime verification, observation, and acceptance instants. The outer handoff updates replacement and aggregate timestamps only when their values actually change, so exact replay is checkpoint-write-free. Existing worker delete, job-free, serial-replacement, final-runtime, and post-values journals remain immutable. Focused regressions cover exact creation and write-free replay plus receipt, predecessor, history branch/reorder, owner, chart/app, ControllerRevision, template, chronology, Pod/container/readiness, runtime-fingerprint, and config/topology drift without infrastructure mutation.
+- TDD-056: `_restore_post_bridge_stale_values_populate_completion` runs before persistent-copy, rolling-provider, and singleton-handoff boundary classification. It activates only for a stale rolling-values revision after exact completion of rolling compute, final cutover, source retirement, and bridge cleanup, and only when the historical Jail fast-verification/completion event pair remains durable. Its pure checkpoint proof requires the checkpointed passive-slot Job name/UID, terminal zero-restart successful monitor with complete restore summary, matching refreshed result and restored maintenance, completed legacy migration or explicit non-requirement, verified current-revision rootfs handoff, passed Slurm smoke, and absence of an active writer hold, recovery, or failure boundary. It restores only the `populate-jail-refresh` completion and checkpoints that event before ordinary boundary calculation. This prevents terminal historical Job fields from suppressing `_reconcile_completed_compute_cutover`; the existing guarded values replay still owns the Slurm quiet window, Helm apply, rollout, and post-cleanup pause restore, after which ordinary completed-action reconciliation reruns the live Jail submission proof. Focused tests cover the exact terminal restoration and mutation-free rejection of an active writer, incomplete Job, missing completion event, or non-cleaned bridge.
+- TDD-057: `_patch_target_slurm_runtime` treats an exact static GPU GRES declaration as the source for one canonical explicit `nodeConfig.gresConfig` line. It normalizes an absent or empty field to a list, removes only the exact `AutoDetect=nvidia` predecessor, and upgrades the exact revision-29/30 generated explicit device line that lacks the override; both paths produce deterministic `AutoDetect=off Name=gpu`, optional `Type`, and `/dev/nvidia` range. It recognizes that form as the one explicit GPU definition on replay and preserves all other directives and non-matching customer mappings. A non-sequence GRES field, non-string entry, duplicate explicit GPU definition, or autodetect without an exact positive static count remains fail-fast and mutation-free. `_ROLLING_COMPUTE_VALUES_REVISION` advances to 31 so the normal completed-cutover re-entry applies the corrected values and SConfig emits a node-specific override of its retained global autodetect. The topology successor reconstructs the exact prior no-custom-GRES ConfigMap from the generated current payload, verifies the predecessor's full and compatibility data fingerprints, and binds every contiguous Helm proof while deriving generation only from distinct consecutive live-spec fingerprints. Focused regressions cover missing, empty, autodetect, the exact revision-29/30 predecessor, typed, untyped, preserved-customer, malformed, idempotent, sparse-generation, ConfigMap-predecessor, and drift cases.
+- TDD-058: `_legacy_rootfs_normalize_final_runtime_config` owns one checkpointed post-generation ConfigMap transition inside the approved upgrade. It accepts only the revision-31 target/Helm proof and exact generated source: one legacy PluginDir and one defunct AccountingStorageUser in `slurm.conf`, one canonical multiarch PluginDir and no other PluginDir in `custom_slurm.conf`, and the exact node-specific `AutoDetect=off` GRES successor. `_legacy_rootfs_final_runtime_config_predecessor` reconstructs the immutable revision-27 aggregate by replacing each exact proof-derived NodeSet GRES line with its original no-custom marker and removing exactly the one canonical custom PluginDir, while preserving the legacy main PluginDir and every other byte; the old topology data fingerprint must then match exactly. The normalizer records source UID/resourceVersion, per-key hashes, full-data fingerprint, exact removal counts, target projection, Helm/topology fingerprints, and intent time before calling the existing exact-resource replace helper. It then rereads the same UID, requires a distinct resourceVersion, byte-identical unrelated keys, exact normalized target hashes, and seals verification with a semantic hash. The post-OpenMetrics binder consumes the normalized main/custom pair as one logical PluginDir, removes only MetricsType for its compatibility projection, and embeds the normalization plus GRES/revision successor receipt before replacing the nested topology proof. `_legacy_rootfs_bridge_client_post_open_metrics_live_config_is_exact` recognizes either the immutable top-level payload or that exact normalized successor by binding the historical hashes to the normalization predecessor, the live and nested topology hashes to its target, and the nested final-runtime receipt to the complete sparse-generation chain; the existing binder reproduction must then remain write-free and byte-equal to the sealed proof. Exact replay reproduces both receipts without writes; fail-first tests cover every directive count, UID/resourceVersion/owner/key/hash/Helm/topology/chronology mutation and prove no ConfigMap or worker mutation occurs on drift.
+
+- TDD-059: `_post_values_worker_config_proof` removes the nested final-runtime receipt from the promoted current topology, but revalidates the older guarded-values receipt against the exact `previous_replay` sealed inside that final-runtime receipt. It independently validates the final-runtime receipt against the normalization, historical outer hashes, revision chain, and current normalized topology. The guarded receipt therefore remains bound to the revision it actually sealed while the final-runtime receipt is the sole bridge to the later revision. A focused regression captures the guarded validator input and requires the sealed predecessor replay; direct validation against the normalized topology, missing predecessor replay, or final-runtime receipt drift remains fail-closed.
+- TDD-060: `_post_values_worker_config_proof` returns both the historical `config_sha256` sealed into the immutable post-values receipt and a `live_config_sha256` that equals it on the historical path or equals the exact normalized topology digest on the AC-057 path. `_verified_post_values_reapply_worker_successor` uses only the live digest for the UID/container-stable jailed-file read, but reconstructs the immutable receipt with the historical digest. Focused coverage requires equality on the historical path and the distinct normalized digest on the successor path; live-file, receipt, Pod, container, or successor drift remains read-only and fail-closed.
+- TDD-061: `_legacy_rootfs_normalize_final_runtime_config` retains its direct predecessor comparison before topology promotion. On a verified normalized replay after promotion, it instead requires its self-exact normalization receipt, an exact final-runtime topology successor, and a `previous_replay.config` byte-equal to the normalizer's immutable predecessor projection. The final-runtime receipt separately proves that predecessor through the sparse revision chain to the current normalized topology. Focused tests prove promoted replay is write-free and drift the sealed predecessor while keeping the outer validator positive to demonstrate local fail-closed enforcement.
+- TDD-062: `_legacy_rootfs_post_open_metrics_guarded_successor_is_exact` is the sole effective-replay selector for the guarded receipt consumed by `_legacy_rootfs_bind_post_open_metrics_config`. It first retains the direct exact guarded-replay path. If that fails, it accepts only a present exact final-runtime topology receipt against the current promoted replay and exact normalization, selects that receipt's sealed `previous_replay`, requires the predecessor to carry the byte-identical guarded receipt, and reruns the guarded receipt validator against that historical replay. It never removes fields from mutable current state or accepts a revision gap without the independently exact final-runtime producer. Focused coverage captures both validator inputs and rejects historical guarded-receipt drift without checkpoint or infrastructure mutation.
+- TDD-063: `_legacy_rootfs_historical_guarded_values_proof_generation` resolves one immutable revision/proof fingerprint only after `_post_values_worker_config_proof` revalidates the current post-OpenMetrics, normalization, guarded, and final-runtime topology chain; it then requires the revisioned Helm proof fingerprint and one unique guarded-receipt generation entry. `_dual_cr_login_service_roles_receipt_is_self_exact` validates the immutable roles payload and semantic hash before it can lend that historical identity to cleanup. `_reconcile_dual_cr_login_service_roles` retains the exact current Helm target gate, but reconstructs existing cleanup and roles payloads with their historical proof only when both receipts share it, cleanup verification precedes roles verification, and the historical adapter returns one generation. All live Service, target, annotation, endpoint, and identity fields remain current and exact; no receipt is rewritten. Focused tests cover exact current and advanced-revision replay plus mismatched cleanup/roles proof drift without checkpoint or Service mutation.
+- TDD-064: `_controller_bridge_source_jailed_files_contract` derives the exact ordered ConfigMap item/Jail-path/content-digest projection from the active source `JailedConfig`. `_reconcile_controller_bridge_source_jailed_files` owns one semantic-hash repair intent and receipt after the immutable source takeover: it revalidates the bound StatefulSet and historical Pods, scales only that exact writer to zero, uses `_stage_controller_bridge_jailed_config` with an explicit target path for each mismatched item, scales back to two, and seals distinct Ready zero-restart Pods, every file digest, current active/standby roles, empty `squeue`, and a bounded post-start controller-log proof without the cloud-node AutoDetect failure. Source-HA satisfaction and downstream gated health require this receipt when present, while the historical takeover remains unchanged. `_controller_bridge_source_jailed_files_retirement_is_exact` is the only tombstone adapter after the legacy-rootfs producer deletes that source JailedConfig: it requires the immutable repair contract to reproduce the historical source name, UID, spec, complete sorted item mapping, and item count; the exact distinct source/target rebind and target successor identities; the exact source UID/resourceVersion delete receipt; verified post-retirement source absence and bridge health; and strict repair, rebind, delete, and revalidation chronology. The caller must independently prove live source absence, the accepted bridge ConfigMap mirror, workload, replacement Pods, every file digest, roles, and empty queue before reusing the immutable contract. Focused tests cover complete contract derivation, one repair, exact write-free replay before and after source retirement, custom mapped staging, and mutation-free rejection of partial, foreign, reordered, or drifted retirement, file, and runtime state.
+- TDD-065: `_cleanup_orphaned_source_node_configurator` runs inside the revisioned validation hold before terminal Helm verification. It first proves no deployed source Helm release or Flux HelmRelease still desires the exact resource, the referenced ServiceAccount is absent, and the live `NodeConfigurator` plus sole owned DaemonSet match exact API, name, namespace, UID/resourceVersion, provenance, label, chart, rebooter, owner, container, and stable-spec projections. It checkpoints a semantic-hash deletion intent before using the existing UID/resourceVersion-preconditioned delete with foreground propagation, then waits for both resources to disappear and seals a verified receipt. An interrupted post-delete replay can seal only the same intent and dual absence; verified replay remains write-free. Focused tests cover the exact deletion/replay path and mutation-free rejection of desired-state, ServiceAccount, identity, owner, and receipt drift. `_VALIDATION_HOLD_REVISION` advances so an older completed hold re-enters this exact cleanup.
+- TDD-066: `SoperatorMigrationClusterLease` captures whether `KUBECONFIG` is present and its exact value at construction. `_kubectl` builds a fresh subprocess environment for every call, restores that captured value when present, and removes the variable when it was absent, so nested `_temporary_env` scopes cannot redirect either the foreground holder fence or the renewal thread. The context, cluster identity, campaign fingerprint, holder test, retry policy, and natural-expiry release semantics remain unchanged. Focused tests change the ambient variable after construction and prove both a captured value and captured absence are preserved without recording kubeconfig contents in checkpoint state.
+- TDD-067: `_reconcile_controller_bridge_source_jailed_files_takeover` runs after the replacement bridge Pods expose the complete staged file contract and before all-file runtime health. It exact-key seals the original accepted `source_bridge_takeover` fingerprint, original active name/UID and backup index, StatefulSet UID, both successor names/UIDs/nodes, and intent chronology before calling `scontrol takeover` in only the replacement active Pod. Replay first reads the two new Pod logs: no primary dispatches once, the exact intended primary accepts without redispatch, and any other or multiple primary marker is recovery-required. `_controller_bridge_partition_pause_authority_gap` recognizes the preceding no-authority interval only through `_controller_bridge_source_jailed_files_restart_intent_is_exact`: the source-HA stage, accepted bridge writer/StatefulSet, predecessor role and Pod identities, full semantic JailedConfig contract, every exact adoption or staging receipt, strict stop/stage/restart chronology, and complete pre-existing DOWN-record proof must all match before `_bridge_pause_all_partitions` skips a live Slurm RPC. The all-file repair then independently revalidates the live replacement StatefulSet, Pods, files, and successor takeover; drift cannot broaden the gap. The accepted takeover semantic hash is included in the terminal all-file receipt; role, queue, log, file, and successor-Pod proof remains independently current. Focused coverage proves one dispatch, crash-after-dispatch adoption, write-free terminal replay, exact pause reuse during the restart gap, and mutation-free writer/intent/staging/predecessor/successor/role/chronology drift rejection.
+- TDD-068: `_legacy_rootfs_post_switch_helm_jail_boundary_successor` is the sole classifier for a product-owned protected Helm advance beyond the current legacy-rootfs writer fence. It exact-validates the current segment's source-retirement and accounting-writer rebind, the rearmed manager-pause reuse, completed post-switch bootstrap, protected-dispatch root/head identity and contiguous successor history, and the current deployed Helm release, stored values, rendered manifest, defaulted live SlurmCluster identity/spec, generation, resource version, Jail alias, maintenance, login submounts, and OpenMetrics state. `_rebind_legacy_rootfs_target_compatibility_after_jail_helm` consumes that material to checkpoint one exact-key semantic-hash `post_jail_boundary_rebind` parent and advance the fence before any login-restore or writer-release child can be admitted. Replay recomputes the same authority and performs no write; all downstream successor checks use the parent rather than path-specific exceptions. Focused producer-to-consumer coverage models source retirement, accounting restoration, rearmed manager reuse, protected post-switch apply, and immediate Jail rebind in one ordered segment, then rejects every identity, chronology, receipt, Helm-history, values, manifest, generation, resource-version, spec, Jail, maintenance, submount, and OpenMetrics drift before checkpoint or infrastructure mutation.
 
 #### Validation Plan
 
@@ -274,7 +347,7 @@ verified.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready priority=P0 version=11 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready priority=P0 version=12 -->
 ### FEAT-002: Exact post-switch Helm dispatch precondition
 
 #### Requirements Covered
@@ -326,7 +399,28 @@ remains bound to the installed successor. The verifier separately evaluates the
 current desired values in live-recovery mode and requires their exact
 fingerprint plus a `compatible` or `compatible-target-spec-normalization`
 semantic result with unchanged OpenMetrics and no unclassified target-spec
-drift. The intent is never persisted as retroactive authority.
+drift. The sole non-adoptable recoverable delta is the exact checkpoint-bound
+dual-CR login role transition from the allocation-bearing target
+`LoadBalancer` predecessor to its target-owned `NodePort` shadow, including the
+two cxcli-owned annotation tombstones and no other spec change. Its v2 semantic
+classifier accepts the historical `LoadBalancer` CRD default NodePort zero only
+when the desired `NodePort` is positive; the exact allocation and full trial
+spec comparison remain authoritative, while a negative or malformed source
+port still fails closed. cxcli seals the
+protected predecessor as a semantic-hash role-repair receipt, binds the
+surge-local intent before protected Helm dispatch, and accepts only the exact
+compatible deployed successor. The intent is never persisted as retroactive
+adoption authority. Before the surge becomes applied, the existing serial login
+MUNGE runtime convergence replaces pre-CAS daemons behind two Ready endpoints
+and requires every successor to authenticate both retained target-HA
+controllers; aggregate Kubernetes readiness is not Slurm readiness. The live
+predecessor need not already mount the successor Secret: that would make the
+serial repair unreachable. It is admitted only when the current verified or
+canonically released availability hold binds the same Pod and workload UID,
+node, sshd container and restart count, exactly one legacy Secret-backed Munge
+mount, and Pod creation before the accepted Secret CAS. This proof is freshly
+revalidated rather than added to the already-sealed v1 reload journal shape.
+Every successor continues to require the target Secret projection.
 The durable adoption receipt binds the normalized proof, dispatch lineage, and
 deterministic apply material. Its replay is exact and performs no Helm command;
 generic legacy wall-clock history recovery is not an alternative. If the same
@@ -334,6 +428,20 @@ adopted surge later checkpoints `peer-ready` or `released`, resume rebinds the
 receipt, proof, semantic fingerprints, target identity, and surge observation
 before routing directly into restore; it cannot create a retroactive apply
 intent or start another surge.
+
+The dedicated post-switch login Service role-repair branch owns the same
+downstream peer and protected-hold lifecycle without producing the ordinary
+adoption receipt. Terminal recognition therefore accepts either producer only
+through its own exact authority. For the already exposed role-repair crash
+window, recovery requires the verified role-repair receipt, v2 surge and target
+binding, byte-identical canonical and gate-nested released hold, released gate,
+exact target-slot peer set, surge/surge live observation, and strict peer,
+release-intent, hold-release, gate-release, and later-regression chronology.
+cxcli seals those inputs together with the regressed reconciliation as one
+self-hashed recovery receipt and atomically restores `released`. Replay derives
+the released reconciliation from that immutable predecessor and receipt and is
+write-free. This path performs no Helm, Kubernetes, or Slurm mutation and does
+not admit an unrelated healthy replica count as recovery authority.
 
 The restore pulse carries the same release-level protection. Its immutable
 root is the deployed surge release proven either by the intent-bound surge
@@ -370,6 +478,12 @@ under the same manager pause, controller gate, bridge authority, and propagated
 client configuration. cxcli checkpoints a verified protected-successor owner
 adoption before scaling the workload. A missing or drifted proof, history,
 manifest, target, fence, or non-login spec field remains blocking.
+Before deriving the protected root-to-head size transition, both defaulted Helm
+specs pass through the same shadow-login annotation normalization used by the
+canonical Helm apply proof. It removes only the two cxcli-owned null deletion
+markers that the API omits after applying them; raw revision manifest/spec hashes
+remain sealed in the protected material, and an unrelated null or any other
+semantic delta still fails the owner-adoption gate.
 
 The durable bridge-client proof can still predate that restore and therefore
 contain the surged login set. When the later controller-gap bridge recovery
@@ -486,10 +600,10 @@ unchanged.
 - TDD-006: Only an exact intent-bound pending revision is cleared; a newer pending head and a foreign failed revision remain blocking.
 - TDD-007: A pending Secret that becomes deployed or is replaced between observation and deletion fails its deletion precondition and produces no retry authorization.
 - TDD-008: An authenticated failed head and deployed successor re-enter the outer admission lifecycle while its immutable release contract remains the original deployed root.
-- TDD-009: A completed post-switch protected successor that already carries the temporary login count is adopted exactly once without a surge Helm replay; dispatch, history, target, chart, values, timestamp, proof, or receipt drift fails before checkpoint mutation.
+- TDD-009: A completed post-switch protected successor that already carries the temporary login count is adopted exactly once without a surge Helm replay. The chart fingerprint hashes regular chart files directly and packaged dependencies by normalized member path/type/content, recursively canonicalizing nested `.tgz` files and excluding tar/gzip writer metadata. The reader rejects duplicate, unsafe, link, special, truncated, corrupt, empty, or excessively nested archives. When a completed bootstrap predates that canonical fingerprint, the v2 adoption authority seals its raw predecessor and canonical successor together with equal current-render/installed target manifest and spec fingerprints; no generic chart-drift compatibility branch exists. Dispatch, history, target, chart, values, timestamp, transition, proof, or receipt drift fails before checkpoint mutation.
 - TDD-010: Login restore recovers a missing precondition only from the unchanged protected surge release with no successor revision, checkpoints it before dispatch, accepts only an exact protected ambiguous create-timeout failure, and rejects release or arbitrary-failure drift without mutation.
 - TDD-011: Only the exact target Soperator Helm `upgrade --install` subprocess receives `GODEBUG=http2client=0`; unrelated settings remain present, other commands do not receive an override, and protected dispatch still performs no in-process retry after any command error.
-- TDD-012: A deployed protected restore successor with configured SlurmCluster and surged workload is adopted without a SlurmCluster patch only from exact root/head history, manifests, surge/current proofs, login-size-only semantics, target identity, and live fences; every independent drift fails before adoption or workload mutation.
+- TDD-012: A deployed protected restore successor with configured SlurmCluster and surged workload is adopted without a SlurmCluster patch only from exact root/head history, manifests, surge/current proofs, login-size-only semantics after removing only the two cxcli-owned null shadow-login annotation tombstones from both defaulted Helm specs, target identity, and live fences. The active Jail-boundary rebind may consume that same canonical proof read-only during the pre-owner crash window, but it cannot create or replace the owner receipt. Raw revision hashes stay immutable, write-free replay revalidates the sealed owner, and an unrelated null or every other independent drift fails before adoption or workload mutation.
 - TDD-013: Controller-gap bridge recovery forwards the exact verified login-surge removal receipt into client-proof reconciliation; the old three-login proof may advance to the configured set only when the same workload, target, and generation receipt is terminal, retained identities and config are unchanged, and only the surge ordinal is absent.
 - TDD-014: OpenMetrics restoration passes the canonical rolling bridge owner. An interrupted checkpoint with both the adopted rolling pause and a completed operation-local OpenMetrics pause normalizes exactly once into the bounded continuous-pause reuse receipt; campaign, target, manager, boundary, or lifecycle drift fails before checkpoint mutation.
 - TDD-015: A terminal restored login surge with no ordinary SlurmCluster-regression receipt advances the prepared SConfig writer fence only when the full protected post-switch adoption and restore-owner validators plus exact reconciliation, removal, manager, controller, client, accounting-writer, target, and campaign evidence agree. The ordinary route still requires its accounting rebind; the protected route accepts an exact older no-rebind checkpoint only through that complete restore successor. Independently drifted adoption, restore-owner, or downstream fence material remains mutation-free.
@@ -837,6 +951,18 @@ contract. Volatile non-contract fields such as `UpTime`, `RealMemory`, and `TmpD
 therefore cannot invalidate unchanged topology, while any semantic topology or
 successor-lineage drift remains pending. All other states remain pending.
 
+The target-HA recovery must not consume its bridge-client worker lineage before
+that lineage's canonical producer has observed the typed-GRES replacements.
+Run the existing bridge-client propagation reconciler first so it mirrors the
+verified Jail rollover into the rolling phase, checkpoints one exact rebind for
+every worker, and advances the existing checkpoint-gap receipt through the
+same complete successor set. This is a checkpoint-only adoption of the Pods
+that the typed-GRES rollover already created; it cannot authorize another Pod
+delete. Only after the producer has durably sealed the complete chain may the
+target-HA recovery validate and consume it. Preserve the terminal rollout
+timestamp when an exact producer replay makes no journal change, while any
+partial, foreign, config-drifted, or identity-drifted chain remains fail-closed.
+
 Before the topology path performs its first partition, queue, node, or
 reconfigure RPC, run the existing target cluster-ID marker repair against the
 rolling phase's exact accounting and bridge authority. This ordering matters:
@@ -907,7 +1033,7 @@ and unrelated migration phases remain unchanged.
 - TDD-001: The exact live 32-CPU/typed-GRES/idle/no-reason/zero-allocation record is stale-process eligible but never ready; allocation, reason, state, parameters, GRES, and inconsistent or already-current CPU topology remain rejected.
 - TDD-002: Only a zero-restart Pod and `slurmd` start before replay yields the exact chronology proof; UID or timestamp drift cannot reach deletion.
 - TDD-003: The live NodeSet binding requires the exact Helm owner, target, UID, generation, replicas, complete spec, and canonical static topology.
-- TDD-004: The caller passes the complete pre-replay subset to the existing parallel rollover, freshly re-observes target-HA successors, skips config recovery for an exact replacement, invokes it for the exact generic-GRES `INVALID_REG` successor or for the live-proof-bound stale-static controller successor, waits for exact post-recovery registration, and never emits `scontrol update State=RESUME` for the idle stale record.
+- TDD-004: The caller passes the complete pre-replay subset to the existing parallel rollover, freshly re-observes target-HA successors, skips config recovery for an exact replacement, invokes it for the exact generic-GRES `INVALID_REG` successor or for the live-proof-bound stale-static controller successor, waits for exact post-recovery registration, and never emits `scontrol update State=RESUME` for the idle stale record. Before that recovery consumes worker lineage, a fail-first ordering regression proves the canonical worker-handoff producer seals all per-worker and aggregate successor receipts without another Pod delete; exact replay is byte-stable and write-free.
 - TDD-005: Registration-resume replay accepts a changed raw `slurmd -C` line only when the canonical topology and successor lineage remain exact, rejects CPU/GRES semantic drift, and leaves the historical observation unchanged; the existing matching-topology, owned stale-drain, generic-GRES `INVALID_REG`, checkpoint replay, and bridge-successor tests remain green.
 - TDD-006: GPU topology replay invokes the canonical target cluster-ID marker repair before its first Slurm RPC. Production-shaped tests prove the full cross-phase pause/queue chain, current accounting writer/runtime/DB authority, no pre-repair `squeue` dependency, exact marker preimage, exact dual-controller fatal-loop admission through the existing inert stager without reapply, distinct immutable source-stager and target-bridge image bindings, stopped-writer restart, role rebind, successor Munge authentication, one immutable intent-generation-to-verified-restart child-lineage receipt, predecessor/StatefulSet/queue-authority/role/chronology/config/Jail drift rejection, and idempotent verified replay. A verified marker record is the historical pre-Slurm authority owner: replay validates its sealed queue/accounting payload and skips chronology reconstruction from later queue observations, while absent or unverified records still derive fresh authority. The child receipt also binds each Ready controller's container ID, image ID, restart count, and start time. The caller wraps a full read-only lineage fence with mutation guards before the pre-reconfigure pause reassert, immediately before `scontrol reconfigure`, and before the post-reconfigure pause reassert; each fence re-reads the StatefulSet, exact Pod/process generation, live active/standby mapping, ConfigMap material, and both jailed digests. After the successful verification ping, a fourth guarded fence must pass before the caller can checkpoint the reconfigure proof.
 
@@ -977,12 +1103,17 @@ zero restarts. Run local encode/decode in bridge and accounting, then pass an
 ephemeral credential through stdin in both directions. Store only the result
 classification; never persist credential bytes or their digest.
 
-Before deletion, revalidate the complete binding, checkpoint paused partitions
-and an empty `squeue`, then record the Pod UID/resourceVersion restart intent.
-Use the existing UID-preconditioned Pod deletion helper. Wait for a distinct
-same-Deployment successor whose target Secret projection is unchanged, whose
-container began after CAS, and whose local and two-controller cross-decode
-checks pass. Seal its immutable identity and make exact replay read-only.
+Before deletion, revalidate the complete binding and checkpointed partition
+pauses, freshly revalidate the journaled active/standby bridge roles, and run
+`squeue` directly in the exact active bridge Pod. A retained generic login
+client is never an authority source at target HA. Command failure and
+successful non-empty output remain distinct pending results, and neither may
+record restart intent. After a successful empty result, record the Pod
+UID/resourceVersion restart intent and use the existing UID-preconditioned Pod
+deletion helper. Wait for a distinct same-Deployment successor whose target
+Secret projection is unchanged, whose container began after CAS, and whose
+local and two-controller cross-decode checks pass. Seal its immutable identity
+and make exact replay read-only.
 
 #### Selected Option
 
@@ -1008,10 +1139,11 @@ selection, controller ownership, or unrelated Pod rollout behavior.
 #### Test-First Success Criteria
 
 - TDD-001: Equal Secret objects plus a pre-CAS Pod are insufficient without successful local Munge and exact failed cross-decode in both directions.
-- TDD-002: One exact target Deployment/ReplicaSet/Pod/Service/Secret/writer/bridge binding and empty paused queue reaches a durable UID/resourceVersion delete intent.
+- TDD-002: One exact target Deployment/ReplicaSet/Pod/Service/Secret/writer/bridge binding plus freshly revalidated target-HA roles and an empty queue read directly from the exact active bridge reaches a durable UID/resourceVersion delete intent.
 - TDD-003: Only a distinct post-CAS zero-restart successor under the same Deployment and Secret that cross-authenticates both bridge Pods becomes verified.
-- TDD-004: Verified replay is mutation-free; every owner, timestamp, selector, Secret, queue, bridge, writer, restart, and probe drift blocks before deletion.
+- TDD-004: Verified replay is mutation-free; every owner, timestamp, selector, Secret, queue, bridge, writer, restart, and probe drift blocks before deletion. Direct bridge RPC failure and successful non-empty output have separate regression controls and neither may fall back to a login route.
 - TDD-005: Existing worker/login Munge continuity, accounting handoff, controller bridge, and topology recovery tests remain green.
+- TDD-006: A fail-first runner whose retained login route fails or reports stale queue data while the exact active bridge role and queue proof succeeds must advance through queue admission without invoking that login route; role, Pod UID, container, or direct-command drift remains write-free.
 
 #### Validation Plan
 
@@ -1051,7 +1183,7 @@ and the live campaign advances with no out-of-band cluster mutation.
 
 <!-- /FEATURE: FEAT-006 -->
 
-<!-- FEATURE: FEAT-007 reqs=REQ-007 status=ready priority=P0 version=3 -->
+<!-- FEATURE: FEAT-007 reqs=REQ-007 status=ready priority=P0 version=5 -->
 ### FEAT-007: Sealed-proof selectors for terminal in-place resume
 
 #### Requirements Covered
@@ -1123,6 +1255,18 @@ start. This matches the producer lifecycle and binds the archived target Pod
 and successor lineage to a clean bridge plus the current segment's released
 hold and final Helm restore proof. Revalidation before cleanup or after segment
 completion remains blocking instead of being accepted as equivalent history.
+Replay reconstructs that exact later-segment successor before classifying a
+changed target Pod UID as drift. When the reconstructed successor differs only
+in Pod UID, retains the sealed workload UID and both immutable proof
+fingerprints, and the target-ready runtime still proves no sessions, zero
+restarts, the same image and host keys, the existing target-Pod rollover adapter
+checkpoints a dedicated later-segment receipt with the predecessor and final
+values fingerprints. The successor UID is advanced only after that durable
+write; any other reconstructed or runtime delta still stops at the successor
+guard. Subsequent resumes rebuild the ordered rollover chain from the handoff's
+sealed target Pod, require every UID to be unique and causally ordered, and
+revalidate each hop's workload UID, runtime identity hashes, and two immutable
+proof fingerprints before accepting the current successor.
 
 Rolling-compute fast verification independently resolves the current locked
 segment and compares the explicitly present journal's exact group-id set with
@@ -1186,6 +1330,41 @@ timestamps before the Pod successor is journaled. Any ambiguity, foreign node,
 wrong role, unaccepted operation, terminal failure, or completed-proof drift
 remains fail-closed.
 
+The all-current-Node controller census classifies only three admission-webhook
+transport outcomes as transient: connection refusal, no ready endpoint, and no
+route to the endpoint. The existing `finally` cleanup deletes every
+deterministic inspector Pod name and proves absence before a typed continuation
+escapes. Re-entry starts the whole proof again, including current Pod bindings,
+the complete Kubernetes Node inventory, fresh attempt IDs, per-node terminal
+Pods and logs, and final Node-identity revalidation. A stable campaign/proof
+deadline bounds retries even if the Node-set progress fingerprint changes while
+a checkpoint-owned provider rollout replaces system nodes. Admission denials,
+policy failures, and every other error remain ordinary fail-closed errors.
+
+Verified login Munge runtime replay owns a separate per-ordinal successor
+chain. The ordinary Pod binding already proves the exact Kruise StatefulSet
+owner, selector, target Secret projection, runtime shape, node, and Ready
+state, and the caller re-proves two Ready login endpoints plus authenticated
+connectivity to both target-HA controllers. If those current proofs succeed but
+the saved runtime projection changed, cxcli admits only a forward successor:
+either a later container pulse within the same Pod or a later same-node Pod UID
+under the same workload ordinal. Each hop fingerprints its predecessor and
+successor, records the predecessor verification time and current creation/start
+chronology, retains a bounded ordered history, and updates the active successor
+only in the same durable checkpoint write. Replay validates the complete chain
+before accepting the current projection; it never deletes the successor or
+weakens the stable workload, Secret, node, readiness, or authentication gates.
+
+Provider status uses one canonical Nebius SDK direct-message conversion path.
+The supported SDK floor is the SDK-owned message/reflection generation, so
+`sdk_message_to_mapping` and `sdk_parse_message` use its ProtoJSON helpers
+instead of the removed generated protobuf backing object. Phase-local MK8s
+cluster identity remains authoritative when present; otherwise status reads
+the immutable top-level campaign cluster ID before any discovery fallback.
+Conversion failure is an unavailable provider observation, not an empty list;
+only an exact empty response from the resolved locked cluster reaches the
+existing bounded retry and `unknown` result.
+
 #### Selected Option
 
 Reuse sealed producer receipts through canonical selectors. Do not refresh
@@ -1229,6 +1408,14 @@ Slurm RPC, target resource, or compatibility policy.
 - TDD-010: A command-gate Pod observed on an exact Ready replacement controller node while its real accepted provider operation is non-terminal leaves Pod lineage unchanged and returns control to the phase provider reconciler. Terminal success then requires and records the unchanged exact completed provider successor proof. A directly completed operation must carry only `terminal_at` and the full intended postcondition plus replacement UIDs; reconciliation of that same accepted operation must carry only `reconciled_at` and its canonical target/readiness postcondition, while the completed group supplies the exact replacement inventory. The sealed successor proof normalizes both routes to the same full postcondition and still binds the route-specific receipt shape; both timestamps missing or present, cross-route postconditions, and foreign group, node, role, readiness, target, operation, or lineage drift fail closed.
 - TDD-011: A provider-pending bridge Node with incomplete kubelet identity does not expand an existing sealed inspector-admission Node set or block its exact replay. The initial preflight still rejects incomplete identity, and replay rejects any missing, deleting, UID-replaced, provider-rebound, system-UUID-rebound, duplicate, or fingerprint-drifted recorded Node before checkpoint or source mutation.
 - TDD-012: A planned controller bridge with an exact requested node-group-create operation and real provider operation ID defers command-entry discovery refresh and retains the journal's completed-waypoint index without reclassifying an already-refreshed intermediate report, so the executor can reconcile that operation. Removing the operation kind, request timestamp, or real operation ID denies both exceptions, and the selector never treats the checkpointed attempt as terminal provider success or segment completion.
+- TDD-013: A live-shaped census whose first bulk inspector apply fails with a supported transient webhook transport error deletes every first-attempt Pod name, enters the bounded typed continuation, rediscovers a changed Node set, and succeeds only from distinct second-attempt Pods and evidence. A webhook policy denial remains an immediate error after exact cleanup, without a retry or authority mutation.
+- TDD-014: A verified login Pod journal at the exact later-topology predecessor digest, the same live Pod UID, and an exact recovered predecessor-to-target topology successor waits for the target jailed digest and canonicalizes the journal without Pod deletion. A crash after one of several login Pods is checkpointed retains the predecessor aggregate and admits the mixed journal only when every current Pod name and UID is exact, each target record is canonical and follows config recovery, and normalizing those producer-owned target fields reproduces the strict predecessor rollout. Wrong predecessor or target digest, reason, authority, semantic fingerprint, handoff digest, successor status, Pod UID, chronology, or observed configuration fails before checkpoint or delete.
+
+- TDD-015: A config-recovered crash checkpoint and a verified terminal replay whose propagation and login rollout already carry the distinct topology target digest both recover the immutable predecessor only from one exact final checkpointed config-reconciliation event. Its direct route requires the current non-empty full-consumer fingerprint, names, UIDs, target digests, propagation semantics, handoff, rollout, successor, and causal timestamps to reproduce. A later product-owned live RPC revalidation that refreshes only ping/show-config hashes and aggregate observation time is represented by one separately sealed topology-propagation revalidation receipt rather than weakening that comparison. The receipt binds the exact reconciliation event and topology successor, historical and source full-consumer fingerprints, a stable ordered projection of role, name, UID, node, container name and ID, restart count, and config digest, the target and ConfigMap, target digest, and strict source-revalidation, handoff-verification, and acceptance chronology. Creation requires the reconciliation event to be unique and final; exact later RPC observations validate their hashes, reproduce the sealed stable projection, and replay without another checkpoint write. Missing, duplicate, partial, extra-field, foreign, stable-identity, config, semantic, fingerprint, malformed-RPC, non-final-event, or chronology drift fails closed and leaves the phase byte-for-byte unchanged.
+- TDD-016: `_require_reconciled_provider_operation_terminal` keeps the exact provider operation lookup as primary authority. For a non-terminal `mk8s-node-group-*` operation only, it additionally reads the exact resource ID and exposes a sanitized structured problem solely through `_node_group_non_retryable_provider_problem`: the latest non-`WARN` valid timestamped event must be an `ERROR`, its code and the nested service/code must match bounded token syntax, and one exact `type.googleapis.com/nebius.common.v1.ServiceError` detail must declare `retry_type=NOTHING`. A later non-warning timestamped progress event supersedes an older failure observation, while warning-only fallout such as `NodeNotFound` does not. The generic reconciler remains fail-closed for that signal. Only the initial worker `target_update` caller may convert the exact causal `compute/NotEnoughResources` tuple into FEAT-010's typed capacity continuation; all other callers raise before the pending reconciler or another mutation. Read failure or every inexact/retryable shape continues through the existing typed one-hour-bounded continuation, while a foreign node-group identity fails closed. Focused tests prove strict generic behavior, the bounded worker exception, the real later warning, message non-reflection, causal chronology, later-progress supersession, node-group identity drift, and INFO, foreign-detail, retryable, missing-hint, and malformed-token negative controls.
+- TDD-017: `_execute_in_place_compute_migration_phase` passes the exact `_in_place_worker_outage_boundary_active` result into `_ensure_paused_manager_worker_readiness`. Without an accepted outage, that function retains the mandatory 30-minute live-readiness proof before provider dispatch. During an accepted outage it instead requires the existing exact paused-manager receipt, validates its schema/status/boundary/timestamp, exact target and worker-values fingerprint, exact NodeSet/workload UID/replica keysets, re-reads the bound live SlurmCluster, and revalidates the live zero-replica manager pause. `_reconcile_paused_manager_worker_readiness_checkpoint` then preserves the immutable receipt or performs only its already-defined stable-authority migration. This returns the sealed pre-dispatch bindings without reading intentionally unavailable worker workloads, allowing `_execute_one_in_place_node_group` to reach the exact provider-operation reconciler. Replacement health continues to call `_wait_for_in_place_worker_replacement_nodesets_ready` after terminal provider success. Focused tests prove live wait avoidance and write-free exact replay plus workload-field, worker-values, target-binding, and manager-authority drift rejection.
+- TDD-018: A verified login ordinal whose current Ready, target-Secret-mounted and target-HA-authenticated runtime is a later same-node Pod successor records one exact predecessor/successor rebind and becomes write-free on replay. A same-Pod forward container restart follows the same chain only when the Munge container ID changes, the restart count increases strictly, and the Munge start time is monotonic. Workload, owner, ordinal, node, Secret, selector, readiness, endpoint, authentication, non-forward timestamp, predecessor fingerprint, successor fingerprint, or chain-order drift remains checkpoint- and Kubernetes-write-free.
+- TDD-019: Real SDK direct NodeGroup messages serialize to complete snake-case mappings and parse update specs through the same supported message layer. Populate-jail status with no phase-local cluster ID queries the locked top-level checkpoint ID and renders the returned rows; a foreign discovery fallback is not called. Unsupported values raise instead of becoming `{}`, and only a genuinely empty list from the locked cluster retains the bounded retry and `unknown` status.
 
 #### Validation Plan
 
@@ -1473,6 +1660,448 @@ CLI output, help, README, requirements, design, changelog, and focused tests
 agree that dry run is optional and execution is an independent approved action.
 
 <!-- /FEATURE: FEAT-009 -->
+
+<!-- FEATURE: FEAT-010 reqs=REQ-010 status=ready priority=P0 version=2 -->
+### FEAT-010: Degraded worker continuation and exact partial completion
+
+#### Requirements Covered
+
+- REQ-010: Preserve safe worker progress across group-local degradation
+
+#### Context Evidence
+
+The current executor already localizes a pre-admission Ready-capacity failure
+and an exact accepted `compute/NotEnoughResources` operation to one worker
+future, while group-local health lets a healthy peer seal independently. Its
+global unavailable calculation charges only cxcli-owned rollout allowances,
+however, so nodes that were already missing or non-Ready can be omitted from
+admission. It also lacks durable exact readiness evidence, treats reservation
+policy strings as disjoint capacity, can lose mutation attribution when a
+future returns pending, and lets an older v6 binary ignore additive scheduler
+state.
+
+#### Design Details
+
+Build a bounded census once per worker wave from the live provider group
+identity and locked fixed-size/source-template contract, one Kubernetes Node
+list, and one Slurm
+node/job observation. Canonically join provider member, Kubernetes UID/name,
+and Slurm alias identities so one unhealthy node is charged once; carry an
+explicit anonymous deficit when the fixed-size group lacks a nameable member.
+An idle pre-admission failure writes a nested readiness-deferral receipt whose
+immutable trigger binds campaign, segment, group ID/UID, template, fixed size,
+strategy, provider-operation absence, first census, affected identities, and
+exact owned-lock restoration. Preserve that trigger while a separately hashed
+latest observation refreshes the exact affected-node report when the degraded
+membership changes. A resolution successor may accept new member UIDs only
+while every group and source-template binding remains exact.
+
+Compute a group charge rather than summing observation sources. An unstarted
+deferred group contributes its census count but no provider slot; an active
+operation, capacity receipt, restore, or health wait contributes the greater
+of the census count and its accepted allowance and retains one slot; a new
+candidate contributes its accepted allowance. Reserve a wave serially, prepare
+each exact group before its first lock, then take one bounded fleet census at a
+pre-dispatch barrier. Evidence or budget drift restores only exact owned
+pre-request locks and recomputes the wave. A transient observation failure
+admits nothing and stays pending; ambiguous mapping, unsafe jobs/epilogs,
+authority failure, or unprovable restoration fails recovery-required.
+
+Keep capacity projection immutable but replace field inequality with allocation
+lanes. Exact disjoint failure domains are independent. `FORBID` uses the common
+lane; `STRICT` uses its listed reservation lanes or a wildcard reservation
+lane; `AUTO` uses both the common lane and a wildcard reservation lane because
+specified reservations still fall back through ordinary AUTO behavior.
+Unknown evidence overlaps. Platform, preset, and GPU-cluster fields remain
+receipt bindings but do not independently prove physical capacity separation.
+
+Keep the existing accepted-operation and group-health journals canonical. The
+worker future converts only an exact non-terminal group operation into a local
+pending outcome; it never issues a second request. Terminal provider failure,
+unknown outcome, checkpoint or identity drift, shared service failure, and
+authorization failure still cancel the wave. Pre-admission Slurm deferral is
+permitted only with healthy controller/accounting authority, exact mapping,
+idle nodes, no ambiguous epilog, and no unresolved job or compensation action;
+cxcli never clears a customer reason. Structured provider errors are attributed
+to an accepted operation only when their event time is at or after that exact
+request; a stale latest error remains historical evidence and cannot abort the
+newer operation.
+
+Add one rolling-phase mutation classifier over durable provider dispatch,
+accepted/terminal/completed group evidence and applied Kubernetes/Slurm locks.
+Persist `none`, `possible`, or `confirmed` at the first external boundary and
+derive report status from that journal rather than a worker return value.
+
+Move checkpoint and report contracts to v7. The new binary recognizes an exact
+v6 checkpoint only through one validation-gated, owner-only atomic conversion
+that preserves nested operation and capacity bindings, adds the scheduler
+capability, and commits before live work. All execution then uses the v7 path;
+older binaries reject it. Owner-only atomic Markdown/JSON reports keep the
+pending phase and exit 1, add explicit partial/resume and mutation fields, and
+list exact Kubernetes and Slurm names where provable. CLI output remains a
+sanitized count-and-path summary. Every worker must still complete before the
+existing fleet verifier, compute tail, cutover, cleanup, retirement, later
+segments, or success can run.
+
+#### Selected Option
+
+Use a typed pre-admission readiness receipt, a census-budgeted two-stage worker
+scheduler, exact operation reconciliation, conservative allocation lanes, and
+an explicit v7 partial-result contract.
+
+#### Alternatives Considered
+
+Treating every provider or Slurm failure as resumable was rejected because it
+would hide workload loss and authority failures. Ignoring pre-existing outages
+was rejected because accepted rollout allowances are not extra capacity above
+an already degraded fleet. Per-group full-fleet polling was rejected as
+quadratic at large scale. Additive v6 state was rejected because an older
+executor could ignore it. Marking the rolling phase successful after partial
+progress was rejected because fleet health and terminal stages are incomplete.
+
+#### Implementation Boundaries
+
+Change external in-place migration scheduling, nested group evidence,
+checkpoint/report v7 loading, report aggregation, tests, operator
+documentation, and the changelog. Add no CLI or config field, provider
+operation replacement, terminal retry, live capacity-policy inference, or
+second scheduler path. The v6 reader exists only for the one-way conversion.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing/non-Ready Kubernetes nodes, fixed-size deficits, and exact idle customer Slurm states produce one bound readiness deferral before provider request; active jobs, epilog ambiguity, controller/accounting failure, ambiguous mapping, and unprovable lock restoration remain recovery-required.
+- TDD-002: Kubernetes and Slurm symptoms for one node are deduplicated, an anonymous deficit is still charged, and pre-admission, active-operation, health, and new-candidate group charges follow the accepted formula without exceeding global availability.
+- TDD-003: The scheduler reserves serially, rechecks before lock and at the pre-dispatch census barrier, restores only owned pre-request locks on drift, never dispatches from stale evidence, and performs bounded observation work per wave.
+- TDD-004: Reservation-lane tests prove AUTO overlaps FORBID and compatible STRICT capacity, explicit disjoint STRICT sets and exact disjoint failure domains may proceed, and unknown, platform, preset, or GPU-cluster differences alone remain overlapping.
+- TDD-005: Exact capacity receipts are rebound before all uses; accepted non-terminal operations reconcile without redispatch, retain their token, and permit only remaining-budget work, while terminal and foreign operations stop.
+- TDD-006: Readiness receipt replay is write-free; a same-source-template member replacement resolves automatically, while group/template/strategy/target-template drift fails before mutation.
+- TDD-007: The rolling mutation classifier reports possible or confirmed mutation from durable dispatch/lock evidence even when a future returns pending, and reports none only before every external boundary.
+- TDD-008: A valid v6 checkpoint converts atomically to v7 with every nested receipt rebound; interrupted conversion is recoverable and v6/older executors reject v7 rather than ignoring the capability.
+- TDD-009: Private reports are atomically promoted at mode `0600`, include exact bound node names or an explicit unidentified deficit, exclude provider IDs/messages, retain exit 1 and partial/resume state, and expose only counts/path on terminal output.
+- TDD-010: A roughly 4,000-node, forty-group scenario advances healthy groups deterministically, leaves the unsafe group unmutated, scales observations by waves, blocks every terminal phase, and on ordinary rerun mutates only an exact recovered group before final success.
+
+#### Validation Plan
+
+Run focused census, scheduler, workload-safety, receipt, migration, mutation,
+report, replay, health, and CLI tests; then the complete migration executor and
+CLI suites, docs alignment, Ruff, compile, Markdown lint, security review, and
+diff checks. Use local proof only; live completion still requires the
+authoritative checkpoint and independent postconditions.
+
+#### Test Plan
+
+Use deterministic in-memory checkpoint/provider fixtures and threading events
+to control census, lock, and dispatch ordering. Exercise mixed Kubernetes and
+Slurm identity, jobs/epilogs, all allocation lanes, budget and concurrency,
+v6 conversion, crash/replay, later terminal success/failure, both pause modes,
+private reports, and the forty-group scale shape.
+
+#### Evaluation Plan
+
+Require fail-first coverage for omitted baseline unavailability, unsafe AUTO
+lane independence, and lost mutation attribution. Then prove other safe groups
+finish without advancing the rolling phase, the exact deferred authority is
+preserved, and an ordinary rerun advances only genuinely recovered work.
+
+#### Rollout And Rollback
+
+Ship the v7 executor and one-way converter together. Conversion is an atomic
+local checkpoint transition performed only under the existing execution lock
+after complete v6 validation and before live mutation. After conversion,
+rollback requires a newer v7-capable binary; never downgrade the checkpoint,
+edit live journal evidence, or synthesize a provider terminal result.
+
+#### Done Definition
+
+Code, tests, specs, README, and changelog agree; census and replay are bounded
+and exact; safe independent work is proven within workload, concurrency,
+capacity-lane, and availability boundaries; partial reports identify affected
+nodes; and unresolved work remains pending without a live-completion claim.
+
+<!-- /FEATURE: FEAT-010 -->
+
+<!-- FEATURE: FEAT-011 reqs=REQ-011 status=ready priority=P0 version=1 -->
+### FEAT-011: Canonical external-upgrade resume frontier
+
+#### Requirements Covered
+
+- REQ-011: Resume the locked upgrade path from one canonical frontier
+
+#### Context Evidence
+
+The v7 checkpoint already locks the ordered top-level phase plan after mutation,
+and the current live campaign maps cleanly to that plan: the first four phases
+are complete and `populate-jail-refresh` is the earliest incomplete phase. The
+repeated failures were therefore phase-local producer and consumer mismatches,
+not a wrong top-level phase. The latest failure is the narrow proven example:
+complete controller-gap `DOWN` evidence can build a sealed semantic binding,
+but target worker recreation consumed that binding before invoking its producer.
+The fail-closed guard then correctly refused a live Slurm query through the
+deliberately inert target controller.
+
+The audit also found three top-level workflow defects: CLI and executor used
+different active-boundary sets, report rendering could reorder the locked plan,
+and completed-phase reconciliation could leave a hole. Historical checkpoints
+can also temporarily contain a protected completion hole whose exact predecessor
+must be reconstructed before strict prefix validation.
+
+#### Design Details
+
+Resume uses the immutable accepted `planned_phases` sequence as the sole
+top-level ordering authority. Checkpoint construction validates plan structure
+without rejecting restorable historical completion holes. Before dispatch, the
+executor runs exact protected-boundary reconstruction, completed-action
+reconciliation, and then a pure classifier that requires `completed_phases` to
+be the exact ordered prefix and selects the earliest incomplete phase.
+`pending_phase` remains status output, never execution authority.
+
+One shared active-mutation-boundary classifier feeds CLI discovery deferral,
+executor preflight, and backup recovery. Protected predecessors are derived
+from the locked plan. If reconciliation invalidates one completed phase, every
+completed successor is invalidated as the dependent suffix. Reports consume the
+locked plan directly instead of the static supported-phase order.
+
+When that classifier defers discovery after a SlurmCluster handoff, the CLI
+reapplies the checkpoint's exact resume identity scope to the cached snapshot in
+memory before immutable campaign validation. The existing scoped inventory
+validator still enforces the mode-specific source/target object count, namespace,
+name, UID, and Helm-ownership contract. It projects the original source UID only
+for campaign comparison and publishes the selected source or target resource to
+execution consumers. The cached bundle remains unchanged, and a foreign,
+recreated, ambiguous, or mode-incompatible target cannot cross the command-entry
+gate.
+
+Source cleanup consumes that same normalized identity scope through the
+executor gate. Before deletion, the scoped source role continues to resolve the
+immutable source binding. If a crash occurs after the exact source disappears
+but before the completion proof is sealed, only a schema-valid source-cleanup
+scope whose target role and source/target namespace, name, and UID bindings
+exactly reproduce the rolling handoff may stand in for the absent source. A raw
+target-only snapshot is insufficient. After completion, the canonical cleanup
+proof remains the terminal authority. This closes the producer/consumer state
+gap without adding a compatibility branch or weakening UID validation.
+
+The current phase-local repair remains deliberately bounded. Target worker
+recreation first invokes the existing exact controller-gap binding producer,
+then validates the resulting digest and reuses checkpoint-owned `DOWN` records.
+Both the rolling worker rollout and its exact target-singleton final-reload
+successor are accepted. Missing or drifted authority remains fail-closed and
+cannot fall through to a live Slurm partition RPC.
+
+#### Selected Option
+
+Use the existing v7 checkpoint as the source of truth, add one pure top-level
+frontier classifier, centralize active-boundary classification, make report and
+reconciliation order follow the locked plan, and route the proven
+controller-gap consumer through its canonical producer. Keep one execution path
+and retain all existing strict phase-local identity and chronology checks.
+
+#### Alternatives Considered
+
+Trusting `pending_phase` and restarting that handler was rejected because it
+does not identify the nested transition or its dependencies. Adding more local
+boolean exceptions was rejected because it repeats the producer/consumer drift.
+Rewriting the whole executor as a new generic workflow engine was rejected as a
+high-blast-radius migration that would duplicate mature safety policy. Resetting
+the live checkpoint or starting from the beginning was rejected because it can
+replay accepted mutations and discard authoritative recovery evidence.
+
+#### System Design Review
+
+The design centralizes top-level ordering and boundary policy while leaving
+phase-local safety facts with their current owners. Structural checkpoint
+admission is intentionally distinct from strict dispatch admission so exact
+protected reconstruction can run first. It adds no service, dependency,
+credential, or permission boundary. General phase-local graph adoption remains
+the explicit FEAT-012 follow-up rather than an implicit completion claim.
+
+#### Implementation Boundaries
+
+Change `src/nebius_cxcli/soperator_migration.py`, `src/nebius_cxcli/cli.py`,
+their tests, README operator guidance, and the changelog. Do not change CLI
+approval semantics, introduce a skip/reset flag, mutate a live checkpoint
+during validation, or weaken existing identity, chronology, Slurm, Kubernetes,
+Helm, provider, or writer fences.
+
+#### Test-First Success Criteria
+
+- TDD-001: Every action-derived locked plan yields the same phase order before and after serialization; duplicate, reordered, missing, extra, or unsupported phases fail before external calls.
+- TDD-002: Exact historical predecessor evidence is structurally admitted, reconstructed, and only then subjected to completed-prefix validation.
+- TDD-003: Completed-prefix and protected-boundary matrices select one earliest incomplete phase and never use `pending_reason` as authority.
+- TDD-004: CLI, executor, and backup paths recognize the same accepted controller-bridge provider boundary, including stale `pending_phase` status.
+- TDD-005: Completed-phase demotion invalidates the locked dependent suffix and reports preserve the locked campaign order.
+- TDD-006: A live-shaped worker rollout with complete inert-controller evidence but no sealed gap binding invokes the canonical binding producer first, checkpoints it once, reuses the exact `DOWN` records, and performs no Slurm snapshot or update. Malformed or drifted binding evidence is mutation-free.
+- TDD-007: The current saved checkpoint derives `populate-jail-refresh` as the top-level frontier. An in-memory replay advances only the missing derived receipt; live completion still requires the unchanged approved command.
+- TDD-008: A cleanup-started checkpoint with no completion proof accepts the exact checkpoint-scoped target only in the source-deleted crash window. Missing scope, wrong mode or role, source/target drift, and foreign target UID remain write- and mutation-free failures; source-present and completed-cleanup replay keep their existing behavior.
+
+#### Current Implementation Scope
+
+The canonical locked-plan order, post-reconstruction completed-prefix
+validation, report ordering, dependency-closed reconciliation, shared
+mutation-boundary classification, and controller-gap producer-before-consumer
+admission apply in this change. Source-cleanup admission also consumes the
+canonical scoped identity receipt for the delete-before-proof crash window.
+Existing manager-pause, source-retirement,
+protected-Helm, JailedConfig, and other phase-local classifiers remain
+fail-closed and retain their composed regressions. FEAT-012 owns general
+declarative transition descriptors and every-write interruption matrices.
+
+#### Validation Plan
+
+Run pure frontier and serialized historical-reconstruction tests first, then
+focused controller-gap producer-to-consumer tests, the entire migration
+executor suite, documentation alignment, Ruff, compilation, and repository CI
+parity. Perform read-only live comparison of checkpoint, controller gate,
+bridge, workers, partitions, and queue. Keep source validation and live campaign
+completion as separate evidence levels.
+
+#### Test Plan
+
+Cover valid and invalid locked plans, restored historical predecessor evidence,
+shared boundary detection, dependency-closed suffix invalidation, locked report
+ordering, rolling-to-singleton reload lineage, exact controller-gap sealing,
+and forbidden Slurm calls on drift.
+
+#### Evaluation Plan
+
+Accept the implementation when every locked-plan fixture derives one earliest
+authorized top-level frontier after exact reconstruction, current
+campaign-shaped evidence advances only the missing controller-gap receipt in
+memory, and an authorized live replay independently reaches terminal checkpoint
+verification.
+
+#### Rollout And Rollback
+
+Ship the source repair through the normal cxcli release path and rerun the exact
+original approved command against the preserved checkpoint. Rollback source
+only; do not edit or delete checkpoint state. Stop before live mutation if the
+derived frontier or any authoritative identity differs.
+
+#### Done Definition
+
+The locked top-level plan and frontier are deterministic, exact protected
+reconstruction precedes strict prefix validation, the controller-gap producer
+precedes its consumer, forbidden Slurm calls are unobserved in negative tests,
+documentation and reports agree, the lifecycle is sealed, and live completion
+is claimed only after terminal checkpoint verification.
+
+<!-- /FEATURE: FEAT-011 -->
+
+<!-- FEATURE: FEAT-012 reqs=REQ-012 status=ready priority=P1 version=1 -->
+### FEAT-012: Declarative phase-local transition graphs
+
+#### Requirements Covered
+
+- REQ-012: Generalize phase-local transition-frontier coverage
+
+#### Context Evidence
+
+The top-level frontier does not describe the many durable transitions inside a
+mutation-capable phase. Prior failures at manager pause, source JailedConfig
+retirement, protected Helm succession, and controller-gap reuse show that
+strict point classifiers can still drift when producer and consumer checkpoint
+shapes evolve independently.
+
+#### Design Details
+
+Introduce one declarative transition descriptor per phase-local step: stable
+identifier, checkpoint owner path, predecessor receipts, effect class,
+terminal classifier, and delegated owner where applicable. A graph validator
+rejects cycles, duplicate identifiers, missing owners, orphan consumers, and
+invalid effect classes. One admission function derives the phase-local frontier
+and invokes canonical checkpoint-only prerequisite producers before granting
+external-call authority.
+
+Expose only a sanitized transition identifier and effect class in status and
+private reports. Preserve the existing intent, accepted, and verified operation
+states and immutable external identities. Migrate phases incrementally through
+the same execution path; do not add a compatibility engine or live-state-only
+fallback.
+
+Product-owned recovery rejections use the same descriptor to emit a stable
+sanitized code, top-level phase, transition boundary, and mismatch class while
+retaining the readable exception cause chain. The mismatch taxonomy separates
+command/authentication, campaign identity, checkpoint lineage, provider,
+Kubernetes/Helm/Jail, Slurm/job/accounting, and terminal-health failures. It is
+diagnostic metadata only: prose and error codes never become checkpoint or
+execution authority, and private resource identifiers remain confined to
+sealed checkpoint/report material.
+
+#### Selected Option
+
+Extend the existing executor with validated descriptors and canonical admission
+instead of replacing it with a second workflow engine. Start with the complete
+in-place Jail and rolling-compute chain, then cover every remaining
+mutation-capable composite phase.
+
+#### Alternatives Considered
+
+Continuing to add local boolean recovery exceptions was rejected because it
+preserves independent producer and consumer classifiers. Replacing the executor
+with a new workflow engine was rejected because it creates a second migration
+path and duplicates mature safety policy. Trusting live resource state was
+rejected because it cannot prove accepted-operation identity or chronology.
+
+#### System Design Review
+
+Descriptors remain metadata over existing checkpoint owners rather than a new
+state store. Admission preserves fail-closed identity, chronology, and
+idempotency checks, while graph validation makes temporal coupling explicit.
+No service, dependency, credential, permission, or network boundary changes.
+
+#### Implementation Boundaries
+
+Change the external-upgrade executor, its private report projection, and tests.
+Do not reset or migrate the live checkpoint, change approval semantics, add a
+compatibility dispatcher, or weaken phase-local Kubernetes, Helm, provider,
+Slurm, writer, or immutable-identity fences.
+
+#### Test-First Success Criteria
+
+- TDD-001: Graph validation rejects cycles, duplicate IDs, missing owners, orphan consumers, and invalid effect classes.
+- TDD-002: Serialized producer-shaped fixtures cover manager-pause rearm, JailedConfig retirement, protected Helm succession, worker recreation, controller-gap binding, and partition reuse.
+- TDD-003: Interruption after every durable write resumes exactly once and never redispatches an accepted external operation.
+- TDD-004: Reports expose only the sanitized transition ID and effect class.
+- TDD-005: Every product-owned rejection category emits the stable code, phase, boundary, and mismatch class with a readable cause chain, while snapshot tests prove that credentials, operation IDs, Kubernetes object identities, private endpoints, customer jobs, and raw command output are absent.
+
+#### Implementation Status
+
+Planned hardening scope. FEAT-011 supplies the universal top-level frontier and
+the current controller-gap producer-to-consumer repair, but does not satisfy
+this feature for all mutation-capable phases.
+
+#### Validation Plan
+
+Run graph validation, every-cut-point serialization matrices, phase-local
+producer-to-consumer composition tests, error-taxonomy and report-privacy
+checks, and the complete external-upgrade executor suite.
+
+#### Test Plan
+
+Generate one producer-shaped serialized fixture at every durable write boundary
+and compare normalized uninterrupted and resumed terminal authority. Include
+negative mutations for every predecessor receipt and assert that forbidden
+external calls remain unobserved.
+
+#### Evaluation Plan
+
+Accept each migrated phase only when its graph validates, all cut-point cases
+are equivalent, accepted operations are never redispatched, and report output
+contains no sensitive runtime identifiers or raw command data.
+
+#### Rollout And Rollback
+
+Land descriptor adoption phase by phase through the existing executor. Roll
+back source only if a descriptor misclassifies a frontier; preserve checkpoint
+authority and use no reset, edit, or compatibility fallback.
+
+#### Done Definition
+
+Every mutation-capable composite phase uses the declarative transition contract,
+all cut-point matrices pass, and no remaining consumer reconstructs a producer
+fact through an independent checkpoint classifier.
+
+<!-- /FEATURE: FEAT-012 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 
@@ -2813,7 +3442,11 @@ static IAM token is inherited and rejects static IAM, CLI, config-profile, and
 impersonation-token fallbacks. One command-lifetime provider SDK owns background
 token renewal; every bounded provider request waits synchronously when renewal
 is due, and provider SDK cleanup is wall-clock bounded so Lease release cannot
-wait indefinitely on a stalled close. Execute mode replaces any stored kube
+wait indefinitely on a stalled close. The Nebius SDK handoff maps an optional
+endpoint override to the SDK's `domain` constructor parameter, starts and
+handshakes the cxcli-owned event loop before construction, and preserves the
+underlying exception as an explicit CLI cause chain when initialization fails.
+Execute mode replaces any stored kube
 context with the cxcli-owned handoff when the target has a Nebius cluster ID;
 kube-context-only targets fail before mutation because arbitrary local
 authentication cannot prove command-lifetime renewal. Credential revocation or
@@ -3408,14 +4041,18 @@ rollback,
 preserves the canonical login Service object and Nebius LoadBalancer public or
 internal address during `rolling-compute-migration`, fails before target chart
 handoff if the existing login `LoadBalancer` address cannot be converted into a
-reusable Nebius allocation and persisted as
-`nebius.com/load-balancer-allocation-id` in
-`slurmNodes.login.sshdServiceAnnotations`; restores that checkpointed annotation
-into every later target Helm and Jail Upgrade values reapply so server-side
-apply cannot remove the retained allocation; and verifies the original Service
-UID, ClusterIP, LoadBalancer ingress, allocation id, target login StatefulSet
-readiness, preserved-Service EndpointSlice readiness, and login-side Slurm smoke
-before source login retirement. Before non-destructive target and Jail Helm
+reusable Nebius allocation and retained on that exact Service. During a dual-CR
+handoff, every later target Helm and Jail Upgrade values replay makes the
+target-owned release-qualified login Service `NodePort` and renders explicit
+JSON-merge null tombstones for only the copied
+`nebius.com/load-balancer-allocation-id` and
+`nebius.com/load-balancer-type` annotations so even live-only values are deleted
+from that shadow Service. This leaves
+the preserved Service as the sole LoadBalancer; same-CR upgrades keep their
+configured Service type. cxcli verifies the original Service UID, ClusterIP,
+LoadBalancer ingress and allocation, the target shadow UID/owner/NodePort type,
+identical selectors and Ready EndpointSlice Pod UIDs, target login StatefulSet
+readiness, and login-side Slurm smoke before terminal validation. Before non-destructive target and Jail Helm
 reconciliation, external upgrade checkpoints every exact source login Pod,
 owning node, SSH container, and host-key identity. The source availability hold
 remains until a distinct Ready target peer with the preserved host key is an
@@ -7501,6 +8138,20 @@ external targets adopt `/mnt/jail/home`, `/mnt/jail/data`,
 `/checkpoints` must be declared with
 `--jail-persistent-mount <mountPath>=<localPath>` because cxcli does not infer
 arbitrary root-level folders as customer data.
+
+The legacy source binding and the active slot are different storage epochs.
+Before the source-to-target SlurmCluster handoff, discovery remains strict: all
+source SlurmCluster, source-owned NodeSet, PVC inventory, and storage-summary
+evidence must resolve one legacy claim. After the checkpoint-scoped identity
+view selects the target successor, its SlurmCluster and NodeSets correctly point
+at the active slot and are no longer legacy-source evidence. Resume therefore
+reuses only the phase's immutable legacy PVC name and UID, requires the exact
+schema-valid target identity scope, complete distinct slot binding, and matching
+available discovery or verified-backup source evidence, then performs the
+existing live PVC UID check before any copy or probe. It does not rewrite the
+cached discovery bundle, reinterpret the target slot as the legacy source, or
+weaken the pre-handoff multi-source conflict guard.
+
 If an automatic path was absent in the legacy rootfs, the chart creates the
 stable directory before mounting it. Later `/models` writes land in
 `/mnt/jail/models` on external clusters or `/mnt/jail-store/shared/models` on
@@ -7732,8 +8383,13 @@ target controller authority.
    checkpointed target SConfig size using the actual target service account,
    proves that no captured source writer survived, waits for the target-owned
    SConfigController pod on the active slot, and verifies delivery of the
-   checkpointed full target config and exact digest into the Jail. Only then
-   does it record
+   achievable checkpointed release-runtime config and exact digest into the
+   Jail. While the manager remains paused and the target-HA bridge is
+   authoritative, that runtime is the exact sealed bridge-client ConfigMap;
+   cxcli separately retains the deferred full-target digest and does not claim
+   REST/controller recovery at this boundary. Full-target delivery remains a
+   later terminal obligation after the manager and OpenMetrics lifecycle
+   resumes. Only then does it record
    `rootfs_handoff_verification.status=verified` with all consumer, slot,
    persistent-mount, and SConfig evidence.
 10. Keep user partitions controlled/DOWN. After the complete rootfs handoff,
@@ -8110,7 +8766,32 @@ The command boundary is intentional:
   stager accepts only the recorded predecessor or successor digest. A
   login-side `scontrol reconfigure` is bracketed by exact partition-pause
   reassertion, and later handoff/config-recovery digest gates explicitly accept
-  this additive successor without rewriting their historical anchors. Natural
+  this additive successor without rewriting their historical anchors. Login
+  propagation keeps its verified predecessor journal immutable until it sees
+  the later-segment successor. A distinct predecessor-to-target digest is not
+  accepted generically: the target must be the current handoff digest, the
+  predecessor must be the verified rollout digest, the exact deployed topology
+  apply authority and timeout-only semantic restoration must reproduce, and the
+  live login Pod UID must be unchanged. Only then does the existing bounded
+  jailed-config observer wait through the recorded Helm digest to the target and
+  replace that one Pod record with the canonical target-digest observation. The
+  path never serially deletes the Pod; missing or drifted successor material
+  remains recovery-required before checkpoint or infrastructure mutation.
+  Once every login and the direct propagation proof have reached the distinct
+  target digest, the topology canonicalizer does not reinterpret that current
+  digest as the sealed predecessor. It recognizes only one exact
+  `checkpointed-client-config-reconciliation` event whose predecessor and
+  replacement digests match the topology successor, whose current replacement
+  consumer fingerprint reproduces from non-empty target-digest consumers with
+  unchanged names and UIDs, and whose current propagation semantics reproduce
+  both the predecessor and target semantic fingerprints. The verified target
+  rollout, current accepted or verified handoff, config-recovery timestamp,
+  reconciliation acceptance, propagation revalidation, and optional terminal
+  timestamps must form the canonical causal order. This permits the crash
+  checkpoint between propagation and topology-successor terminalization as well
+  as terminal write-free replay; partial, duplicate, foreign, extra-field, or
+  drifted reconciliation state fails before any mutation.
+  Natural
   worker registration receives a bounded window; only a still-waiting exact
   Pod-UID/container identity may receive one journaled in-place slurmd
   `SIGHUP`. An indeterminate prior signal fails closed rather than risking a

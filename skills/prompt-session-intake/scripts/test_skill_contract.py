@@ -99,12 +99,19 @@ class PromptSessionSkillContractTests(unittest.TestCase):
             ),
         )
         self.assert_terms(
-            "prompt-session-intake/evals/trigger-prompts.md",
+            "prompt-session-intake/evals/process-cases.md",
+            (
+                "prompt-intake-positive-11",
+                "prompt-intake-positive-15",
+                "secret plus valid project intent",
+                "one wins and one reports prompt",
+            ),
+        )
+        self.assert_terms(
+            "prompt-session-intake/evals/trigger-prompts.csv",
             (
                 "Add configurable timeout, then run pytest -q.",
                 "tool check --json",
-                "secret plus valid project intent",
-                "one wins and one reports prompt",
             ),
         )
 

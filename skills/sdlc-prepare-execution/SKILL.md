@@ -1,6 +1,6 @@
 ---
 name: sdlc-prepare-execution
-description: "Use only as part of the Agentic SDLC workflow; use after one feature plan is locked and before `sdlc-tdd` to create or resume the feature's private integration branch/worktree, deterministic task waves, and recoverable execution state."
+description: "Use only as part of the Agentic SDLC workflow; after a feature plan is locked and before sdlc-tdd, create or resume its private integration branch/worktree, deterministic task waves, and recoverable execution state."
 ---
 
 # Prepare SDLC Execution
@@ -170,6 +170,22 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   coordinator-created task commit.
 - Current state and checkpoint point to the integration cwd and
   `sdlc-tdd` as the next skill.
+
+## SDLC Invariants
+
+- Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
+- Keep run state, plans, evidence, steering, screenshots, and transcripts under
+  `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
+- Reload `current-state.json` and the latest checkpoint before changing phase
+  state or writing evidence.
+- Classify every failure before retrying or routing backward.
+- Treat hooks as invariant guardrails only; do not make hooks orchestrate the
+  workflow.
 
 ## Learning Loop
 

@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+publish-helm-positive-01,true,"Use publish-helm to release this chart end to end."
+publish-helm-positive-02,true,"Set up the Helm publication assets and workflow for this project."
+publish-helm-positive-03,true,"Prepare merge tag verify and report the next OCI chart release."
+publish-helm-negative-01,false,"Create or harden this Helm chart without publishing it."
+publish-helm-negative-02,false,"Publish a container image release."
+publish-helm-negative-03,false,"Write only the GitHub Actions YAML for chart CI."

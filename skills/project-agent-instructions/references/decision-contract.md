@@ -159,6 +159,27 @@ never truncates. Empty sections, duplicate rules, multiline or control-bearing b
 placeholders, URLs, IP literals, recognized secret forms, and absolute user
 home paths are rejected.
 
+Rendering also preflights the disposition against the fresh inspected target.
+For example, `existing-sufficient` is valid only for active human-owned project
+instructions and fails before private rules or state are published for a
+managed target. A revised current-session decision may change existing private
+rules only when the prior canonical render state exactly binds the project,
+manifest, decision and rules paths and hashes the current mode-`0600`,
+single-link rules bytes. Historical spec and decision digests remain generation
+metadata so later spec reconciliation can produce a new generation; planning
+independently revalidates the new full digests. The helper holds one
+nonblocking private-bundle lock and carries the validated state identity and
+bytes into the final compare-and-swap, where it rechecks both state and rules
+predecessors immediately before atomically replacing the rules. It syncs the
+private directory and then publishes matching render state. A private I/O
+failure while publishing that state returns only
+`RENDER_STATE_PUBLICATION_INCOMPLETE`; exact current decision-rendered rules
+let the next locked render finish publication, including re-syncing the private
+parent directory when replacement completed before directory sync failed.
+Missing, malformed,
+ownership-mismatched, unsafe, hard-linked, or concurrently changing predecessor
+evidence remains blocked, and generic `UNSAFE_TARGET` is not retryable.
+
 ## Ownership and transitions
 
 The generated marker is:
@@ -289,9 +310,10 @@ overrides are explicit. Declare the base profile and no overrides as:
 
 The helper private root is a dedicated initially empty mode-`0700` directory
 outside every Git worktree. Manifest, decision, ownership, and state are direct
-children with mode `0600`. The owner-issued spec receipt and required runtime
-declaration are mode-`0600` caller inputs outside Git and sit beside that
-directory. The lifecycle guard permits only the exact current-session
+children with mode `0600`; the renderer's direct-child mode-`0600` lock file
+serializes rules and state publication. The owner-issued spec receipt and
+required runtime declaration are mode-`0600` caller inputs outside Git and sit
+beside that directory. The lifecycle guard permits only the exact current-session
 `runtime-config.json` and direct-child `decision.json` caller inputs. It may
 also admit one exact, uncomposed numeric mode-`0600` tightening command for one
 of those existing regular files; broader modes, directories, symlinks, sibling

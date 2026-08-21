@@ -49,36 +49,36 @@ def bounded_nebius_request_kwargs(
 
 
 def sdk_message_to_mapping(value: object) -> Mapping[str, Any]:
-    """Convert a Nebius SDK wrapper object to a JSON-style mapping."""
+    """Convert a supported Nebius SDK direct message to a JSON-style mapping."""
 
     if isinstance(value, Mapping):
         return dict(value)
-    message = getattr(value, "__pb2_message__", None)
-    if message is None:
-        return {}
-    from google.protobuf.json_format import MessageToDict
+    from nebius.base.protos.direct import Message
+    from nebius.base.protos.json_format import message_to_dict
 
-    parsed = MessageToDict(
-        message,
+    if not isinstance(value, Message):
+        raise TypeError("value is not a Nebius SDK direct message")
+    return message_to_dict(
+        value,
         preserving_proto_field_name=True,
         use_integers_for_enums=False,
     )
-    return parsed if isinstance(parsed, Mapping) else {}
 
 
 def sdk_parse_message(wrapper_type: type[Any], payload: Mapping[str, Any]) -> Any:
-    """Build a Nebius SDK wrapper from a JSON-style mapping."""
+    """Build a supported Nebius SDK direct message from a JSON-style mapping."""
 
-    from google.protobuf.json_format import ParseDict
+    from nebius.base.protos.direct import Message
+    from nebius.base.protos.json_format import parse_dict
 
     wrapper = wrapper_type()
-    message = wrapper.__pb2_message__
-    parsed = ParseDict(
+    if not isinstance(wrapper, Message):
+        raise TypeError("wrapper_type does not construct a Nebius SDK direct message")
+    return parse_dict(
         to_plain_data(dict(payload)),
-        message,
+        wrapper,
         ignore_unknown_fields=True,
     )
-    return wrapper_type(parsed)
 
 
 def nebius_operation_id(operation: object) -> str:

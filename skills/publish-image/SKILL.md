@@ -1,6 +1,6 @@
 ---
 name: publish-image
-description: "Use to publish container images end to end from the current project: collect release inputs, optionally set up changelog and release-helper assets, prep the release branch, create and merge a PR, tag from the default branch, wait for the image publish workflow, verify pushed image tags/digest, and report the result. Also supports explicit setup-only guidance; delegate GitHub Actions YAML to github-workflows."
+description: "Use only when explicitly asked to publish container images end to end: collect inputs, set up optional assets, prepare/merge a PR, tag, wait, verify tags/digest, and report. Use github-workflows for workflow YAML."
 ---
 
 # Publish Image

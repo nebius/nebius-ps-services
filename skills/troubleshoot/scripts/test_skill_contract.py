@@ -240,11 +240,29 @@ class TroubleshootContractTest(unittest.TestCase):
                 normalized = " ".join(value.split()).casefold()
                 self.assertIn("every explicit `$troubleshoot` invocation", normalized)
                 self.assertIn("troubleshoot-report-obligation.json", normalized)
-        combined = " ".join(" ".join(value.split()).casefold() for value in surfaces.values())
+        combined = " ".join(
+            " ".join(value.split()).casefold() for value in surfaces.values()
+        )
         self.assertIn("concise", combined)
         self.assertIn("advisory_incomplete", combined)
+        self.assertIn("sensitive_detected", combined)
         self.assertIn("same session", combined)
         self.assertIn("no generated fallback", combined)
+        self.assertIn("no automatic replacement", combined)
+        self.assertIn("repository-relative", combined)
+        self.assertIn("full git repository root", combined)
+        self.assertIn("home-relative", combined)
+        self.assertIn("`file:`", combined)
+        self.assertIn("sibling-project", combined)
+        self.assertIn("format defect", combined)
+        self.assertIn("ambiguous", combined)
+        self.assertIn("renderer-active", combined)
+        preflight = TROUBLESHOOT / "scripts" / "preflight_report_obligations.py"
+        self.assertTrue(preflight.is_file())
+        self.assertIn(
+            "preflight_report_obligations.py",
+            surfaces["hook README"],
+        )
 
     def test_remediation_hook_registers_prompt_tool_and_arbitrated_stop_boundaries(
         self,
@@ -265,6 +283,13 @@ class TroubleshootContractTest(unittest.TestCase):
             TROUBLESHOOT / "assets" / "hooks" / "stop_lifecycle_arbiter.py"
         )
         self.assertIn('"remediation_attempt_guard.py"', stop_arbiter)
+        self.assertIn("if terminal is None", stop_arbiter)
+        guard_source = self.read(
+            TROUBLESHOOT / "assets" / "hooks" / "remediation_attempt_guard.py"
+        )
+        self.assertIn("codex/troubleshoot-report-obligation-v3", guard_source)
+        self.assertIn('"sensitive_detected"', guard_source)
+        self.assertNotIn("MAX_REPORT_CORRECTIONS", guard_source)
         for owner in ("maintain-project-specs", "prompt-session-intake", "sdlc-start"):
             candidate = ROOT / owner / "assets" / "hooks" / "stop_lifecycle_arbiter.py"
             if candidate.exists():
@@ -413,7 +438,9 @@ class TroubleshootContractTest(unittest.TestCase):
             self.assertIn(layer, protocol)
         self.assertIn("Each canonical log layer remains exactly once", reporting)
         self.assertIn("as working evidence", reporting)
-        self.assertIn("Do not make internal ledger formatting a Stop prerequisite", reporting)
+        self.assertIn(
+            "Do not make internal ledger formatting a Stop prerequisite", reporting
+        )
         for criterion in (
             "Design",
             "Infrastructure",
@@ -471,7 +498,7 @@ class TroubleshootContractTest(unittest.TestCase):
 
     def test_design_accepts_proven_handoff_without_reopening_diagnosis(self) -> None:
         skill = self.read(DESIGN / "SKILL.md")
-        evals = self.read(DESIGN / "evals" / "trigger-prompts.md")
+        evals = self.read(DESIGN / "evals" / "process-cases.md")
         normalized = " ".join(skill.split())
         normalized_evals = " ".join(evals.split())
 
@@ -503,7 +530,7 @@ class TroubleshootContractTest(unittest.TestCase):
         metadata = self.read(TROUBLESHOOT / "agents" / "openai.yaml")
         readme = self.read(TROUBLESHOOT / "README.md")
         process_cases = self.read(TROUBLESHOOT / "evals" / "process-cases.md")
-        trigger_prompts = self.read(TROUBLESHOOT / "evals" / "trigger-prompts.md")
+        trigger_prompts = self.read(TROUBLESHOOT / "evals" / "trigger-prompts.csv")
         normalized_readme = " ".join(readme.split())
         normalized_prompts = " ".join(trigger_prompts.split())
 
@@ -603,7 +630,7 @@ class TroubleshootContractTest(unittest.TestCase):
     def test_observability_evals_require_zero_call_signal_fit_gate(self) -> None:
         process_cases = self.read(TROUBLESHOOT / "evals" / "process-cases.md")
         rubric = self.read(TROUBLESHOOT / "evals" / "process-rubric.md")
-        prompts = self.read(TROUBLESHOOT / "evals" / "trigger-prompts.md")
+        prompts = self.read(TROUBLESHOOT / "evals" / "trigger-prompts.csv")
         normalized_cases = " ".join(process_cases.split())
         normalized_rubric = " ".join(rubric.split())
         normalized_prompts = " ".join(prompts.split())

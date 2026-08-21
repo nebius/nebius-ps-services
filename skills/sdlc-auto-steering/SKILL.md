@@ -1,6 +1,6 @@
 ---
 name: sdlc-auto-steering
-description: "Use only as part of the Agentic SDLC workflow; use when an active prompt-bound SDLC run needs private `STEERING.md` refreshed from an accepted same-prompt revision, requirements, design, context, locked plans, fingerprints, or recent evidence before selecting the next phase."
+description: "Use only as part of the Agentic SDLC workflow; refresh private STEERING.md for an active prompt-bound run from accepted revisions, specs, context, locked plans, fingerprints, or evidence before phase selection."
 ---
 
 # SDLC Auto Steering
@@ -166,13 +166,15 @@ changing committed product-truth documents directly.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md`, `docs/design.md`, and any
-  ownership-receipted v2 selected-project `AGENTS.md` as committed project
+  ownership-receipted v3 selected-project `AGENTS.md` as committed project
   truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only
-  `sdlc-create-design` writes `docs/design.md`; only
-  `project-agent-instructions` creates, refreshes, adopts, or retires its
-  v2-managed selected-project `AGENTS.md`. Other skills route changes to those
-  owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner. Only
+  `project-agent-instructions` creates, attaches, refreshes, adopts, or retires
+  its v3-managed selected-project `AGENTS.md` tail.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under
   `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest

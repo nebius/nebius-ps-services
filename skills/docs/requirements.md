@@ -99,6 +99,18 @@ validated, and reconciled before implementation can be represented as complete.
   the implementation write epoch, and invalidates stale planning evidence. The
   transition must not depend on a Stop-generated continuation emitting a new
   `UserPromptSubmit` event.
+- AC-011: Project-instruction rendering rejects a disposition that cannot be
+  applied to the inspected target before publishing render evidence. A revised
+  current-session decision may replace prior rendered rules only while holding
+  the private-bundle render lock and when the canonical predecessor state
+  exactly owns the current private rules bytes. The final replacement boundary
+  revalidates the identity and exact bytes of both predecessor state and rules;
+  replacement is atomic and matching state is published next. Only a proven
+  private I/O failure while publishing that matching state returns
+  `RENDER_STATE_PUBLICATION_INCOMPLETE` and is safely recoverable by rerunning
+  the exact decision. If replacement completed before its directory sync
+  failed, that equal-bytes retry must re-sync the private parent directory;
+  generic `UNSAFE_TARGET` remains terminal.
 
 #### Negative Criteria
 
@@ -121,11 +133,16 @@ validated, and reconciled before implementation can be represented as complete.
   effective marker exists at an ancestor within the enclosing Git worktree.
 - NC-007: A continuation must not ask the agent to reconcile canonical specs
   while retaining a lifecycle phase that denies those exact spec mutations.
+- NC-008: A missing, malformed, ownership-mismatched, unsafe, or concurrently
+  changing render-state predecessor must not authorize replacement of existing
+  private rules, and a managed target must not treat `existing-sufficient` as a
+  renderable outcome. A predecessor-state change after validation but before
+  final rules replacement must block without changing the rules.
 
 #### Validation Method
 
 Run owner validation, lifecycle transition tests, hook contract tests, and
-project-instruction discovery/render/apply/verify tests.
+project-instruction discovery/render/revision/apply/verify tests.
 
 #### Test Method
 
@@ -136,7 +153,14 @@ using disposable repositories and private state roots. Cover paraphrased
 user-dependence intent, global-policy isolation, missing and human-owned
 targets, same-directory overrides, nearest-ancestor root discovery, and empty
 root-marker configuration. Exercise an `implementation-open` Stop followed by
-canonical spec reconciliation without an intervening `UserPromptSubmit`.
+canonical spec reconciliation without an intervening `UserPromptSubmit`. Revise
+an owned empty render to needed rules in the same current-session bundle, and
+prove that unowned or tampered predecessor bytes remain unchanged and blocked.
+Mutate the predecessor state between validation and final replacement and
+require the rules to remain byte-identical. Inject a matching-state publication
+I/O failure through the CLI, require the distinct retryable result, then prove
+that the exact rerun completes and re-syncs the parent directory after an
+interrupted post-replacement sync while generic unsafe targets remain terminal.
 
 #### Evaluation Method
 
@@ -149,7 +173,12 @@ current implementation and persists at terminal seal when project rules are
 needed, without requiring magic words or weakening higher-level safeguards.
 Confirm a Stop-generated continuation can immediately reconcile canonical
 specs and that the transition neither advances the write epoch nor preserves
-stale receipt, spec, rules, or planned-epoch bindings.
+stale receipt, spec, rules, or planned-epoch bindings. Confirm an inapplicable
+decision fails before render publication and that an exactly owned decision
+revision reaches planning without deleting or bypassing private evidence.
+Confirm the final replacement rejects either predecessor changing after
+validation, and only `RENDER_STATE_PUBLICATION_INCOMPLETE` authorizes an exact
+render retry that completes state durability while `UNSAFE_TARGET` still stops.
 
 <!-- /REQUIREMENT: REQ-002 -->
 
@@ -429,6 +458,22 @@ interrupting safe diagnostic or repair work.
   one supported classification, confidence, fixed scope, current state, root
   cause, changes made, verified and unverified scope, and an exact next-action
   owner, action, and done condition. A bounded `Evidence Appendix` is optional.
+  Public HTTPS links may be used after private-host validation. Prefer local
+  evidence labels as plain inline-code, repository-relative slash-separated
+  paths with an optional positive line suffix. A local inline or Markdown
+  target may instead be repository-relative, platform-native absolute,
+  home-relative, or a constrained local `file:` URI when its decoded,
+  canonical destination remains inside the Git repository root derived from
+  the event working directory. Existing candidates resolve symlinks; a
+  nonexistent candidate uses lexical containment beneath the deepest existing
+  ancestor. When no Git root can be proven, absolute, home-relative, and local
+  `file:` forms are unsafe because containment is indeterminate. Reject parent
+  or symlink escape, ambiguous encoding or Markdown link syntax, renderer-active
+  schemes, remote file authorities, credentials, query or fragment components,
+  UNC paths, and non-native separators or path syntax. Repository containment
+  validates only the reference address and never exempts the decoded target,
+  link label, surrounding prose, file content, secrets, or private endpoints
+  from independent safety checks.
 - AC-003: `DIAGNOSED-FIXED` means the causal owner and earliest divergence are
   proven, an owner-correct repair is applied, and the original reproducer plus
   focused regression and source or boundary checks pass for the named fixed
@@ -442,17 +487,34 @@ interrupting safe diagnostic or repair work.
   fallback report. The workflow continues safe evidence collection and repair
   while a decision-changing bounded experiment remains.
 - AC-005: Exact remediation-budget exhaustion remains a hard Stop contract and
-  cannot use `DIAGNOSED-FIXED`. Sensitive output may receive one bounded
-  redaction correction. Invalid trusted coordination state, missing mutation
-  authority, and independent peer Stop policy remain fail-closed.
+  cannot use `DIAGNOSED-FIXED`. A contained local-reference format defect is
+  advisory, while an ordinary report containing sensitive content, an
+  outside-repository target, traversal or symlink escape, or an unsafe local
+  URI closes its obligation and terminates with one bounded deterministic
+  warning; it must not request a model-authored replacement. Stop is terminal
+  detection and does not claim to retract output already rendered by the host.
+  Generated exhausted-report fields must replace over-limit reference markup
+  atomically rather than truncate through a Markdown or inline-code token.
+  Invalid trusted coordination state, missing mutation authority, and
+  independent peer Stop policy remain fail-closed.
 - AC-006: The workflow documents that host or process termination before any
   Stop event cannot be converted into an assistant response by a local hook.
   A later resumed turn reports the interrupted state without claiming proof
   that the hook could not observe.
 - AC-007: The shared Stop arbiter keeps a peer continuation or terminal result
-  authoritative. A valid concise report is finalized transactionally, while
-  an ordinary advisory-incomplete report never becomes a competing Stop
-  decision.
+  authoritative. It evaluates every delegate for lifecycle transitions and
+  cleanup, retains the first terminal result in delegate order, and finalizes a
+  valid concise report transactionally. If that finalization fails after a peer
+  terminal result, the first terminal result remains authoritative and gains
+  only a generic trusted-state warning. An ordinary advisory-incomplete report
+  never becomes a competing Stop decision.
+- AC-008: The report-obligation sidecar uses one current schema and canonical
+  status machine. An older active schema is not migrated in place; it fails
+  closed with an actionable fresh-session instruction, and activation must not
+  proceed while an older active obligation remains. Activation preflight emits
+  schema/status counts only, preserves recognized terminal history under the
+  exact v1 and v2 schemas, and fails closed on active legacy, unknown-schema,
+  unsupported-status, unreadable, or malformed sidecars.
 
 #### Negative Criteria
 
@@ -460,33 +522,44 @@ interrupting safe diagnostic or repair work.
   source, or non-passing check must not stop the agent, deny tools, or consume a
   remediation attempt by itself.
 - NC-002: Reporting must not loop, fabricate evidence, expose secrets, emit a
-  large generated substitute report, or obscure a successful source repair
-  behind `DIAGNOSED_NOT_FIXED` merely because activation remains pending.
+  large generated substitute report, create a second automatic report, or
+  obscure a successful source repair behind `DIAGNOSED_NOT_FIXED` merely
+  because activation remains pending.
 - NC-003: A concise report must not hide material unavailable components,
   unverified activation or live state, missing log intervals, or another
   decision-relevant coverage gap; summarize them under `Not verified` and give
   the exact next action.
+- NC-004: The hook validator must not be described as sanitization or complete
+  secret detection, and a terminal warning must not echo rejected content.
 
 #### Validation Method
 
 Validate invocation tracking, concise field-specific parsing, advisory ordinary
-Stop behavior, `DIAGNOSED-FIXED` semantics, sensitive-output correction,
-strict exhaustion composition, interruption handling, and Stop-arbiter
-behavior.
+Stop behavior, `DIAGNOSED-FIXED` semantics, safe reference validation,
+sensitive-output terminal detection, strict exhaustion composition,
+interruption handling, schema migration boundaries, bounded prompt context,
+and all-delegate Stop-arbiter behavior.
 
 #### Test Method
 
 Cover source-fixed/runtime-pending, verified, diagnosed-unrepaired, blocked,
 tool-error, ordinary early-stop, malformed and partial reports, sensitive
-content, budget exhaustion, inclusive 5/120 limits, resumed interruption, and
-composition with continuing and terminal project-contract and SDLC delegates.
+content, local reference forms and full-Git-root containment, old-schema
+resume, atomic state
+failure including peer-terminal finalization, repeated Stop, budget exhaustion,
+inclusive 5/120 limits, nested-working-directory and exhausted-fallback
+containment, resumed
+interruption, and composition with continuing and terminal project-contract
+and SDLC delegates.
 
 #### Evaluation Method
 
 Invoke `$troubleshoot` with and without a remediation marker and confirm that
 ordinary report quality is advisory, hard boundaries remain fail-closed, and a
 successful source repair produces one concise `DIAGNOSED-FIXED` report with an
-exact activation next action.
+exact activation next action. In a disposable fresh session, force only fake
+sensitive content and confirm the original may remain visible but no automatic
+continuation or second assistant report is created.
 
 <!-- /REQUIREMENT: REQ-008 -->
 
@@ -1482,13 +1555,13 @@ returns `ALREADY_COMPLETE` and a changed prompt creates a linked new revision.
 <!-- /REQUIREMENT: REQ-018 -->
 
 <!-- REQUIREMENT: REQ-019 status=active priority=P0 type=feature -->
-### REQ-019: Select the least-agentic sufficient AI application architecture
+### REQ-019: Select a least-agentic, provider-portable AI architecture
 
 #### User Story
 
-AI application designers need a consistent way to separate direct model calls,
-deterministic workflows containing model calls, and genuine agents so systems
-remain predictable without excluding agentic behavior where it is necessary.
+AI application designers need one architecture that separates direct model
+calls, deterministic workflows, bounded agents, and specialist harnesses while
+keeping provider choice, state, tools, policy, and operations replaceable.
 
 #### Acceptance Criteria
 
@@ -1509,25 +1582,55 @@ remain predictable without excluding agentic behavior where it is necessary.
 - AC-004: One application may use all three levels concurrently, with ordinary
   application logic, databases, APIs, RBAC, approvals, and other deterministic
   controls remaining outside model discretion.
-- AC-005: `ai-stack` prefers the official OpenAI SDK with the Responses API for
-  direct OpenAI text or reasoning generation supported by Responses, and the
-  official task-specific API for other direct workloads such as embeddings,
-  transcription, or realtime speech. It prefers the OpenAI Agents SDK for
-  intentionally OpenAI-native agent loops and Pydantic AI for Python agent
-  workloads that require non-OpenAI providers such as Anthropic or Gemini or
-  require provider-neutral typed boundaries.
-- AC-006: Engineering tasks are evaluated separately from general AI tasks.
-  A coding-agent specialist uses the Codex SDK for coding-focused threads and
-  adds the Codex app-server protocol only when deep product integration needs
-  authentication, conversation history, approvals, or streamed agent events.
-- AC-007: The decision rule, provider/runtime choices, Codex specialist
-  boundary, source links, skill metadata, trigger evaluations, READMEs, root
-  catalog, and changelog remain aligned.
-- AC-008: Control-flow autonomy is classified independently from orchestration
+- AC-005: Pydantic AI is the default portable Python model and agent runtime.
+  Direct-call behavior uses its low-level direct model API when the caller
+  needs `ModelResponse` control, or a no-tools single-request `Agent` when
+  typed output parsing, validation retries, typed dependencies, or similar
+  request services are required. That primitive choice does not make the
+  behavior agentic; its `Agent` loop is preferred when the model owns actions
+  or continuation. Intentionally provider-specific direct calls may use the
+  provider's official task API. Provider-specific model features remain
+  explicit, isolated settings rather than lowest-common-denominator behavior.
+- AC-006: The application owns a stable logical runtime facade, canonical
+  session and run state, tool and policy contracts, authorization, budgets,
+  routing governance, telemetry, evaluation, and release identity. These may
+  begin in-process; separate services, gateways, registries, queues, or stores
+  require an operational or scale trigger. Resume and cancel requests carry
+  verified principal and tenant context, expected run-state version, and
+  idempotency identity; resume also carries the exact approval or external-
+  event receipt when applicable. The facade reauthorizes and applies these
+  mutations through an optimistic-concurrency transition.
+- AC-007: Model selection uses a versioned capability catalog that separates
+  functional support, operational health, and governance eligibility. Routing
+  applies hard data, tenant, region, capability, context, health, and quota
+  filters before scoring quality, latency, cost, health, or affinity.
+- AC-008: A provider-native agent SDK is a specialized runtime escape hatch,
+  not a model adapter. Its use requires a documented workload dependency on
+  unique harness semantics, stays behind the application runtime facade, and
+  retains platform policy, state, tool, budget, audit, and evaluation controls.
+- AC-009: Tool adapters remain thin AI-facing bindings over typed domain APIs
+  or a policy-enforcing tool gateway. Authorization, approval, idempotency,
+  audit, output bounds, and side-effect semantics are deterministic. MCP is an
+  interoperability boundary and never a trust boundary.
+- AC-010: Routing and fallback remain separate. One layer owns each retry
+  class, cross-provider fallback is allowed only for classified replay-safe
+  failures, and irreversible effects are never replayed without domain-owned
+  idempotency and durable progress evidence.
+- AC-011: Specialist agents have bounded input, output, tool, security, step,
+  cost, and evaluation contracts. Pydantic AI capabilities or Harness are
+  conditional options for portable specialists; a coding-focused specialist
+  may use the Codex SDK, and provider-native harnesses require the AC-008
+  escape decision.
+- AC-012: Control-flow autonomy is classified independently from orchestration
   and durability. An explicit graph or durable workflow may wrap direct calls,
   deterministic workflows, agents, or a mixture; graph, checkpoint, timer,
   approval, or compensation requirements do not by themselves require an
-  agent.
+  agent. When durability is required, Temporal, DBOS, Prefect, Restate, or an
+  existing qualified owner is selected from workload evidence rather than
+  mandated by the presence of an agent.
+- AC-013: The decision rule, runtime and provider boundaries, specialist
+  choices, source links, skill metadata, trigger evaluations, READMEs, root
+  catalog, project design, and changelog remain aligned.
 
 #### Negative Criteria
 
@@ -1539,97 +1642,131 @@ remain predictable without excluding agentic behavior where it is necessary.
   operation or whether a deterministic loop should continue.
 - NC-003: OpenAI-compatible wire shape must not be treated as proof of OpenAI
   Responses API, tool, session, or agent-runtime semantic compatibility.
-- NC-004: Codex app-server must not be required for ordinary CI or background
+- NC-004: Pydantic AI must not be wrapped around a provider-native agent
+  runtime, and the platform must not duplicate Pydantic AI model, provider,
+  profile, message, or tool semantics without a proven cross-runtime need.
+- NC-005: Provider sessions, caches, or compaction must not be the only durable
+  representation of conversation, workflow, approval, or side-effect state.
+- NC-006: A decorator, prompt, provider session, authenticated MCP connection,
+  or model-generated plan must not become the authorization or transaction
+  boundary.
+- NC-007: PostgreSQL, Redis, a vector database, a gateway, Kubernetes, a
+  durable workflow engine, or multi-agent topology must not become mandatory
+  merely because the application uses Pydantic AI or agents.
+- NC-008: Codex app-server must not be required for ordinary CI or background
   automation when the Codex SDK supplies the needed coding-thread interface.
-- NC-005: LangGraph, Temporal, or another orchestration runtime must not be
+- NC-009: LangGraph, Temporal, or another orchestration runtime must not be
   placed downstream of an agent as though agentic autonomy were a prerequisite
   for graph or durability semantics.
 
 #### Validation Method
 
-Run skill-structure, Markdown, traceability, changed-scope review, and static
-trigger-evaluation checks over `design`, `ai-stack`, the root catalog, project
-specs, and changelog. Recheck product-specific claims against current official
-OpenAI and Pydantic documentation.
+Run skill-structure, Markdown, traceability, changed-scope review, security
+review, and static trigger-evaluation checks over `ai-stack`, the root catalog,
+project specs, and changelog. Recheck version-sensitive Pydantic AI, OpenAI,
+Anthropic, Google, and interoperability claims against current official
+documentation.
 
 #### Test Method
 
-Use should-trigger and quality scenarios for one-call text generation,
-task-specific non-text APIs, known multi-step workflows, deterministic
-unknown-count loops, deterministic durable approvals, dynamic tool choice,
-observation-driven loops, provider-specific agents, and a Codex engineering
-specialist. Confirm each scenario selects the lowest sufficient level and the
-matching SDK and orchestration boundary.
+Use should-trigger and quality scenarios for low-level and typed direct calls,
+known multi-step workflows, dynamic tool choice, provider-specific features,
+provider-native escape decisions, policy-owned routing, replay-safe fallback,
+authenticated resume and cancel races, durable approvals, Pydantic AI
+specialists, and a Codex engineering specialist. Confirm each selects the
+lowest sufficient level and preserves the application-owned state, policy, and
+tool boundaries.
 
 #### Evaluation Method
 
-Review a representative AI application containing deterministic logic, general
-AI work, and engineering work. Confirm direct calls and known workflows remain
-explicit, only genuinely dynamic control flow becomes agentic, and every
-selected runtime has a requirement, evidence state, owner, acceptance gate,
-and revisit trigger.
+Review a representative multi-provider application containing deterministic
+logic, general AI work, side-effecting tools, and specialist agents. Confirm
+Pydantic AI is the portable default without becoming a mandatory distributed
+platform, native runtimes are justified exceptions, and every selected runtime
+or component has a requirement, evidence state, owner, acceptance gate, and
+revisit trigger.
 
 <!-- /REQUIREMENT: REQ-019 -->
 
 <!-- REQUIREMENT: REQ-020 status=active priority=P0 type=feature -->
-### REQ-020: Report Task Implementer completion from immutable machine evidence
+### REQ-020: Report concise Task Implementer lane progress from machine evidence
 
 #### User Story
 
-Task Implementer users need successful runs and pending persistent-lane changes
-to be inspectable from deterministic evidence so they can integrate the correct
-project without relying on coordinator prose or hidden state.
+Task Implementer users need one short, human-readable view of the persistent
+lane, current or latest run, temporary workers, promoted work, remaining work,
+and next public action without exposing changed files or disturbing execution.
 
 #### Acceptance Criteria
 
 - AC-001: Successful `run` completion seals a versioned `run-summary-v1` with
   task/correction/wave and temporary-resource totals, combined validation and
   review, lane promotion/release, source observation, queued-prompt status, and
-  a structured next action.
-- AC-002: Run-local changes use valid ancestral commit objects from the
-  coordinator initial head to the final promoted head. Accumulated pending
-  changes are separately labelled source-to-lane comparisons and include
-  full-repository, selected-scope, outside-scope, cross-scope, file-status,
-  textual, and binary statistics.
-- AC-003: Git reporting disables external diff and text conversion, pins
-  rename/copy behavior, parses NUL-delimited bytes, safely escapes filenames,
-  and enforces time and output bounds.
-- AC-004: The source head is recorded before workers start and completion says
+  a structured next action. Its immutable finalization contract is unchanged.
+- AC-002: Internal `lane-report` returns hard-cut
+  `task-implementer/lane-report-v2` with current or latest run progress,
+  persistent-lane generation totals, a bounded current step, remaining steps,
+  and one structured next public action.
+- AC-003: Current-run task totals come from coordinator-v7 wave indexes. A task
+  is promoted only when its owning wave records a valid `promoted_head`;
+  committed or merged work remains in progress until that boundary.
+- AC-004: Temporary-worker totals describe logical worker assignments from
+  task-plane-v5. The report distinguishes planned, created, queued, active,
+  finished, failed, and superseded assignments without inferring process
+  liveness or enumerating worktree paths.
+- AC-005: Wave totals, active-wave identity, and promotion progress come from
+  validated wave-v4 and coordinator-v7 state. Released, integrated, pending,
+  active, and finalization-pending generation totals remain a separate lane
+  backlog rather than an aggregate of incomplete historical run evidence.
+- AC-006: The source head is recorded before workers start and completion says
   only `unchanged`, `moved`, or `unknown_legacy`. Movement warns that public
   integration rebuilds and revalidates its candidate.
-- AC-005: Summary bytes are prepared and digest-bound before generation
+- AC-007: Summary bytes are prepared and digest-bound before generation
   release, sealed unchanged after release, projected to the handoff before
   queue activation, and returned exactly by `ALREADY_COMPLETE`. Interrupted
   finalization is idempotent and blocks another generation until complete.
-- AC-006: Clean source and lane state reports the exact primary-project
+- AC-008: Clean source and lane state reports the exact primary-project
   `$task-implementer integrate "<primary-project-path>"` command. A dirty
   primary first directs the user to invoke `$commit` there.
-- AC-007: The generated workspace labels its unchanged lane path
-  `CODE — MANAGED PERSISTENT LANE` and supplies one manual inspection-only task
-  for current source/lane commits, generation state, aggregate changes, ordered
-  pending summaries, and the exact next public action.
-- AC-008: Generated workspace preflight classifies current, the exact previous
-  generated shape, or tampered. Init/run migrate only the exact previous shape;
-  reuse is non-mutating and requests upgrade; tampering fails before mutation.
-- AC-009: Historical pending generations without sealed summaries display
-  `summary unavailable for legacy generation` while retaining a current
-  aggregate comparison. Reporting remains useful after integration and lane
-  removal.
-- AC-010: The public Task Implementer interface remains exactly five actions;
+- AC-009: The generated workspace labels its unchanged lane path
+  `CODE — MANAGED PERSISTENT LANE` and supplies one manual
+  `Task Implementer: Show Lane Status` task. It renders concise human text by
+  default, retains explicit JSON for machine callers, and uses a cleared
+  dedicated terminal without echoing the invocation or stealing focus.
+- AC-010: Generated workspace preflight classifies current, the exact previous
+  four-task generated shape, or tampered. Init/run migrate only that exact
+  previous shape; reuse is non-mutating and requests upgrade; tampering fails
+  before mutation.
+- AC-011: Reporting takes two complete bounded observations and emits only a
+  matching validated snapshot. One retry is allowed; continued movement
+  returns `WORKSPACE_BUSY` without partial counts, a lock-file write, or
+  blocking the Task Implementer writer.
+- AC-012: Before coordinator-v7 exists, the report says planning is in progress
+  and totals are unavailable. When no run is active it uses only the latest
+  sealed pending summary, and legacy-only history remains explicitly
+  unavailable rather than reconstructed.
+- AC-013: Human and JSON lane reports contain no changed-file information,
+  file paths, comparison statistics, commits, branch names, prompt content,
+  private identities, or embedded run summaries, and their size is bounded.
+- AC-014: The public Task Implementer interface remains exactly five actions;
   hooks and the Worktree mutation API are unchanged, and `lane-report` receives
   no coordinator privilege.
 
 #### Negative Criteria
 
-- NC-001: Reports must not expose prompt bodies, raw diffs, private run/lane
-  IDs, private state paths, or recovery artifacts, and must not reconstruct
-  historical legacy summaries from current state.
+- NC-001: Lane reports must not expose or compute raw diffs, changed-file
+  totals, changed paths, prompt bodies, private run/lane IDs, private state
+  paths, recovery artifacts, or reconstructed historical summaries.
 - NC-002: Reporting must not ensure, refresh, checkpoint, integrate, chmod,
+  create or acquire a writable lock, inspect lease resources through a writer,
   create an overlay, dirty a checkout, or otherwise mutate lane, source, Git,
-  prompt, run, or hook state.
+  prompt, run, Worktree, lease, or hook state.
 - NC-003: A forged helper/Python path, extra folder/task, changed argument, or
   released-but-unsealed summary must not be accepted as current or permit a new
   generation.
+- NC-004: Worker counts must not claim operating-system process liveness or
+  physical worktree presence, and committed or merged tasks must not be shown
+  as promoted.
 
 #### Validation Method
 
@@ -1639,19 +1776,141 @@ disposable repositories and isolated Codex homes.
 
 #### Test Method
 
-Cover stable bytes, no-change commits, every supported Git file status, binary
-files, unsafe/non-UTF path bytes, cross-scope renames, source movement, two
-overlapping generations, every finalization crash boundary, legacy pending
-history, integration/removal, exact prior-shape migration, stale Python,
-forged helpers, arbitrary tampering, and zero-mutation report fingerprints.
+Cover planning without a coordinator, every task and wave state, worker arm
+and start distinctions, blocked and superseded tasks, promotion and cleanup,
+every finalization phase, legacy-only pending history, source integration,
+lane removal, exact prior-shape migration, stale Python, forged helpers,
+arbitrary tampering, moving snapshots, output bounds, and zero-mutation
+fingerprints across private state, Git, Worktree, leases, and lock metadata.
 
 #### Evaluation Method
 
-Complete and replay a disposable run, inspect its lane before and after public
-integration and removal, and confirm the sealed run-local report stays byte
-identical while the current aggregate comparison changes with authoritative
-refs.
+Complete and replay a disposable multi-wave run. Confirm the human report
+shows promoted and remaining progress without file information, the JSON view
+matches the same counts, committed work remains unpromoted, an unstable read
+fails without interference, and public integration or removal changes only the
+expected generation and next-action projection.
 
 <!-- /REQUIREMENT: REQ-020 -->
+
+<!-- REQUIREMENT: REQ-021 status=active priority=P0 type=feature -->
+### REQ-021: Align skills with lean authoring and target-specific evaluations
+
+#### User Story
+
+Skill authors need `align-skill` to make each selected skill concise,
+well-scoped, safely executable, and independently evaluable without imposing a
+costly migration or runtime benchmark on the entire skill catalog.
+
+#### Acceptance Criteria
+
+- AC-001: Every authorized writable skill that completes alignment has one
+  canonical `evals/trigger-prompts.csv` containing at least three realistic
+  should-trigger prompts and three meaningful near-miss should-not-trigger
+  prompts with unique non-empty IDs and prompts.
+- AC-002: The structural validator accepts an independent `--require-evals`
+  flag. Default validation permits legacy skills without evaluations while
+  validating any canonical trigger CSV that exists; strict validation requires
+  the canonical CSV for every selected skill.
+- AC-003: Strict validation rejects missing or dual trigger authorities,
+  malformed headers or boolean labels, blank fields, duplicates, and
+  insufficient positive or negative cases without adding a legacy
+  compatibility path.
+- AC-004: Alignment reviews descriptions for a concise job and outcome,
+  triggering intent, routing-relevant inputs or modes, and adjacent negative
+  boundaries without requiring literal checklist words in always-loaded
+  metadata.
+- AC-005: Alignment keeps `SKILL.md` directive-first and focused on trigger,
+  scope, workflow, guardrails, validation, and output. It moves deep domain or
+  workflow guidance into focused one-level references, preserves rationale that
+  affects decisions or safety, and treats more than 500 lines as a review
+  warning rather than an automatic failure.
+- AC-006: Each workflow block uses the least prescriptive safe form: goals and
+  constraints when variation is safe, bounded defaults when a preferred route
+  allows judgment, and tested scripts or exact sequences for fragile,
+  repetitive, or deterministic behavior.
+- AC-007: Material workflow or output changes receive realistic output-quality
+  cases with expected results and concrete assertions, or deterministic tests
+  when the intended outcome is fully machine-verifiable. Description-only or
+  invocation-only changes require trigger coverage but not an artificial
+  output benchmark.
+- AC-008: Alignment reports static definition validation, fresh-runtime trigger
+  observations, and output-quality comparisons as separate evidence lanes with
+  explicit pass, fail, not-run, or unavailable states. Static prompt files are
+  never represented as executed runtime evidence.
+- AC-009: Report-only, remote, or unauthorized targets remain unchanged and are
+  reported as partial or missing evaluation coverage rather than fully aligned.
+- AC-010: Changes to skill guidance are checked against current official
+  product documentation, focused validator tests, review, security, lint, and
+  changed-surface alignment without installing the complete dirty source tree.
+- AC-011: When `SKILL.md` exceeds 500 lines or is structurally overloaded,
+  alignment classifies each instruction block by runtime ownership, preserves
+  decision-changing and safety-critical content before moving or removing it,
+  and either refactors by progressive disclosure or records a specific
+  justified exception.
+- AC-012: Long-skill review always records before-and-after logical line counts
+  with the validator-compatible `splitlines()` method and records comparable
+  token cost only when a compatible tokenizer or runner exposes it. Missing
+  token evidence is reported as unavailable and never replaced by a mandatory
+  dependency or approximate failure threshold.
+- AC-013: Length alone never causes a skill split. Independently triggered jobs
+  with distinct outcomes are routed toward separate skills, and initial new
+  skill scaffolding remains owned by `skill-creator`.
+- AC-014: Working-byte baselines use owner-only task storage and are removed by
+  exact scoped cleanup after comparison, or retained only with a documented
+  reason, permissions, cleanup owner, and deadline.
+- AC-015: The canonical trigger CSV is a target-owned regular file. Validation
+  rejects symlinks in its skill-relative path and any resolved path outside the
+  skill before reading content, and malformed-case diagnostics identify rows
+  without echoing IDs or prompts into logs.
+
+#### Negative Criteria
+
+- NC-001: Basic catalog validation must not require immediate evaluation
+  migration for every existing skill.
+- NC-002: Alignment must not add empty evaluation boilerplate, brittle semantic
+  regex checks, a hard 500-line limit, or duplicate Markdown and CSV trigger
+  authorities.
+- NC-003: A missing live runner or baseline must remain visibly unverified and
+  must not be converted into a runtime or quality pass.
+- NC-004: Removing passive prose must not discard decision-changing rationale,
+  safety constraints, domain knowledge, or validation requirements.
+- NC-005: Alignment must not mechanically summarize every section, move
+  always-needed guardrails behind conditional reads, split a skill only to
+  satisfy a size target, or treat unavailable token evidence as a failure.
+- NC-006: Alignment must not use a line-count method that disagrees with the
+  validator, leave temporary working-byte snapshots behind silently, or send
+  private target content to an external tokenizer or runner without
+  authorization.
+- NC-007: Validation must not follow an eval path outside the selected skill or
+  disclose raw trigger IDs or prompts in failure output.
+
+#### Validation Method
+
+Run the validator self-test, strict validation of `align-skill`, default
+validation of the source catalog, portable upstream validation, Python and
+Markdown checks, focused code and security review, project-spec validation,
+and final changed-surface alignment.
+
+#### Test Method
+
+Cover strict and default modes; valid and missing evaluations; malformed CSV
+headers, labels, blanks, duplicates, and case counts; Markdown-only and dual
+trigger authorities; external file and directory symlinks; redacted duplicate
+diagnostics; 500/501-line warning behavior; stateful-profile composition;
+semantic 700-line refactoring and justified-exception cases; and the unchanged
+real-source catalog regression.
+
+#### Evaluation Method
+
+Review `align-skill` against positive prompts for existing-skill alignment and
+near-miss prompts that belong to new scaffolding, whole-project alignment, or
+ordinary implementation. Compare material output changes against the captured
+pre-edit skill snapshot when a clean evaluation runner is available, and
+report unavailable runtime or compatible token evidence separately from static
+readiness. Include a mixed 700-line target and a safety-critical target whose
+justified core remains over the soft budget.
+
+<!-- /REQUIREMENT: REQ-021 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

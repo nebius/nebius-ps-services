@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+gitignore-positive-01,true,"Create a sensible gitignore for this Python project on macOS with VS Code."
+gitignore-positive-02,true,"Fix the repository gitignore so Node build output and editor files are excluded."
+gitignore-positive-03,true,"Standardize this Terraform project's gitignore without hiding source files."
+gitignore-negative-01,false,"Remove already-tracked build artifacts from Git history."
+gitignore-negative-02,false,"Configure Ruff and pytest for this Python repository."
+gitignore-negative-03,false,"Review all repository files for accidentally committed secrets."

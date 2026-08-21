@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Use for neutral, evidence-based code review of the current local branch, local diff, changed files, module, repository area, or provided patch: find bugs, regressions, test gaps, reliability risks, security-adjacent issues, maintainability problems, abstraction drift, type-boundary problems, file-size growth, spaghetti branches, and missed structural simplifications. A direct standalone `$code-review` invocation reviews first, fixes only safe in-scope findings, validates each fix with focused repository-native proof, and reports the complete prioritized ledger unless the user states explicit no-write intent such as review-only, audit-only, or report-only. Implicit or nested use is always report-only. Do not use for GitHub PR review by number, URL, or current branch; PR readiness; branch updates; dedicated security scans; whole-project alignment; or design-phase architecture review."
+description: "Review local diffs/branches, files, modules, or patches for prioritized correctness, regression, test, reliability, and maintainability risks. Standalone may fix safe findings unless report-only; nested use is read-only. Use review-pr for PRs."
 ---
 
 # Code Review
@@ -274,5 +274,5 @@ Then include:
 
 - Read `references/quality-rubric.md` for the detailed neutral-review rubric,
   blocker guidance, strict structural standards, and review phrases.
-- Use `evals/trigger-prompts.md` when tuning or reviewing implicit invocation
+- Use `evals/trigger-prompts.csv` when tuning or reviewing implicit invocation
   behavior.

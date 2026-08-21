@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import typer
 import yaml
 from click import unstyle
 from typer.testing import CliRunner
@@ -71,6 +72,32 @@ _OTHER_VALID_ED25519_PUBLIC_KEY = _VALID_ED25519_PUBLIC_KEY.replace(
     "demo@example",
     "other@example",
 )
+
+
+def test_exit_with_error_prints_explicit_cause_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines: list[str] = []
+
+    class RecordingConsole:
+        def print(self, *values: object, **_kwargs: object) -> None:
+            lines.append(" ".join(str(value) for value in values))
+
+    monkeypatch.setattr(cli_module, "console", RecordingConsole())
+    leaf = TypeError("SDK constructor rejected the domain")
+    middle = ValueError("renewable SDK attempt failed")
+    middle.__cause__ = leaf
+    outer = RuntimeError("cluster handoff failed")
+    outer.__cause__ = middle
+
+    with pytest.raises(typer.Exit) as raised:
+        cli_module._exit_with_error(outer)  # noqa: SLF001
+
+    rendered = "\n".join(lines)
+    assert raised.value.exit_code == 1
+    assert "cluster handoff failed" in rendered
+    assert "caused by ValueError: renewable SDK attempt failed" in rendered
+    assert "caused by TypeError: SDK constructor rejected the domain" in rendered
 
 
 def _minimal_project_identity_payload() -> dict[str, object]:
@@ -5249,7 +5276,7 @@ def test_ext_soperator_upgrade_rejects_every_non_v3_campaign_schema_without_writ
     "schema_value",
     [None, "nebius-cxcli-ext-soperator-upgrade-execution/v2", "unknown-journal-schema"],
 )
-def test_ext_soperator_upgrade_rejects_every_non_v3_journal_schema_without_write(
+def test_ext_soperator_upgrade_rejects_every_non_v6_or_v7_journal_schema_without_write(
     tmp_path: Path,
     schema_value: str | None,
 ) -> None:
@@ -5270,12 +5297,12 @@ def test_ext_soperator_upgrade_rejects_every_non_v3_journal_schema_without_write
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "Unsupported external Soperator upgrade operation journal schema" in normalized_output
-    assert (
-        f"requires {soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA}"
-        in normalized_output
+    assert "Unsupported external Soperator upgrade checkpoint schema" in normalized_output
+    assert "requires checkpoint schema" in normalized_output
+    assert soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA in normalized_output
+    assert "Only an exact valid v6 journal is eligible for automatic one-way conversion" in (
+        normalized_output
     )
-    assert "no conversion or path fallback is supported" in normalized_output
     assert config_path.read_bytes() == config_before
     assert checkpoint_path.read_bytes() == journal_before
 
@@ -16073,11 +16100,15 @@ def test_external_checkpoint_readers_reconcile_before_strict_validation(
         validated.append(dict(checkpoint))
 
     monkeypatch.setattr(
-        cli_module,
+        soperator_migration_module,
         "_reconcile_interrupted_cleaned_login_handoff_replay",
         _reconcile,
     )
-    monkeypatch.setattr(cli_module, "_validate_checkpoint_journal_contract", _validate)
+    monkeypatch.setattr(
+        soperator_migration_module,
+        "_validate_checkpoint_journal_contract",
+        _validate,
+    )
 
     locked = cli_module._locked_upgrade_checkpoint_payload(  # noqa: SLF001
         config_path=config_path,
@@ -16095,6 +16126,47 @@ def test_external_checkpoint_readers_reconcile_before_strict_validation(
     assert loaded_path == checkpoint_path
     assert len(reconciled) == 2
     assert len(validated) == 2
+    assert checkpoint_path.read_bytes() == checkpoint_before
+
+
+def test_external_checkpoint_readers_project_exact_v6_without_write(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    campaign = payload["deploy"]["targets"][0]["soperator_onboarding"]["upgrade_path"]
+    first_segment = campaign["segments"][0]
+    checkpoint_path = _write_locked_ext_soperator_checkpoint(
+        config_path=config_path,
+        target_ref="external-cluster",
+        upgrade_path=campaign,
+        current_segment_id=first_segment["id"],
+        completed_segment_ids=[],
+        pending_phase="provider-operation",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["schema"] = "nebius-cxcli-ext-soperator-upgrade-journal/v6"
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+    checkpoint_before = checkpoint_path.read_bytes()
+
+    locked = cli_module._locked_upgrade_checkpoint_payload(  # noqa: SLF001
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload_or_config=payload,
+    )
+    loaded_path, campaign_journal = cli_module._external_soperator_campaign_journal(  # noqa: SLF001
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=payload,
+    )
+
+    assert locked is not None
+    assert campaign_journal is not None
+    assert loaded_path == checkpoint_path
+    assert locked["schema"] == soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA
+    assert campaign_journal == locked
+    assert locked["schema_migration"]["from_schema"].endswith("/v6")
+    assert locked["schema_migration"]["to_schema"].endswith("/v7")
     assert checkpoint_path.read_bytes() == checkpoint_before
 
 
@@ -18933,7 +19005,7 @@ def test_external_soperator_execute_snapshot_collector_reloads_cleanup_scope(
     assert observed_modes == ["target-handoff", "source-cleanup", "target-only"]
 
 
-def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_recorder(
+def test_ext_soperator_upgrade_execute_deferred_target_only_rebinds_cached_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -18954,6 +19026,7 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
         upgrade_path=campaign,
         current_segment_id=second_segment_id,
         completed_segment_ids=[first_segment_id],
+        pending_phase="populate-jail-refresh",
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     source_ref = {
@@ -19023,6 +19096,38 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
         },
     }
     checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+    cached_snapshot = _old_soperator_snapshot_with_provider(
+        soperator_version=_soperator_test_chart_version(),
+        current_k8s_version="1.32",
+    )
+    cached_target_resource = copy.deepcopy(cached_snapshot["soperator_resources"][0])  # type: ignore[index]
+    cached_target_resource["metadata"] = {  # type: ignore[index]
+        "namespace": "soperator",
+        "name": "external-cluster",
+        "uid": "target-slurmcluster-uid",
+    }
+    cached_snapshot["soperator_resources"] = [cached_target_resource]
+    cached_cluster_identity = cached_snapshot["cluster_identity"]
+    assert isinstance(cached_cluster_identity, dict)
+    cached_cluster_identity["slurmcluster_uid"] = "target-slurmcluster-uid"
+    kubernetes_section_path = _soperator_discovery_section_path(
+        config_path,
+        "kubernetes.json",
+    )
+    kubernetes_section = json.loads(kubernetes_section_path.read_text(encoding="utf-8"))
+    kubernetes_section["snapshot"] = cached_snapshot
+    _write_soperator_discovery_section(
+        config_path,
+        "kubernetes.json",
+        kubernetes_section,
+    )
+    cached_report = cli_module._load_soperator_source_discovery_report(  # noqa: SLF001
+        config_path=config_path,
+        target_ref="external-cluster",
+    )
+    assert cached_report["snapshot"]["cluster_identity"]["slurmcluster_uid"] == (  # type: ignore[index]
+        "target-slurmcluster-uid"
+    )
     observed_modes: list[str] = []
     execute_calls: list[str] = []
     recorder_calls: list[dict[str, object]] = []
@@ -19100,6 +19205,18 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
         "record_soperator_migration_slurmcluster_handoff_binding",
         lambda **kwargs: recorder_calls.append(dict(kwargs)),
     )
+    monkeypatch.setattr(
+        cli_module,
+        "_external_soperator_discovery_refresh_deferred",
+        lambda _checkpoint: True,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_run_external_soperator_discovery_command",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deferred discovery must not refresh the cached bundle")
+        ),
+    )
 
     result = runner.invoke(
         app,
@@ -19118,6 +19235,7 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
     assert execute_calls == ["execute"], result.output
     assert recorder_calls == []
     assert observed_modes and set(observed_modes) == {"target-only"}
+    assert "External Soperator discovery refresh deferred" in result.output
     assert "terminal target-only execute reached" in result.output
 
 

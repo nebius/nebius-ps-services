@@ -51,6 +51,37 @@ def git(*arguments: str, cwd: Path) -> str:
     return result.stdout.strip()
 
 
+def tree_fingerprint(root: Path) -> dict[str, tuple[object, ...]]:
+    """Capture bytes and metadata without following private-state symlinks."""
+
+    result: dict[str, tuple[object, ...]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        details = path.lstat()
+        if path.is_symlink():
+            result[relative] = (
+                "symlink",
+                os.readlink(path),
+                details.st_mode,
+                details.st_mtime_ns,
+            )
+        elif path.is_file():
+            result[relative] = (
+                "file",
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                details.st_size,
+                details.st_mode,
+                details.st_mtime_ns,
+            )
+        elif path.is_dir():
+            result[relative] = (
+                "directory",
+                details.st_mode,
+                details.st_mtime_ns,
+            )
+    return result
+
+
 class WorktreeInteroperabilityTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -777,14 +808,8 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             report = task_reporting.lane_report(self.workspace)
             self.assertEqual(report["generations"]["finalization_pending"], 1)
             self.assertEqual(report["next_action"]["action"], "run")
-            self.assertEqual(
-                next(
-                    item["summary"]
-                    for item in report["pending_summaries"]
-                    if item["generation"] == generation
-                ),
-                "summary finalization pending",
-            )
+            self.assertEqual(report["current_run"]["status"], "finalizing")
+            self.assertEqual(report["current_run"]["phase"], "finalizing")
             stderr = io.StringIO()
             with mock.patch.object(pw.sys, "stderr", stderr):
                 return_code = pw.main(
@@ -878,48 +903,44 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             task_reporting.lane_report(self.workspace)
         self.assertEqual(tampered_summary.exception.code, "RUN_STATE_INVALID")
         interop_path.write_bytes(interop_bytes)
-        private_before = {
-            str(path.relative_to(self.run_dir)): path.read_bytes()
-            for path in self.run_dir.rglob("*")
-            if path.is_file()
-        }
-        git_before = (
-            git("rev-parse", "HEAD", cwd=self.primary),
-            git("rev-parse", "HEAD", cwd=self.outer),
-            git("status", "--porcelain=v2", cwd=self.primary),
-            git("status", "--porcelain=v2", cwd=self.outer),
-        )
-        pending_report = task_reporting.lane_report(self.workspace)
-        self.assertEqual(pending_report["generations"]["pending"], 2)
-        self.assertEqual(
-            pending_report["lane"]["branch"], task_reporting.LANE_BRANCH_DISPLAY
-        )
+        before = tree_fingerprint(self.root)
+        git_trace = self.root / "lane-report-git-trace.log"
+        with (
+            mock.patch.dict(os.environ, {"GIT_TRACE": str(git_trace)}),
+            mock.patch.object(
+                task_reporting,
+                "diff_statistics",
+                side_effect=AssertionError("lane status must not compute a diff"),
+            ),
+            mock.patch.object(
+                task_interop,
+                "_inspect_managed_lease",
+                side_effect=AssertionError("lane status must not inspect the lease"),
+            ),
+            mock.patch.object(
+                task_interop,
+                "prepare_checkpoint",
+                side_effect=AssertionError("lane status must not checkpoint"),
+            ),
+        ):
+            pending_report = task_reporting.lane_report(self.workspace)
+        self.assertFalse(git_trace.exists())
+        self.assertEqual(before, tree_fingerprint(self.root))
+        self.assertEqual(pending_report["generations"]["released_total"], 2)
+        self.assertEqual(pending_report["generations"]["integrated_total"], 0)
+        self.assertEqual(pending_report["generations"]["pending_integration"], 2)
+        self.assertEqual(pending_report["lane"]["state"], "pending")
         serialized_report = json.dumps(pending_report, sort_keys=True)
         self.assertNotIn(self.lane_id, serialized_report)
         self.assertNotIn(self.lane_id[:8], serialized_report)
-        self.assertEqual(pending_report["pending_summaries"][0]["summary"], finalized)
+        self.assertNotIn("pending_summaries", pending_report)
+        self.assertNotIn("comparison", pending_report)
+        self.assertEqual(pending_report["current_run"]["status"], "complete")
         self.assertEqual(
-            pending_report["pending_summaries"][1]["summary"],
-            "summary unavailable for legacy generation",
+            pending_report["current_run"]["progress"]["tasks"]["total"],
+            finalized["work"]["tasks"]["total"],
         )
         self.assertEqual(pending_report["next_action"]["action"], "integrate")
-        self.assertEqual(
-            private_before,
-            {
-                str(path.relative_to(self.run_dir)): path.read_bytes()
-                for path in self.run_dir.rglob("*")
-                if path.is_file()
-            },
-        )
-        self.assertEqual(
-            git_before,
-            (
-                git("rev-parse", "HEAD", cwd=self.primary),
-                git("rev-parse", "HEAD", cwd=self.outer),
-                git("status", "--porcelain=v2", cwd=self.primary),
-                git("status", "--porcelain=v2", cwd=self.outer),
-            ),
-        )
         inspected = wm.inspect_worktree(
             cwd=self.outer_scope, name=None, require_clean=True
         )
@@ -959,8 +980,10 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         assert lane_state is not None
         self.assertEqual(lane_state["state"], "idle")
         integrated_report = task_reporting.lane_report(self.workspace)
-        self.assertEqual(integrated_report["generations"]["pending"], 0)
-        self.assertEqual(integrated_report["comparison"]["relationship"], "equal")
+        self.assertEqual(
+            integrated_report["generations"]["pending_integration"], 0
+        )
+        self.assertIsNone(integrated_report["current_run"])
         self.assertIsNone(
             wm.load_checkpoint(self.primary, self.lane_id, required=False)
         )
@@ -977,7 +1000,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         self.assertEqual(removed["status"], "removed")
         removed_report = task_reporting.lane_report(self.workspace)
         self.assertEqual(removed_report["status"], "removed")
-        self.assertEqual(removed_report["generations"]["pending"], 0)
+        self.assertEqual(removed_report["generations"]["pending_integration"], 0)
         self.assertEqual(removed_report["next_action"]["action"], "workspace init")
 
         reinitialized = pw.initialize_project_workspace(
@@ -1016,19 +1039,10 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             promoted_head=rebound_head,
         )
         rebound_report = task_reporting.lane_report(self.workspace)
-        self.assertEqual(rebound_report["generations"]["pending"], 1)
-        self.assertEqual(
-            rebound_report["pending_summaries"],
-            [
-                {
-                    "generation": int(opened["generation"]),
-                    "summary": "summary unavailable for legacy generation",
-                }
-            ],
-        )
-        self.assertNotEqual(
-            rebound_report["pending_summaries"][0]["summary"], finalized
-        )
+        self.assertEqual(rebound_report["generations"]["pending_integration"], 1)
+        self.assertEqual(rebound_report["current_run"]["status"], "unavailable")
+        self.assertIsNone(rebound_report["current_run"]["progress"])
+        self.assertNotIn("pending_summaries", rebound_report)
 
     def test_plan_checkpoints_dirty_lane_and_uses_post_checkpoint_baseline(
         self,

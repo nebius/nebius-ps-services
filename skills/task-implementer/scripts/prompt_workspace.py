@@ -47,6 +47,7 @@ from prompt_workspace_interop import verify_workspace_anchor  # noqa: E402
 from prompt_workspace_reporting import (  # noqa: E402
     lane_report,
     pending_finalization_generations,
+    render_lane_report,
 )
 from prompt_workspace_recovery import (  # noqa: E402
     recover_handoff_projection,
@@ -605,7 +606,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     lane_report_parser = subparsers.add_parser(
         "lane-report",
-        help="Internal: inspect pending managed-lane changes without mutation.",
+        help="Internal: inspect concise managed-lane status without mutation.",
     )
     add_common_workspace(lane_report_parser)
     add_common_workspace(queue_next_parser)
@@ -1277,7 +1278,10 @@ def main(argv: list[str]) -> int:
     )
     if args.command == "intake" and getattr(args, "json", False):
         result = {key: value for key, value in result.items() if key != "_internal"}
-    emit(result, json_output)
+    if args.command == "lane-report" and not json_output:
+        print(render_lane_report(result), end="")
+    else:
+        emit(result, json_output)
     return 0
 
 

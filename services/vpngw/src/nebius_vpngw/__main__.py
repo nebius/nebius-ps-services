@@ -1,6 +1,6 @@
 import os
 
-from .cli import app
+from nebius_vpngw.cli import app
 
 
 def main() -> None:

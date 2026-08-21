@@ -1,6 +1,6 @@
 ---
 name: nebius-audit-log
-description: "Use only when the user explicitly asks to query Nebius Control Plane Audit Logs for a resource, subject, service, action, status, region, or time range. Requires explicit invocation because it reads tenant-level audit/security data; do not use for broad Nebius SDK/IAM/VPC/quota/MK8s/observability automation."
+description: "Use only when explicitly asked to query tenant-level Nebius Control Plane Audit Logs by resource, subject, service, action, status, region, or time. Not for general Nebius cloud/observability work."
 ---
 
 # Nebius Audit Log
@@ -167,4 +167,4 @@ Report:
 - `references/audit-log-querying.md`
 - `scripts/query_audit_logs.py`
 - `scripts/test_query_audit_logs.py`
-- `evals/trigger-prompts.md`
+- `evals/trigger-prompts.csv`

@@ -62,7 +62,12 @@ def _source_root(workspace: dict[str, object]) -> Path:
     return Path(required_string(workspace, "source_root", "workspace manifest"))
 
 
-def _call(workspace: dict[str, object], arguments: list[str]) -> dict[str, object]:
+def _call(
+    workspace: dict[str, object],
+    arguments: list[str],
+    *,
+    environment: dict[str, str] | None = None,
+) -> dict[str, object]:
     if not arguments or arguments[0] not in PRIVATE_WORKTREE_ACTIONS:
         raise PromptWorkspaceError(
             "WORKTREE_CONFLICT",
@@ -79,6 +84,7 @@ def _call(workspace: dict[str, object], arguments: list[str]) -> dict[str, objec
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            env=environment,
         )
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
@@ -328,14 +334,16 @@ def _safe_scope(value: object) -> str | None:
     return value
 
 
-def inspect_anchor(workspace: dict[str, object]) -> dict[str, object]:
+def inspect_anchor(
+    workspace: dict[str, object], *, environment: dict[str, str] | None = None
+) -> dict[str, object]:
     path = _helper_path(required=False)
     if path is None:
         raise PromptWorkspaceError(
             "ENVIRONMENT_BLOCKER",
             "the persistent Task Implementer lane requires the Worktree helper",
         )
-    return _call(workspace, ["anchor-inspect"])
+    return _call(workspace, ["anchor-inspect"], environment=environment)
 
 
 def verify_workspace_anchor(workspace: dict[str, object]) -> dict[str, object]:

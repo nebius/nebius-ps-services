@@ -515,8 +515,6 @@ from .soperator_migration import (
     _checkpoint_slurm_held_job_operations,
     _checkpoint_write_lock,
     _cleanup_controller_bridge_after_final_health,
-    _controller_bridge_provider_boundary_active,
-    _controller_singleton_handoff_boundary_active,
     _ensure_passive_populate_job,
     _ensure_persistent_migration_login_hold_allowed,
     _ensure_persistent_migration_writer_hold_intact_after_copy,
@@ -524,6 +522,7 @@ from .soperator_migration import (
     _ensure_slurm_quiet,
     _execute_controller_ha_bridge_phase,
     _execute_legacy_persistent_mount_migration,
+    _external_upgrade_active_mutation_boundaries,
     _external_upgrade_slurm_action_authority,
     _fast_verification_failed,
     _handoff_controller_bridge_to_target_singleton,
@@ -532,22 +531,20 @@ from .soperator_migration import (
     _kubectl_exec_login,
     _legacy_persistent_mount_migration_entries,
     _live_home_mount_pending_reason,
+    _load_checkpoint,
     _merge_slurm_action_journals,
     _persistent_migration_original_maintenance,
     _persistent_migration_writer_hold_drift,
     _persistent_migration_writer_hold_values,
-    _persistent_mount_copy_failure_boundary_active,
     _preflight_persistent_migration_writer_restore_identity,
     _probe_legacy_persistent_mount_sources,
     _provider_operation_id_is_real,
-    _reconcile_interrupted_cleaned_login_handoff_replay,
     _release_journaled_external_upgrade_held_jobs,
     _require_persistent_mount_reprobe_binding,
     _restore_persistent_migration_writers,
     _restore_slurm_partitions_before_controller_bridge_cleanup,
     _retire_stale_source_soperator_helm_releases,
     _revalidate_config_campaign_under_shared_lease,
-    _rolling_compute_provider_boundary_active,
     _rootfs_handoff_pending_reason,
     _SdkSoperatorMigrationNebiusApi,
     _slurm_job_control_record_fields,
@@ -557,7 +554,6 @@ from .soperator_migration import (
     _target_values_gated_by_controller_bridge,
     _target_worker_nodeset_names,
     _upgrade_controller_bridge_to_target_version,
-    _validate_checkpoint_journal_contract,
     _validate_completed_passive_populate_job_checkpoint,
     _verify_target_rootfs_handoff_consumers,
     _wait_for_live_home_mount_probe_coverage,
@@ -612,6 +608,7 @@ from .soperator_onboarding import (
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     SOPERATOR_UPGRADE_SUPPORT_LAYER,
     SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES,
+    _scope_soperator_resume_snapshot_identity,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
     normalize_k8s_minor_version,
@@ -23221,6 +23218,12 @@ def _confirm_generated_destroy(
 
 def _exit_with_error(exc: Exception) -> None:
     console.print(f"{error_markup('ERROR:', bold=True)} {escape(str(exc))}")
+    cause = exc.__cause__
+    seen: set[int] = {id(exc)}
+    while isinstance(cause, BaseException) and id(cause) not in seen:
+        seen.add(id(cause))
+        console.print(f"  caused by {type(cause).__name__}: {escape(str(cause))}")
+        cause = cause.__cause__ or cause.__context__
     raise typer.Exit(code=1) from exc
 
 
@@ -60075,33 +60078,17 @@ def _external_soperator_campaign_journal(
     if not path.exists():
         return path, None
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            f"recovery-required: external Soperator operation journal is invalid: {path}: {exc}"
-        ) from exc
-    if not isinstance(raw, dict):
-        raise RuntimeError(
-            f"recovery-required: external Soperator operation journal must be an object: {path}"
-        )
-    schema = _non_empty_text(raw.get("schema"))
-    if schema != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
-        raise RuntimeError(
-            "recovery-required: unsupported external Soperator operation journal schema "
-            f"{schema or 'missing'} in {path}; this cxcli requires "
-            f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA}. No conversion is supported."
-        )
-    _reconcile_interrupted_cleaned_login_handoff_replay(raw)
-    try:
-        _validate_checkpoint_journal_contract(
-            raw,
+        raw = _load_checkpoint(
+            path,
             allow_source_binding_promotion=True,
         )
     except RuntimeError as exc:
         raise RuntimeError(
             "recovery-required: external Soperator operation journal does not satisfy "
-            f"the strict v6 contract in {path}: {exc}"
+            f"the strict v6 contract or current v7 contract in {path}: {exc}"
         ) from exc
+    if raw is None:  # pragma: no cover - existence/read race is reported as no journal
+        return path, None
     return path, raw
 
 
@@ -63874,12 +63861,7 @@ def _external_soperator_discovery_refresh_deferred(
 ) -> bool:
     return bool(
         checkpoint is not None
-        and (
-            _persistent_mount_copy_failure_boundary_active(checkpoint)
-            or _rolling_compute_provider_boundary_active(checkpoint)
-            or _controller_bridge_provider_boundary_active(checkpoint)
-            or _controller_singleton_handoff_boundary_active(checkpoint)
-        )
+        and _external_upgrade_active_mutation_boundaries(checkpoint)
     )
 
 
@@ -66093,22 +66075,17 @@ def _locked_upgrade_checkpoint_payload(
     if not checkpoint_path.exists():
         return None
     try:
-        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        checkpoint = _load_checkpoint(
+            checkpoint_path,
+            allow_source_binding_promotion=True,
+        )
+    except RuntimeError as exc:
         raise RuntimeError(
-            f"External Soperator upgrade checkpoint is invalid: {checkpoint_path}: {exc}"
+            "recovery-required: external Soperator operation journal does not satisfy "
+            f"the strict v6 contract or current v7 contract in {checkpoint_path}: {exc}"
         ) from exc
-    if not isinstance(checkpoint, dict):
-        raise RuntimeError(
-            f"External Soperator upgrade checkpoint must be a JSON object: {checkpoint_path}"
-        )
-    if checkpoint.get("schema") != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
-        raise RuntimeError(
-            "Unsupported external Soperator upgrade operation journal schema in "
-            f"{checkpoint_path}. This cxcli version requires "
-            f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA}; no conversion or path fallback "
-            "is supported."
-        )
+    if checkpoint is None:  # pragma: no cover - existence/read race is reported as absent
+        return None
     forbidden_desired_keys = {
         "campaign",
         "locked_upgrade_path",
@@ -66122,17 +66099,6 @@ def _locked_upgrade_checkpoint_payload(
             + ", ".join(sorted(forbidden_desired_keys))
             + ". config.yaml is the only campaign authority."
         )
-    _reconcile_interrupted_cleaned_login_handoff_replay(checkpoint)
-    try:
-        _validate_checkpoint_journal_contract(
-            checkpoint,
-            allow_source_binding_promotion=True,
-        )
-    except RuntimeError as exc:
-        raise RuntimeError(
-            "recovery-required: external Soperator operation journal does not satisfy "
-            f"the strict v6 contract in {checkpoint_path}: {exc}"
-        ) from exc
     return checkpoint
 
 
@@ -68391,6 +68357,12 @@ def soperator_external_upgrade_command(
         )
         refreshed_snapshot = source_report.get("snapshot")
         refreshed_snapshot = refreshed_snapshot if isinstance(refreshed_snapshot, Mapping) else {}
+        if discovery_refresh_deferred and resume_slurmcluster_identity_scope is not None:
+            refreshed_snapshot = _scope_soperator_resume_snapshot_identity(
+                refreshed_snapshot,
+                identity_scope=resume_slurmcluster_identity_scope,
+            )
+            source_report = {**source_report, "snapshot": refreshed_snapshot}
         discovered_resume_identity = refreshed_snapshot.get("resume_slurmcluster_identity")
         discovered_resume_identity = (
             discovered_resume_identity if isinstance(discovered_resume_identity, Mapping) else {}

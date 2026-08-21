@@ -34,6 +34,18 @@ def test_manager_pause_successor_docs_bind_exact_rolling_authority_roles() -> No
     assert "historical source-HA adoption" in changelog
 
 
+def test_rearmed_pause_docs_start_reuse_at_post_switch() -> None:
+    requirements = _squash((REPO_ROOT / "docs" / "requirements.md").read_text(encoding="utf-8"))
+    design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))
+    readme = _squash((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    changelog = _squash((REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    assert "`post-switch-resume` and the later `in-place-login-surge-restore`" in requirements
+    assert "ordered boundary chain begins with `post-switch-resume`" in design
+    assert "rearm, post-switch resume, surge restore" in readme
+    assert "post-switch as the first ordered rearm-reuse boundary" in changelog
+
+
 def test_post_switch_login_surge_docs_bind_protected_dispatch_authority() -> None:
     requirements = _squash((REPO_ROOT / "docs" / "requirements.md").read_text(encoding="utf-8"))
     design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))

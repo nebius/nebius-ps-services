@@ -1,6 +1,6 @@
 ---
 name: agent-nebius-auth-diagnose
-description: Read-only diagnosis for current-session Nebius project discovery and Codex Agent authentication, tenant quota-read, CLI profile, selector, and hook failures. Use automatically when Nebius authentication is missing or a runtime auth hook blocks a command. Never create, repair, or mutate IAM, credentials, profiles, selectors, leases, or hooks.
+description: "Read-only diagnosis for current-session Nebius project discovery, Codex Agent auth, quota reads, profiles, selectors, or auth-hook failures. Use when auth is missing/blocked; never mutate auth or IAM."
 ---
 
 # Agent Nebius Auth Diagnose

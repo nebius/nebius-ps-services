@@ -1,6 +1,6 @@
 ---
 name: frontend-project
-description: "Use for creating, scaffolding, or standardizing a React, TypeScript, and Vite frontend project or bounded frontend component, including deterministic candidate manifests, package metadata, strict TypeScript configuration, source and route shells, public environment validation, tests, explicitly assigned lint/format tooling, and component documentation. Use standalone for a frontend repository or coordinated-candidate when scaffold-project assigns exact paths. Do not use for Node backends, other frontend frameworks, hosted Sites projects, Docker/Compose, repository-root CI, repository topology, or application stack selection."
+description: "Create or standardize React, TypeScript, and Vite frontends/components with strict config, routes, environment checks, tests, tooling, docs, and candidate manifests. Not for Node backends, other frameworks, Sites, containers, root CI, or stack selection."
 ---
 
 # Frontend Project

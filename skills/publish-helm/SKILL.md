@@ -1,6 +1,6 @@
 ---
 name: publish-helm
-description: "Use to publish Helm charts end to end from the current project: collect chart and OCI inputs, optionally set up changelog/helper/workflow assets, prep chart release changes, create and merge a PR, tag from the default branch, wait for the chart publish workflow, verify the pushed OCI chart, and report the result. Also supports explicit setup-only guidance."
+description: "Use only when explicitly asked to publish Helm charts end to end: collect chart/OCI inputs, set up optional assets, prepare/merge a PR, tag, wait, verify the OCI chart, and report. Also supports setup-only guidance."
 ---
 
 # Publish Helm

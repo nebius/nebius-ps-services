@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-context-positive-01,true,"Gather the technical and codebase context needed for this active Agentic SDLC feature."
+sdlc-context-positive-02,true,"Build a compact feature context pack before SDLC design."
+sdlc-context-positive-03,true,"Collect only the vendor layer boundary and test facts needed for this SDLC slice."
+sdlc-context-negative-01,false,"Research one disputed technology claim outside Agentic SDLC."
+sdlc-context-negative-02,false,"Summarize the entire repository for a human report."
+sdlc-context-negative-03,false,"Implement the feature from its locked plan."

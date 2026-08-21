@@ -1,6 +1,6 @@
 ---
 name: sdlc-start
-description: "Use only as part of the Agentic SDLC workflow; when the user explicitly invokes `workspace init` or `run`, initialize, start, resume, continue, or steer one prompt-bound run by exact prompt ref or managed file. Bound-session direct prompts may be captured into the canonical prompt as a non-blocking sidecar but never invoke this coordinator."
+description: "Use only as part of the Agentic SDLC workflow; on explicit workspace init or run, initialize, resume, continue, or steer one prompt-bound run by exact ref/file. Prompt capture may refine but never invokes this coordinator."
 ---
 
 # Start SDLC

@@ -65,3 +65,6 @@ Track without turning speed into the primary objective:
   `DIAGNOSED_NOT_FIXED` used after a proven and verified owner-correct repair
 - ordinary report gaps, `FAIL`, or `UNKNOWN` causing a correction loop, tool
   denial, or generated fallback instead of continued safe troubleshooting
+- a contained local-reference format defect becoming terminal instead of
+  advisory, or an outside-root, escaping, sensitive, or unsafe-URI reference
+  failing to stop once without path echo or automatic replacement

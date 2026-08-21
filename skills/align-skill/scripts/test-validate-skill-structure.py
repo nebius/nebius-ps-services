@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Self-test the skill structure validator against temporary fixtures."""
+"""Self-test the skill validator against fixtures and the real source catalog."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+
+sys.dont_write_bytecode = True
 
 
 LEARNING_LOOP = """## Learning Loop
@@ -94,15 +98,41 @@ def write_skill(
         )
 
 
+def write_trigger_evals(
+    skill_dir: Path,
+    *,
+    true_count: int = 3,
+    false_count: int = 3,
+) -> None:
+    evals_dir = skill_dir / "evals"
+    evals_dir.mkdir(exist_ok=True)
+    rows = ["id,should_trigger,prompt"]
+    rows.extend(
+        f"positive-{index},true,Positive trigger prompt {index}"
+        for index in range(1, true_count + 1)
+    )
+    rows.extend(
+        f"negative-{index},false,Negative trigger prompt {index}"
+        for index in range(1, false_count + 1)
+    )
+    (evals_dir / "trigger-prompts.csv").write_text(
+        "\n".join(rows) + "\n",
+        encoding="utf-8",
+    )
+
+
 def run_validator(
     target: Path,
     *,
     profile: str | None = None,
+    require_evals: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     validator = Path(__file__).with_name("validate-skill-structure.py")
     command = [sys.executable, "-B", str(validator)]
     if profile:
         command.extend(["--profile", profile])
+    if require_evals:
+        command.append("--require-evals")
     command.append(str(target))
     return subprocess.run(
         command,
@@ -132,11 +162,7 @@ def test_evals_folder_and_unknown_folder_warning() -> None:
             "good-skill",
             "Use `evals/trigger-prompts.csv` for trigger examples.",
         )
-        (good_skill / "evals").mkdir()
-        (good_skill / "evals" / "trigger-prompts.csv").write_text(
-            "prompt,should_trigger\n",
-            encoding="utf-8",
-        )
+        write_trigger_evals(good_skill)
 
         warning_skill = root / "warning-skill"
         write_skill(warning_skill, "warning-skill")
@@ -152,6 +178,29 @@ def test_evals_folder_and_unknown_folder_warning() -> None:
             output, "non-canonical folder reported for review: experiments/"
         )
         assert_not_contains(output, "non-canonical folder reported for review: evals/")
+
+
+def test_eval_contract_cases() -> None:
+    scripts_dir = Path(__file__).resolve().parent
+    before = set(
+        scripts_dir.glob("__pycache__/validator_eval_contract_cases.*.pyc")
+    )
+    from validator_eval_contract_cases import run_eval_contract_cases
+
+    after = set(
+        scripts_dir.glob("__pycache__/validator_eval_contract_cases.*.pyc")
+    )
+    if after != before:
+        raise AssertionError("eval-contract helper import created bytecode artifacts")
+
+    run_eval_contract_cases(
+        write_skill=write_skill,
+        write_trigger_evals=write_trigger_evals,
+        run_validator=run_validator,
+        stateful_workflow_body=stateful_workflow_body,
+        assert_contains=assert_contains,
+        assert_not_contains=assert_not_contains,
+    )
 
 
 def test_missing_evals_reference_fails() -> None:
@@ -632,6 +681,16 @@ def test_sdlc_only_name_and_description_contract() -> None:
         )
 
 
+def test_real_source_catalog_passes() -> None:
+    source_catalog = Path(__file__).resolve().parents[2]
+    result = run_validator(source_catalog)
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        raise AssertionError(f"real source catalog failed validation\n{output}")
+
+    assert_contains(output, "0 failure(s)")
+
+
 def test_sdlc_workflow_test_external_verifier_exception() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -865,9 +924,111 @@ def test_sdlc_invocation_policy_must_be_explicit_only() -> None:
         )
 
 
+def test_long_skill_quality_fixture_integrity() -> None:
+    skill_root = Path(__file__).resolve().parents[1]
+    evals_path = skill_root / "evals" / "evals.json"
+    payload = json.loads(evals_path.read_text(encoding="utf-8"))
+    if payload.get("skill_name") != "align-skill":
+        raise AssertionError("quality eval payload must target align-skill")
+
+    eval_cases = payload.get("evals")
+    if not isinstance(eval_cases, list) or not eval_cases:
+        raise AssertionError("quality eval payload must contain cases")
+
+    case_ids: list[int | str] = []
+    for case_number, case in enumerate(eval_cases, start=1):
+        if not isinstance(case, dict):
+            raise AssertionError(f"quality eval case {case_number} must be an object")
+        case_id = case.get("id")
+        if not isinstance(case_id, (int, str)) or isinstance(case_id, bool):
+            raise AssertionError(f"quality eval case {case_number} has invalid id")
+        if isinstance(case_id, str) and not case_id.strip():
+            raise AssertionError(f"quality eval case {case_number} has blank id")
+        case_ids.append(case_id)
+        for key in ("prompt", "expected_output"):
+            value = case.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise AssertionError(
+                    f"quality eval case {case_id} has invalid {key}"
+                )
+        assertions = case.get("assertions")
+        if (
+            not isinstance(assertions, list)
+            or not assertions
+            or any(
+                not isinstance(assertion, str) or not assertion.strip()
+                for assertion in assertions
+            )
+        ):
+            raise AssertionError(
+                f"quality eval case {case_id} needs non-empty assertions"
+            )
+        files = case.get("files")
+        if not isinstance(files, list) or any(
+            not isinstance(file_name, str) or not file_name.strip()
+            for file_name in files
+        ):
+            raise AssertionError(f"quality eval case {case_id} has invalid files")
+        for file_name in files:
+            fixture = (skill_root / file_name).resolve()
+            if not fixture.is_relative_to(skill_root.resolve()) or not fixture.is_file():
+                raise AssertionError(
+                    f"quality eval case {case_id} has unsafe or missing fixture: "
+                    f"{file_name}"
+                )
+
+    if len(set(case_ids)) != len(case_ids):
+        raise AssertionError("quality eval case ids must be unique")
+    cases = {case["id"]: case for case in eval_cases}
+
+    for case_id in (1, 3):
+        case = cases[case_id]
+        if len(case["files"]) != 1:
+            raise AssertionError(f"case {case_id} must have exactly one fixture")
+        fixture = skill_root / case["files"][0]
+        lines = fixture.read_text(encoding="utf-8").splitlines()
+        if len(lines) != 700:
+            raise AssertionError(
+                f"case {case_id} fixture must have 700 logical lines; "
+                f"found {len(lines)}"
+            )
+
+    mixed = (skill_root / cases[1]["files"][0]).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    for line_number, expected in (
+        (73, "Resolve the target and provider."),
+        (633, "Never deploy when the environment is production or unknown without exact authorization."),
+        (699, "Preserve shared validation and output rules for both public actions."),
+    ):
+        if mixed[line_number - 1] != expected:
+            raise AssertionError(f"mixed fixture line {line_number} anchor drifted")
+    mixed_assertions = "\n".join(cases[1]["assertions"])
+    for expected in (
+        "lines 73-79",
+        "lines 633-638",
+        "699-700",
+        "lines 80-160",
+        "639-698",
+    ):
+        assert_contains(mixed_assertions, expected)
+
+    irreducible = (skill_root / cases[3]["files"][0]).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    if not irreducible[82].startswith("AUTH-001:"):
+        raise AssertionError("irreducible fixture authorization anchor drifted")
+    if irreducible[660] != "## Historical Rationale":
+        raise AssertionError("irreducible fixture history anchor drifted")
+    irreducible_assertions = "\n".join(cases[3]["assertions"])
+    assert_contains(irreducible_assertions, "lines 81-660")
+    assert_contains(irreducible_assertions, "lines 661-700")
+
+
 def main() -> int:
     tests = [
         test_evals_folder_and_unknown_folder_warning,
+        test_eval_contract_cases,
         test_missing_evals_reference_fails,
         test_missing_learning_loop_fails,
         test_heading_only_learning_loop_fails,
@@ -887,6 +1048,7 @@ def main() -> int:
         test_stateful_workflow_profile_passes_complete_sections,
         test_stateful_workflow_profile_missing_heading_fails,
         test_sdlc_only_name_and_description_contract,
+        test_real_source_catalog_passes,
         test_sdlc_workflow_test_external_verifier_exception,
         test_missing_openai_metadata_policy_fails,
         test_wrong_openai_metadata_path_fails,
@@ -898,6 +1060,7 @@ def main() -> int:
         test_apply_security_policy_can_be_implicit,
         test_guardrail_text_does_not_make_whole_skill_explicit_only,
         test_sdlc_invocation_policy_must_be_explicit_only,
+        test_long_skill_quality_fixture_integrity,
     ]
     for test in tests:
         test()

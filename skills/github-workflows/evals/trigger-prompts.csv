@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+github-workflows-positive-01,true,"Create a least-privilege GitHub Actions workflow for pull request checks."
+github-workflows-positive-02,true,"Review this reusable workflow and bot-safe merge automation."
+github-workflows-positive-03,true,"Standardize service-scoped release CI in these workflow YAML files."
+github-workflows-negative-01,false,"Publish the next Helm chart release end to end."
+github-workflows-negative-02,false,"Create a local shell script for the release process."
+github-workflows-negative-03,false,"Review a GitHub pull request for merge readiness."

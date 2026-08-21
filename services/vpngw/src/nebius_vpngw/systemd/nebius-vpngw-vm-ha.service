@@ -20,7 +20,9 @@ TimeoutStopSec=30
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw /proc/sys/net/ipv4/ip_forward
+PrivateTmp=true
+SupplementaryGroups=frr frrvty
+ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw /run/ufw.lock /proc/sys/net/ipv4/ip_forward /etc/vpngw_peer_ips /etc/vpngw_mgmt_cidrs /etc/vpngw_local_prefixes /etc/ufw /etc/default/ufw /etc/frr
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 

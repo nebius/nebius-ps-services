@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: "Requires explicit invocation to create, locally integrate, exactly reuse, or safely remove a full-repository linked Git worktree for monorepo work. Use `$worktree add` from a clean named non-default source branch, `$worktree integrate` from the primary checkout to safely commit eligible ordinary child/source dirt before exact candidate validation, and `$worktree remove` after exact local proof. Do not use for push, PR creation, publication, or parallel-agent orchestration."
+description: "Requires explicit invocation to add, integrate, reuse, or remove full-repo linked Git worktrees with exact branch, commit, and cleanup checks. Not for push, PRs, publication, or parallel-agent orchestration."
 ---
 
 # Worktree

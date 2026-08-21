@@ -22,17 +22,31 @@ Every explicit `$troubleshoot` invocation also creates mode-0600
 The sidecar records invocation and transactional delivery; it is not a
 general workflow lock. The ordinary report has four required sections:
 `Outcome`, `Root Cause And Fix`, `Verification`, and `Next Action`, with an
-optional bounded `Evidence Appendix`.
+optional bounded `Evidence Appendix`. Schema v3 contains only its schema,
+workspace/session/turn bindings, and one status: `active`, `delivered`,
+`advisory_incomplete`, `sensitive_detected`, or `fallback`. A v2 sidecar is
+preserved and requires a fresh Codex session; it is never migrated in place.
 
 A valid concise report is finalized only after the shared Stop arbiter proves
 that no project-contract or SDLC delegate still needs continuation. A peer
 continuation remains authoritative. An ordinary incomplete, malformed,
 partial, `FAIL`, or `UNKNOWN` report records `advisory_incomplete` and returns
 `continue: true`; it requests no corrective turn, denies no later tool, and
-emits no generated fallback. Sensitive output may receive one bounded
-redaction correction and then a concise redacted safety fallback. Invalid
-trusted state, missing authority, exact remediation-budget exhaustion, and
-peer Stop policy remain fail-closed.
+emits no generated fallback. Prefer repository-relative inline labels. Inline
+or Markdown local targets may instead use repository-relative, native
+absolute, home-relative, or strict local `file:` syntax when decoded canonical
+resolution keeps them inside the full Git repository root derived from the
+event working directory. Without a proven Git root, absolute, home-relative,
+and local `file:` forms remain unsafe. This admits sibling-project evidence
+while rejecting outside-root, traversal, ambiguous or renderer-active link
+syntax, unsafe URI, and symlink escape. Contained format defects are advisory.
+Strict fallback normalizes contained targets, redacts unsafe values, and never
+truncates reference markup. Sensitive or unsafe ordinary output atomically records
+`sensitive_detected`, stops with one generic non-report warning, and requests
+no automatic replacement report. Stop cannot retract an
+assistant message already rendered by the host. Invalid trusted state, missing
+authority, exact remediation-budget exhaustion, and peer Stop policy remain
+fail-closed.
 
 Supported outcomes include `DIAGNOSED-FIXED` for a proven cause, applied
 owner-correct repair, and passing reproducer, regression, and source or
@@ -43,13 +57,18 @@ unverified. `VERIFIED_FIXED` remains end-to-end proof;
 ## Runtime Contract
 
 The event payload and output shapes follow the current
-[Codex Hooks guide](https://learn.chatgpt.com/docs/hooks.md), including
+[Codex Hooks guide](https://learn.chatgpt.com/docs/hooks), including
 `UserPromptSubmit` turn/prompt fields, bounded `additionalContext`, prompt
 blocking, and concurrent same-event command handlers.
 
 - Missing task state or a missing remediation marker fails open for budget
   enforcement. An active ordinary report obligation remains advisory; its
   sensitive-output boundary is independently enforced.
+- The shared Stop arbiter evaluates every delegate even after a terminal result
+  so peer cleanup and lifecycle transitions run. It preserves the first
+  terminal result in delegate order, while a peer continuation still defers
+  valid-report finalization. A finalization failure after a peer terminal keeps
+  that terminal authoritative and adds only a generic trusted-state warning.
 - A present malformed marker fails closed until the parent repairs the exact
   advertised `current.md` file. The denial includes a bounded public-safe
   validation reason without reflecting marker content or filesystem exception
@@ -173,10 +192,34 @@ python3 -m py_compile \
 Installation is explicit because hooks change local Codex behavior:
 
 ```bash
+python3 troubleshoot/scripts/preflight_report_obligations.py
+
+skills_source_root="$(pwd -P)"
+installed_skills_root="${AGENTS_SKILLS_DIR:-${HOME}/.agents/skills}"
+codex_runtime_root="${CODEX_HOME:-${HOME}/.codex}"
+test "$(cat "${installed_skills_root}/troubleshoot/.install-source-id")" = \
+  "local:${skills_source_root}"
+mkdir -p "${codex_runtime_root}/skill-backups"
+skill_backup_dir="$(mktemp -d \
+  "${codex_runtime_root}/skill-backups/troubleshoot.XXXXXX")"
+chmod 700 "${skill_backup_dir}"
+cp -a "${installed_skills_root}/troubleshoot" "${skill_backup_dir}/"
+rsync -ai --delete --omit-dir-times \
+  --exclude .DS_Store --exclude .install-source-id \
+  troubleshoot/ "${installed_skills_root}/troubleshoot/"
+
 ./install-skills.sh \
   --install-hooks troubleshoot/assets/hooks \
   --register-hooks
 ```
+
+The preflight prints aggregate schema/status counts only, preserves recognized
+terminal v1/v2 records, and exits nonzero for active legacy, unknown-schema,
+unsupported-status, unreadable, or malformed sidecars. Do not activate after a
+nonzero exit.
+The targeted sync intentionally preserves the root-source ownership marker so
+later full-root installs still recognize the skill. Keep the skill backup
+directory together with the hook installer's backup for exact rollback.
 
 Set `CODEX_HOME` first to target a disposable or non-default Codex home. After
 installing, restart Codex and review and trust all three hook registrations in
