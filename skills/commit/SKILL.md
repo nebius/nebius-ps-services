@@ -56,7 +56,9 @@ Agentic SDLC checkpoints.
 
 - The exact Git worktree and current branch selected by the user's session.
 - A fresh root-user authorization from the prompt hook, or exact delegated
-  owner evidence from Task Implementer or Worktree.
+  owner evidence from Task Implementer or Worktree. The shared hook also mints
+  this authorization for a fresh explicit `$commit-push` so that workflow can
+  reuse the same local transaction before its separately bounded push.
 - An optional user-provided commit message; otherwise the reviewed candidate
   must be coherent enough to summarize truthfully.
 - The current selected-project lifecycle state or its bounded zero-write
@@ -120,6 +122,9 @@ Agentic SDLC checkpoints.
      markers, and help do not authorize mutation. An absent `agent_type` is
      compatible with primary UserPromptSubmit events; an explicit non-root
      value is denied.
+     The same bounded grammar with `$commit-push` authorizes this transaction
+     only as that workflow's local commit phase; it never authorizes a push
+     from the `commit` skill or a default-branch commit.
    - Before direct preparation, require the current selected-project lifecycle
      to be sealed. A fresh turn that has performed no project writes may record
      its bounded commit-only waiver instead. Do not discover or require sibling

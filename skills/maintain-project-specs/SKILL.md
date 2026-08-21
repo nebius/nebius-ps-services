@@ -137,6 +137,11 @@ completion.
   temporary root; task ownership and deletion safety remain separate policy
   decisions. Reject mixed, dynamic, ambiguous, detached, or authoritative
   control-plane writes and audit unfinished state on the next session.
+  Exact `commit-push` remote queries, constrained current-branch tracking-ref
+  fetch, and non-force same-branch push are external only when `origin` is a
+  single fixed network target and no active pre-push or reference-transaction
+  hook can hide project effects. Raw Git mutation and every broader remote
+  shape remain denied.
 
 ## Process
 

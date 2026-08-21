@@ -37,6 +37,8 @@ leading directive before it), or `$commit on the default branch
 - Reports the final branch status and whether anything remains dirty.
 - Uses a hidden one-shot authorization and claim so the lifecycle hook can
   admit exactly this whole-repository commit without allowing raw Git mutation.
+- Shares that local transaction owner with a fresh explicit `$commit-push`;
+  the publication skill still owns and bounds the later remote effect.
 
 ## Architecture
 
@@ -114,7 +116,8 @@ Final status report
 
 - `SKILL.md`: Runtime workflow, guardrails, commands, and output contract.
 - `agents/openai.yaml`: UI metadata and default prompt.
-- `assets/hooks/commit_intent.py`: Bounded root-turn `$commit` authorization.
+- `assets/hooks/commit_intent.py`: Bounded root-turn authorization for
+  `$commit` and the local transaction phase of `$commit-push`.
 - `scripts/commit_transaction.py`: Temporary-index preview, one-shot claim,
   locked staging, normal-hook commit, exact recovery verification, and private
   acknowledgement of a reviewed hook-modified direct child.

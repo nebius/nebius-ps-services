@@ -96,7 +96,7 @@ class CommitTransactionTest(unittest.TestCase):
             }
         )
         context = result["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("Explicit $commit authorization", context)
+        self.assertIn("Explicit commit transaction authorization", context)
         return transaction.expected_authorization_path(self.root, session_id)
 
     def run_helper(self, *arguments: str, expected: int = 0) -> dict[str, object]:
@@ -162,6 +162,10 @@ class CommitTransactionTest(unittest.TestCase):
             "Use $commit Fix docs",
             "please run $commit Fix docs",
             "please $commit Fix docs",
+            "$commit-push",
+            "$commit-push Fix docs",
+            "run $commit-push",
+            "please use $commit-push Fix docs",
         ):
             with self.subTest(prompt=prompt):
                 result = intent.evaluate({**base, "prompt": prompt})
@@ -181,7 +185,7 @@ class CommitTransactionTest(unittest.TestCase):
             "$commit --help",
             "run $commit --help",
             "apply $commit -h",
-            "run $commit-push",
+            "run $commit-push --help",
             "$commitment",
         ):
             with self.subTest(prompt=prompt):
@@ -242,6 +246,11 @@ class CommitTransactionTest(unittest.TestCase):
         self.assertFalse(
             intent._default_branch_authorized(
                 "$commit on mainframe Fix docs", "refs/heads/main"
+            )
+        )
+        self.assertFalse(
+            intent._default_branch_authorized(
+                "$commit-push on main Fix docs", "refs/heads/main"
             )
         )
 
@@ -923,7 +932,7 @@ class CommitTransactionTest(unittest.TestCase):
                 "agent_type": "root",
             }
         )
-        self.assertIn("Explicit $commit authorization", str(result))
+        self.assertIn("Explicit commit transaction authorization", str(result))
         authorization = transaction.expected_authorization_path(child, "session-1")
         claim = transaction.expected_claim_path(child)
         blocked = self.run_helper(

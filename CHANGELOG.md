@@ -8,6 +8,9 @@ project folder.
 
 ### Changed
 
+- Updated the root README description from Nebius Public Services to Nebius
+  Platform Services and aligned it with the repository's reusable AI/ML
+  deployment building-block focus.
 - Helm chart publication validation now lints charts with subcharts after
   resolving chart dependencies and can run chart-specific strict lint and
   smoke render combinations.

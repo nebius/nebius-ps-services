@@ -1912,5 +1912,80 @@ readiness. Include a mixed 700-line target and a safety-critical target whose
 justified core remains over the soft budget.
 
 <!-- /REQUIREMENT: REQ-021 -->
+
+<!-- REQUIREMENT: REQ-022 status=active priority=P0 type=feature -->
+### REQ-022: Admit bounded commit-push Git effects without weakening lifecycle safety
+
+#### User Story
+
+Skill users need an explicitly authorized `commit-push` workflow to inspect its
+fixed remote and publish the current branch without the selected-project
+lifecycle misclassifying those known Git effects as ambiguous project writes.
+
+#### Acceptance Criteria
+
+- AC-001: Exact read-only Git query shapes used by `commit-push`, including
+  version, remote URL, symbolic-ref, remote-ref listing, show-ref, and rev-list
+  queries, are non-material only when their options cannot write configuration,
+  refs, worktree files, or hook state.
+- AC-002: One exact fetch from `origin` for the literal current branch may
+  update only its matching remote-tracking ref and object database while
+  suppressing `FETCH_HEAD`, tags, automatic maintenance, and commit-graph
+  writes. The selected-project lifecycle treats that bounded Git control-plane
+  effect as external and epoch-neutral only when no active
+  reference-transaction hook can introduce hidden project effects.
+- AC-003: One exact non-force push from `HEAD` to the same literal current
+  branch on `origin`, optionally setting that branch's upstream, is external to
+  the selected-project contract only when no active pre-push or
+  reference-transaction hook can introduce hidden project effects.
+- AC-004: A dirty `commit-push` workflow obtains its local commit through the
+  existing claim-bound whole-repository commit transaction. Its explicit
+  invocation can authorize that transaction without admitting raw `git add` or
+  `git commit`.
+- AC-005: Force, delete, mirror, all, tags, wildcard, arbitrary-remote,
+  arbitrary-refspec, URL-targeted, dynamic, composed, hook-bearing, or otherwise
+  ambiguous fetch and push commands remain denied by the project lifecycle.
+- AC-006: Source tests prove the recognized and rejected command matrix without
+  contacting a remote or mutating the developer checkout. Installed parity,
+  hook trust, restart, fresh-session behavior, and a real push remain separate
+  rollout gates.
+- AC-007: The relevant fetch or push URL for `origin` resolves to exactly one
+  HTTPS, SSH, or scp-style network target with a strictly validated authority.
+  Local paths, file or external-helper transports, option-like authorities,
+  embedded whitespace, and multiple URLs remain ambiguous.
+
+#### Negative Criteria
+
+- NC-001: Do not make generic `git fetch`, `git push`, `git config`, `git
+  remote`, or `git symbolic-ref` read-only or lifecycle-exempt.
+- NC-002: Do not infer safety only from an external working directory, because
+  Git effects are rooted in repository metadata and remote refs rather than the
+  process cwd.
+- NC-003: Do not bypass repository-owned publication, Worktree, Task
+  Implementer, Agentic SDLC, credential, or remote-policy controls.
+- NC-004: Do not run a live push as part of source-level regression testing.
+
+#### Validation Method
+
+Run focused lifecycle-hook and commit authorization tests, disposable-repository
+Git-effect tests, Python and Markdown checks, project-spec validation, security
+and code review, changed-surface alignment, and repository hygiene checks.
+
+#### Test Method
+
+Cover every admitted read query, constrained current-branch fetch, push with
+and without upstream setup, missing or active pre-push and
+reference-transaction hooks, detached head, branch mismatch, alternate remotes,
+unsafe or multiple URLs, unsafe flags, multiple or wildcard refspecs, command
+composition, and raw Git mutations.
+
+#### Evaluation Method
+
+Reproduce the original command classifications against the source hook in a
+disposable repository. After separately authorized installation and restart,
+repeat the same preflight in a fresh session before any separately authorized
+real publication.
+
+<!-- /REQUIREMENT: REQ-022 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

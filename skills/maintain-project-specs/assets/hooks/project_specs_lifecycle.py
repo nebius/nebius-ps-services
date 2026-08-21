@@ -79,6 +79,7 @@ READ_ONLY_GIT_COMMANDS = {
     "log",
     "ls-files",
     "ls-tree",
+    "rev-list",
     "rev-parse",
     "show",
     "status",
@@ -807,6 +808,8 @@ def _command(tool_input: Any) -> str:
 
 
 def _git_is_read_only(tokens: list[str]) -> bool:
+    if tokens == ["git", "--version"]:
+        return True
     index = 1
     while index < len(tokens):
         token = tokens[index]
@@ -836,6 +839,24 @@ def _git_is_read_only(tokens: list[str]) -> bool:
     arguments = tokens[index + 1 :]
     if command == "branch":
         return arguments == ["--show-current"]
+    if command == "remote":
+        return arguments == ["get-url", "origin"]
+    if command == "config":
+        return arguments == ["--get", "remote.origin.url"]
+    if command == "symbolic-ref":
+        return arguments in (
+            ["-q", "--short", "HEAD"],
+            ["--short", "refs/remotes/origin/HEAD"],
+            ["-q", "--short", "refs/remotes/origin/HEAD"],
+        )
+    if command == "show-ref":
+        return (
+            len(arguments) in {2, 3}
+            and arguments[0] == "--verify"
+            and (len(arguments) == 2 or arguments[1] == "--quiet")
+            and re.fullmatch(r"refs/[A-Za-z0-9][A-Za-z0-9._/-]{0,240}", arguments[-1])
+            is not None
+        )
     if command in MUTATING_GIT_COMMANDS or command not in READ_ONLY_GIT_COMMANDS:
         return False
     options = _options_before_delimiter(arguments)
@@ -1065,6 +1086,172 @@ def _git_symbolic_ref(git_root: Path) -> str:
     ):
         raise HookError("Git ref identity is unavailable")
     return value
+
+
+def _git_execution_arguments(
+    tokens: list[str], cwd: Path, git_root: Path
+) -> tuple[str, list[str]] | None:
+    """Return one direct Git subcommand bound to the selected repository."""
+
+    if not tokens or not _trusted_named_executable(tokens[0], "git"):
+        return None
+    index = 1
+    execution_cwd = cwd
+    if index < len(tokens) and tokens[index] == "-C":
+        if index + 1 >= len(tokens):
+            return None
+        candidate = Path(tokens[index + 1]).expanduser()
+        if not candidate.is_absolute():
+            candidate = cwd / candidate
+        try:
+            execution_cwd = Path(os.path.abspath(candidate)).resolve(strict=True)
+        except OSError:
+            return None
+        index += 2
+    if index >= len(tokens) or tokens[index].startswith("-"):
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(execution_cwd), "rev-parse", "--show-toplevel"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        discovered = Path(completed.stdout.strip()).resolve(strict=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0 or discovered != git_root.resolve(strict=True):
+        return None
+    return tokens[index], tokens[index + 1 :]
+
+
+def _origin_remote_is_fixed(git_root: Path, *, push: bool) -> bool:
+    arguments = ["git", "-C", str(git_root), "remote", "get-url"]
+    if push:
+        arguments.append("--push")
+    arguments.extend(("--all", "origin"))
+    try:
+        completed = subprocess.run(
+            arguments,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    urls = completed.stdout.splitlines()
+    if completed.returncode != 0 or len(urls) != 1:
+        return False
+    url = urls[0]
+    if not url or any(character.isspace() for character in url):
+        return False
+    host = (
+        r"(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?"
+        r"|\[[0-9A-Fa-f:.]+\])"
+    )
+    port = r"(?::[0-9]{1,5})?"
+    if re.fullmatch(rf"https://{host}{port}/[^\s]+", url):
+        return True
+    if re.fullmatch(rf"ssh://(?:[A-Za-z0-9._-]+@)?{host}{port}/[^\s]+", url):
+        return True
+    scp = re.fullmatch(
+        rf"(?:(?P<user>[A-Za-z0-9._-]+)@)?(?P<host>{host}):"
+        r"(?P<path>[A-Za-z0-9._~/+][^\s]*)",
+        url,
+    )
+    return bool(
+        scp
+        and scp.group("path").strip("/")
+        and (scp.group("user") or "." in scp.group("host"))
+    )
+
+
+def _git_hooks_are_absent(git_root: Path, names: tuple[str, ...]) -> bool:
+    for name in names:
+        try:
+            completed = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(git_root),
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-path",
+                    f"hooks/{name}",
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        values = completed.stdout.splitlines()
+        if completed.returncode != 0 or len(values) != 1:
+            return False
+        hook = Path(values[0])
+        if not hook.is_absolute():
+            return False
+        try:
+            if hook.is_file() and os.access(hook, os.X_OK):
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _bounded_git_effect(tokens: list[str], cwd: Path, git_root: Path) -> str | None:
+    """Classify the exact remote Git shapes owned by commit-push."""
+
+    invocation = _git_execution_arguments(tokens, cwd, git_root)
+    if invocation is None:
+        return None
+    command, arguments = invocation
+    try:
+        branch = _git_symbolic_ref(git_root).removeprefix("refs/heads/")
+    except HookError:
+        return None
+    source_ref = f"refs/heads/{branch}"
+    tracking_ref = f"refs/remotes/origin/{branch}"
+    if command == "ls-remote" and arguments in (
+        ["--symref", "origin", "HEAD"],
+        ["--exit-code", "--branches", "origin", source_ref],
+    ):
+        return (
+            EFFECT_EXTERNAL if _origin_remote_is_fixed(git_root, push=False) else None
+        )
+    if command == "fetch" and arguments == [
+        "--no-write-fetch-head",
+        "--no-auto-maintenance",
+        "--no-write-commit-graph",
+        "--no-tags",
+        "origin",
+        f"{source_ref}:{tracking_ref}",
+    ]:
+        return (
+            EFFECT_EXTERNAL
+            if _origin_remote_is_fixed(git_root, push=False)
+            and _git_hooks_are_absent(git_root, ("reference-transaction",))
+            else None
+        )
+    if command != "push" or arguments not in (
+        ["origin", f"HEAD:{branch}"],
+        ["-u", "origin", f"HEAD:{branch}"],
+        ["--set-upstream", "origin", f"HEAD:{branch}"],
+    ):
+        return None
+    if not _origin_remote_is_fixed(git_root, push=True):
+        return None
+    return (
+        EFFECT_EXTERNAL
+        if _git_hooks_are_absent(git_root, ("pre-push", "reference-transaction"))
+        else None
+    )
 
 
 def _exact_flag_map(
@@ -2523,7 +2710,7 @@ def _effect_analysis(
     git_root: Path,
     state_path: Path,
 ) -> EffectAnalysis:
-    del git_root, state_path
+    del state_path
     if not _potential_write(tool, tool_input):
         return EffectAnalysis(EFFECT_NON_MATERIAL)
     try:
@@ -2539,6 +2726,10 @@ def _effect_analysis(
             for segment in parsed.segments
         ):
             return EffectAnalysis(EFFECT_AMBIGUOUS)
+        if len(parsed.segments) == 1:
+            git_effect = _bounded_git_effect(list(parsed.segments[0]), cwd, git_root)
+            if git_effect is not None:
+                return EffectAnalysis(git_effect)
     targets, complete, recursive = _effect_targets(tool, tool_input, cwd)
     if not complete or not targets:
         return EffectAnalysis(EFFECT_AMBIGUOUS, tuple(targets))

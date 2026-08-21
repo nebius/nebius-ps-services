@@ -15,6 +15,7 @@ from typing import Any
 
 AUTH_SCHEMA = "commit-transaction.authorization.v1"
 COMMIT_DIRECTIVES = frozenset({"apply", "execute", "invoke", "run", "use"})
+COMMIT_INVOCATIONS = frozenset({"$commit", "$commit-push"})
 REPOSITORY_SHAPING_GIT_ENV = frozenset(
     {
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -68,7 +69,7 @@ def _excluded(payload: dict[str, Any]) -> bool:
     return bool(agent_type and agent_type not in {"root", "primary"})
 
 
-def _commit_invocation_body(prompt: str) -> tuple[str, ...] | None:
+def _commit_invocation(prompt: str) -> tuple[str, tuple[str, ...]] | None:
     words = prompt.lstrip().split()
     if not words:
         return None
@@ -77,22 +78,29 @@ def _commit_invocation_body(prompt: str) -> tuple[str, ...] | None:
         index += 1
     if index < len(words) and words[index].casefold() in COMMIT_DIRECTIVES:
         index += 1
-    if index >= len(words) or words[index] != "$commit":
+    if index >= len(words) or words[index] not in COMMIT_INVOCATIONS:
         return None
+    invocation = words[index]
     body = tuple(words[index + 1 :])
     if body and body[0] in {"-h", "--help"}:
         return None
-    return body
+    return invocation, body
+
+
+def _commit_invocation_body(prompt: str) -> tuple[str, ...] | None:
+    invocation = _commit_invocation(prompt)
+    return invocation[1] if invocation is not None else None
 
 
 def _explicit_commit(prompt: str) -> bool:
-    return _commit_invocation_body(prompt) is not None
+    return _commit_invocation(prompt) is not None
 
 
 def _default_branch_authorized(prompt: str, reference: str) -> bool:
-    invocation_body = _commit_invocation_body(prompt)
-    if invocation_body is None:
+    invocation = _commit_invocation(prompt)
+    if invocation is None or invocation[0] != "$commit":
         return False
+    invocation_body = invocation[1]
     body = " ".join(invocation_body).lower()
     branch = reference.removeprefix("refs/heads/").lower()
     phrases = ("on the default branch", f"on {branch}")
@@ -239,7 +247,9 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     session_id = payload.get("session_id")
     turn_id = payload.get("turn_id")
     if session_id in {None, ""} or turn_id in {None, ""}:
-        raise IntentError("explicit $commit requires current session and turn identity")
+        raise IntentError(
+            "explicit commit transaction requires current session and turn identity"
+        )
     identity = _identity(payload.get("cwd"))
     path = _authorization_path(identity, session_id)
     claim_path = _claim_path(identity)
@@ -261,7 +271,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
-                "Explicit $commit authorization is bound to this root turn and exact "
+                "Explicit commit transaction authorization is bound to this root turn and exact "
                 f"repository state. Canonical authorization path: {path}. "
                 f"Canonical claim path: {claim_path}"
             ),
@@ -278,7 +288,7 @@ def main() -> int:
     except Exception as error:
         output = {
             "continue": False,
-            "stopReason": f"Explicit $commit intent could not be bound safely: {error}",
+            "stopReason": f"Explicit commit intent could not be bound safely: {error}",
         }
     if output:
         print(json.dumps(output, sort_keys=True))

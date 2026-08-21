@@ -88,6 +88,11 @@ external only for one literal absolute system-temp descendant in the form
 `find /tmp/<task-owned-tree> -depth -delete`; temporary roots, variables,
 globs, multiple roots, symlinks, and alternate `find` actions remain denied by
 this lifecycle, while destructive-action policy still owns deletion approval.
+Bounded `commit-push` remote operations are classified by Git semantics rather
+than cwd: only a single fixed-network `origin`, literal current-branch tracking
+fetch, and non-force same-branch push with no active pre-push or
+reference-transaction hook pass through. Broader remote commands and raw Git
+mutation remain denied.
 
 Missing files start from the canonical draft templates under
 `assets/templates/`; the agent replaces every placeholder from focused README,

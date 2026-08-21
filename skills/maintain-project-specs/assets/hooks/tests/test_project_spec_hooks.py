@@ -779,6 +779,13 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             "git diff --stat HEAD",
             "git log -1",
             "git branch --show-current",
+            "git --version",
+            "git remote get-url origin",
+            "git config --get remote.origin.url",
+            "git symbolic-ref -q --short HEAD",
+            "git symbolic-ref --short refs/remotes/origin/HEAD",
+            "git show-ref --verify refs/remotes/origin/topic",
+            "git rev-list --left-right --count HEAD...origin/topic",
             r"find . -type f -print -exec stat -f '%Sp %N' {} \;",
             "rg pattern README.md | head -n 5",
             "git status --short && git diff --stat HEAD",
@@ -809,6 +816,269 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             ),
             {},
         )
+
+    def test_bounded_commit_push_git_effects_are_external(self) -> None:
+        git(self.project, "remote", "add", "origin", "https://example.invalid/o/r.git")
+        branch = subprocess.run(
+            ["git", "-C", str(self.project), "branch", "--show-current"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        state_path = self.root / "lifecycle.json"
+        commands = (
+            "git ls-remote --symref origin HEAD",
+            f"git ls-remote --exit-code --branches origin refs/heads/{branch}",
+            "git fetch --no-write-fetch-head --no-auto-maintenance "
+            "--no-write-commit-graph --no-tags origin "
+            f"refs/heads/{branch}:refs/remotes/origin/{branch}",
+            f"git push origin HEAD:{branch}",
+            f"git push -u origin HEAD:{branch}",
+            f"git -C {self.project} push origin HEAD:{branch}",
+        )
+
+        for command in commands:
+            with self.subTest(command=command):
+                effect = lifecycle._effect_analysis(
+                    "Bash",
+                    {"command": command, "workdir": str(self.project)},
+                    self.project,
+                    self.project,
+                    state_path,
+                )
+                self.assertEqual(effect.kind, lifecycle.EFFECT_EXTERNAL)
+
+        git(self.project, "checkout", "--detach", "-q")
+        effect = lifecycle._effect_analysis(
+            "Bash",
+            {
+                "command": f"git push origin HEAD:{branch}",
+                "workdir": str(self.project),
+            },
+            self.project,
+            self.project,
+            state_path,
+        )
+        self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
+
+    def test_bounded_commit_push_effects_pass_lifecycle_and_stay_epoch_neutral(
+        self,
+    ) -> None:
+        git(self.project, "remote", "add", "origin", "git@example.invalid:o/r.git")
+        branch = subprocess.run(
+            ["git", "-C", str(self.project), "branch", "--show-current"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        before = lifecycle._load(state_path)
+        assert before is not None
+        command = f"git push -u origin HEAD:{branch}"
+        payload = {
+            **self.base,
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+
+        self.assertEqual(
+            lifecycle.evaluate({**payload, "hook_event_name": "PreToolUse"}), {}
+        )
+        self.assertEqual(
+            lifecycle.evaluate(
+                {
+                    **payload,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": {"exit_code": 0},
+                }
+            ),
+            {},
+        )
+        after = lifecycle._load(state_path)
+        assert after is not None
+        self.assertEqual(after["write_epoch"], before["write_epoch"])
+        self.assertEqual(after["phase"], before["phase"])
+
+    def test_commit_push_git_effects_fail_closed_outside_exact_shape(self) -> None:
+        git(self.project, "remote", "add", "origin", "https://example.invalid/o/r.git")
+        branch = subprocess.run(
+            ["git", "-C", str(self.project), "branch", "--show-current"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        state_path = self.root / "lifecycle.json"
+        commands = (
+            f"git push --force origin HEAD:{branch}",
+            f"git push --force-with-lease origin HEAD:{branch}",
+            f"git push --delete origin {branch}",
+            "git push --mirror origin",
+            "git push --tags origin",
+            "git push origin 'refs/heads/*:refs/heads/*'",
+            f"git push origin :{branch}",
+            f"git push origin HEAD:not-{branch}",
+            f"git push other HEAD:{branch}",
+            f"git push origin HEAD:{branch} HEAD:other",
+            "git push origin --all",
+            f"git push origin HEAD:{branch} && git status --short",
+            f"git fetch origin refs/heads/{branch}:refs/remotes/origin/{branch}",
+            f"git ls-remote --exit-code --heads origin refs/heads/{branch}",
+            "git fetch --all",
+            f"git fetch --no-write-fetch-head --no-auto-maintenance "
+            "--no-write-commit-graph --no-tags other "
+            f"refs/heads/{branch}:refs/remotes/origin/{branch}",
+            "GIT_SSH_COMMAND='touch changed' git ls-remote --symref origin HEAD",
+        )
+
+        for command in commands:
+            with self.subTest(command=command):
+                effect = lifecycle._effect_analysis(
+                    "Bash",
+                    {"command": command, "workdir": str(self.project)},
+                    self.project,
+                    self.project,
+                    state_path,
+                )
+                self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
+
+        hook = self.project / ".git/hooks/pre-push"
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        hook.chmod(0o755)
+        effect = lifecycle._effect_analysis(
+            "Bash",
+            {
+                "command": f"git push origin HEAD:{branch}",
+                "workdir": str(self.project),
+            },
+            self.project,
+            self.project,
+            state_path,
+        )
+        self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
+
+        reference_hook = self.project / ".git/hooks/reference-transaction"
+        reference_hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        reference_hook.chmod(0o755)
+        fetch = (
+            "git fetch --no-write-fetch-head --no-auto-maintenance "
+            "--no-write-commit-graph --no-tags origin "
+            f"refs/heads/{branch}:refs/remotes/origin/{branch}"
+        )
+        effect = lifecycle._effect_analysis(
+            "Bash",
+            {"command": fetch, "workdir": str(self.project)},
+            self.project,
+            self.project,
+            state_path,
+        )
+        self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
+
+        hook.unlink()
+        configured_hooks = self.project / ".githooks"
+        configured_hooks.mkdir()
+        configured_hook = configured_hooks / "pre-push"
+        configured_hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        configured_hook.chmod(0o755)
+        git(self.project, "config", "core.hooksPath", ".githooks")
+        effect = lifecycle._effect_analysis(
+            "Bash",
+            {
+                "command": f"git push origin HEAD:{branch}",
+                "workdir": str(self.project),
+            },
+            self.project,
+            self.project,
+            state_path,
+        )
+        self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
+
+        git(
+            self.project,
+            "remote",
+            "set-url",
+            "--add",
+            "origin",
+            "https://mirror.example.invalid/o/r.git",
+        )
+        effect = lifecycle._effect_analysis(
+            "Bash",
+            {
+                "command": "git ls-remote --symref origin HEAD",
+                "workdir": str(self.project),
+            },
+            self.project,
+            self.project,
+            state_path,
+        )
+        self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
+
+    def test_commit_push_remote_target_must_be_fixed_and_network_scoped(self) -> None:
+        git(self.project, "remote", "add", "origin", "https://example.invalid/o/r.git")
+        branch = subprocess.run(
+            ["git", "-C", str(self.project), "branch", "--show-current"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        state_path = self.root / "lifecycle.json"
+        for remote in (
+            str(self.root / "bare.git"),
+            "file:///tmp/repository.git",
+            "ext::sh -c 'touch changed'",
+            "ssh://-oProxyCommand=touch%20changed/repository.git",
+        ):
+            with self.subTest(remote=remote):
+                git(self.project, "remote", "set-url", "origin", remote)
+                effect = lifecycle._effect_analysis(
+                    "Bash",
+                    {
+                        "command": f"git push origin HEAD:{branch}",
+                        "workdir": str(self.project),
+                    },
+                    self.project,
+                    self.project,
+                    state_path,
+                )
+                self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
+
+        git(
+            self.project,
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/o/r.git",
+        )
+        git(
+            self.project,
+            "remote",
+            "set-url",
+            "--add",
+            "--push",
+            "origin",
+            "ssh://git@example.invalid/o/r-one.git",
+        )
+        git(
+            self.project,
+            "remote",
+            "set-url",
+            "--add",
+            "--push",
+            "origin",
+            "ssh://git@example.invalid/o/r-two.git",
+        )
+        effect = lifecycle._effect_analysis(
+            "Bash",
+            {
+                "command": f"git push origin HEAD:{branch}",
+                "workdir": str(self.project),
+            },
+            self.project,
+            self.project,
+            state_path,
+        )
+        self.assertEqual(effect.kind, lifecycle.EFFECT_AMBIGUOUS)
 
     def test_planning_allows_only_canonical_intent_to_add(self) -> None:
         lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})

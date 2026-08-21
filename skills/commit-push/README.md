@@ -11,12 +11,14 @@ PRs, change branches, merge, rebase, or repair remote divergence.
   candidate, nested worker, or inconsistent ownership claim and routes it to
   its local owner; only the accumulated source branch may be pushed.
 - Verifies the current Git state is safe for a branch-local commit and push.
-- Stages the complete repository diff with repo-root `git add -A`, regardless
-  of the project or subdirectory where the agent started.
-- Repairs small mechanical whitespace blockers reported by
-  `git diff --cached --check` when the fix is local and unambiguous.
-- Creates a commit with a user-provided or generated message.
-- Pushes the current branch to `origin`.
+- Reuses the claim-bound commit transaction, which previews and stages the
+  complete repository diff with repo-root `git add -A`.
+- Creates a commit with a user-provided or generated message after reviewing
+  the temporary-index candidate.
+- Uses exact remote queries, constrained tracking-ref refresh, and one
+  non-force current-branch push to `origin`.
+- Stops on active pre-push or reference-transaction hooks rather than
+  bypassing hidden project effects.
 - Reports whether the final worktree is clean.
 
 ## Architecture
@@ -28,13 +30,10 @@ Current git branch
 Safety checks
   |
   v
-Full repository staging
+Claim-bound candidate preparation
   |
   v
-Lightweight staged validation
-  |
-  v
-Bounded whitespace repair when safe
+Candidate review and validation
   |
   v
 Commit when needed
@@ -58,27 +57,27 @@ Final status report
 4. If the branch is clean but ahead, push the existing commits.
 5. If the branch is clean, has no upstream, and has local work relative to the
    default branch, push it with upstream tracking.
-6. If the branch is dirty, run `git add -A` from the repository root with no
-   pathspec, validate the staged diff, repair simple whitespace-only validation
-   blockers when safe, commit with a provided or generated message, and push.
+6. If the branch is dirty, use the canonical commit transaction to preview the
+   complete repository tree, validate it, and create the local commit with
+   normal hooks before pushing.
 7. Report the final branch status and whether the worktree is clean.
 
 ## Core Concepts
 
 - The skill is current-branch only.
-- `git add -A` is mandatory and always runs from the Git repository root
-  because monorepo changes often span projects.
+- `git add -A` is mandatory inside the claim-bound helper and always runs from
+  the Git repository root because monorepo changes often span projects.
 - The current working directory, service folder, chart folder, or package
   folder never narrows the commit scope for this skill.
 - Divergence recovery is intentionally out of scope; it needs a separate
   explicit request.
-- The remote branch refresh uses a full `refs/heads/<branch>` source ref so the
-  update target is explicit.
-- Whitespace repair is intentionally narrow: trailing whitespace and final
-  extra blank lines can be fixed, but conflict markers, unresolved conflicts,
-  semantic changes, broad formatter churn, and dependency updates still stop the
-  workflow.
-- Commit and push hooks should run normally.
+- The remote branch refresh uses one full `refs/heads/<branch>` source ref and
+  suppresses `FETCH_HEAD`, tags, automatic maintenance, and commit-graph
+  writes.
+- Raw staging and commit stay denied; `$commit-push` authorizes the existing
+  local transaction as part of the same publication workflow.
+- Commit hooks run normally. An active pre-push or reference-transaction hook
+  stops the remote transition because its project effects are not bounded.
 - Idempotence means safe no-op or push-only behavior, not hidden branch repair.
 
 ## Files

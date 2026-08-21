@@ -3376,5 +3376,141 @@ truthfully; long skills are classified rather than blindly summarized; and no
 installation or broad migration is implied by source proof.
 
 <!-- /FEATURE: FEAT-020 -->
+
+<!-- FEATURE: FEAT-021 reqs=REQ-022 status=ready priority=P0 version=1 -->
+### FEAT-021: Semantic Git-effect classification for commit-push
+
+#### Requirements Covered
+
+- REQ-022: Admit bounded commit-push Git effects without weakening lifecycle safety.
+
+#### Context Evidence
+
+The project lifecycle currently decides whether Git is material through a
+small subcommand allowlist. Any other Git command is material, but the generic
+path-target extractor cannot identify remote refs or repository metadata, so
+remote URL lookup, remote-ref queries, constrained fetch, and the exact
+authorized push all become `EFFECT_AMBIGUOUS` before cwd scoping is considered.
+Moving the command outside the checkout therefore cannot change the result.
+The existing commit transaction already owns reviewed local staging and commit
+effects; publication needs a separate, narrow semantic classification rather
+than a second raw-Git compatibility path.
+
+#### Design Details
+
+Parse Git tokens once after supported global options. Recognize only exact
+read-only query grammars required by `commit-push`: `--version`, remote URL
+lookup for `origin`, remote and local symbolic-ref reads, remote-ref listing,
+show-ref verification, rev-list, and the existing read allowlist. Reject
+unknown or write-capable options rather than generalizing entire subcommands.
+
+Introduce a bounded Git-effect classifier before generic filesystem target
+extraction. Resolve the repository's literal current branch from
+`refs/heads/BRANCH` and require the command's source and destination to encode
+that same branch without shell expansion, wildcard, additional refspec, or URL
+target. Resolve every applicable `origin` URL with `get-url --all`, require
+exactly one HTTPS, SSH, or scp-style network target, and validate its authority
+strictly enough to reject local, file, external-helper, option-like, whitespace,
+and multiple-target forms. The only admitted fetch is `origin` plus
+`refs/heads/BRANCH:refs/remotes/origin/BRANCH` with flags that suppress
+`FETCH_HEAD`, tag following, automatic maintenance, and commit-graph writes.
+Its object and matching remote-tracking-ref updates are known Git control-plane
+effects outside the selected project contract only when no executable
+reference-transaction hook can add unmodeled worktree effects.
+
+The only admitted publication is a non-force `git push` to `origin` from
+`HEAD` to that literal branch, optionally with upstream setup. Before treating
+it as external, resolve `core.hooksPath` and the repository's effective
+`pre-push` and `reference-transaction` paths. Any active hook or inspection
+ambiguity keeps the command denied because it can introduce unmodeled project
+effects. Upstream setup is a known local Git-config effect, not a project-file
+effect, and remains bounded to the already validated branch and remote.
+
+Teach the existing commit prompt-intent owner that a bounded leading
+`$commit-push` invocation also authorizes its local commit phase. Update the
+workflow to call the claim-bound commit helper whenever the checkout is dirty;
+raw staging and commit remain lifecycle-denied. Keep repository-owned
+publication policies and remote authentication authoritative after lifecycle
+classification.
+
+#### Selected Option
+
+Add exact semantic Git-effect recognition at the lifecycle boundary and reuse
+the existing claim-bound commit transaction for local changes. This repairs
+the false ambiguity without making cwd a proxy for Git safety or creating dual
+old/new commit paths.
+
+#### Alternatives Considered
+
+Allowing generic Git commands in an external cwd was rejected because `-C`,
+repository discovery, and Git metadata effects ignore that boundary. Treating
+all fetch and push commands as external was rejected because force, delete,
+mirror, tags, arbitrary refspecs, config-capable options, and custom hooks have
+material effects beyond this workflow. A second commit-push-owned staging
+helper was rejected because the established claim-bound transaction already
+owns exactly that local effect.
+
+#### Implementation Boundaries
+
+Owned surfaces are lifecycle Git parsing and classification, focused hook
+tests, commit prompt intent, `commit-push` workflow guidance and trigger
+coverage, root documentation, canonical specs, and changelog. Remote policy,
+credentials, hosting-provider behavior, runtime installation, and an actual
+push are outside this source repair.
+
+#### Test-First Success Criteria
+
+- TDD-001: Every exact read-only preflight query is non-material while
+  write-capable or malformed variants remain material and ambiguous.
+- TDD-002: Only the constrained literal current-branch fetch and push classify
+  as external; detached head, branch mismatch, unsafe flags, multiple refspecs,
+  alternate remotes, unsafe or multiple URLs, wildcard, and composition fail
+  closed.
+- TDD-003: Absent relevant hooks permit the exact remote shapes; an effective
+  repository or configured pre-push or reference-transaction hook and
+  hook-resolution failure deny them.
+- TDD-004: A leading explicit `$commit-push` authorizes the existing commit
+  transaction, while conversational mentions and raw staging/commit do not.
+- TDD-005: Source regressions use disposable repositories and no remote, leave
+  the developer checkout unchanged, and do not claim installed or live proof.
+
+#### Validation Plan
+
+Run focused lifecycle and commit-intent tests first, then disposable Git-effect
+tests, scoped Ruff and Python compilation, Markdownlint, source catalog and
+project-spec validation, security review, code review, explicit changed-surface
+alignment, and `git diff --check`.
+
+#### Test Plan
+
+Use a table-driven lifecycle-hook matrix for exact and adversarial Git shapes,
+including `-C`, long/short option variants, config and worktree hook paths,
+detached heads, unsafe or multiple URLs, unsafe refspecs, and composed shell
+commands. Extend commit intent cases for direct and leading-imperative
+`commit-push` invocations.
+
+#### Evaluation Plan
+
+Run the original blocked commands against the source hook in a disposable
+repository and verify expected allow/deny classifications. Treat source
+correctness, installed byte parity, registration/trust, restart, fresh-session
+behavior, and real remote publication as independent gates.
+
+#### Rollout And Rollback
+
+Land source and tests first. Install the source and hook bundle only under
+separate authorization, verify exact parity and trust, restart, then perform a
+fresh-session preflight. Roll back the exact installed bundle if activation
+regresses; never repair a publication failure by weakening unsafe command
+denials.
+
+#### Done Definition
+
+The exact commit-push preflight and current-branch publication path no longer
+hit false lifecycle ambiguity, unsafe or hidden-effect Git remains fail-closed,
+dirty local commits retain the established transaction owner, and validation
+claims distinguish source repair from installed and live behavior.
+
+<!-- /FEATURE: FEAT-021 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

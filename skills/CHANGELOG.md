@@ -6,6 +6,16 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed `commit-push` under an active selected-project lifecycle. Exact safe
+  Git queries are now read-only, while a fixed-network `origin` query,
+  constrained current-branch tracking fetch, and non-force same-branch push
+  are explicit epoch-neutral Git control-plane effects. Alternate remotes,
+  unsafe or multiple transports, active pre-push or reference-transaction
+  hooks, force/delete/mirror/tag/wildcard shapes, extra refspecs, and
+  composition stay fail-closed. Dirty publication now reuses the claim-bound
+  commit transaction instead of raw staging and commit; source verification
+  remains separate from installation, restart, fresh-session behavior, and
+  live publication.
 - Fixed project-instruction decision revision after an earlier current-session
   render. Rendering now rejects target-inapplicable dispositions before
   publishing private evidence and atomically replaces changed private rules

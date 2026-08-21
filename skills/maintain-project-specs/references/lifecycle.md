@@ -198,8 +198,9 @@ unbound receipt, and caller-authored review evidence all remain terminal.
 The hook is a project-mutation lifecycle guard, not a general executable trust
 policy. Ordinary reads, read-only pipelines, common Git inspection, and
 user-owned package-manager tools remain available. This includes exact
-`git branch --show-current` inspection and `find -exec stat` compositions;
-other `git branch` actions and arbitrary `find -exec` helpers remain material.
+`git branch --show-current`, version, origin URL, symbolic-ref, show-ref, and
+rev-list inspection and `find -exec stat` compositions; write-capable variants,
+other `git branch` actions, and arbitrary `find -exec` helpers remain material.
 Explicit writers,
 redirections, detached execution, command substitution, unsafe ripgrep helper
 options, mutating Git actions, and mutating or unknown MCP methods remain
@@ -226,6 +227,14 @@ task state, installed skills, credentials, and other user files are outside
 this selected-project hook's ownership and pass through when their effects are
 fixed and external. Normal sandbox, permission, domain-hook, credential, and
 destructive-action policies continue to own non-lifecycle security.
+The `commit-push` exception is semantic rather than cwd-based. It admits only
+one fixed-network `origin` query, one current-branch tracking-ref fetch with
+unrelated metadata writes suppressed, or one non-force `HEAD` push to that
+same literal branch. An active pre-push or reference-transaction hook, unsafe
+transport, multiple URL, alternate remote, force/delete/mirror/tag/wildcard
+option, extra refspec, shell composition, or branch mismatch remains ambiguous
+and denied. Raw staging and commit remain owned solely by the claim-bound
+commit transaction.
 The single Stop arbiter invokes troubleshooting, project-contract, and SDLC
 delegates in deterministic order. Terminal results take precedence; otherwise
 it combines every initial blocker into one continuation request. A ready
