@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,11 @@ from nebius_cxcli.slurm_jobs import (
 from nebius_cxcli.soperator_upgrade_progress import bounded_identifier_summary
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _plain_cli_output(value: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", value)
 
 
 def test_cross_version_partition_restore_normalizes_alloc_nodes_all(
@@ -1937,9 +1943,10 @@ def test_removed_discovery_redaction_fails_at_parser_before_cluster_access(
         ],
     )
 
+    output = _plain_cli_output(result.output)
     assert result.exit_code == 2
-    assert "No such option" in result.output
-    assert "--redaction" in result.output
+    assert "No such option" in output
+    assert "--redaction" in output
     assert downstream_calls == []
 
 
@@ -1969,6 +1976,7 @@ def test_soperator_commands_reject_misrouted_options_at_the_parser(
 
     result = runner.invoke(cli.app, argv)
 
+    output = _plain_cli_output(result.output)
     assert result.exit_code == 2
-    assert "No such option" in result.output
-    assert foreign_option in result.output
+    assert "No such option" in output
+    assert foreign_option in output

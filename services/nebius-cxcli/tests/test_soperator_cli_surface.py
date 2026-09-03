@@ -39,6 +39,7 @@ from nebius_cxcli.soperator_telemetry import (
 from soperator_fixtures import sample_infrastructure_receipt
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def test_public_discovery_provider_observation_preserves_capacity(
@@ -548,7 +549,7 @@ def _retired_soperator_root_command() -> str:
 
 
 def _normalized(value: str) -> str:
-    return " ".join(value.split())
+    return " ".join(_ANSI_ESCAPE_RE.sub("", value).split())
 
 
 def _normalized_cli_help(value: str) -> str:
