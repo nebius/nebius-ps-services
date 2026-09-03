@@ -14,6 +14,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Restored reproducible Python 3.12 installs by bounding Click before its 8.4
+  rendering changes, Typer before its 0.26 Click-vendoring change, and the
+  Nebius SDK before its 0.4 generated-API replacement. CI help assertions now
+  use a stable terminal height, and VM-HA TLS contexts expose their existing
+  TLS 1.2 minimum directly at construction for static security analysis.
 - Fixed post-promotion VM-HA restoration for an exact already-running,
   alias-free standby. The rearm service now adopts the committed authorization
   without issuing a Compute start, rejects foreign same-receipt checkpoint

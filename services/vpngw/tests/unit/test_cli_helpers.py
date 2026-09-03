@@ -222,7 +222,7 @@ def test_nested_vm_manager_lifetime_remains_open_for_outer_command() -> None:
     assert hasattr(_run_vm_ha_planned_transfer, "__wrapped__")
 
 
-HELP_ENV = {"COLUMNS": "120"}
+HELP_ENV = {"COLUMNS": "120", "LINES": "200"}
 EXPECTED_ROOT_COMMANDS = (
     "create-config",
     "vm-ha",

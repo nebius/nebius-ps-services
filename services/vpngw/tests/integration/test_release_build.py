@@ -143,6 +143,18 @@ def test_wheel_metadata_retains_runtime_dependency_bounds(tmp_path) -> None:
 
     requires_dist = metadata.get_all("Requires-Dist") or []
     assert any(
+        requirement.startswith("click") and ">=8.3.0" in requirement and "<8.4.0" in requirement
+        for requirement in requires_dist
+    )
+    assert any(
+        requirement.startswith("typer") and ">=0.20.0" in requirement and "<0.26.0" in requirement
+        for requirement in requires_dist
+    )
+    assert any(
+        requirement.startswith("nebius") and ">=0.3.18" in requirement and "<0.4.0" in requirement
+        for requirement in requires_dist
+    )
+    assert any(
         requirement.startswith("Pygments") and ">=2.20.0" in requirement and "<3.0.0" in requirement
         for requirement in requires_dist
     )

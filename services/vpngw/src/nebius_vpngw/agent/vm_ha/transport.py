@@ -88,7 +88,6 @@ class MutualTLSConfig:
         if not snapshot.peer_certificate_pems:
             raise PeerTransportError("managed peer certificate trust is empty")
         peer_bundle = b"\n".join(snapshot.peer_certificate_pems).decode("ascii")
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.verify_mode = ssl.CERT_REQUIRED
         context.options |= ssl.OP_NO_TICKET
         context.verify_flags |= getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0)
@@ -102,6 +101,7 @@ class MutualTLSConfig:
         try:
             snapshot = self.snapshot_provider()
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.check_hostname = True
             self._apply_common_context_policy(context, snapshot)
             return context, snapshot
@@ -114,6 +114,7 @@ class MutualTLSConfig:
         try:
             snapshot = self.snapshot_provider()
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.check_hostname = False
             self._apply_common_context_policy(context, snapshot)
             context.num_tickets = 0
