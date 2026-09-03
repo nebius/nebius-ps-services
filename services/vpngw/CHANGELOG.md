@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.0] - 2026-09-03
+
 - Restored reproducible Python 3.12 installs by bounding Click before its 8.4
   rendering changes, Typer before its 0.26 Click-vendoring change, and the
   Nebius SDK before its 0.4 generated-API replacement. CI semantic CLI
