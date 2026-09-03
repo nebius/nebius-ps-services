@@ -7,10 +7,11 @@ All notable changes to this project are tracked here. This changelog follows
 ## How to use this file
 
 - Keep `## [Unreleased]` at the top and add bullets as changes land.
-- Before release tagging, start from clean synced `__MAIN_BRANCH__` and move
-  `Unreleased` into a dated release section with
-  `./publish-release.sh --mode prep --tag X.Y.Z`; it creates and pushes a
-  release branch.
+- Before release tagging, move `Unreleased` into a dated release section with
+  `./publish-release.sh --mode prep --tag X.Y.Z` from a clean feature branch
+  that contains current `origin/__MAIN_BRANCH__`, or from clean synced
+  `__MAIN_BRANCH__`. The helper reuses the feature branch; from
+  `__MAIN_BRANCH__`, it creates and pushes a release branch.
 - After the release-prep PR merges to `__MAIN_BRANCH__`, run
   `./publish-release.sh --mode publish --tag X.Y.Z` on clean synced
   `__MAIN_BRANCH__`.

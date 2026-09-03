@@ -50,7 +50,7 @@ show_usage() {
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}prep${S_RESET}      Require clean synced default branch, create release/<tag>, update the changelog, commit it, and push the release branch."
+  printf '%b\n' "  ${S_YELLOW}prep${S_RESET}      Reuse a clean current feature branch, or create release/<tag> from a clean synced default branch; update, commit, and push the changelog."
   printf '%b\n' "                 Fails if the tag already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}publish${S_RESET}   Verify runtime version when configured, then create and push the annotated release tag."
   printf '%b\n' "  ${S_YELLOW}verify${S_RESET}    Verify a built wheel artifact version with --asset-glob."
@@ -126,31 +126,66 @@ ensure_named_branch() {
 push_current_branch() {
   local branch="$1"
   ensure_named_branch "${branch}"
-  git push --set-upstream origin "HEAD:${branch}"
+  git push --set-upstream origin "HEAD:refs/heads/${branch}"
 }
 
-release_source_required_note() {
-  log_note "First open and merge a PR for your current branch into ${MAIN_BRANCH}, then switch to ${MAIN_BRANCH}, fast-forward, and rerun."
+publish_source_required_note() {
+  log_note "Merge the release-prep PR into ${MAIN_BRANCH}, then switch to ${MAIN_BRANCH}, fast-forward, and rerun."
 }
 
-ensure_release_source_ready() {
+ensure_publish_source_ready() {
   local branch="$1"
-  local mode="$2"
   local status_output=""
   ensure_named_branch "${branch}"
   if [[ "${branch}" != "${MAIN_BRANCH}" ]]; then
-    log_error "--${mode} must run from ${MAIN_BRANCH}; current branch is ${branch}."
-    release_source_required_note
+    log_error "--mode publish must run from ${MAIN_BRANCH}; current branch is ${branch}."
+    publish_source_required_note
     exit 1
   fi
   status_output="$(git status --short --untracked-files=all)"
   if [[ -n "${status_output}" ]]; then
-    log_error "--${mode} requires a clean working tree on ${MAIN_BRANCH}."
+    log_error "--mode publish requires a clean working tree on ${MAIN_BRANCH}."
     printf '%s\n' "${status_output}" >&2
-    release_source_required_note
+    publish_source_required_note
     exit 1
   fi
   ensure_branch_synced "${MAIN_BRANCH}"
+}
+
+ensure_remote_branch_publishable() {
+  local branch="$1"
+  local remote_status=0
+  git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1 || remote_status=$?
+  if [[ "${remote_status}" -eq 2 ]]; then
+    return 0
+  fi
+  if [[ "${remote_status}" -ne 0 ]]; then
+    log_error "Unable to check origin for current branch: ${branch}"
+    exit 1
+  fi
+  git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+  if ! git merge-base --is-ancestor "origin/${branch}" HEAD; then
+    log_error "Pushing current ${branch} would not fast-forward origin/${branch}."
+    log_note "Merge the remote branch into ${branch} without rewriting shared history, validate it, and rerun."
+    exit 1
+  fi
+}
+
+ensure_prep_source_ready() {
+  local branch="$1"
+  ensure_named_branch "${branch}"
+  ensure_clean_worktree
+  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
+    ensure_branch_synced "${MAIN_BRANCH}"
+    return 0
+  fi
+  git fetch origin "+refs/heads/${MAIN_BRANCH}:refs/remotes/origin/${MAIN_BRANCH}"
+  if ! git merge-base --is-ancestor "origin/${MAIN_BRANCH}" HEAD; then
+    log_error "Current ${branch} does not contain the latest origin/${MAIN_BRANCH}."
+    log_note "Merge origin/${MAIN_BRANCH} into ${branch}, resolve and validate the result, then rerun."
+    exit 1
+  fi
+  ensure_remote_branch_publishable "${branch}"
 }
 
 release_branch_name() {
@@ -165,7 +200,7 @@ ensure_release_branch_absent() {
     log_error "Release branch already exists locally: ${branch}"
     exit 1
   fi
-  git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1 || remote_status=$?
+  git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1 || remote_status=$?
   if [[ "${remote_status}" -eq 0 ]]; then
     log_error "Release branch already exists on origin: ${branch}"
     exit 1
@@ -178,11 +213,11 @@ ensure_release_branch_absent() {
 
 ensure_branch_synced() {
   local branch="$1"
-  git fetch origin
+  git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
   local local_commit=""
   local remote_commit=""
   local_commit="$(git rev-parse HEAD)"
-  if ! remote_commit="$(git rev-parse "origin/${branch}" 2>/dev/null)"; then
+  if ! remote_commit="$(git rev-parse "refs/remotes/origin/${branch}" 2>/dev/null)"; then
     log_error "Remote branch origin/${branch} not found."
     exit 1
   fi
@@ -230,6 +265,38 @@ if not capture:
 if not "\n".join(notes).strip():
     print(f"Changelog section for {tag} is empty in {changelog_path}", file=sys.stderr)
     sys.exit(1)
+PY
+}
+
+ensure_release_payload_available() {
+  local tag="$1"
+  python3 - "${tag}" "${CHANGELOG_FILE}" <<'PY'
+import pathlib
+import re
+import sys
+
+tag, changelog_path = sys.argv[1], sys.argv[2]
+text = pathlib.Path(changelog_path).read_text(encoding="utf-8")
+headers = list(re.finditer(r"^## \[.+?\].*$", text, re.MULTILINE))
+sections = []
+for idx, header in enumerate(headers):
+    end = headers[idx + 1].start() if idx + 1 < len(headers) else len(text)
+    sections.append((header.group(0), text[header.end():end]))
+
+unreleased = next(
+    (content for header, content in sections if header.strip() == "## [Unreleased]"),
+    None,
+)
+if unreleased is None:
+    raise SystemExit(f"Unreleased section not found in {changelog_path}")
+existing = next(
+    (content for header, content in sections if header.startswith(f"## [{tag}] -")),
+    "",
+)
+if not unreleased.strip() and not existing.strip():
+    raise SystemExit(
+        f"No changelog content is available for release {tag} in {changelog_path}"
+    )
 PY
 }
 
@@ -325,14 +392,20 @@ prep_release() {
   local release_branch=""
 
   ensure_tag_absent "${tag}"
-  ensure_release_source_ready "${branch}" "prep"
-  release_branch="$(release_branch_name "${tag}")"
-  ensure_release_branch_absent "${release_branch}"
-  git switch -c "${release_branch}"
-  branch="${release_branch}"
-  log_success "Created release branch ${release_branch} from ${MAIN_BRANCH}."
+  ensure_prep_source_ready "${branch}"
+  ensure_release_payload_available "${tag}"
+  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
+    release_branch="$(release_branch_name "${tag}")"
+    ensure_release_branch_absent "${release_branch}"
+    git switch -c "${release_branch}"
+    branch="${release_branch}"
+    log_success "Created release branch ${release_branch} from ${MAIN_BRANCH}."
+  else
+    log_success "Reusing current feature branch ${branch} for release prep."
+  fi
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
+  ensure_release_section_ready "${tag}"
 
   git add "${CHANGELOG_FILE}"
   if git diff --cached --quiet -- "${CHANGELOG_FILE}"; then
@@ -464,10 +537,6 @@ main() {
       --changelog) changelog="${2:-}"; shift 2 ;;
       --package-import-name) package_import_name="${2:-}"; shift 2 ;;
       --asset-glob) asset_glob="${2:-}"; shift 2 ;;
-      --allow-non-main)
-        log_error "--allow-non-main is not supported; release publish must run from the clean synced default branch."
-        exit 1
-        ;;
       --no-push)
         no_push=1
         shift
@@ -546,7 +615,7 @@ main() {
       ;;
     publish)
       ensure_tag_absent "${tag}"
-      ensure_release_source_ready "${branch}" "publish"
+      ensure_publish_source_ready "${branch}"
       publish_tag "${tag}"
       ;;
     verify)
