@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 import typer
+from click import unstyle
 from typer.core import TyperGroup
 from typer.main import get_command
 from typer.testing import CliRunner
@@ -873,7 +874,7 @@ def test_operational_local_config_aliases_parse_identically(
 
 def test_root_help_explains_operational_alias_and_positional_file_commands() -> None:
     result = CliRunner().invoke(app, ["--help"])
-    normalized_output = " ".join(result.output.split())
+    normalized_output = " ".join(unstyle(result.output).split())
 
     assert result.exit_code == 0
     assert (
@@ -898,7 +899,9 @@ def test_config_short_alias_is_not_root_or_validate_config_syntax(tmp_path: Path
         ["-c", str(config_path), "status"],
     )
 
+    validate_output = unstyle(validate_result.output)
+    root_output = unstyle(root_result.output)
     assert validate_result.exit_code == 2
-    assert "No such option: -c" in validate_result.output
+    assert "No such option: -c" in validate_output
     assert root_result.exit_code == 2
-    assert "No such option: -c" in root_result.output
+    assert "No such option: -c" in root_output

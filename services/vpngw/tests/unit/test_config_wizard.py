@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from click import unstyle
 from pydantic import StringConstraints, TypeAdapter, ValidationError
 from rich.console import Console
 from typer.testing import CliRunner
@@ -391,11 +392,12 @@ def test_mutually_exclusive_interactive_flags_fail_before_write(tmp_path: Path) 
 
 def test_create_config_help_documents_both_compatibility_modes() -> None:
     result = CliRunner().invoke(app, ["create-config", "--help"])
+    output = unstyle(result.output)
 
     assert result.exit_code == 0
-    assert "--interactive" in result.output
-    assert "--no-interactive" in result.output
-    assert "--force" in result.output
+    assert "--interactive" in output
+    assert "--no-interactive" in output
+    assert "--force" in output
 
 
 @pytest.mark.parametrize("answer", ["q\n", "quit\n", ":quit\n"])

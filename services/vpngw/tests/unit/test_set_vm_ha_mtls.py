@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 import nebius_vpngw.cli as cli
@@ -318,7 +319,7 @@ def test_vm_ha_rotate_mtls_rejects_other_facade_modes_before_dispatch(
     )
 
     assert result.exit_code == 2
-    assert "--rotate-mtls cannot be combined" in result.output
+    assert "--rotate-mtls cannot be combined" in unstyle(result.output)
     assert dispatched == []
 
 

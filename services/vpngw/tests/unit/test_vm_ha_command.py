@@ -16,6 +16,7 @@ import paramiko
 import pytest
 import typer
 import yaml
+from click import unstyle
 from typer.testing import CliRunner
 
 import nebius_vpngw.cli as cli_module
@@ -2171,7 +2172,7 @@ def test_vm_ha_rejects_invalid_standby_auto_healing_before_authentication(
     )
 
     assert result.exit_code == 2
-    assert "Invalid value for '--standby-auto-healing'" in result.output
+    assert "Invalid value for '--standby-auto-healing'" in unstyle(result.output)
     authenticate.assert_not_called()
 
 

@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import pytest
 import typer
 import yaml
+from click import unstyle
 from click.core import Command, Context
 from grpc import StatusCode
 from nebius.aio.service_error import RequestError
@@ -718,16 +719,18 @@ def test_external_ip_yaml_update_rejects_symlink_and_fingerprint_race(tmp_path: 
 
 def test_prep_network_help_and_interactive_flags() -> None:
     help_result = CliRunner().invoke(app, ["prep-network", "--help"])
+    help_output = unstyle(help_result.output)
     assert help_result.exit_code == 0
-    assert "--interactive" in help_result.output
-    assert "--no-interactive" in help_result.output
+    assert "--interactive" in help_output
+    assert "--no-interactive" in help_output
 
     conflict = CliRunner().invoke(
         app,
         ["prep-network", "--interactive", "--no-interactive"],
     )
+    conflict_output = unstyle(conflict.output)
     assert conflict.exit_code == 2
-    assert "cannot be used together" in conflict.output
+    assert "cannot be used together" in conflict_output
 
 
 def _static_route_plan() -> ResolvedDeploymentPlan:
@@ -10324,7 +10327,7 @@ def test_repeated_planned_transfer_is_a_request_free_noop_in_selected_format(
     assert result.exit_code == 0, result.output
     operation_name = "Failback" if command == "failback" else "Failover"
     if output_format == "json":
-        assert json.loads(result.stdout) == {
+        assert json.loads(unstyle(result.stdout)) == {
             "outcome": "already-owner",
             "request_submitted": False,
             "schema": "nebius-vpngw/vm-ha-planned-transfer-result-v1",
@@ -10337,11 +10340,12 @@ def test_repeated_planned_transfer_is_a_request_free_noop_in_selected_format(
             f"{operation_name} not needed: the {target_role} VM already owns the gateway.\n"
         )
     help_result = CliRunner().invoke(app, [command, "vm", "--help"])
+    help_output = unstyle(help_result.stdout)
     assert help_result.exit_code == 0
-    assert "no-op" in help_result.stdout
-    assert "--output-format" in help_result.stdout
-    assert "text" in help_result.stdout
-    assert "json" in help_result.stdout
+    assert "no-op" in help_output
+    assert "--output-format" in help_output
+    assert "text" in help_output
+    assert "json" in help_output
 
 
 @pytest.mark.parametrize(
@@ -10662,11 +10666,12 @@ def test_planned_transfer_rejects_invalid_output_format_before_callback(
         ],
     )
 
+    stderr = unstyle(result.stderr)
     assert result.exit_code == 2
     assert result.stdout == ""
-    assert "Invalid value for '--output-format'" in result.stderr
-    assert "text" in result.stderr
-    assert "json" in result.stderr
+    assert "Invalid value for '--output-format'" in stderr
+    assert "text" in stderr
+    assert "json" in stderr
 
 
 def test_planned_transfer_reports_safe_partial_completion_when_rearm_fails(
@@ -12521,12 +12526,13 @@ def test_cli_help_examples_cover_every_public_command() -> None:
 def test_top_level_help_includes_quick_start_examples() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["--help"], env=HELP_ENV)
-    normalized_output = " ".join(result.output.split())
+    output = unstyle(result.output)
+    normalized_output = " ".join(output.split())
 
     assert result.exit_code == 0
-    assert "Usage:" in result.output
-    assert "Examples:" in result.output
-    assert "COMMAND --help" in result.output
+    assert "Usage:" in output
+    assert "Examples:" in output
+    assert "COMMAND --help" in output
     for example in _ROOT_HELP_EXAMPLES:
         assert " ".join(example.split()) in normalized_output
 
@@ -12559,11 +12565,12 @@ def test_each_cli_command_help_renders_with_its_examples(
     command_path: tuple[str, ...],
 ) -> None:
     result = CliRunner().invoke(app, [*command_path, "--help"], env=HELP_ENV)
-    normalized_output = " ".join(result.output.split())
+    output = unstyle(result.output)
+    normalized_output = " ".join(output.split())
 
     assert result.exit_code == 0
-    assert "Usage:" in result.output
-    assert "Examples:" in result.output
+    assert "Usage:" in output
+    assert "Examples:" in output
     for example in _COMMAND_EXAMPLES[command_path]:
         assert " ".join(example.split()) in normalized_output
 
@@ -12594,23 +12601,25 @@ def test_each_cli_command_example_uses_supported_syntax(
 
 def test_apply_help_exposes_the_supported_service_account_option() -> None:
     result = CliRunner().invoke(app, ["apply", "--help"], env=HELP_ENV)
+    output = unstyle(result.stdout)
 
     assert result.exit_code == 0
-    assert "--sa" in result.stdout
-    assert "Service Account" in result.stdout
-    assert "--prepare-vm-ha-peer-rotation" in result.stdout
-    assert "VM-HA IPsec peer credential change" in " ".join(result.stdout.split())
+    assert "--sa" in output
+    assert "Service Account" in output
+    assert "--prepare-vm-ha-peer-rotation" in output
+    assert "VM-HA IPsec peer credential change" in " ".join(output.split())
 
 
 def test_destroy_help_publishes_topology_and_retention_contract() -> None:
     result = CliRunner().invoke(app, ["destroy", "--help"], env=HELP_ENV)
-    normalized = " ".join(result.stdout.split())
+    output = unstyle(result.stdout)
+    normalized = " ".join(output.split())
 
     assert result.exit_code == 0
     assert "ordinary or VM-HA gateway compute" in normalized
     assert "default-No confirmation" in normalized
     assert "public IP allocations are retained" in normalized
-    assert "--yes" in result.stdout
+    assert "--yes" in output
 
 
 def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
