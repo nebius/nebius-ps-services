@@ -24,6 +24,19 @@ def _read_esp4_preflight_script() -> str:
     return script_path.read_text(encoding="utf-8")
 
 
+def _iter_public_keys(ssh_key: str) -> list[str]:
+    """Split an authorized-keys blob into individual keys.
+
+    Emitting a multi-key file as one YAML list item renders invalid cloud-init.
+    """
+    keys = [
+        line.strip()
+        for line in (ssh_key or "").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    return keys or [(ssh_key or "").strip()]
+
+
 def _parse_ipv4_network(cidr: str) -> ipaddress.IPv4Network | None:
     """Parse a CIDR as IPv4 only.
 
@@ -2044,8 +2057,9 @@ class VMManager:
                     existing_disk=ExistingDisk(id=boot_disk_id),
                 )
             if not boot_disk_id:
-                print(
-                    "[VMManager] Warning: boot_disk_id missing; proceeding without boot_disk in spec."
+                raise RuntimeError(
+                    f"boot disk for {inst_name} was neither created nor found; refusing to "
+                    "attempt an instance create that cannot succeed"
                 )
 
             ni_msgs = []
@@ -3279,8 +3293,8 @@ class VMManager:
         # Build users section with SSH key if provided
         users_section = ""
         if ssh_key:
-            users_section = (
-                f"users:\n  - name: ubuntu\n    ssh_authorized_keys:\n      - {ssh_key}\n"
+            users_section = "users:\n  - name: ubuntu\n    ssh_authorized_keys:\n" + "".join(
+                f"      - {k}\n" for k in _iter_public_keys(ssh_key)
             )
 
         cloud = (
@@ -3454,7 +3468,7 @@ class VMManager:
             "            WantedBy=multi-user.target\n"
             "  - path: /etc/frr/daemons\n"
             '    permissions: "0644"\n'
-            "    owner: frr:frr\n"
+            # No owner: write_files runs before runcmd installs FRR. Chowned there.
             "    content: |\n"
             "            # FRR daemons configuration - enable bgpd\n"
             "            bgpd=yes\n"
@@ -3560,6 +3574,7 @@ class VMManager:
             '  - [ bash, -c, "UBUNTU_CODENAME=$(lsb_release -cs); echo \\"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\\" > /etc/apt/sources.list.d/frr.list" ]\n'
             "  - [ apt-get, update ]\n"
             '  - [ bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools" ]\n'
+            '  - [ bash, -c, "chown frr:frr /etc/frr/daemons || true" ]\n'
             "  # Prepare ESP4 after Ubuntu package upgrades; defer VPN services if a reboot is required\n"
             '  - [ bash, -lc, "/usr/local/bin/nebius-vpngw-esp4-preflight.sh --prepare; rc=$?; if [ $rc -eq 75 ]; then exit 0; fi; exit $rc" ]\n'
             "  # Comment out conflicting sysctl settings in /etc/sysctl.conf (prevents our 99-zzz-vpngw.conf from being overridden)\n"

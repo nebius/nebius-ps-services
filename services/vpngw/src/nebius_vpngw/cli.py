@@ -55,6 +55,36 @@ _HELP_COMMAND_ORDER = [
 ]
 
 
+def _list_all_instances(isc: t.Any, parent_id: str) -> list[t.Any]:
+    """Return every instance under parent_id, following pagination.
+
+    A bare list() returns only the first page, so an instance past the page
+    boundary reads as absent.
+    """
+    from nebius.api.nebius.compute.v1 import ListInstancesRequest
+
+    items: list[t.Any] = []
+    page_token = ""
+    seen_tokens: set[str] = set()
+    while True:
+        op = isc.list(ListInstancesRequest(parent_id=parent_id, page_token=page_token))
+        page = op.wait() if hasattr(op, "wait") else op
+        if hasattr(page, "items"):
+            items.extend(page.items)
+        elif hasattr(page, "__iter__"):
+            items.extend(list(page))
+        next_page_token = str(getattr(page, "next_page_token", "") or "")
+        if not next_page_token:
+            return items
+        if next_page_token == page_token or next_page_token in seen_tokens:
+            raise RuntimeError(
+                "instance listing returned a repeated pagination token; "
+                "aborting to avoid an infinite loop."
+            )
+        seen_tokens.add(next_page_token)
+        page_token = next_page_token
+
+
 def _registered_command_name(command_info: t.Any) -> str:
     """Resolve the CLI command name Typer will show in help output."""
     if command_info.name:
@@ -954,17 +984,10 @@ def _ensure_gateway_vms_exist(
         raise typer.Exit(code=1)
 
     try:
-        from nebius.api.nebius.compute.v1 import InstanceServiceClient, ListInstancesRequest
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient
 
         isc = InstanceServiceClient(client)
-        ilist_op = isc.list(ListInstancesRequest(parent_id=project_id))
-        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
-
-        items = []
-        if hasattr(ilist, "items"):
-            items = ilist.items
-        elif hasattr(ilist, "__iter__"):
-            items = list(ilist)
+        items = _list_all_instances(isc, project_id)
     except Exception as e:
         print(f"[red]Error: Failed to query gateway VMs:[/red] {e}")
         raise typer.Exit(code=1)
@@ -1254,6 +1277,7 @@ def apply(
             print("[yellow]Some VMs did not become reachable within timeout[/yellow]")
 
     print("[bold]Pushing per-VM resolved configs and reloading agent...[/bold]")
+    skipped_pushes: list[str] = []
     for inst_cfg in plan.iter_instance_configs():
         # Use discovered IP from vm_ips first, then fall back to config
         target = vm_ips.get(inst_cfg.hostname) or (inst_cfg.external_ip or "").strip()
@@ -1264,10 +1288,18 @@ def apply(
                 target = discovered_ip
             else:
                 print(
-                    f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]"
+                    f"[red]Skipping config push for {inst_cfg.hostname}: No IP address available[/red]"
                 )
+                skipped_pushes.append(inst_cfg.hostname)
                 continue
         ssh.push_config_and_reload(target, inst_cfg, local_cfg)
+
+    if skipped_pushes:
+        print(
+            "[red]Apply did NOT complete: no configuration was pushed to "
+            f"{', '.join(skipped_pushes)}.[/red]"
+        )
+        raise typer.Exit(code=1)
 
     print("[green]Apply completed successfully.[/green]")
     if show_add_routes_hint:
@@ -1867,22 +1899,12 @@ def status(
 
     # Quick check: verify at least one gateway VM exists before attempting SSH
     print("[bold]Checking for gateway VMs...[/bold]")
-    from nebius.api.nebius.compute.v1 import (  # type: ignore
-        InstanceServiceClient,
-        ListInstancesRequest,
-    )
+    from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
 
     client = vm_mgr._get_client()
     if client and proj_id:
         isc = InstanceServiceClient(client)
-        ilist_op = isc.list(ListInstancesRequest(parent_id=proj_id))
-        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
-
-        items = []
-        if hasattr(ilist, "items"):
-            items = ilist.items
-        elif hasattr(ilist, "__iter__"):
-            items = list(ilist)
+        items = _list_all_instances(isc, proj_id)
 
         existing_vms = [
             inst
@@ -3375,7 +3397,6 @@ def destroy(
         from nebius.api.nebius.compute.v1 import (
             DiskServiceClient,
             InstanceServiceClient,
-            ListInstancesRequest,
         )
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient
 
@@ -3387,15 +3408,7 @@ def destroy(
         print(
             f"[bold]Step 1/5: Listing VMs matching pattern '{plan.gateway_group.name}-*'...[/bold]"
         )
-        ilist_op = isc.list(ListInstancesRequest(parent_id=proj_id or ""))
-        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
-
-        # Extract items from the response
-        items = []
-        if hasattr(ilist, "items"):
-            items = ilist.items
-        elif hasattr(ilist, "__iter__"):
-            items = list(ilist)
+        items = _list_all_instances(isc, proj_id or "")
 
         existing = [
             inst
