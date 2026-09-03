@@ -111,8 +111,9 @@ the user before continuing.
    Verify the release changelog section from prep is present.
 7. Run `publish` only from the clean, synced default branch:
    `scripts/publish-release-doer.sh --mode publish ...`
-   The helper verifies the runtime package version when configured, creates the
-   annotated tag, and pushes only the tag.
+   The helper creates the annotated tag locally, verifies the runtime package
+   version against that tag when configured, and pushes only after the version
+   matches. If verification fails, it removes that exact unpushed local tag.
 8. If waiting is enabled, find the tag-triggered workflow with `gh run list`,
    wait with `gh run watch --exit-status`, and inspect the terminal run.
 9. Verify the GitHub Release with `gh release view <tag>` and confirm expected
@@ -143,6 +144,10 @@ doer path.
   empty an already prepared release section.
 - Before tagging, re-read the merged changelog and current remote/default
   identity instead of relying on prep-time state.
+- Keep runtime-version verification between local annotated-tag creation and
+  the remote push so SCM-derived packages resolve the final version. Remove the
+  exact local tag on verification failure; retain it after an ambiguous push
+  failure for inspection rather than assuming the remote was unchanged.
 
 ## Failure Handling
 
@@ -154,6 +159,9 @@ doer path.
   report the exact next owner action; do not retry by bypassing the gate.
 - If prep succeeds but merge or publication fails, resume from the existing
   branch, PR, or tag state only after re-verifying its exact identity.
+- A runtime-version mismatch must leave no local or remote release tag. A push
+  failure may leave the local tag as ambiguity evidence and requires explicit
+  local/remote identity inspection before retry.
 
 ## Must Not
 

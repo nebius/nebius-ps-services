@@ -23,6 +23,9 @@ For an explicitly requested complete release, verify that the result:
 - returns to the clean synchronized default branch after the prep PR merges and
   refreshes its exact remote-tracking ref independently of local fetch config,
   then verifies the dated changelog section before creating the annotated tag;
+- creates the annotated tag locally before checking an SCM-derived runtime
+  version, pushes it only after the version matches, and removes that exact
+  unpushed tag when verification fails;
 - never tags from a feature branch and never bypasses checks, reviews, merge
   queues, branch protection, or human approvals;
 - waits for and verifies the tag-triggered GitHub Release workflow and expected

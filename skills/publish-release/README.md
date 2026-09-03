@@ -11,7 +11,8 @@ but its primary job is to execute a release and return a completion report.
   `release/<tag>` when prep starts from the clean synced default branch.
 - Uses `create-pr` and `merge-pr` for the release-prep PR path.
 - Tags only from a clean synced default branch.
-- Verifies package runtime version before tag push when configured.
+- Creates the annotated tag locally, verifies the package runtime version
+  against it when configured, and pushes only after the version matches.
 - Waits for the tag-triggered GitHub Release workflow when requested.
 - Verifies the GitHub Release and expected assets.
 
@@ -51,6 +52,8 @@ GitHub Release with assets
 - Prep from the default branch creates `release/<tag>` before changing the
   changelog, so release changes still reach the default branch through a PR.
 - Package import name and asset glob are inputs, not hardcoded skill knowledge.
+- A runtime mismatch removes the exact unpushed local tag; an ambiguous push
+  failure retains the local tag for identity inspection before retry.
 - Secret values stay in GitHub secrets or local auth state, not in skill
   sources.
 - Human-required approvals and failing checks are blockers.

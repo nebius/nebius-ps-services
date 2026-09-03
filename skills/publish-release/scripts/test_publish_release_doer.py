@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import os
@@ -6,7 +5,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 CANONICAL_HELPER = SKILL_DIR / "scripts" / "publish-release-doer.sh"
@@ -129,8 +127,10 @@ class GitFixture:
         helper: Path,
         mode: str,
         version: str,
+        *,
+        package_import_name: str = "",
     ) -> subprocess.CompletedProcess[str]:
-        return run_command(
+        args = [
             "bash",
             str(helper),
             "--mode",
@@ -145,9 +145,45 @@ class GitFixture:
             "main",
             "--changelog",
             "CHANGELOG.md",
-            cwd=self.root,
-            check=False,
+        ]
+        if package_import_name:
+            args.extend(("--package-import-name", package_import_name))
+        return run_command(*args, cwd=self.root, check=False)
+
+    def write_tag_derived_package(self, *, version_without_tag: str) -> str:
+        package_import_name = "demo_package"
+        package_dir = self.work / "src" / package_import_name
+        package_dir.mkdir(parents=True)
+        (package_dir / "__init__.py").write_text(
+            """from __future__ import annotations
+
+import subprocess
+
+
+result = subprocess.run(
+    ["git", "describe", "--tags", "--exact-match", "--match", "demo-v*"],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if result.returncode == 0:
+    __version__ = result.stdout.strip().removeprefix("demo-v")
+else:
+    __version__ = VERSION_WITHOUT_TAG
+""".replace("VERSION_WITHOUT_TAG", repr(version_without_tag)),
+            encoding="utf-8",
         )
+        return package_import_name
+
+    def write_fixed_version_package(self, *, version: str) -> str:
+        package_import_name = "demo_package"
+        package_dir = self.work / "src" / package_import_name
+        package_dir.mkdir(parents=True)
+        (package_dir / "__init__.py").write_text(
+            f"__version__ = {version!r}\n",
+            encoding="utf-8",
+        )
+        return package_import_name
 
     def assert_no_local_or_remote_ref(self, test: unittest.TestCase, ref: str) -> None:
         local = self.git(
@@ -512,6 +548,59 @@ class PublishReleaseDoerTests(unittest.TestCase):
                 fixture.bare_git_output("rev-parse", f"refs/tags/{tag}^{{}}"),
                 expected_commit,
             )
+
+        self.for_each_helper(assertion)
+
+    def test_publish_verifies_tag_derived_runtime_version_before_push(self) -> None:
+        def assertion(fixture: GitFixture, helper: Path) -> None:
+            tag = f"{TAG_PREFIX}-v3.1.1"
+            fixture.write_changelog(fixture.work, release_tag=tag)
+            package_import_name = fixture.write_tag_derived_package(
+                version_without_tag="3.1.0.dev1",
+            )
+            fixture.git(fixture.work, "add", "CHANGELOG.md", "src")
+            fixture.git(fixture.work, "commit", "-m", "Prepare tag-derived release")
+            fixture.git(fixture.work, "push", "origin", "main")
+            expected_commit = fixture.git_output(fixture.work, "rev-parse", "HEAD")
+
+            result = fixture.run_helper(
+                helper,
+                "publish",
+                "3.1.1",
+                package_import_name=package_import_name,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Runtime version resolved to 3.1.1.", result.stdout)
+            self.assertEqual(
+                fixture.bare_git_output("rev-parse", f"refs/tags/{tag}^{{}}"),
+                expected_commit,
+            )
+
+        self.for_each_helper(assertion)
+
+    def test_runtime_version_mismatch_removes_unpushed_local_tag(self) -> None:
+        def assertion(fixture: GitFixture, helper: Path) -> None:
+            tag = f"{TAG_PREFIX}-v3.1.2"
+            fixture.write_changelog(fixture.work, release_tag=tag)
+            package_import_name = fixture.write_fixed_version_package(
+                version="9.9.9",
+            )
+            fixture.git(fixture.work, "add", "CHANGELOG.md", "src")
+            fixture.git(fixture.work, "commit", "-m", "Prepare mismatched release")
+            fixture.git(fixture.work, "push", "origin", "main")
+
+            result = fixture.run_helper(
+                helper,
+                "publish",
+                "3.1.2",
+                package_import_name=package_import_name,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Runtime version", result.stderr)
+            self.assertIn("Removed unpushed local tag", result.stdout)
+            fixture.assert_no_local_or_remote_ref(self, f"refs/tags/{tag}")
 
         self.for_each_helper(assertion)
 
