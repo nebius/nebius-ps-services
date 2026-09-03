@@ -926,6 +926,60 @@ def _update_external_ips_in_yaml(path: Path, external_ips: list[list[str]]) -> N
     raise ValueError("Unable to locate gateway_group or external_ips in YAML.")
 
 
+def _list_all_instances(
+    client: t.Any,
+    project_id: str,
+    *,
+    max_pages: int = 100,
+) -> list[t.Any]:
+    """List every compute instance in the project, following pagination.
+
+    The Nebius compute API rejects page_size above 999 and returns at most one
+    page per call. Listing without pagination can miss gateway VMs in projects
+    with many instances, so we request the largest page the API allows and keep
+    fetching while the response carries a next_page_token.
+
+    ``client`` may be either an InstanceServiceClient or an SDK channel; both
+    accept ``ListInstancesRequest`` objects and return a waitable operation.
+    """
+    from nebius.api.nebius.compute.v1 import (  # type: ignore
+        InstanceServiceClient,
+        ListInstancesRequest,
+    )
+
+    if not (project_id or "").strip():
+        return []
+
+    isc = client if hasattr(client, "list") else InstanceServiceClient(client)
+
+    instances: list[t.Any] = []
+    page_token = ""
+    seen_tokens: set[str] = set()
+    for _ in range(max_pages):
+        ilist_op = isc.list(
+            ListInstancesRequest(
+                parent_id=project_id,
+                page_size=999,
+                page_token=page_token,
+            )
+        )
+        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
+
+        items = []
+        if hasattr(ilist, "items"):
+            items = ilist.items
+        elif hasattr(ilist, "__iter__"):
+            items = list(ilist)
+        instances.extend(items)
+
+        next_page_token = getattr(ilist, "next_page_token", "") or ""
+        if not next_page_token or next_page_token in seen_tokens:
+            break
+        seen_tokens.add(next_page_token)
+        page_token = next_page_token
+    return instances
+
+
 def _ensure_gateway_vms_exist(
     plan: ResolvedDeploymentPlan,
     *,
@@ -954,17 +1008,7 @@ def _ensure_gateway_vms_exist(
         raise typer.Exit(code=1)
 
     try:
-        from nebius.api.nebius.compute.v1 import InstanceServiceClient, ListInstancesRequest
-
-        isc = InstanceServiceClient(client)
-        ilist_op = isc.list(ListInstancesRequest(parent_id=project_id))
-        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
-
-        items = []
-        if hasattr(ilist, "items"):
-            items = ilist.items
-        elif hasattr(ilist, "__iter__"):
-            items = list(ilist)
+        items = _list_all_instances(client, project_id)
     except Exception as e:
         print(f"[red]Error: Failed to query gateway VMs:[/red] {e}")
         raise typer.Exit(code=1)
@@ -1867,22 +1911,10 @@ def status(
 
     # Quick check: verify at least one gateway VM exists before attempting SSH
     print("[bold]Checking for gateway VMs...[/bold]")
-    from nebius.api.nebius.compute.v1 import (  # type: ignore
-        InstanceServiceClient,
-        ListInstancesRequest,
-    )
 
     client = vm_mgr._get_client()
     if client and proj_id:
-        isc = InstanceServiceClient(client)
-        ilist_op = isc.list(ListInstancesRequest(parent_id=proj_id))
-        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
-
-        items = []
-        if hasattr(ilist, "items"):
-            items = ilist.items
-        elif hasattr(ilist, "__iter__"):
-            items = list(ilist)
+        items = _list_all_instances(client, proj_id)
 
         existing_vms = [
             inst
@@ -3372,11 +3404,7 @@ def destroy(
             client = Client()
 
         # Get service clients
-        from nebius.api.nebius.compute.v1 import (
-            DiskServiceClient,
-            InstanceServiceClient,
-            ListInstancesRequest,
-        )
+        from nebius.api.nebius.compute.v1 import DiskServiceClient, InstanceServiceClient
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient
 
         isc = InstanceServiceClient(client)
@@ -3387,15 +3415,7 @@ def destroy(
         print(
             f"[bold]Step 1/5: Listing VMs matching pattern '{plan.gateway_group.name}-*'...[/bold]"
         )
-        ilist_op = isc.list(ListInstancesRequest(parent_id=proj_id or ""))
-        ilist = ilist_op.wait() if hasattr(ilist_op, "wait") else ilist_op
-
-        # Extract items from the response
-        items = []
-        if hasattr(ilist, "items"):
-            items = ilist.items
-        elif hasattr(ilist, "__iter__"):
-            items = list(ilist)
+        items = _list_all_instances(isc, proj_id or "")
 
         existing = [
             inst
