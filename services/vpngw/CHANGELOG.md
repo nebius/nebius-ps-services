@@ -14,6 +14,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed gateway VM discovery in projects with many compute instances:
+  instance listings in `status`, `destroy`, `ensure-gateway-vms` checks, and
+  route-manager private-allocation lookups now set an explicit page size and
+  follow `next_page_token` pagination, so gateway VMs are no longer missed
+  when they land beyond the first page of results.
 - Added concise static and BGP example configurations and clarified the subnet
   and route-table resources created by `prep-network`.
 

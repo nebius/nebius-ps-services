@@ -15,6 +15,52 @@ from ..config_loader import ResolvedDeploymentPlan
 
 class RouteManager:
     @staticmethod
+    def _list_all_instances_paged(
+        compute_channel: t.Any,
+        *,
+        parent_id: str,
+        max_pages: int = 100,
+    ) -> list[t.Any]:
+        """List every compute instance in the project, following pagination.
+
+        The Nebius compute API rejects page_size above 999 and returns at most
+        one page per call. A single List call can miss gateway VMs in projects
+        with many instances, so request the largest page the API allows and keep
+        fetching while the response carries a next_page_token.
+        """
+        if not (parent_id or "").strip():
+            return []
+
+        from importlib import import_module
+
+        instance_service_pb2 = import_module(
+            "nebius.api.nebius.compute.v1.instance_service_pb2"
+        )
+        instance_service_pb2_grpc = import_module(
+            "nebius.api.nebius.compute.v1.instance_service_pb2_grpc"
+        )
+
+        istub = instance_service_pb2_grpc.InstanceServiceStub(compute_channel)
+        instances: list[t.Any] = []
+        page_token = ""
+        seen_tokens: set[str] = set()
+        for _ in range(max_pages):
+            ilist = istub.List(
+                instance_service_pb2.ListInstancesRequest(
+                    parent_id=parent_id,
+                    page_size=999,
+                    page_token=page_token,
+                )
+            )
+            instances.extend(ilist.items)
+            next_page_token = getattr(ilist, "next_page_token", "") or ""
+            if not next_page_token or next_page_token in seen_tokens:
+                break
+            seen_tokens.add(next_page_token)
+            page_token = next_page_token
+        return instances
+
+    @staticmethod
     def _normalize_value(value) -> str:
         if hasattr(value, "value"):
             value = value.value
@@ -119,11 +165,6 @@ class RouteManager:
     ) -> dict[int, str]:
         import ipaddress
 
-        from nebius.api.nebius.compute.v1 import (
-            instance_service_pb2,
-            instance_service_pb2_grpc,
-        )
-
         host_to_index = {
             inst.hostname: inst.instance_index for inst in plan.iter_instance_configs()
         }
@@ -131,11 +172,11 @@ class RouteManager:
 
         # List instances in the project and find the private (static) IP allocation
         # With the VM manager refactoring, private IPs now use static allocations
-        istub = instance_service_pb2_grpc.InstanceServiceStub(compute_channel)
-        ilist = istub.List(
-            instance_service_pb2.ListInstancesRequest(parent_id=self.project_id or "")
+        instances = self._list_all_instances_paged(
+            compute_channel,
+            parent_id=self.project_id or "",
         )
-        for inst in ilist.items:
+        for inst in instances:
             instance_index = host_to_index.get(self._metadata_name(inst))
             if instance_index is None:
                 continue
