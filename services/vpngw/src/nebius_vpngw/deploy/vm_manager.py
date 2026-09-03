@@ -7418,7 +7418,7 @@ class VMManager:
                             "Please create a network or specify gateway_group.network_id in YAML."
                         )
                     if len(items) == 1:
-                        network_obj = items[0]
+                        network_obj = t.cast(t.Any, items[0])
                         net_name = getattr(
                             getattr(network_obj, "metadata", None),
                             "name",

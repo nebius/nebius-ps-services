@@ -2211,11 +2211,13 @@ class NebiusDestroyBackend:
     def submit_delete_resource(self, resource: DestroyResource, operation_id: str) -> object | None:
         if self.resource_absent(resource):
             return None
+        call: t.Callable[..., object]
+        request: object
         if resource.kind == "compute":
             from nebius.api.nebius.compute.v1 import DeleteInstanceRequest  # type: ignore
 
             call = self.instances.delete
-            request: object = DeleteInstanceRequest(id=resource.resource_id)
+            request = DeleteInstanceRequest(id=resource.resource_id)
         elif resource.kind == "disk":
             from nebius.api.nebius.compute.v1 import DeleteDiskRequest  # type: ignore
 
