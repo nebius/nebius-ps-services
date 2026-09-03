@@ -56,6 +56,8 @@ def _heartbeat(*, cluster_id: str = "cluster-a", sequence: int = 0) -> PeerHeart
         service_healthy=True,
         route_ready=True,
         promotion_ready=False,
+        auto_healing_policy_state="enabled",
+        auto_healing_policy_digest="e" * 64,
     )
 
 

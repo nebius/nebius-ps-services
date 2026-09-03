@@ -174,12 +174,12 @@ with `--output-dir`:
 
 ## Upgrade Policy Demo
 
-After submitting jobs, run the external Soperator upgrade and keep the separate
-jobs screen open when the operator needs to act during a controller gap:
+After submitting jobs, run the Soperator upgrade and keep `squeue` open in a
+separate login-node shell when the operator needs to inspect active jobs:
 
 ```bash
-nebius-cxcli ext-soperator upgrade CONFIG_YAML --target TARGET --execute --approve
-nebius-cxcli ext-soperator jobs CONFIG_YAML --target TARGET
+nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET --execute --approve
+squeue --iterate=5
 ```
 
 The smoke jobs exit non-zero on `TERM` or `INT`, so interruption, cancellation,

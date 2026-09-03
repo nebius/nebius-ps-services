@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,13 +12,21 @@ from nebius.aio.service_error import RequestError
 
 from nebius_vpngw.deploy.vm_ha_cloud import (
     AcceptedCloudOperation,
+    AllocationObservation,
+    AllocationOwner,
     AmbiguousHACloudError,
+    ComputeObservation,
+    InstanceCloudState,
+    MissingHAComputeError,
     NebiusSDKCloudClient,
     PermanentHACloudError,
+    VMHACloudAdapter,
     VMHACloudOperationJournal,
     clone_nebius_sdk_message,
     nebius_request_error_code_is,
     operation_status_lookup_unsupported,
+    vm_ha_idempotency_key,
+    vm_ha_request_kwargs,
 )
 
 
@@ -117,10 +126,119 @@ def test_sdk_start_instance_uses_bounded_idempotent_mutation() -> None:
 
     submitted = service.start.call_args.args[0]
     assert submitted.id == "instance-a"
-    assert service.start.call_args.kwargs["metadata"] == (
-        ("x-idempotency-key", "operation-a"),
-    )
+    assert service.start.call_args.kwargs["metadata"] == (("x-idempotency-key", "operation-a"),)
     wait.assert_called_once_with(operation)
+
+
+def test_vm_ha_request_key_encodes_only_provider_invalid_action_ids() -> None:
+    controller_id = "boot-a:1:stop-former-owner:node-a"
+    encoded = hashlib.sha256(controller_id.encode("utf-8")).hexdigest()
+
+    assert vm_ha_idempotency_key("already-valid-key-7") == "already-valid-key-7"
+    assert vm_ha_idempotency_key(controller_id) == encoded
+    assert vm_ha_idempotency_key(controller_id + "-other") != encoded
+    assert "metadata" not in vm_ha_request_kwargs()
+    assert vm_ha_request_kwargs(controller_id)["metadata"] == (("x-idempotency-key", encoded),)
+
+
+def test_sdk_stop_encodes_provider_key_but_retains_action_journal_identity(
+    tmp_path: Path,
+) -> None:
+    controller_id = "boot-a:1:stop-former-owner:node-a"
+    cloud_operation_id = "cloud-operation-a"
+    operation = SimpleNamespace(id=cloud_operation_id, successful=lambda: True)
+    request = MagicMock()
+    request.wait.return_value = operation
+    service = MagicMock()
+    service.stop.return_value = request
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch(
+            "nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation",
+            side_effect=RuntimeError("injected post-acceptance interruption"),
+        ),
+        pytest.raises(RuntimeError, match="post-acceptance interruption"),
+    ):
+        client.stop_instance("instance-a", controller_id)
+
+    encoded = hashlib.sha256(controller_id.encode("utf-8")).hexdigest()
+    assert service.stop.call_args.kwargs["metadata"] == (("x-idempotency-key", encoded),)
+    assert journal.load() == AcceptedCloudOperation(
+        action_operation_id=controller_id,
+        kind="stop-instance",
+        cloud_operation_id=cloud_operation_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "alias_present"),
+    (
+        ("stop", None),
+        ("start", None),
+        ("set-alias", True),
+        ("set-alias", False),
+    ),
+)
+def test_sdk_mutations_share_provider_key_encoding(
+    mutation: str,
+    alias_present: bool | None,
+) -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.compute.v1 import (
+        Instance,
+        InstanceSpec,
+        IPAlias,
+        NetworkInterfaceSpec,
+    )
+
+    controller_id = "boot-a:1:stop-former-owner:node-a"
+    operation = SimpleNamespace(id="cloud-operation-a", successful=lambda: True)
+    request = MagicMock()
+    request.wait.return_value = operation
+    service = MagicMock()
+    service.stop.return_value = request
+    service.start.return_value = request
+    service.update.return_value = request
+    client = NebiusSDKCloudClient(object())
+    instance = Instance(
+        metadata=ResourceMetadata(id="instance-a", resource_version=7),
+        spec=InstanceSpec(
+            network_interfaces=[
+                NetworkInterfaceSpec(
+                    name="eth0",
+                    aliases=[] if alias_present else [IPAlias(allocation_id="shared-a")],
+                )
+            ]
+        ),
+    )
+
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch.object(client, "get_instance", return_value=instance),
+        patch("nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation"),
+    ):
+        if mutation == "stop":
+            client.stop_instance("instance-a", controller_id)
+            submitted = service.stop
+        elif mutation == "start":
+            client.start_instance("instance-a", controller_id)
+            submitted = service.start
+        else:
+            assert alias_present is not None
+            client.set_alias_allocation(
+                "instance-a",
+                "eth0",
+                "shared-a",
+                alias_present,
+                operation_id=controller_id,
+            )
+            submitted = service.update
+
+    encoded = hashlib.sha256(controller_id.encode("utf-8")).hexdigest()
+    assert submitted.call_args.kwargs["metadata"] == (("x-idempotency-key", encoded),)
 
 
 def test_sdk_read_uses_remaining_deadline_budget() -> None:
@@ -130,9 +248,7 @@ def test_sdk_read_uses_remaining_deadline_budget() -> None:
     service.get.return_value = request
     client = NebiusSDKCloudClient(object(), request_timeout_provider=lambda: 4.5)
 
-    with patch(
-        "nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service
-    ):
+    with patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service):
         client.get_instance("instance-a")
 
     assert service.get.call_args.kwargs == {
@@ -173,6 +289,115 @@ def test_operation_status_lookup_unsupported_is_exact() -> None:
     assert not operation_status_lookup_unsupported(_request_error(StatusCode.UNAVAILABLE))
     assert not operation_status_lookup_unsupported(RuntimeError("UNIMPLEMENTED"))
     assert nebius_request_error_code_is(_request_error(StatusCode.ALREADY_EXISTS), "ALREADY_EXISTS")
+
+
+def test_cloud_adapter_classifies_not_found_as_exact_missing_compute() -> None:
+    adapter = VMHACloudAdapter(
+        instance_reader=lambda _instance_id: (_ for _ in ()).throw(
+            _request_error(StatusCode.NOT_FOUND)
+        ),
+        instance_stopper=lambda *_args: None,
+        allocation_reader=lambda _allocation_id: None,
+        alias_allocation_setter=lambda *_args: None,
+    )
+
+    with pytest.raises(MissingHAComputeError):
+        adapter._read_instance("retired-compute")
+
+
+def test_cloud_adapter_allows_missing_former_only_with_exact_candidate_ownership() -> None:
+    allocation_id = "shared-a"
+    former_owner = AllocationOwner("retired-compute", "eth0")
+    candidate_owner = AllocationOwner("owner-compute", "eth0")
+    exact_allocation = AllocationObservation(allocation_id, candidate_owner)
+    candidate = ComputeObservation(
+        instance_id=candidate_owner.instance_id,
+        state=InstanceCloudState.RUNNING,
+        resource_version="7",
+        nic_allocations=(("eth0", "primary-a"),),
+        nic_alias_allocations=(("eth0", (allocation_id,)),),
+    )
+    adapter = VMHACloudAdapter(
+        instance_reader=lambda _instance_id: None,
+        instance_stopper=lambda *_args: None,
+        allocation_reader=lambda _allocation_id: None,
+        alias_allocation_setter=lambda *_args: None,
+    )
+    adapter._read_allocation = MagicMock(side_effect=[exact_allocation, exact_allocation])
+
+    def read_instance(instance_id: str) -> ComputeObservation:
+        if instance_id == former_owner.instance_id:
+            raise MissingHAComputeError("retired Compute is absent")
+        return candidate
+
+    adapter._read_instance = MagicMock(side_effect=read_instance)
+
+    observed = adapter.observe_cluster(
+        allocation_id=allocation_id,
+        former_owner=former_owner,
+        candidate=candidate_owner,
+        allow_missing_former=True,
+    )
+
+    assert observed.former.state is InstanceCloudState.STOPPED
+    assert observed.former_attachment_absent is True
+    assert observed.candidate_attachment_exact is True
+
+    adapter._read_allocation = MagicMock(
+        side_effect=[
+            AllocationObservation(allocation_id, former_owner),
+            AllocationObservation(allocation_id, former_owner),
+        ]
+    )
+    with pytest.raises(PermanentHACloudError, match="exact candidate ownership"):
+        adapter.observe_cluster(
+            allocation_id=allocation_id,
+            former_owner=former_owner,
+            candidate=candidate_owner,
+            allow_missing_former=True,
+        )
+
+    adapter._read_allocation = MagicMock(side_effect=[exact_allocation])
+    with pytest.raises(MissingHAComputeError):
+        adapter.observe_cluster(
+            allocation_id=allocation_id,
+            former_owner=former_owner,
+            candidate=candidate_owner,
+        )
+
+
+def test_cloud_mutation_replay_reuses_encoded_provider_key(
+    tmp_path: Path,
+) -> None:
+    controller_id = "boot-a:1:stop-former-owner:node-a"
+    accepted = AcceptedCloudOperation(
+        action_operation_id=controller_id,
+        kind="stop-instance",
+        cloud_operation_id="cloud-operation-a",
+    )
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    journal.save(accepted)
+    operation = SimpleNamespace(id=accepted.cloud_operation_id, successful=lambda: True)
+    request = MagicMock()
+    request.wait.return_value = operation
+    service = MagicMock()
+    service.stop.return_value = request
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+
+    with (
+        patch.object(
+            client,
+            "_resume_operation",
+            side_effect=_request_error(StatusCode.UNIMPLEMENTED),
+        ),
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch("nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation"),
+    ):
+        client.stop_instance("instance-a", controller_id)
+
+    encoded = hashlib.sha256(controller_id.encode("utf-8")).hexdigest()
+    assert service.stop.call_args.kwargs["metadata"] == (("x-idempotency-key", encoded),)
+    assert journal.load() is None
 
 
 def test_cloud_operation_journal_is_private_and_compare_and_clear(tmp_path: Path) -> None:

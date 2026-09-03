@@ -4,7 +4,7 @@
 Git worktrees/branches, worker commits, and coordinator integration commits.
 Generic parallel requests do not trigger it. `trigger-prompts.csv` is the sole
 canonical trigger authority; these post-routing cases retain detailed workflow
-expectations. Contract tests remain required for lifecycle and output
+expectations. Contract tests remain required for workflow and output
 assertions; canonical CSV validation does not replace them.
 
 ## Post-Routing Workflow Expectations

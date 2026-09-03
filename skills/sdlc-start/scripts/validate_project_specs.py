@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agentic SDLC adapter for the shared project-spec validator."""
+"""Advisory Agentic SDLC adapter for project-spec inspection."""
 
 from __future__ import annotations
 
@@ -17,29 +17,25 @@ if str(SHARED_SCRIPTS) not in sys.path:
 from project_specs_lib.contracts import ProjectSpecError, validate_project  # noqa: E402
 
 
-SpecValidationError = ProjectSpecError
-
-
 def validate(project_root: Path) -> dict[str, object]:
-    """Delegate Agentic SDLC validation to the shared authoritative owner."""
+    """Return strict validation results as non-blocking workflow context."""
 
-    return validate_project(project_root)
+    try:
+        result = validate_project(project_root)
+    except ProjectSpecError as error:
+        return {
+            "status": "advisory",
+            "code": error.code,
+            "message": error.message,
+        }
+    return {**result, "status": "current"}
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Validate canonical project specs.")
     parser.add_argument("--project-root", type=Path, required=True)
     args = parser.parse_args(argv)
-    try:
-        result = validate(args.project_root)
-    except ProjectSpecError as error:
-        print(
-            json.dumps(
-                {"status": "blocked", "code": error.code, "error": error.message},
-                sort_keys=True,
-            )
-        )
-        return 2
+    result = validate(args.project_root)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

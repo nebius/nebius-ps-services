@@ -102,6 +102,10 @@ never prevents the current agent from handling the complete direct request.
 
 - Canonical row `prompt-intake-negative-20` covers unbound use: without an exact
   current hook receipt, do not use this skill.
+- A fresh direct session remains unbound and creates no intake event even when
+  exactly one compatible Task Implementer or Agentic SDLC objective is active.
+  Bind that same session with an exact init or run command before evaluating
+  later direct-turn capture.
 - Canonical row `prompt-intake-negative-18` covers manual prompt-file edits,
   which remain inert until explicit
   `$task-implementer run <prompt-ref-or-file>` or

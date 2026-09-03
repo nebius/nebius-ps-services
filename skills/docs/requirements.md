@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD001 MD024 -->
-<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
 # Project Requirements
 
 <!-- REQUIREMENT: REQ-001 status=active priority=P0 type=feature -->
@@ -48,7 +48,7 @@ installed skill from the canonical user root.
 
 <!-- /REQUIREMENT: REQ-001 -->
 
-<!-- REQUIREMENT: REQ-002 status=active priority=P0 type=constraint -->
+<!-- REQUIREMENT: REQ-002 status=superseded priority=P0 type=constraint -->
 ### REQ-002: Enforce one fail-closed project contract lifecycle
 
 #### User Story
@@ -111,6 +111,49 @@ validated, and reconciled before implementation can be represented as complete.
   the exact decision. If replacement completed before its directory sync
   failed, that equal-bytes retry must re-sync the private parent directory;
   generic `UNSAFE_TARGET` remains terminal.
+- AC-012: A new lifecycle session may continue automation ownership of an
+  intact managed project `AGENTS.md` without new user approval only from a
+  valid active workspace-private ownership entry that binds the exact project,
+  target path, current whole-target digest, verified final-state digest, and
+  active ownership receipt. When no entry exists, sealed session history may
+  bootstrap one only if every relevant valid event agrees on that exact active
+  authority and no retirement, incompatible generation, unsafe evidence, or
+  ambiguity exists. An exact completed apply interrupted before registry
+  publication records a pending generation bound to its receipt and state
+  digest so only that writer can recover it. Otherwise, the first bootstrap
+  records either active authority or a durable blocked subject state; removing
+  conflicting evidence cannot trigger a later rescan, and only exact-digest
+  adoption may supersede the block. The
+  current session imports the verified receipt into its own private bundle
+  before apply; unproven managed regions remain exact-digest adoption-gated.
+- AC-013: `SessionStart` reports only the exact current session's lifecycle
+  state. Historical session quantity, sibling project scopes, structural
+  private directories, retention scans, and maintenance failures must not
+  produce a project-contract audit failure, request specification work, or
+  gate current implementation. Private maintenance uses no session-count
+  retention threshold and creates no archive. It removes valid `sealed` and
+  `waived` bundles after 30 inactive days, and valid `planning-required`,
+  `planned`, `implementation-open`, and `reconciliation-required` bundles
+  after 90 inactive days. The current session, `seal-armed`, unsafe, malformed,
+  unknown, pending-publication, and legacy-required ownership evidence remain
+  protected.
+- AC-014: Private maintenance treats 1 GiB of allocated
+  `${CODEX_HOME}/project-specs` storage as the high watermark only after every
+  current workspace has a complete aggregate entry. A private root cursor
+  rotates one bounded maintenance slice across inactive workspaces so age and
+  pressure cleanup do not depend on reopening an old project. It reclaims the oldest
+  ownership-safe terminal bundles in each complete workspace pressure slice
+  toward 768 MiB before considering 90-day-expired unfinished bundles. Stable
+  workspace and session locks,
+  ownership-registry synchronization, explicit activity metadata, an fsynced
+  identity-, registry-generation-, and canonical-registry-digest-bound cleanup
+  journal, same-device atomic staging, and directory-relative
+  no-follow deletion prevent a writer, crash, link, mount, or stale ownership
+  snapshot from losing authoritative evidence. Bounded scan continuation and
+  journal rotation prevent malformed prefixes from starving later recovery.
+  Exact-schema aggregate private maintenance health cannot authorize pressure
+  from partial or malformed state and remains diagnostic without routine
+  user-facing context.
 
 #### Negative Criteria
 
@@ -138,6 +181,39 @@ validated, and reconciled before implementation can be represented as complete.
   private rules, and a managed target must not treat `existing-sufficient` as a
   renderable outcome. A predecessor-state change after validation but before
   final rules replacement must block without changing the rules.
+- NC-009: Codex instruction discovery or marker presence alone must not confer
+  mutation ownership. Unsealed, unverifiable, stale, retired,
+  subject-mismatched, target-mismatched, unsafe, or ambiguous prior evidence
+  must not be carried into the current lifecycle session. Retirement must be a
+  durable tombstone: damaged or competing history cannot make an older active
+  receipt authoritative again. Session IDs, timestamps, directory order, or
+  filesystem metadata must not be treated as a causal ownership sequence.
+- NC-010: Workspace ownership publication must be serialized, exact-schema,
+  owner-only, single-link, bounded, atomically durable, and monotonic. A missing
+  registry root must appear atomically with its valid generation-zero registry.
+  A missing entry may bootstrap from unanimous sealed history once. A scan that
+  finds one exact completed apply awaiting publication must bind a pending
+  generation to that receipt and source-state digest; other sessions cannot
+  import it, while the exact writer may advance it to active. A failed or empty
+  scan must publish a blocked subject state before returning. An
+  initialized but missing, unsafe, or malformed registry must never fall back
+  to weaker historical selection. The same lock must cover authority preflight,
+  target mutation, final state, conditional registry publication, and
+  recovery-evidence release so a stale writer cannot follow retirement with a
+  new active entry.
+- NC-011: Raising a historical session-count cap, deleting an arbitrary oldest
+  set, moving records into an archive, or silently discarding ownership or
+  `seal-armed` evidence must not be used as lifecycle recovery or storage
+  maintenance.
+- NC-012: A cleanup decision based on an unlocked registry snapshot, a lock
+  stored inside the movable session bundle, filesystem-following recursive
+  deletion, a device-crossing tree, an unsafe activity record, or an
+  unjournaled staging rename must protect the candidate and leave current
+  lifecycle work available.
+- NC-013: A partial root aggregate, malformed maintenance status, sealed
+  lifecycle missing its bound final project-instructions state, changed
+  same-generation registry, or malformed journal prefix must not authorize or
+  indefinitely starve deletion.
 
 #### Validation Method
 
@@ -161,6 +237,19 @@ require the rules to remain byte-identical. Inject a matching-state publication
 I/O failure through the CLI, require the distinct retryable result, then prove
 that the exact rerun completes and re-syncs the parent directory after an
 interrupted post-replacement sync while generic unsafe targets remain terminal.
+Create a second lifecycle session after a sealed managed outcome and prove that
+exact verified ownership continues without an adoption prompt or repository
+write. Tamper each lifecycle, final-state, ownership, subject, target, digest,
+mode, and link binding independently and require the original explicit
+adoption gate to remain in force. Exercise more than 128 terminal,
+unfinished, sibling-scope, structural, and unknown workspace entries without a
+startup failure. Cover 30-day terminal retention, 90-day unfinished expiry,
+1-GiB/768-MiB pressure hysteresis, exact-current and `seal-armed` protection,
+ownership bootstrap and pending-publication protection, stable-lock races,
+  crash-journal recovery, canonical registry digest drift, unsafe links and
+  device crossings, malformed-status pressure, partial aggregate pressure,
+  rotating journal continuation, idempotent bounded scan continuation, and
+  reopening an expired session through a fresh lifecycle.
 
 #### Evaluation Method
 
@@ -179,53 +268,83 @@ revision reaches planning without deleting or bypassing private evidence.
 Confirm the final replacement rejects either predecessor changing after
 validation, and only `RENDER_STATE_PUBLICATION_INCOMPLETE` authorizes an exact
 render retry that completes state durability while `UNSAFE_TARGET` still stops.
+Confirm that the same active managed project instructions remain authoritative
+through ordinary Codex discovery and that lifecycle ownership continuity uses
+only sealed private proof, never global or ancestor instruction presence.
+Exercise active bootstrap, conflicting generations, retirement tombstones,
+unsafe or malformed history, initialized-but-missing registry state, a regular
+workspace file, competing first-use root initialization, conflict removal after
+a blocked bootstrap, created-publication failure followed by another session's
+inspection and the original writer's recovery, retirement-versus-active writer
+concurrency, publication failure and recovery, and a subsequent exact
+active/retired lookup without session-ID ordering. Confirm routine maintenance
+stays out of hook context, while bounded aggregate private status distinguishes
+completed scans, protected pressure, lock contention, and retryable cleanup
+errors. Treat source tests, disposable installation parity, restart/trust, and
+fresh-session behavior as separate evidence gates.
 
 <!-- /REQUIREMENT: REQ-002 -->
 
 <!-- REQUIREMENT: REQ-003 status=active priority=P0 type=constraint -->
-### REQ-003: Trust only canonical installed lifecycle coordinators
+### REQ-003: Trust only canonical explicit spec and instruction helpers
 
 #### User Story
 
-The project-contract hook needs to execute reviewed coordinator scripts from
-the same user-skill root that Codex and the repository installer use.
+Users who explicitly inspect, validate, migrate, recover, or mutate project
+contracts need reviewed helpers with exact ownership and path checks, without
+making those helpers an authority over ordinary agent work.
 
 #### Acceptance Criteria
 
-- AC-001: An installed lifecycle hook recognizes the reviewed
-  `maintain-project-specs` and `project-agent-instructions` coordinators under
-  `${HOME}/.agents/skills`.
-- AC-002: Source-bundle tests may bind an explicit checkout-relative skill root
-  without making arbitrary repository scripts trusted by an installed hook.
-- AC-003: Coordinator recognition binds the exact script, action, selected
-  project, interpreter, and required evidence arguments before execution.
+- AC-001: `maintain-project-specs` exposes one canonical helper for advisory
+  `inspect` and `validate` plus explicit `migrate` and `recover`; lifecycle
+  transition actions and alternate Python APIs are absent.
+- AC-002: `project-agent-instructions` remains the sole explicit mutation
+  helper for project instructions and continues to bind exact paths, evidence,
+  ownership, digests, locks, and recovery state within that separately invoked
+  workflow.
+- AC-003: Source and disposable-installed tests bind the exact reviewed helper
+  paths without trusting arbitrary repository scripts, basename lookalikes,
+  symlinks, caller-authored receipts, writable package ancestry, or a helper
+  source set whose identity or digest changes during execution. The classifier
+  executes from an owner-only temporary tree containing only those snapshotted
+  sources, so unsnapshotted sibling modules cannot enter import resolution.
+- AC-004: Advisory hooks may locate a canonical read-only ownership classifier
+  for bounded private retention, but they never execute lifecycle transitions,
+  admit project mutations, or make helper availability a workflow prerequisite.
 
 #### Negative Criteria
 
 - NC-001: An arbitrary script with a matching basename or subcommand must not
-  be treated as a lifecycle coordinator.
-- NC-002: The installed hook must not derive a checkout trust root from its
-  copied `${CODEX_HOME}/hooks` location.
+  be treated as a trusted spec, instruction, or retention helper.
+- NC-002: An advisory hook must not derive mutation authority from its copied
+  hook location, an installed skill path, lifecycle state, or private evidence.
+- NC-003: Public workflow guidance must not advertise retired lifecycle
+  transitions, a no-op compatibility alias, or an automatic
+  project-instruction mutation route.
 
 #### Validation Method
 
-Compare installed-hook and source-hook behavior using isolated homes and exact
-coordinator paths.
+Compare source and disposable-installed helper behavior, statically verify the
+retired lifecycle API is unreachable, and prove hook helper discovery is
+read-only, fail-safe, and irrelevant to ordinary workflow progression.
 
 #### Test Method
 
-Add regression tests covering installed `${HOME}/.agents/skills`
-coordinators, source-bundle coordinators, missing coordinators, symlink and
-path-spoof rejection, and both coordinator owners.
+Add regression tests covering the canonical public helper surface, missing or
+spoofed retention helpers, writable or replaced classifier package trees,
+partial registry proof, explicit instruction mutation ownership, absence of
+transition imports, and source/disposable-installed parity.
 
 #### Evaluation Method
 
-Reproduce the former `planning-required` deadlock against the faulty hook and
-show that the repaired hook admits only the canonical coordinator command.
+Reproduce the former `planning-required` deadlock and show that ordinary work
+continues without any lifecycle coordinator while explicit helper failures stay
+contained within the requested helper operation.
 
 <!-- /REQUIREMENT: REQ-003 -->
 
-<!-- REQUIREMENT: REQ-004 status=active priority=P0 type=constraint -->
+<!-- REQUIREMENT: REQ-004 status=superseded priority=P0 type=constraint -->
 ### REQ-004: Restrict project lifecycle authority to project-owned state
 
 #### User Story
@@ -278,8 +397,8 @@ selected-project sequencing and authoritative lifecycle state remain protected.
 
 #### User Story
 
-Maintainers need accurate evidence about whether a lifecycle repair exists in
-source, is installed locally, and is active in a fresh Codex runtime.
+Maintainers need accurate evidence about whether a hook or skill repair exists
+in source, is installed locally, and is active in a fresh Codex runtime.
 
 #### Acceptance Criteria
 
@@ -288,7 +407,7 @@ source, is installed locally, and is active in a fresh Codex runtime.
 - AC-002: Hook installation preserves recoverable backups and reports when a
   restart and `/hooks` review are required.
 - AC-003: Temporary recovery artifacts are removed only after the repaired
-  runtime has independently demonstrated the canonical coordinator path.
+  runtime has independently demonstrated the intended fresh-session behavior.
 
 #### Negative Criteria
 
@@ -305,7 +424,8 @@ gate independently.
 #### Test Method
 
 Run focused source tests, installer idempotency and parity checks, hook syntax
-checks, and a clean post-restart lifecycle probe in the selected project.
+checks, and a clean post-restart advisory project-spec probe in the selected
+project.
 
 #### Evaluation Method
 
@@ -314,7 +434,7 @@ remaining restart or fresh-session requirement explicitly.
 
 <!-- /REQUIREMENT: REQ-005 -->
 
-<!-- REQUIREMENT: REQ-006 status=active priority=P0 type=constraint -->
+<!-- REQUIREMENT: REQ-006 status=superseded priority=P0 type=constraint -->
 ### REQ-006: Keep lifecycle enforcement proportional to material effects
 
 #### User Story
@@ -326,7 +446,7 @@ allowlist or filesystem sandbox.
 #### Acceptance Criteria
 
 - AC-001: Ordinary read-only shell commands, pipelines, repository inspection,
-  and read-only connector or computer-use tools remain available in every
+  and reviewed read-only connector operations remain available in every
   lifecycle phase unless their declared operation has a material side effect.
 - AC-002: The guard classifies and constrains known project mutations by their
   actual targets while leaving non-project security, permissions, and sandbox
@@ -349,6 +469,11 @@ allowlist or filesystem sandbox.
   project passes through the project-contract hook and does not advance its
   lifecycle write epoch, while remaining subject to the operating system,
   Codex permissions, destructive-action safeguards, and other domain hooks.
+- AC-008: The reviewed Atlassian Rovo identity, access-discovery, fetch, search,
+  Confluence read, Jira read, and account-lookup operations are classified from
+  their exact canonical hook names and remain phase- and epoch-neutral across
+  successful and failed connector responses. Connector-owned authentication or
+  default-browser redirects remain governed by connector and workspace policy.
 
 #### Negative Criteria
 
@@ -366,6 +491,10 @@ allowlist or filesystem sandbox.
 - NC-005: Out-of-project pass-through must not admit direct lifecycle-state
   forgery, mixed selected-project and external mutation, dynamic or ambiguous
   targets, or any command that another security or domain policy denies.
+- NC-006: Case or version drift in reserved provider families, method-name
+  fragments, browser or computer-control families, arbitrary JavaScript, and
+  unreviewed, renamed, malformed, or newly introduced connector methods must
+  not inherit lifecycle-neutral treatment from the generic MCP read grammar.
 
 #### Validation Method
 
@@ -376,17 +505,19 @@ phase.
 #### Test Method
 
 Cover `cat`, `find`, `grep`, `nl`, read-only pipelines, quoted metacharacter
-patterns, ordinary Git reads, exact canonical intent-to-add, read-only MCP and
-computer-use calls, explicit redirects, mutating Git and shell commands, exact
-private decision inputs and mode normalization, mixed targets, and symlink
-escapes. Exercise fixed external targets and working directories separately
-from mixed or ambiguous project-affecting commands.
+patterns, ordinary Git reads, exact canonical intent-to-add, the exact reviewed
+Atlassian Rovo read set, generic read-only MCP calls, connector-owned
+authentication redirects, mutating or unknown MCP methods, browser-control and
+arbitrary-code tools, mutating Git and shell commands, exact private decision
+inputs and mode normalization, mixed targets, and symlink escapes. Exercise
+fixed external targets and working directories separately from mixed or
+ambiguous project-affecting commands.
 
 #### Evaluation Method
 
-Re-run the original blocked diagnosis and lifecycle bootstrap without a
-symlink-only installation model, then confirm that real implementation writes
-still require a validated plan and open transition.
+Replay the originally blocked canonical connector names in disposable lifecycle
+fixtures, then confirm that implementation writes still require a validated
+plan and open transition. Keep installed and live connector proof separate.
 
 <!-- /REQUIREMENT: REQ-006 -->
 
@@ -418,9 +549,9 @@ at its causal owner and retried.
 - NC-001: Repair must not change writers, use shell redirection, edit only an
   installed hook, disable or unregister the guard, change working directory to
   escape classification, or mutate the original target before owner repair.
-- NC-002: A source repair must not weaken lifecycle-private state protection,
-  selected-project phase gates, destructive-action safeguards, or an external
-  security policy.
+- NC-002: A source repair must not weaken owner-private state protection,
+  destructive-action safeguards, workflow-owned controls, or an external
+  security policy. Project lifecycle observation remains advisory.
 
 #### Validation Method
 
@@ -434,8 +565,9 @@ fails before source repair and admits the same operation after reviewed install.
 
 #### Evaluation Method
 
-Re-run the originally denied config patch unchanged and independently confirm
-that protected project lifecycle state remains denied.
+Re-run the originally denied config patch unchanged, independently confirm
+that owner-private state remains protected by its owning controls, and confirm
+the project-spec observer remains neutral.
 
 <!-- /REQUIREMENT: REQ-007 -->
 
@@ -502,12 +634,13 @@ interrupting safe diagnostic or repair work.
   A later resumed turn reports the interrupted state without claiming proof
   that the hook could not observe.
 - AC-007: The shared Stop arbiter keeps a peer continuation or terminal result
-  authoritative. It evaluates every delegate for lifecycle transitions and
-  cleanup, retains the first terminal result in delegate order, and finalizes a
-  valid concise report transactionally. If that finalization fails after a peer
-  terminal result, the first terminal result remains authoritative and gains
-  only a generic trusted-state warning. An ordinary advisory-incomplete report
-  never becomes a competing Stop decision.
+  authoritative. It evaluates every registered troubleshooting, SDLC, and
+  prompt-session delegate for workflow transitions and cleanup, retains the
+  first terminal result in delegate order, and finalizes a valid concise report
+  transactionally. Project lifecycle has no Stop delegate. If finalization
+  fails after a peer terminal result, that first result remains authoritative
+  and gains only a generic trusted-state warning. An ordinary
+  advisory-incomplete report never becomes a competing Stop decision.
 - AC-008: The report-obligation sidecar uses one current schema and canonical
   status machine. An older active schema is not migrated in place; it fails
   closed with an actionable fresh-session instruction, and activation must not
@@ -515,6 +648,14 @@ interrupting safe diagnostic or repair work.
   schema/status counts only, preserves recognized terminal history under the
   exact v1 and v2 schemas, and fails closed on active legacy, unknown-schema,
   unsupported-status, unreadable, or malformed sidecars.
+- AC-009: A valid resolved remediation marker is completed evidence rather
+  than an exhausted tool lock. A later bare `$troubleshoot` invocation keeps
+  the saved profile and admits discovery without pending fresh-marker state.
+  Explicit profile flags use the profile-only authorization handshake while
+  preserving the resolved marker core. Post-exhaustion fresh-state handoff
+  remains fail-closed and admits only one exact `apply_patch` targeting the
+  advertised `current.md` until promotion: update when the file exists or add
+  only when it is absent.
 
 #### Negative Criteria
 
@@ -531,6 +672,10 @@ interrupting safe diagnostic or repair work.
   the exact next action.
 - NC-004: The hook validator must not be described as sanitization or complete
   secret detection, and a terminal warning must not echo rejected content.
+- NC-005: Resolved evidence must not be relabeled as an exhausted terminal
+  marker, force a fresh blocker before discovery, or admit an add operation for
+  an existing task-state file, a delete or delete/add replacement, shell
+  rewrite, or unrelated tool during an actual pending authorization.
 
 #### Validation Method
 
@@ -538,7 +683,8 @@ Validate invocation tracking, concise field-specific parsing, advisory ordinary
 Stop behavior, `DIAGNOSED-FIXED` semantics, safe reference validation,
 sensitive-output terminal detection, strict exhaustion composition,
 interruption handling, schema migration boundaries, bounded prompt context,
-and all-delegate Stop-arbiter behavior.
+all-delegate Stop-arbiter behavior, resolved-session reuse, and exact pending
+patch admission.
 
 #### Test Method
 
@@ -549,8 +695,11 @@ resume, atomic state
 failure including peer-terminal finalization, repeated Stop, budget exhaustion,
 inclusive 5/120 limits, nested-working-directory and exhausted-fallback
 containment, resumed
-interruption, and composition with continuing and terminal project-contract
-and SDLC delegates.
+interruption, and composition with continuing and terminal SDLC and
+prompt-session delegates while project-spec status remains absent or neutral.
+Cover a bare invocation and an explicit profile change
+from valid resolved state, plus actionable denial text for rejected pending
+writers.
 
 #### Evaluation Method
 
@@ -569,26 +718,28 @@ continuation or second assistant report is created.
 #### User Story
 
 Task Implementer and Agentic SDLC users need every direct prompt to reach the
-current agent normally. When the session is bound to an active managed
-objective, eligible material intent should also be captured in that
-objective's canonical prompt without turning capture into an execution gate or
-requiring the user to locate and edit the prompt file.
+current agent normally. When the current Codex session is explicitly bound to
+an active managed objective, eligible material intent should also be captured
+in that objective's canonical prompt without turning capture into an execution
+gate or requiring the user to locate and edit the prompt file.
 
 #### Acceptance Criteria
 
-- AC-001: An explicit workspace initialization or workflow invocation registers
-  one active canonical objective for the selected workflow and project.
-  Session binding and prompt capture are subordinate metadata and must never be
-  prerequisites for delivering or executing a direct prompt in the current
-  agent turn.
+- AC-001: An exact workspace initialization or workflow invocation binds that
+  current Codex session and registers one active canonical objective for the
+  selected workflow and project. A compatible active objective in the private
+  registry must not implicitly bind another session. Session binding and
+  prompt capture are subordinate metadata and must never be prerequisites for
+  delivering or executing a direct prompt in the current agent turn.
 - AC-002: `UserPromptSubmit` prompt intake is non-blocking for direct root-agent
   prompts. Recognized secrets, stale writer provenance, binding conflicts,
   ambiguous objectives, unsafe private state, capture failures, and unexpected
   intake errors skip or report capture without returning a stop decision.
-- AC-003: Every eligible safe direct turn in a bound workflow receives durable
-  session and turn provenance when metadata-only staging succeeds. Staging
-  persists bounded identity, digest, workflow, project, token, and timing
-  fields but never the submitted prompt body or a raw prompt journal.
+- AC-003: Every eligible safe direct turn after an exact current-session
+  binding receives durable session and turn provenance when metadata-only
+  staging succeeds. Staging persists bounded identity, digest, workflow,
+  project, token, and timing fields but never the submitted prompt body or a
+  raw prompt journal.
 - AC-004: The current agent classifies the already-delivered prompt as merge,
   no-op, or sensitive. Only objective intent, steering, constraints, material
   clarification answers, and acceptance changes may produce a project-intent
@@ -611,10 +762,11 @@ requiring the user to locate and edit the prompt file.
   Codex session and current-turn claim. An already-accepted immutable
   projection may complete its exact merge and consume transition, but an older
   staged event must never be classified from later conversation context.
-- AC-008: Task Implementer resolves its primary-checkout project and
-  manifest-proven managed-lane project as one logical active objective for
-  attachment, capture, registry updates, and prompt-result validation.
-  Unrelated projects remain ineligible for capture.
+- AC-008: Within an explicitly bound Task Implementer session, the primary
+  checkout project and manifest-proven managed-lane project resolve as one
+  logical active objective for capture, registry updates, and prompt-result
+  validation. The alias does not establish a fresh-session binding, and
+  unrelated projects remain ineligible for capture.
 - AC-009: Prompt workspaces use one canonical v3 schema with a collision-safe
   five-character user-facing prompt reference at the filename prefix and the
   existing full internal prompt ID as authority.
@@ -635,7 +787,10 @@ requiring the user to locate and edit the prompt file.
 - NC-001: Unbound, ambiguous, Stop-generated continuation, subagent, no-op,
   sensitive, stale-session, failed-capture, or replayed turns must not update an
   objective, but prompt-intake policy must not prevent the direct user turn
-  from running.
+  from running. A unique active Task Implementer or SDLC objective must not
+  make an otherwise unbound fresh session capture-eligible. An unbound direct
+  turn emits no prompt-intake context or state even when its content matches
+  the capture-specific secret detector.
 - NC-002: Secrets or recognized credential material must not be persisted in a
   prompt body, project-intent projection, canonical prompt, diagnostic, or
   test artifact. A recognized pre-stage match creates no event; a later
@@ -658,7 +813,8 @@ current-session/current-turn authorization, file modes, atomic writes,
 no-follow path handling, selective projection, secret non-persistence,
 projection-bound operation identity, idempotency, prompt migration, ref
 resolution, logical primary/lane identity, workflow adapters, non-blocking
-shared Stop arbitration, and source/install/runtime separation.
+shared Stop arbitration, explicit current-session binding, and
+source/install/runtime separation.
 
 #### Test Method
 
@@ -667,13 +823,16 @@ for every structured and unexpected intake failure, binding, dispositions,
 the project-intent allowlist and no-op list, mixed prompts, commands as data,
 contextual clarification answers, metadata-only stage/accept/consume/discard,
 concurrent and duplicate turns, projection substitution, manual drift,
-secrets, stale events, event-v1 isolation, primary/lane attachment, workflow
-isolation, prompt migration, ref collisions, immutable revisions, explicit
-manual reruns, and Stop/subagent exclusions.
+secrets, stale events, event-v1 isolation, explicitly bound primary/lane
+aliases, fresh-session active-objective non-attachment, workflow isolation,
+prompt migration, ref collisions, immutable revisions, explicit manual reruns,
+and Stop/subagent exclusions.
 
 #### Evaluation Method
 
-After separately authorized installation and restart, bind fresh Task
+After separately authorized installation and restart, first submit a direct
+prompt in a fresh session while one compatible objective is active and confirm
+that no prompt-intake context or event appears. Then explicitly bind fresh Task
 Implementer and SDLC sessions, submit direct material and nonmaterial prompts,
 and confirm every prompt reaches the current agent. Verify safe project intent
 is projected and captured once without starting either workflow, excluded
@@ -775,8 +934,8 @@ projection; static text tests alone do not prove runtime investigation quality.
 
 Codex users need one explicit `$commit` invocation to commit the complete local
 repository diff even when related changes span multiple project folders,
-without weakening project lifecycle, Task Implementer, Worktree, or Agentic
-SDLC ownership.
+without weakening repository instructions, Task Implementer, Worktree,
+Agentic SDLC, or transaction-owned safety.
 
 #### Acceptance Criteria
 
@@ -789,7 +948,7 @@ SDLC ownership.
 - AC-002: The reviewed candidate tree is computed from the current real index
   plus the complete tracked and untracked worktree delta before the real index
   is changed, then bound to the exact common Git directory, worktree, ref,
-  branch, base `HEAD`, index, status, selected lifecycle, and one-shot claim.
+  branch, base `HEAD`, index, status, explicit authorization, and one-shot claim.
   Repository-shaping Git environment variables are rejected before discovery
   or mutation so callers cannot redirect the canonical repository, worktree,
   object store, configuration, or real index.
@@ -798,16 +957,16 @@ SDLC ownership.
   and proves one single-parent direct-child commit with the expected final
   checkout state.
 - AC-004: Changes under repository root files and any number of sibling project
-  folders may commit together without requiring lifecycle attestations from
-  every affected sibling; the current selected-project lifecycle remains the
-  only project-contract gate.
+  folders may commit together without project-lifecycle attestations. The
+  current-turn authorization plus transaction-owned Git, branch, Worktree,
+  secret, and workflow-conflict checks remain authoritative.
 - AC-005: Task Implementer worker commits and Worktree integration commits use
   their exact delegated claims, and interrupted exact-child adoption revalidates
   that delegated ownership before completing the claim. Dirty Task Implementer
   source checkouts direct the user to a separate explicit `$commit`, and active
   Agentic SDLC continues to require `sdlc-commit`. Task start and base-state
   recovery return one transient canonical commit context with the exact
-  PATH-canonical Python-family executable, helper, outer lifecycle cwd, worker
+  PATH-canonical Python-family executable, helper, exact scope cwd, worker
   root, raw session ID, authorization, claim, and prepare argv; persisted
   session fingerprints are never accepted as raw `--session-id` values. Task
   start and recovery also return a transient result context with the exact
@@ -855,10 +1014,10 @@ SDLC ownership.
 
 Use disposable multi-project Git repositories and private Codex homes to prove
 prompt binding, helper trust, whole-tree review, claim consumption, shared-ref
-serialization, crash recovery, workflow isolation, and unchanged lifecycle
-write epochs for verified Git-only effects. Run the lifecycle hook and worker
-adapter under different canonical Python versions, prove the exact returned raw
-session succeeds, and prove substituting its fingerprint fails before staging.
+serialization, crash recovery, workflow isolation, and neutral project-spec
+hook behavior for Git-only effects. Run the worker adapter under different
+canonical Python versions, prove the exact returned raw session succeeds, and
+prove substituting its fingerprint fails before staging.
 
 #### Test Method
 
@@ -932,10 +1091,11 @@ manually committing, stashing, resetting, or cleaning the managed checkout.
 - NC-002: Private checkpoint state must not persist prompt bodies, diff
   contents, repository file contents, secrets, private endpoints, or commit
   message input.
-- NC-003: A checkpoint must not weaken selected-project lifecycle gates,
-  bypass applicable repository instructions, silently absorb an unresolved
-  cross-project ownership conflict, or create task resources before its exact
-  generation baseline is durable.
+- NC-003: A checkpoint must not bypass applicable repository instructions,
+  weaken Task Implementer or Worktree ownership gates, silently absorb an
+  unresolved cross-project ownership conflict, or create task resources before
+  its exact generation baseline is durable. Project lifecycle status is
+  advisory.
 
 #### Validation Method
 
@@ -1024,7 +1184,7 @@ and independently verify unchanged Git and private workflow state.
 
 <!-- /REQUIREMENT: REQ-013 -->
 
-<!-- REQUIREMENT: REQ-014 status=active priority=P0 type=feature -->
+<!-- REQUIREMENT: REQ-014 status=superseded priority=P0 type=feature -->
 ### REQ-014: Bridge Task Implementer project contracts through the owner lifecycle
 
 #### User Story
@@ -1372,7 +1532,7 @@ requiring knowledge of private coordinator commands.
 
 - AC-001: Repeating public `run` for the same prompt revision derives one
   bounded outcome from authoritative coordinator-v7, wave, task, immutable,
-  Git, Worktree, lifecycle, and lease evidence: execute one exact transition,
+  Git, Worktree, and lease evidence: execute one exact transition,
   wait for a proven active owner, require stop confirmation, block on
   ambiguity, or report the unchanged run complete.
 - AC-002: Coordinator-owned transitions use a durable monotonic intent record
@@ -1395,10 +1555,11 @@ requiring knowledge of private coordinator commands.
 - AC-006: Final completion is published only after promotion, cleanup, external
   lease release, local interop reconciliation, handoff projection, and queued
   activation each have exact-once evidence.
-- AC-007: Lifecycle continuation uses the project-contract owner's explicit
-  state transition and never assumes a synthetic Stop continuation emits
-  `UserPromptSubmit`. A required fresh runtime returns one precise reload
-  boundary while preserving the run.
+- AC-007: Project-spec observation never becomes a resume continuation or
+  transition prerequisite. A newly recommended project-instruction change is
+  advisory for the current run unless the user separately invokes its explicit
+  mutation workflow; already-effective repository instructions remain in
+  force.
 - AC-008: Promotion-review corrections become immutable, digest-addressed
   `pending-plan-v1` input bound to the active resume epoch and token before
   coordinator, wave, or task-plane publication. A retry consumes the same
@@ -1428,20 +1589,11 @@ requiring knowledge of private coordinator commands.
   plan basis and coordinator in recoverable order. Repeating an unchanged
   retained-prefix replan is byte-idempotent and never blocks its active
   replacement wave; successful recovery proceeds through ordinary resume
-  adoption and its controlled next transition. If canonical spec receipt bytes
-  advanced before recovery, the owner first refreshes the ready refinement's
-  compiled managed-requirements digest; recovery republishes the current
+  adoption and its controlled next transition. If canonical requirements or
+  design bytes advanced before recovery, the owner first refreshes the ready
+  refinement's compiled managed-requirements digest; recovery republishes the current
   validated impact, accepts only `retain_plan`, and binds that exact impact into
   the repaired plan basis before the coordinator write.
-- AC-013: When a sealed selected-lane lifecycle reconciliation leaves only the
-  canonical requirements/design pair and provenance-owned `AGENTS.md` dirty
-  during an active promotion review, one owner-invoked adoption binds the exact
-  lifecycle and file digests, journals a single coordinator-owned integration
-  commit, and treats that overlay as admissible only while the lane bytes and
-  integration blobs remain identical. Promotion journals the temporary lane
-  cleanup and either completes the fast-forward or restores the exact adopted
-  bytes after interruption. No product path, arbitrary dirt, staged state, or
-  unsealed lifecycle is admitted.
 - AC-014: A promotion-review correction graph may span multiple dependency
   frontiers. Replanning appends only the currently dependency-ready frontier
   to the retained integration, dispatches it from the latest sealed integration
@@ -1501,11 +1653,6 @@ requiring knowledge of private coordinator commands.
   replacement suffix, follow a symlink or non-file recovery artifact, appear
   in ordinary helper help, repair a stale refinement, accept material
   `replan_required` impact, or become a legacy coordinator compatibility layer.
-- NC-006: Contract-delta adoption must not generalize lane cleanliness, move or
-  stage the persistent-lane index, accept README, changelog, product, untracked,
-  deleted, renamed, symlinked, or partially reviewed paths, copy private
-  lifecycle bytes into Git, or lose the lane overlay before its exact bytes are
-  durable in the retained integration.
 - NC-007: Projection recovery must not accept arbitrary Markdown edits, change
   machine state, infer completion, rewrite pending correction content or
   narrative, expose a public action, or retain `committed` as a second accepted
@@ -1529,15 +1676,14 @@ run evaluation at every persistent and external-effect boundary.
 Cover interruption during intake, revision settlement, checkpoint, generation
 open, plan publication, preparation, dispatch, worker execution and result
 publication, integration, promotion, cleanup, final release, handoff
-projection, queue activation, lifecycle continuation, and concurrent resume.
+projection, queue activation, workflow-owned finalization, and concurrent resume.
 Include journal-less coordinator-v7 adoption, stale projections, file and
 directory sync failures, partial journals, storage exhaustion, retained
 completed prefixes with deterministic replacement-tail digests, interrupted
 plan-basis-first and coordinator-first repair completion, broken-symlink and
   live-worker rejection, hidden owner-command routing, repeated unchanged
-  replanning, spec-receipt-only retain-impact refresh, stale-refinement and
-  material-impact rejection, sealed contract-delta adoption, interrupted
-  promotion cleanup restoration, multi-frontier correction chaining, future
+  replanning, canonical-spec-only retain-impact refresh, stale-refinement and
+  material-impact rejection, multi-frontier correction chaining, future
   dependency-only rebinding, canonical unpromoted task projection, exact
   unsupported-status recovery, repeated ordinary resume, and unchanged
   terminal replay. Change canonical worker guardrail wording after a task has
@@ -1559,15 +1705,18 @@ returns `ALREADY_COMPLETE` and a changed prompt creates a linked new revision.
 
 #### User Story
 
-AI application designers need one architecture that separates direct model
-calls, deterministic workflows, bounded agents, and specialist harnesses while
-keeping provider choice, state, tools, policy, and operations replaceable.
+AI application designers need one architecture that separates deterministic
+code, direct model calls, deterministic workflows, bounded agents, and
+specialist harnesses while keeping provider choice, state, tools, policy, and
+operations replaceable.
 
 #### Acceptance Criteria
 
-- AC-001: `design` classifies every AI-enabled capability as a direct model
-  call, a deterministic workflow containing model calls, or an agent before it
-  finalizes component boundaries and control flow.
+- AC-001: `design` identifies the AI subsystem and delegates its behavior,
+  topology, policy, and contract design once to `ai-agent-design`.
+  `ai-agent-design` classifies every AI-enabled capability as deterministic
+  code, a direct model call, a deterministic workflow containing model calls,
+  or an agent before delegating frozen component requirements to `ai-stack`.
 - AC-002: A direct call is preferred when one model request can solve the task;
   a deterministic workflow is preferred when the application knows the
   operation sequence; an agent is selected only when the model must choose an
@@ -1579,9 +1728,9 @@ keeping provider choice, state, tools, policy, and operations replaceable.
   supporting agent-runtime triggers rather than sufficient reasons to make the
   whole application agentic. Latency and cost predictability bias the decision
   toward direct calls and deterministic workflows.
-- AC-004: One application may use all three levels concurrently, with ordinary
-  application logic, databases, APIs, RBAC, approvals, and other deterministic
-  controls remaining outside model discretion.
+- AC-004: One application may use all four behavior classes concurrently, with
+  ordinary application logic, databases, APIs, RBAC, approvals, and other
+  deterministic controls remaining outside model discretion.
 - AC-005: Pydantic AI is the default portable Python model and agent runtime.
   Direct-call behavior uses its low-level direct model API when the caller
   needs `ModelResponse` control, or a no-tools single-request `Agent` when
@@ -1628,9 +1777,10 @@ keeping provider choice, state, tools, policy, and operations replaceable.
   agent. When durability is required, Temporal, DBOS, Prefect, Restate, or an
   existing qualified owner is selected from workload evidence rather than
   mandated by the presence of an agent.
-- AC-013: The decision rule, runtime and provider boundaries, specialist
-  choices, source links, skill metadata, trigger evaluations, READMEs, root
-  catalog, project design, and changelog remain aligned.
+- AC-013: The `design` to `ai-agent-design` to `ai-stack` ownership chain, the
+  decision rule, runtime and provider boundaries, specialist choices, source
+  links, skill metadata, trigger evaluations, READMEs, root catalog, project
+  design, and changelog remain aligned.
 
 #### Negative Criteria
 
@@ -1662,20 +1812,20 @@ keeping provider choice, state, tools, policy, and operations replaceable.
 #### Validation Method
 
 Run skill-structure, Markdown, traceability, changed-scope review, security
-review, and static trigger-evaluation checks over `ai-stack`, the root catalog,
-project specs, and changelog. Recheck version-sensitive Pydantic AI, OpenAI,
-Anthropic, Google, and interoperability claims against current official
-documentation.
+review, and static trigger-evaluation checks over `design`, `ai-agent-design`,
+`ai-stack`, the root catalog, project specs, and changelog. Recheck
+version-sensitive Pydantic AI, OpenAI, Anthropic, Google, and interoperability
+claims against current official documentation.
 
 #### Test Method
 
-Use should-trigger and quality scenarios for low-level and typed direct calls,
-known multi-step workflows, dynamic tool choice, provider-specific features,
-provider-native escape decisions, policy-owned routing, replay-safe fallback,
-authenticated resume and cancel races, durable approvals, Pydantic AI
-specialists, and a Codex engineering specialist. Confirm each selects the
-lowest sufficient level and preserves the application-owned state, policy, and
-tool boundaries.
+Use should-trigger and quality scenarios for deterministic code, low-level and
+typed direct calls, known multi-step workflows, dynamic tool choice,
+provider-specific features, provider-native escape decisions, policy-owned
+routing, replay-safe fallback, authenticated resume and cancel races, durable
+approvals, Pydantic AI specialists, and a Codex engineering specialist.
+Confirm each follows the ownership chain, selects the lowest sufficient level,
+and preserves the application-owned state, policy, and tool boundaries.
 
 #### Evaluation Method
 
@@ -1914,41 +2064,40 @@ justified core remains over the soft budget.
 <!-- /REQUIREMENT: REQ-021 -->
 
 <!-- REQUIREMENT: REQ-022 status=active priority=P0 type=feature -->
-### REQ-022: Admit bounded commit-push Git effects without weakening lifecycle safety
+### REQ-022: Keep commit-push Git effects workflow-owned
 
 #### User Story
 
 Skill users need an explicitly authorized `commit-push` workflow to inspect its
-fixed remote and publish the current branch without the selected-project
-lifecycle misclassifying those known Git effects as ambiguous project writes.
+fixed remote and publish the current branch without depending on project
+lifecycle classification or weakening publication safety.
 
 #### Acceptance Criteria
 
-- AC-001: Exact read-only Git query shapes used by `commit-push`, including
-  version, remote URL, symbolic-ref, remote-ref listing, show-ref, and rev-list
-  queries, are non-material only when their options cannot write configuration,
-  refs, worktree files, or hook state.
+- AC-001: `commit-push` validates the exact read-only Git query shapes it uses,
+  including version, remote URL, symbolic-ref, remote-ref listing, show-ref,
+  and rev-list, without treating a lifecycle hook as their authority.
 - AC-002: One exact fetch from `origin` for the literal current branch may
   update only its matching remote-tracking ref and object database while
   suppressing `FETCH_HEAD`, tags, automatic maintenance, and commit-graph
-  writes. The selected-project lifecycle treats that bounded Git control-plane
-  effect as external and epoch-neutral only when no active
-  reference-transaction hook can introduce hidden project effects.
+  writes. The publication workflow rejects an active reference-transaction
+  hook that could introduce hidden project effects.
 - AC-003: One exact non-force push from `HEAD` to the same literal current
-  branch on `origin`, optionally setting that branch's upstream, is external to
-  the selected-project contract only when no active pre-push or
-  reference-transaction hook can introduce hidden project effects.
+  branch on `origin`, optionally setting that branch's upstream, is admitted
+  only when no active pre-push or reference-transaction hook can introduce
+  hidden project effects.
 - AC-004: A dirty `commit-push` workflow obtains its local commit through the
   existing claim-bound whole-repository commit transaction. Its explicit
   invocation can authorize that transaction without admitting raw `git add` or
   `git commit`.
 - AC-005: Force, delete, mirror, all, tags, wildcard, arbitrary-remote,
   arbitrary-refspec, URL-targeted, dynamic, composed, hook-bearing, or otherwise
-  ambiguous fetch and push commands remain denied by the project lifecycle.
+  ambiguous fetch and push commands remain denied by the publication workflow
+  and any independent repository policy.
 - AC-006: Source tests prove the recognized and rejected command matrix without
-  contacting a remote or mutating the developer checkout. Installed parity,
-  hook trust, restart, fresh-session behavior, and a real push remain separate
-  rollout gates.
+  contacting a remote or mutating the developer checkout. Project lifecycle
+  hooks remain neutral. Installed parity, hook trust, restart, fresh-session
+  behavior, and a real push remain separate rollout gates.
 - AC-007: The relevant fetch or push URL for `origin` resolves to exactly one
   HTTPS, SSH, or scp-style network target with a strictly validated authority.
   Local paths, file or external-helper transports, option-like authorities,
@@ -1956,8 +2105,8 @@ lifecycle misclassifying those known Git effects as ambiguous project writes.
 
 #### Negative Criteria
 
-- NC-001: Do not make generic `git fetch`, `git push`, `git config`, `git
-  remote`, or `git symbolic-ref` read-only or lifecycle-exempt.
+- NC-001: Do not generalize the workflow to arbitrary `git fetch`, `git push`,
+  `git config`, `git remote`, or `git symbolic-ref` shapes.
 - NC-002: Do not infer safety only from an external working directory, because
   Git effects are rooted in repository metadata and remote refs rather than the
   process cwd.
@@ -1967,9 +2116,10 @@ lifecycle misclassifying those known Git effects as ambiguous project writes.
 
 #### Validation Method
 
-Run focused lifecycle-hook and commit authorization tests, disposable-repository
-Git-effect tests, Python and Markdown checks, project-spec validation, security
-and code review, changed-surface alignment, and repository hygiene checks.
+Run focused commit authorization and publication tests, a neutral project-spec
+hook regression, disposable-repository Git-effect tests, Python and Markdown
+checks, project-spec validation, security and code review, changed-surface
+alignment, and repository hygiene checks.
 
 #### Test Method
 
@@ -1981,11 +2131,301 @@ composition, and raw Git mutations.
 
 #### Evaluation Method
 
-Reproduce the original command classifications against the source hook in a
-disposable repository. After separately authorized installation and restart,
-repeat the same preflight in a fresh session before any separately authorized
-real publication.
+Reproduce the publication workflow's accepted and rejected commands in a
+disposable repository while the project-spec hook remains neutral. After
+separately authorized installation and restart, repeat the same preflight in a
+fresh session before any separately authorized real publication.
 
 <!-- /REQUIREMENT: REQ-022 -->
+
+<!-- REQUIREMENT: REQ-023 status=active priority=P1 type=feature -->
+### REQ-023: Design governed production AI agent subsystems
+
+#### User Story
+
+Agent builders need a provider-neutral skill that turns workload goals and
+risk constraints into a complete agent-subsystem design without duplicating
+AI stack selection or implying implementation authority.
+
+#### Acceptance Criteria
+
+- AC-001: The repository provides an implicitly invokable, advisory
+  `ai-agent-design` skill with no public actions beyond report-only help and no
+  repository, installation, deployment, credential, or live-system authority.
+- AC-002: The skill classifies each AI-enabled capability as deterministic
+  code, a direct model call, a deterministic workflow containing model calls,
+  or an agent before selecting a topology. It prefers the least-agentic
+  sufficient design and a bounded single agent before multi-agent patterns. A
+  direct call is one bounded application-level inference operation; bounded
+  transport retries or schema-repair retries do not change that class while
+  the application still owns continuation and no tools or effects are added.
+- AC-003: The skill owns agent-specific patterns, policies, contracts, and
+  synthesis for the complete agent subsystem. When active inside a `design`
+  workflow, it receives one explicit delegation and does not route back. It
+  passes a frozen workload and policy contract to `ai-stack` for component and
+  technology selection when at least one model-backed capability remains, then
+  incorporates that scoped decision without restating its vendor selection
+  corpus or reopening classification. A deterministic-only result takes
+  precedence even when the request initially asked for AI-stack review: it
+  records that no AI component is required and skips technology selection.
+  When a direct `ai-stack` request delegates a disputed provisional contract,
+  the skill returns only the frozen contract and skips a nested stack handoff
+  so component selection executes exactly once.
+- AC-004: For agent-classified capabilities, the design workflow requires an
+  explicit provider-neutral reference architecture that separates product
+  identity, trusted control and policy, model-directed execution, durable
+  session state, context and governed memory, capability tools, and
+  observability behind versioned interfaces. Simpler behavior classes reject
+  unneeded runtime or session layers. Every applicable design also covers task
+  and agent contracts, deterministic authorization and approvals, state and
+  durability, idempotent effects, failure recovery, security, evaluation,
+  governance, rollout, and rollback. Before dispatching an effect-capable
+  action, trusted state persists its authorized immutable intent and
+  idempotency identity; the receipt and independent verification follow
+  dispatch so resume can reconcile the crash boundary without blind replay.
+- AC-005: The skill routes surrounding whole-product design to `design` and
+  `app-stack`, focused technology due diligence to `research`, and checklist
+  review of an existing architecture to `system-design-rules`.
+- AC-006: `SKILL.md` remains lean and directive-first. Detailed reusable
+  guidance is split into focused references for classification and patterns;
+  runtime architecture and sessions; contracts, context, and memory; tools,
+  authority, and security; durability, failures, and effects; and evaluation,
+  observability, and governance.
+- AC-007: The output contract includes a capability map that explicitly lists
+  deterministic code, direct model calls, deterministic AI workflows, and
+  agents even when a class is empty; topology; the reference architecture and
+  provider-neutral interfaces; a bounded agent loop and durable session
+  contract when present; ownership and policy decisions; operator progress,
+  steer, cancel, and escalation controls; independent outcome verification;
+  the `ai-stack` component table when an AI component remains, or an explicit
+  `Skipped - no AI component required` decision for deterministic-only scope;
+  failure and recovery design; evaluation and operations; rejected
+  alternatives; switch conditions; and a logical-only implementation handoff.
+- AC-008: Canonical trigger evaluations cover positive agent-design requests
+  and near misses owned by adjacent skills. Process and quality evaluations
+  include a direct-call lower bound, a deterministic approval-aware support
+  workflow, a deterministic-code lower bound, an evidence-disciplined bounded
+  diagnostic agent, a durable orchestrator-worker design, a controlled effect
+  with ambiguous-delivery recovery, governed memory curation with rollback,
+  and an originating `ai-stack` handoff that returns the frozen contract
+  without a nested stack selection.
+
+#### Negative Criteria
+
+- NC-001: The skill must not make provider-specific frameworks, MCP,
+  multi-agent topology, long-term memory, a workflow engine, or new
+  infrastructure mandatory without a current requirement and owner.
+- NC-002: Model instructions or model-based guardrails must not become the
+  authorization boundary for tools, tenant data, approvals, or side effects.
+- NC-003: The skill must not implement the design, assign repository paths,
+  install dependencies, provision services, perform paid calls, or mutate live
+  systems.
+- NC-004: The source must not copy private paths, confidential material,
+  customer data, secrets, or volatile vendor claims into reusable guidance.
+
+#### Validation Method
+
+Run strict target skill validation, JSON and Markdown checks, source catalog
+validation, focused skill alignment, code and security review, changed-surface
+alignment, project-spec validation, and repository hygiene checks.
+
+#### Test Method
+
+Exercise balanced should-trigger and near-miss prompts, all four behavior
+classes, single-agent and multi-agent topology decisions, `ai-stack` handoff
+completeness, control/execution/session boundaries, durable checkpoints and
+operator control, authenticated and authorized high-risk approval boundaries,
+credential and sandbox isolation, duplicate delivery and ambiguous effects,
+the crash boundary after dispatch but before receipt persistence, governed
+memory promotion and rollback, independent outcome verification, the
+originating `ai-stack` non-recursive return path, and output-contract coverage.
+
+#### Evaluation Method
+
+Compare representative skill-assisted designs against a no-skill baseline.
+Report static validation, installed parity, fresh-session routing, and output
+quality as separate evidence states.
+
+<!-- /REQUIREMENT: REQ-023 -->
+
+<!-- REQUIREMENT: REQ-024 status=active priority=P0 type=constraint -->
+### REQ-024: Keep historical lifecycle phase state fully advisory
+
+#### User Story
+
+Codex users need ordinary work, Task Implementer runs, and Agentic SDLC runs
+to remain independent from retired private lifecycle phases, seals, waivers,
+and project-instruction reload state without weakening canonical project-spec
+maintenance or workflow-owned safety.
+
+#### Acceptance Criteria
+
+- AC-001: Project lifecycle hooks may inspect, reconcile, maintain, and report
+  project contract state, but they never deny a tool call, request a Stop
+  continuation, return `continue: false`, or make session completion depend on
+  lifecycle state.
+- AC-002: Missing historical state, every former lifecycle phase, stale or missing
+  receipts, render failures, ownership conflicts, lock contention, maintenance
+  failures, and reload recommendations produce only bounded, redacted advisory
+  diagnostics.
+- AC-003: Task Implementer planning, dispatch, integration, promotion,
+  cleanup, resume, and finalization depend only on Task Implementer-owned
+  prompt, plan, task, claim, worktree, evidence, Git, and recovery state.
+  Accepted root intent and the canonical v2 project-spec receipt are required
+  before spec-dependent planning and dispatch; historical lifecycle phase,
+  waiver, project-instruction state, and terminal seal evidence are optional
+  observations.
+- AC-004: Agentic SDLC phase progression, implementation, validation,
+  evaluation, commit, promotion, and completion depend only on SDLC-owned
+  intent, artifact, plan, evidence, authorization, Git, retry, and recovery
+  state after canonical project-spec reconciliation. The canonical v2 receipt
+  is required before spec-dependent planning and dispatch; historical
+  lifecycle phase and project-instruction mutation remain advisory side lanes
+  rather than mandatory phases.
+- AC-005: Prompt-impact and material-change decisions remain authoritative
+  workflow checks, but bind to accepted prompt revisions, semantic contract
+  inputs, the canonical spec pair, and locked plans instead of historical
+  lifecycle receipts.
+- AC-006: Task Implementer and Agentic SDLC never apply project instructions
+  automatically or stop for `reload_required`. They may report a recommended
+  change; explicit project-instruction mutation remains a separately invoked
+  operation with its own filesystem, ownership, and recovery safety.
+- AC-007: Existing authoritative workflow records remain readable without a
+  compatibility execution path. Retired lifecycle-only adjunct files and
+  fields are ignored rather than migrated into workflow identity; invalid
+  workflow-owned evidence remains owned by that workflow's recovery policy.
+- AC-008: Existing loaded repository instructions remain authoritative for the
+  active session. A future instruction change does not stop or invalidate the
+  current workflow solely because a fresh session would load different bytes.
+- AC-009: An explicit ordinary `$commit` never requires a lifecycle seal,
+  waiver, receipt, phase, or sibling attestation. Its current-turn
+  authorization, repository instructions, Git and branch checks, secret review,
+  Worktree ownership, and workflow-owned commit policy remain authoritative.
+
+#### Negative Criteria
+
+- NC-001: Advisory lifecycle conversion must not weaken Task Implementer or
+  SDLC authorization, secret handling, destructive-action approval, worker
+  ownership, test and review evidence, exact-SHA promotion, retry budget, or
+  recovery invariants.
+- NC-002: Private historical lifecycle state must not become a caller-authored authority.
+  Unsafe private maintenance or explicit project-instruction mutation fails
+  within that helper while the enclosing requested workflow continues.
+- NC-003: Enforcement-only lifecycle commands, phases, and receipts must not
+  remain as undocumented no-op compatibility shims or alternate execution
+  paths.
+- NC-004: Advisory diagnostics must not include prompts, transcripts, secrets,
+  customer data, private endpoints, repository contents, or absolute private
+  state paths.
+
+#### Validation Method
+
+Run hook, Task Implementer, Agentic SDLC, project-instruction, maintenance,
+skill-structure, Markdown, code-review, and security checks. Report source,
+installed parity, fresh-session activation, and disposable workflow completion
+as separate evidence states.
+
+#### Test Method
+
+Exercise every former lifecycle phase and failure class in ordinary, Task
+Implementer, and SDLC contexts and prove progression continues. Pair each case
+with a workflow-owned negative control that must still stop.
+
+#### Evaluation Method
+
+Run disposable Task Implementer and SDLC workflows with historical lifecycle
+support absent or faulted, then repeat with one canonical-spec or
+workflow-owned safety failure. The historical-state failure must not gate the
+run, while the negative control must remain blocked.
+
+<!-- /REQUIREMENT: REQ-024 -->
+
+<!-- REQUIREMENT: REQ-025 status=satisfied priority=P0 type=feature -->
+### REQ-025: Maintain one project contract across every agent workflow
+
+#### User Story
+
+Codex users need every direct root-user prompt to be classified consistently so
+durable project requirements and their designs remain current across ordinary
+sessions, Task Implementer, Agentic SDLC, and delegated worker execution.
+
+#### Acceptance Criteria
+
+- AC-001: Every real direct root-user prompt receives one best-effort,
+  statement-level classification attempt. Durable changes to product behavior,
+  constraints, acceptance, design, or implementation enter the project
+  lifecycle; questions, status requests, conversation, and unrelated operations
+  do not.
+- AC-002: `maintain-project-specs` is the only schema, parser, renderer,
+  traceability, migration, and paired-publication owner. The normal path accepts
+  only schema v2, while explicit migration converts recognized v1 ownership.
+- AC-003: A durable requirement and its design shell are reconciled before
+  implementation. After implementation, the same design records implementation
+  evidence and independently checked verification evidence through separate
+  design-readiness and delivery statuses.
+- AC-004: Scope defaults to the session startup directory, an explicit project
+  path takes precedence, and ambiguous cross-project scope requires user
+  clarification. Each selected project owns its own `docs/requirements.md` and
+  `docs/design.md` pair.
+- AC-005: UserPromptSubmit intake persists metadata and digests only, excludes
+  secret-bearing, system, compaction, continuation, and subagent prompts, and
+  never stores raw prompt bodies. Concurrent delivery of one session/turn is
+  serialized and publishes one idempotent intake record.
+- AC-006: Hooks never deny tool calls, participate in Stop, or make session or
+  workflow completion depend on project-spec state. SessionStart observes the
+  actual canonical documents, and missing historical lifecycle state never
+  produces `ADVISORY_UNAVAILABLE`.
+- AC-007: Task Implementer and Agentic SDLC use the canonical owner rather than
+  independent parsers or schemas. Root agents classify and publish; workers
+  inherit one root intent and return typed `spec_gaps` proposals without
+  writing project specs. Worker path inventories preserve both sides of a
+  rename, and gap text is sensitive-screened before output or persistence.
+- AC-008: Paired publication binds Git HEAD and both prior document digests,
+  validates the complete candidate pair, serializes writers, journals metadata,
+  holds verified no-follow project/docs directory descriptors, rechecks Git and
+  both file states at each replacement boundary, and rolls back only unchanged
+  candidate bytes if a later publication step fails. Canonical pair inspection
+  uses the matching shared lock and observes a complete pair.
+- AC-009: Focused source tests prove classification injection, secret and worker
+  exclusions, v1 rejection and migration, traceability, delivery evidence,
+  concurrent intake, compare-and-swap race handling and rollback, directory
+  redirection rejection, worker rename and sensitive-gap rejection, Task/SDLC
+  adapter use, and safe installer retirement of obsolete project-spec hook
+  registrations. Installed parity and fresh-session activation remain separate
+  verification lanes.
+
+#### Negative Criteria
+
+- NC-001: A model classification, hook observation, worker proposal, or stale
+  private record must not independently authorize paths, requirement removal,
+  delivery completion, or verified status.
+- NC-002: The system must not retain a second normal parser, alternate schema,
+  lifecycle state machine, PreToolUse/PostToolUse project-spec observer, or
+  project-spec Stop delegate as a compatibility path.
+- NC-003: Best-effort intake must not be described as guaranteed durable
+  persistence when a session is interrupted before the root agent publishes the
+  canonical pair.
+
+#### Validation Method
+
+Run canonical parser, migration, transaction, hook, Task Implementer, Agentic
+SDLC, installer, skill-contract, Markdown, and changed-surface alignment checks.
+
+#### Test Method
+
+Exercise direct ordinary, Task Implementer, Agentic SDLC, worker, secret,
+continuation, ambiguity, concurrent writer, partial publication, v1 migration,
+pending design, implemented design, and independently verified design cases.
+Inject Git-head drift, external document writes, a swapped `docs` symlink, a
+reader during split-write recovery, protected-path renames, and secret-bearing
+typed gaps.
+
+#### Evaluation Method
+
+Compare source validation, disposable installed parity, fresh-session hook
+activation, and representative end-to-end workflow completion as independent
+evidence lanes without inferring one from another.
+
+<!-- /REQUIREMENT: REQ-025 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

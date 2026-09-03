@@ -200,6 +200,7 @@ def _validate_spec_receipt(
         "validator_version",
         "requirements",
         "design",
+        "pending",
         "traceability_sha256",
     }
     expected_requirements = {
@@ -242,9 +243,10 @@ def _validate_spec_receipt(
         or not isinstance(receipt.get("validator"), str)
         or not receipt.get("validator")
         or type(receipt.get("validator_version")) is not int
-        or int(receipt["validator_version"]) < 1
+        or int(receipt["validator_version"]) < 2
         or receipt.get("requirements") != expected_requirements
         or receipt.get("design") != expected_design
+        or receipt.get("pending") != []
         or not _valid_sha256(receipt.get("traceability_sha256"))
     ):
         raise ProjectInstructionsError(

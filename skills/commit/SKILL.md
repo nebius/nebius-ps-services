@@ -61,8 +61,6 @@ Agentic SDLC checkpoints.
   reuse the same local transaction before its separately bounded push.
 - An optional user-provided commit message; otherwise the reviewed candidate
   must be coherent enough to summarize truthfully.
-- The current selected-project lifecycle state or its bounded zero-write
-  commit-only waiver.
 
 ## Required Reads
 
@@ -125,11 +123,11 @@ Agentic SDLC checkpoints.
      The same bounded grammar with `$commit-push` authorizes this transaction
      only as that workflow's local commit phase; it never authorizes a push
      from the `commit` skill or a default-branch commit.
-   - Before direct preparation, require the current selected-project lifecycle
-     to be sealed. A fresh turn that has performed no project writes may record
-     its bounded commit-only waiver instead. Do not discover or require sibling
-     project lifecycle attestations. Task Implementer uses its delegated owner
-     evidence at the worker boundary rather than a root direct-mode waiver.
+   - Project lifecycle state is advisory and is never a commit prerequisite.
+     Direct preparation relies on the explicit current-turn authorization,
+     already-effective repository instructions, and the transaction's own Git,
+     branch, Worktree, secret, and workflow-conflict checks. Project lifecycle
+     attestations are not required for the current or any sibling scope.
    - A Task Implementer worker does not use root-user intent. Its exact
      one-direct-child authorization is minted by `task-start` from the immutable
      assignment, running task plane, worker session, branch, and base `HEAD`;
@@ -139,7 +137,7 @@ Agentic SDLC checkpoints.
      the hook-provided authorization and claim paths, exact Git root, and
      current session. Task Implementer returns the same two paths from its
      owner transition inside a transient canonical `commit_context`. A worker
-     runs that context's exact `prepare_argv` from its `lifecycle_cwd` and uses
+     runs that context's exact `prepare_argv` from its `scope_cwd` and uses
      the returned raw `session_id` from `CODEX_THREAD_ID`; it must never use the
      `worker_session_fingerprint_sha256` as `--session-id`. Never invoke a
      source-tree or alternate helper.
@@ -149,8 +147,7 @@ Agentic SDLC checkpoints.
      Preparation must leave the real index and worktree unchanged.
    - Inspect the complete candidate with read-only Git tree/diff commands.
      Stop before execution if it contains unsafe, incoherent, or unexplained
-     content. The selected project lifecycle remains the only semantic
-     lifecycle; sibling project attestations are not required.
+     content. No project lifecycle attestation is required.
 5. Execute the exact reviewed transaction.
    - Use the canonical installed `commit_transaction.py execute` helper with
      the same root, session, claim and token, the exact reviewed candidate tree,
@@ -267,9 +264,9 @@ Agentic SDLC checkpoints.
   permission to prepare and execute the one canonical local transaction for
   the current branch. The hook authorization is single-use and contains no
   prompt or commit-message text.
-- Do not use the helper to bypass unresolved selected-project reconciliation.
-  Direct mode requires a sealed lifecycle or the bounded fresh zero-write
-  commit-only waiver; this never expands into sibling-project attestation.
+- Do not use the helper to bypass already-effective repository instructions,
+  unresolved Git state, active Worktree ownership, or workflow-owned commit
+  policy. Project lifecycle status remains advisory in every case.
 - Treat a fresh explicit `$worktree integrate <name>` as permission for only
   the eligible child/source commits that its read-only preflight orders. Do not
   infer delegated permission from a coordinator handoff, active reservation,
@@ -280,9 +277,8 @@ Agentic SDLC checkpoints.
 - Never push, create a PR, dispatch CI, publish artifacts, or call external
   write APIs from this skill.
 - Never run `git add -A` outside the repository root.
-- Never broadly allow raw Git mutation to work around project lifecycle
-  policy. Only the exact digest-pinned helper and current private evidence are
-  admissible.
+- Never broadly allow raw Git mutation. Only the exact digest-pinned helper and
+  current transaction evidence are admissible.
 - Never pass a pathspec to `git add -A`; this skill is intentionally whole-repo
   because multi-folder repositories often have related changes outside the
   current directory.
@@ -313,7 +309,7 @@ Agentic SDLC checkpoints.
 - Final output names the branch, commit hash and message when created,
   repo-root `git add -A`, validation performed, final status, and any retained
   `STALE` or `REVIEW_REQUIRED` blocker.
-- No push, PR, branch rewrite, sibling lifecycle mutation, or external write
+- No push, PR, branch rewrite, project-lifecycle prerequisite, or external write
   occurred.
 
 ## Learning Loop

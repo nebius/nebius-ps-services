@@ -26,6 +26,7 @@ from .capacity_dashboard import (
 )
 from .deploy_targets import deploy_target_is_external_mk8s
 from .sdk_auth import init_nebius_sdk
+from .soperator_wizard import soperator_wizard_settings
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
@@ -1294,12 +1295,9 @@ class ProviderOptionLookup:
     def _soperator_nodesets_profile_catalog(
         self,
     ) -> tuple[str | None, Mapping[str, Mapping[str, Any]]]:
-        from .component_sources import helm_chart_source_by_id
-
-        chart = helm_chart_source_by_id("soperator")
-        settings = getattr(chart, "soperator_nodesets", None)
-        default = _as_str(getattr(settings, "default", None))
-        raw_profiles = getattr(settings, "profiles", {}) if settings is not None else {}
+        settings = soperator_wizard_settings().nodesets
+        default = _as_str(settings.default)
+        raw_profiles = settings.profiles
         profiles = raw_profiles if isinstance(raw_profiles, Mapping) else {}
         return default, profiles
 
@@ -1370,12 +1368,9 @@ class ProviderOptionLookup:
         payload: dict[str, Any],
         field_path: str,
     ) -> Mapping[str, Any]:
-        from .component_sources import helm_chart_source_by_id
-
-        chart = helm_chart_source_by_id("soperator")
-        settings = getattr(chart, "soperator_nodesets", None)
-        default = _as_str(getattr(settings, "default", None))
-        profiles = getattr(settings, "profiles", {}) if settings is not None else {}
+        settings = soperator_wizard_settings().nodesets
+        default = _as_str(settings.default)
+        profiles = settings.profiles
         row_path = self._soperator_chart_row_path(field_path)
         profile_name = _as_str(_payload_value(payload, f"{row_path}.profile")) or default
         profile = profiles.get(profile_name or "") if isinstance(profiles, Mapping) else None

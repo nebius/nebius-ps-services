@@ -6,6 +6,115 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Unified project-spec management across ordinary sessions, Task Implementer,
+  and Agentic SDLC. The v2 owner contract separates requirement state, design
+  readiness, and delivery; publishes both documents with Git/file-digest
+  compare-and-set and split-write rollback; and records implementation and
+  verification evidence independently. Direct root prompts now receive
+  statement-level classification guidance from metadata-only intake, while
+  workers inherit the accepted intent/spec receipt and return typed
+  `spec_gaps` instead of reclassifying intent or editing specs. Concurrent
+  intake for one turn is serialized, gap text is sensitive-screened, and worker
+  path inventories disable rename folding so moving a protected spec cannot
+  hide its source. Paired publication now holds no-follow project/docs
+  descriptors, checks Git and document state at each replacement boundary,
+  uses guarded rollback, and serializes owner-aware readers. SessionStart
+  observes actual document markers through bounded no-follow regular-file reads
+  and no longer emits `ADVISORY_UNAVAILABLE` because a private `lifecycle.json`
+  is absent. Project-spec PreToolUse,
+  PostToolUse, and Stop registrations are retired; hook failures remain
+  nonblocking. Canonical v1, Task Implementer v1, and Agentic SDLC v1 pairs
+  upgrade only through explicit migration, with no normal-path compatibility
+  parser. Dedicated CI covers the canonical owner, transaction and hook paths,
+  Task planning/resume, SDLC prompt/start/hook/execution paths, installer
+  retirement, and project-instruction generation/retention.
+- Made historical project lifecycle phase state fully advisory. Ordinary hooks
+  now emit bounded context only and never deny tools, continue Stop, or gate a
+  session. Task Implementer owns its prompt-impact schemas and no longer has a
+  lifecycle authorization bridge, project-agent dispatch receipt, terminal
+  seal, reload gate, or runtime contract-delta overlay. Agentic SDLC likewise
+  excludes historical phase state and project-instruction lifecycle from its
+  golden path, while both workflows require the canonical v2 spec pair before
+  spec-dependent planning or dispatch and use general `align` before commit.
+  Explicit project-instruction mutation retains its own ownership,
+  concurrency, recovery, and verification safety.
+  The retired transition API is removed from both the CLI and importable
+  library, the real SessionStart path reaches the canonical bounded retention
+  classifier with an `unsafe` fallback and pre/post identity-and-digest proof
+  of its owner-controlled package tree; it executes only the snapshotted bytes
+  from an owner-only temporary tree. Project-instruction steering requires an
+  explicit current-user request, the orphaned Task receipt validator is
+  removed, the transient Task worker commit context uses `scope_cwd` under a
+  hard-cut v2 schema, ordinary `$commit` no longer waits for a lifecycle seal
+  or waiver, and stateful skill contracts expose their required structural
+  boundaries.
+- Fixed a same-session lifecycle coordinator deadlock during canonical
+  project-instruction render and seal verification. Nested renderer and verifier
+  subprocesses now inherit and validate the parent coordinator's already-held
+  workspace/session lock descriptors, while direct commands still acquire the
+  same locks normally. This preserves session serialization and maintenance
+  exclusion without waiting for the parent's bounded subprocess timeout.
+- Removed the count-based cross-session project-spec lifecycle audit that made
+  normal `SessionStart` context report a false failure after 128 private
+  records. Hook context is now current-session only. Owner-private maintenance
+  keeps terminal records for 30 days, expires abandoned resumable records after
+  90 days, and uses 1 GiB/768 MiB allocated-storage hysteresis without an
+  archive. Stable workspace/session locks, canonical ownership-registry
+  classification, non-authoritative activity, bounded cursor state, fsynced
+  rename journals, generation-plus-canonical-digest drift restoration, strict
+  status validation, root-cursor rotation across inactive workspaces,
+  complete-aggregate pressure admission, rotating journal recovery, and
+  directory-FD no-follow deletion protect active, `seal-armed`,
+  pending, legacy-required, missing sealed final state, malformed, linked, and
+  cross-device evidence. Staged bytes are counted once. Maintenance status remains
+  private and never gates the current implementation. Source verification is
+  separate from installation, restart, and fresh-session activation.
+- Fixed redundant project `AGENTS.md` adoption prompts in new Codex sessions.
+  Inspection and apply now carry exact managed-region authority through a
+  locked, monotonic workspace-private registry with durable retirement
+  tombstones. The lock spans preflight through target/state publication and
+  recovery release, preventing stale active writers from following
+  retirement. A missing subject can bootstrap once only from unanimous exact
+  active sealed history. First use atomically publishes a complete
+  generation-zero registry root; failed, empty, damaged, retired, mismatched,
+  or ambiguous bootstrap evidence publishes a blocked subject generation that
+  cannot be retried after evidence removal and is superseded only by exact
+  adoption. Initialized-but-missing, unsafe, or malformed registry state never
+  falls back. A completed apply interrupted before registry publication is
+  recorded as a pending generation bound to its exact receipt and state digest,
+  preserving original-writer recovery without granting observers authority.
+  The verified exact-target receipt is imported into the current private
+  bundle, while discovery and marker presence remain non-authoritative. Source
+  verification remains separate from installation and fresh-session
+  activation.
+- Fixed exact read-only Atlassian Rovo calls being denied as ambiguous project
+  effects before connector authentication or page access could run. The
+  lifecycle hook now recognizes only the reviewed provider-scoped canonical
+  read names in both PreToolUse and PostToolUse; reserved provider families
+  cannot fall through on read-like methods, and writes, unknown or drifted
+  names, browser-control tools, and arbitrary code remain fail-closed.
+  Connector-owned authentication/default-browser redirects stay under
+  connector and workspace policy. This tranche is source-only; installed
+  parity, restart, fresh-session behavior, and live page access remain separate
+  validation gates.
+- Fixed resolved remediation sessions so a later bare `$troubleshoot` keeps the
+  saved profile and admits discovery instead of preemptively creating a fresh
+  tranche and denying every tool. Explicit profile changes preserve the
+  resolved marker through the profile-only handshake; post-exhaustion behavior
+  stays fail-closed. Pending repair now requires an update for an existing
+  task-state file, permits add only when the file is absent, and rejects delete,
+  delete/add replacement, shell rewrites, and unrelated tools.
+- Fixed lifecycle coordinator guidance that advertised a repo-relative checkout
+  helper rejected by the installed hook. Workflow examples now require literal
+  absolute trusted Python and installed-helper paths, and malformed-command
+  feedback distinguishes that trust boundary from project-instructions inspect
+  bundle flags without weakening coordinator validation.
+- Fixed prompt-session intake so an active Task Implementer or Agentic SDLC
+  objective can no longer bind an unrelated fresh Codex session. Capture now
+  requires an exact init or run invocation in that same session; registry
+  entries retain objective identity and writer provenance without acting as a
+  workflow selector. Direct unbound prompts remain capture-inert, and focused
+  regressions cover both workflow owners.
 - Fixed `commit-push` under an active selected-project lifecycle. Exact safe
   Git queries are now read-only, while a fixed-network `origin` query,
   constrained current-branch tracking fetch, and non-force same-branch push
@@ -226,7 +335,15 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
-- Added canonical `evals/trigger-prompts.csv` coverage to all 69 source-owned
+- Added the implicitly invokable `ai-agent-design` skill for provider-neutral
+  production agent-subsystem design. It classifies deterministic code, direct
+  calls, deterministic AI workflows, and agents; applies bounded single- and
+  multi-agent patterns; defines typed task, tool, context, memory, authority,
+  durability, security, evaluation, observability, and governance contracts;
+  and uses `ai-stack` for workload-driven technology selection without taking
+  implementation authority. Whole-product work now follows the non-recursive
+  `design` to `ai-agent-design` to `ai-stack` ownership chain.
+- Added canonical `evals/trigger-prompts.csv` coverage to all 70 source-owned
   skills, migrated legacy Markdown trigger authorities, and retained detailed
   workflow or output-quality scenarios as supplemental cases where needed.
   Invocation policy and workflow behavior are unchanged.
@@ -545,6 +662,33 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Made `python-project` uv-first for new scaffolds while preserving existing
+  package managers unless migration is requested. The skill now treats
+  `pyproject.toml` as dependency intent and generated `uv.lock` as the reviewed
+  install graph, separates development groups from consumer extras, uses
+  locked uv commands in Makefile and CI templates, pins every CI action and uv,
+  binds generated systemd units to the project-owned environment and an
+  explicitly generated importable module, removes overridable
+  virtual-environment deletion, and adds dependency trust, library lower-bound,
+  resolver-failure, trigger, quality, and deterministic contract coverage.
+- Strengthened `ai-agent-design` with an explicit provider-neutral runtime
+  architecture that separates trusted control and policy, model-directed
+  execution, and durable session state behind versioned interfaces. The skill
+  now requires, when applicable, effect-aware checkpoints, bounded agent loops,
+  user and operator controls, recoverable context compaction, governed memory
+  curation,
+  credential mediation, sandbox and artifact boundaries, independent outcome
+  verification, resume compatibility, and ambiguous-effect reconciliation.
+  Additional quality cases cover controlled effects, governed memory, and a
+  deterministic-code lower bound. Direct calls retain their class across
+  bounded transport or schema-repair retries, deterministic-only designs skip
+  AI component selection, and one policy gateway owns approval decisions while
+  tool boundaries enforce them. Provider and runtime technology selection
+  remains owned by `ai-stack` when an AI component is actually required.
+  Alignment now persists authorized effect intent before dispatch, gives the
+  deterministic-only result precedence over an initial stack-review request,
+  and adds a quality case for the non-recursive originating `ai-stack`
+  contract-return path.
 - Shortened and front-loaded all 69 repo-owned skill descriptions while
   preserving their invocation policies, primary trigger intent, adjacent
   routing boundaries, safety constraints, full workflow instructions, and 724

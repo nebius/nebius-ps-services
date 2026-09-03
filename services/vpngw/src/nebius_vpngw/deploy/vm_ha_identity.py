@@ -7,13 +7,18 @@ product-owned member records persisted in both Compute specifications.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import typing as t
 from dataclasses import dataclass
 from enum import Enum
 
+import yaml
+
 from ..config_loader import GatewayGroupSpec
+from ..nebius_pagination import collect_nebius_pages
 from ..schema import VMHARole
 from .vm_ha_cloud import (
     HACloudError,
@@ -28,6 +33,9 @@ from .vm_ha_lifecycle import (
 
 PROVISIONING_MARKER_PREFIX = "# nebius-vpngw-vm-ha-provisioning-v1: "
 PROVISIONING_MARKER_SCHEMA = "nebius-vpngw/vm-ha-provisioning-v1"
+LEGACY_VM_HA_SSH_HOST_KEY_PATH = "/etc/ssh/ssh_host_vpngw_key"
+_MAX_CLOUD_INIT_BYTES = 32 * 1024
+_MAX_RECOVERED_HOST_KEY_BYTES = 16 * 1024
 
 _IdentifierRecord = tuple[int, str, str, str]
 _Topology = tuple[_IdentifierRecord, _IdentifierRecord]
@@ -66,6 +74,119 @@ class FormerVMHAEvidence:
     owner_network_interface_name: str
     members: tuple[_MemberIdentity, _MemberIdentity]
     provenance: FormerVMHAProvenance
+
+
+class _CloudInitRecoveryLoader(yaml.SafeLoader):
+    """Bounded composer used without constructing YAML-tagged Python objects."""
+
+    _node_count = 0
+    _depth = 0
+
+    def compose_node(self, parent: t.Any, index: t.Any) -> t.Any:
+        if self.check_event(yaml.events.AliasEvent):
+            raise yaml.YAMLError("aliases are not accepted")
+        self._depth += 1
+        try:
+            if self._depth > 32:
+                raise yaml.YAMLError("cloud-init nesting is too deep")
+            node = super().compose_node(parent, index)
+            self._node_count += 1
+            if self._node_count > 2048:
+                raise yaml.YAMLError("cloud-init contains too many nodes")
+            return node
+        finally:
+            self._depth -= 1
+
+
+def _yaml_mapping(node: t.Any, *, label: str) -> dict[str, t.Any]:
+    if not isinstance(node, yaml.nodes.MappingNode):
+        raise RuntimeError(f"VM-HA product cloud-init {label} is malformed")
+    values: dict[str, t.Any] = {}
+    for key_node, value_node in node.value:
+        if (
+            not isinstance(key_node, yaml.nodes.ScalarNode)
+            or key_node.tag != "tag:yaml.org,2002:str"
+        ):
+            raise RuntimeError(f"VM-HA product cloud-init {label} has an invalid key")
+        if key_node.value in values:
+            raise RuntimeError(f"VM-HA product cloud-init {label} has a duplicate key")
+        values[key_node.value] = value_node
+    return values
+
+
+def _validate_yaml_tree(node: t.Any) -> None:
+    if isinstance(node, yaml.nodes.MappingNode):
+        for value in _yaml_mapping(node, label="mapping").values():
+            _validate_yaml_tree(value)
+        return
+    if isinstance(node, yaml.nodes.SequenceNode):
+        for value in node.value:
+            _validate_yaml_tree(value)
+        return
+    if isinstance(node, yaml.nodes.ScalarNode):
+        return
+    raise RuntimeError("VM-HA product cloud-init contains an unsupported YAML node")
+
+
+def recover_product_host_key(instance: t.Any, *, path: str) -> bytes:
+    """Extract one exact product-written private host key from bounded cloud-init."""
+
+    cloud_init = str(getattr(getattr(instance, "spec", None), "cloud_init_user_data", "") or "")
+    encoded_cloud_init = cloud_init.encode("utf-8", errors="strict")
+    if (
+        not cloud_init.startswith("#cloud-config\n")
+        or not encoded_cloud_init
+        or len(encoded_cloud_init) > _MAX_CLOUD_INIT_BYTES
+        or "\x00" in cloud_init
+        or cloud_init.count(f"path: {path}") != 1
+        or cloud_init.count(f"HostKey {path}") != 1
+    ):
+        raise RuntimeError("VM-HA product cloud-init host identity is unavailable or ambiguous")
+    loader = _CloudInitRecoveryLoader(cloud_init)
+    try:
+        document = loader.get_single_node()
+    except yaml.YAMLError as error:
+        raise RuntimeError("VM-HA product cloud-init is malformed") from error
+    finally:
+        loader.dispose()
+    _validate_yaml_tree(document)
+    root = _yaml_mapping(document, label="document")
+    write_files = root.get("write_files")
+    if not isinstance(write_files, yaml.nodes.SequenceNode):
+        raise RuntimeError("VM-HA product cloud-init write-files section is malformed")
+    matches: list[dict[str, t.Any]] = []
+    for item in write_files.value:
+        entry = _yaml_mapping(item, label="write-files entry")
+        path_node = entry.get("path")
+        if (
+            isinstance(path_node, yaml.nodes.ScalarNode)
+            and path_node.tag == "tag:yaml.org,2002:str"
+            and path_node.value == path
+        ):
+            matches.append(entry)
+    if len(matches) != 1:
+        raise RuntimeError("VM-HA product cloud-init host identity is unavailable or ambiguous")
+    entry = matches[0]
+    if set(entry) != {"path", "permissions", "owner", "encoding", "content"}:
+        raise RuntimeError("VM-HA product cloud-init host-key entry is malformed")
+
+    def scalar(name: str) -> str:
+        node = entry[name]
+        if not isinstance(node, yaml.nodes.ScalarNode) or node.tag != "tag:yaml.org,2002:str":
+            raise RuntimeError("VM-HA product cloud-init host-key entry is malformed")
+        return node.value
+
+    if scalar("permissions") != "0600" or scalar("owner") != "root:root":
+        raise RuntimeError("VM-HA product cloud-init host-key entry is not owner-only")
+    if scalar("encoding") != "b64":
+        raise RuntimeError("VM-HA product cloud-init host-key entry encoding is unsupported")
+    try:
+        private_key = base64.b64decode(scalar("content"), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise RuntimeError("VM-HA product cloud-init host-key entry is malformed") from error
+    if not private_key or len(private_key) > _MAX_RECOVERED_HOST_KEY_BYTES:
+        raise RuntimeError("VM-HA product cloud-init host-key entry is malformed")
+    return private_key
 
 
 def compute_provisioning_provenance(instance: t.Any) -> FormerVMHAProvenance | None:
@@ -314,31 +435,17 @@ def _read_former_allocation(
         )
 
         service = AllocationServiceClient(client)
-        items: list[t.Any] = []
-        page_token = ""
-        seen_tokens: set[str] = set()
-        for _ in range(100):
-            request = ListAllocationsRequest(
-                parent_id=project_id,
-                page_size=1000,
-                page_token=page_token,
-            )
-            pending_response = service.list(request)
-            response: t.Any = (
-                pending_response.wait()
-                if hasattr(pending_response, "wait")
-                else pending_response
-            )
-            items.extend(list(getattr(response, "items", response) or []))
-            next_page_token = str(getattr(response, "next_page_token", "") or "")
-            if not next_page_token:
-                break
-            if next_page_token in seen_tokens:
-                raise RuntimeError("Former VM-HA allocation pagination repeated a token")
-            seen_tokens.add(next_page_token)
-            page_token = next_page_token
-        else:
-            raise RuntimeError("Former VM-HA allocation pagination exceeded its bound")
+        items = collect_nebius_pages(
+            lambda page_token: service.list(
+                ListAllocationsRequest(
+                    parent_id=project_id,
+                    page_size=1000,
+                    page_token=page_token,
+                )
+            ),
+            context="Former allocation",
+            item_identity=resource_id,
+        )
     except Exception as error:
         raise RuntimeError("Former VM-HA allocation evidence could not be read") from error
 

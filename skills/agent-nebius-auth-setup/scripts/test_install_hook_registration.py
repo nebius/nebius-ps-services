@@ -414,6 +414,61 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertEqual(len(list(self.codex_home.glob("hooks.json.bak.*"))), 1)
 
+    def test_project_spec_manifest_retires_only_obsolete_observer_events(self) -> None:
+        command = (
+            'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/'
+            'project_specs_lifecycle.py"'
+        )
+        unrelated = {
+            "hooks": [{"type": "command", "command": "python3 /other/keep_me.py"}]
+        }
+        self.codex_home.joinpath("hooks.json").write_text(
+            json.dumps(
+                {
+                    "owner": "preserve-me",
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+                                "hooks": [{"type": "command", "command": command}],
+                            },
+                            unrelated,
+                        ],
+                        "PostToolUse": [
+                            {
+                                "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+                                "hooks": [{"type": "command", "command": command}],
+                            }
+                        ],
+                        "Stop": [unrelated],
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        source = self.repo_root / "maintain-project-specs/assets/hooks"
+
+        result = self.run_custom_hook_installer(source, "--register-hooks")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installed = json.loads(
+            self.codex_home.joinpath("hooks.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(installed["owner"], "preserve-me")
+        self.assertEqual(installed["hooks"]["PreToolUse"], [unrelated])
+        self.assertEqual(installed["hooks"]["PostToolUse"], [])
+        self.assertEqual(installed["hooks"]["Stop"], [unrelated])
+        observer_events = [
+            event
+            for event, groups in installed["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "project_specs_lifecycle.py" in hook["command"]
+        ]
+        self.assertEqual(observer_events, ["SessionStart", "UserPromptSubmit"])
+
     def test_targeted_refresh_can_remove_only_status_message_metadata(self) -> None:
         command = (
             'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_status_refresh.py"'
@@ -853,7 +908,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
         self.assertIn(
-            "Summary: files updated 0, unchanged 29; registrations unchanged 16",
+            "Summary: files updated 0, unchanged 31; registrations unchanged 13",
             second.stdout,
         )
         self.assertTrue(
@@ -993,7 +1048,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         )
         self.assertTrue(any("custom_stop.py" in item for item in commands))
         self.assertIn(
-            "Replaced legacy independently registered Stop handlers", result.stdout
+            "Retired exact obsolete managed hook registrations", result.stdout
         )
         self.assertEqual(len(list(self.codex_home.glob("hooks.json.bak.*"))), 1)
 

@@ -376,7 +376,6 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
                         "id": "soperator",
                         "instance_id": "mk8s",
                         "enabled": True,
-                        "install_mode": "production-cluster",
                         "values": {},
                     }
                 ]
@@ -5329,15 +5328,15 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
 
     assert completed is True
     assert (
-        "deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled"
-        in prompted_paths
+        "deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled" in prompted_paths
     )
     assert "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.enabled" in prompted_paths
-    assert "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
+    assert (
+        "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
+    )
     assert all(".nccl." not in path for path in prompted_paths)
     assert (
-        "deploy.targets[0].deployment_testing.mk8s_gpu.health_checker.enabled"
-        not in prompted_paths
+        "deploy.targets[0].deployment_testing.mk8s_gpu.health_checker.enabled" not in prompted_paths
     )
 
 
@@ -5451,9 +5450,7 @@ def test_wizard_does_not_persist_mk8s_nccl_for_single_gpu_shape(
     assert completed is True
     assert all(".nccl." not in path for path in prompted_paths)
     payload = yaml.safe_load(updated_yaml)
-    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"][
-        "mk8s_gpu"
-    ]
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
     assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
     assert "nccl" not in mk8s_gpu_deployment_testing
 
@@ -6694,7 +6691,6 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
                         "id": "soperator",
                         "instance_id": "mk8s",
                         "enabled": True,
-                        "install_mode": "production-cluster",
                         "values": {},
                     }
                 ]

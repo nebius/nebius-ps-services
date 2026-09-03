@@ -232,8 +232,7 @@ charon {
         xfrm_conf_path = STRONGSWAN_CONF_DIR / "xfrm_if.conf"
         if (
             xfrm_conf_path.exists()
-            and xfrm_conf_path.read_text(encoding="utf-8")
-            == _LEGACY_MANAGED_XFRM_IF_CONF
+            and xfrm_conf_path.read_text(encoding="utf-8") == _LEGACY_MANAGED_XFRM_IF_CONF
         ):
             xfrm_conf_path.unlink()
             print(f"[StrongSwan] Removed obsolete managed {xfrm_conf_path}")
@@ -433,4 +432,6 @@ vici {
         # Return interface configuration for external management (XFRM device creation, routing)
         # XFRM interfaces must be created externally before/after strongSwan starts
         return interface_endpoints
+
+
 NETPLAN_DIR = Path("/etc/netplan")

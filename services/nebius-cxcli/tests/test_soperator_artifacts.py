@@ -26,12 +26,12 @@ def test_soperator_cluster_key_prefers_cluster_id() -> None:
 
 def test_soperator_cluster_key_uses_name_when_id_missing() -> None:
     identity = soperator_cluster_artifact_identity(
-        cluster_name="External Soperator Prod",
+        cluster_name="Onboarded Soperator Prod",
         kube_context="ctx",
         target_ref="external",
     )
 
-    assert identity.cluster_key == "external-soperator-prod"
+    assert identity.cluster_key == "onboarded-soperator-prod"
 
 
 def test_soperator_cluster_key_uses_kube_context_when_identity_missing() -> None:
@@ -44,9 +44,9 @@ def test_soperator_cluster_key_uses_kube_context_when_identity_missing() -> None
 
 
 def test_soperator_cluster_key_falls_back_to_target() -> None:
-    identity = soperator_cluster_artifact_identity(target_ref="External Soperator")
+    identity = soperator_cluster_artifact_identity(target_ref="Onboarded Soperator")
 
-    assert identity.cluster_key == "external-soperator"
+    assert identity.cluster_key == "onboarded-soperator"
 
 
 @pytest.mark.parametrize("unsafe_value", (".", ".."))

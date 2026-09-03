@@ -388,17 +388,21 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   investigation report with the exact missing evidence and next action.
 - Never extend or reset a tranche for the same blocker without a new current-task
   user instruction. Optional flags update the saved session profile. An active
-  resize is valid only when both resulting limits remain strictly above the
-  completed-attempt and consumed-active-time counters. If a pending resize
+  or resolved-state profile change is valid only when both resulting limits
+  remain strictly above the completed-attempt and consumed-active-time
+  counters. If a pending resize
   marker becomes invalid, restore every non-profile field to its exact
   pre-resize value and apply the authorized profile fields atomically. A
   deleted marker cannot be reconstructed from bounded authorization metadata;
   restore the exact prior marker or end the session and request a fresh
   user-authorized troubleshoot session without inventing or resetting blocker
-  state. Fresh-state feedback calls its source the prior terminal marker because
-  it can follow either resolved or exhausted state. An exhausted tranche is
-  never reopened; the next user instruction starts fresh state using the saved
-  profile.
+  state. A resolved marker is completed evidence, not a terminal tool lock: a
+  bare later `$troubleshoot` keeps the saved profile and starts discovery
+  without pending authorization or marker replacement. Explicit profile flags
+  use the profile-only handshake while preserving the resolved marker core.
+  Only a post-exhaustion fresh-state handoff calls its source the prior terminal
+  marker. An exhausted tranche is never reopened; the next user instruction
+  starts fresh state using the saved profile.
 - Helper scripts must be safe to rerun and must replace only the exact output
   path selected by the user.
 

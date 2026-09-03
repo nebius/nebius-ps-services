@@ -1,8 +1,0 @@
-apiVersion: v2
-name: soperator-backup-config
-description: K8up schedule configuration for Soperator jail backups.
-type: application
-version: 4.0.2-ps.1
-appVersion: "4.0.2"
-annotations:
-  soperator.nebius.com/upstream-release: "4.0.2"

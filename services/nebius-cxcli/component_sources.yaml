@@ -87,7 +87,7 @@ components:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mysterybox?ref=main
         local: ../../platform-infra/modules/mysterybox
       ui:
-        title: MysteryBox secrets
+        title: "SecretStash secrets (service identifier: mysterybox)"
         group: Security
         enabled: false
       status:
@@ -207,61 +207,6 @@ components:
         namespace: nccl-test
         name: nccl-test
       defaults: {}
-    soperator:
-      source:
-        portable:
-          repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator
-          chart: soperator
-          version: 4.0.2-ps.4
-        local:
-          path: ../../helm-charts/soperator
-      ui:
-        title: Nebius Soperator self-deployment
-        group: Slurm
-        enabled: false
-      release:
-        namespace: soperator
-        name: soperator
-        timeout: 90m
-      wizard_profile: soperator
-      defaults:
-        values.soperator-checks.enabled: false
-        values.soperator-checks.fullnameOverride: soperator-checks
-        values.soperator-checks.serviceMonitor.enabled: false
-        values.soperator-activechecks.enabled: false
-        values.soperator-activechecks.fullnameOverride: soperator-activechecks
-        values.soperator-activechecks.waitForChecks.enabled: false
-        # ActiveChecks are opt-in only. Keep their individual run-on-create
-        # gates false as a second guardrail for benchmark or diagnostic clusters
-        # where operators intentionally enable the child chart.
-        values.soperator-activechecks.checks.all-reduce-perf-nccl-in-docker.runAfterCreation: false
-        values.soperator-activechecks.checks.all-reduce-perf-nccl-with-ib.runAfterCreation: false
-        values.soperator-activechecks.checks.all-reduce-perf-nccl-without-ib.runAfterCreation: false
-        values.soperator-activechecks.checks.cuda-samples.runAfterCreation: false
-        values.soperator-activechecks.checks.dcgmi-diag-r2.runAfterCreation: false
-        values.soperator-activechecks.checks.dcgmi-diag-r3.runAfterCreation: false
-        values.soperator-activechecks.checks.gpu-fryer.runAfterCreation: false
-        values.soperator-activechecks.checks.ib-gpu-perf.runAfterCreation: false
-        values.soperator-activechecks.checks.manage-jail-state.runAfterCreation: false
-        values.soperator-activechecks.checks.mem-perf.runAfterCreation: false
-        values.soperator-activechecks.checks.prepull-container-image.runAfterCreation: false
-        values.soperator-notifier.enabled: false
-        values.soperator-notifier.fullnameOverride: soperator-notifier
-        values.soperator-notifier.slack.mode: existing-webhook
-        values.soperator-notifier.slack.webhookSource: deploy-time
-        values.soperator-notifier.slack.existingSecret: soperator-notifier-slack-webhook
-        values.soperator-notifier.slack.existingSecretKey: url
-        values.soperator-notifier.slack.mysterybox.property: url
-        values.soperator-backup-config.enabled: false
-        values.soperator-backup-config.fullnameOverride: soperator-jail-backup
-        values.soperator-backup-config.secret.name: jail-backup
-        values.soperator-backup-config.secret.keys.accessKeyID: aws-access-key-id
-        values.soperator-backup-config.secret.keys.secretAccessKey: aws-access-secret-key
-        values.soperator-backup-config.secret.keys.backupPassword: backup-password
-        values.soperator-dcgm-exporter.enabled: false
-        values.soperator-dcgm-exporter.fullnameOverride: soperator-dcgm-exporter
-        values.soperator-dcgm-exporter.serviceMonitor.enabled: false
-        values.certManager.privateKey.rotationPolicy: Always
     csi-driver-nfs:
       source:
         portable:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coordinate canonical project specs, migration, and lifecycle receipts."""
+"""Inspect, validate, publish, and explicitly migrate canonical project specs."""
 
 from __future__ import annotations
 
@@ -10,18 +10,13 @@ import sys
 
 from project_specs_lib.contracts import (
     ProjectSpecError,
+    _read_file,
     inspect_project,
     validate_project,
 )
-from project_specs_lib.lifecycle import (
-    open_implementation,
-    plan,
-    seal,
-    start_prompt,
-    waive,
-    write_validation_receipt,
-)
+from project_specs_lib.lifecycle import write_validation_receipt
 from project_specs_lib.migration import migrate_project, recover_migration
+from project_specs_lib.transaction import publish_spec_pair
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -36,37 +31,14 @@ def _parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--project-root", type=Path, required=True)
     validate_parser.add_argument("--output", type=Path)
     validate_parser.add_argument("--session-id")
-    validate_parser.add_argument("--task-implementer-workspace", type=Path)
-    validate_parser.add_argument("--task-implementer-run-id")
-    start_parser = subparsers.add_parser("start-prompt")
-    start_parser.add_argument("--project-root", type=Path, required=True)
-    start_parser.add_argument("--session-id", required=True)
-    start_parser.add_argument("--turn-id", required=True)
-    for name in ("plan", "open", "seal", "waive"):
-        command = subparsers.add_parser(name)
-        command.add_argument("--project-root", type=Path, required=True)
-        command.add_argument("--session-id", required=True)
-        turn = command.add_mutually_exclusive_group(required=True)
-        turn.add_argument("--turn-id")
-        turn.add_argument("--turn-token")
-    subparsers.choices["plan"].add_argument("--rules-file", type=Path, required=True)
-    subparsers.choices["plan"].add_argument(
-        "--render-state-file", type=Path, required=True
-    )
-    subparsers.choices["plan"].add_argument(
-        "--project-instructions-private-root", type=Path, required=True
-    )
-    subparsers.choices["seal"].add_argument(
-        "--project-instructions-state", type=Path, required=True
-    )
-    subparsers.choices["seal"].add_argument(
-        "--project-instructions-private-root", type=Path, required=True
-    )
-    subparsers.choices["waive"].add_argument(
-        "--reason",
-        choices=("documentation-only", "read-only", "non-project", "project-policy"),
-        required=True,
-    )
+    publish_parser = subparsers.add_parser("publish")
+    publish_parser.add_argument("--project-root", type=Path, required=True)
+    publish_parser.add_argument("--requirements-candidate", type=Path, required=True)
+    publish_parser.add_argument("--design-candidate", type=Path, required=True)
+    publish_parser.add_argument("--expected-head", required=True)
+    publish_parser.add_argument("--expected-requirements-sha256", required=True)
+    publish_parser.add_argument("--expected-design-sha256", required=True)
+    publish_parser.add_argument("--operation-id", required=True)
     return parser
 
 
@@ -81,68 +53,38 @@ def main(argv: list[str]) -> int:
                     args.project_root,
                     args.output,
                     args.session_id,
-                    task_implementer_workspace=args.task_implementer_workspace,
-                    task_implementer_run_id=args.task_implementer_run_id,
                 )
                 if args.output is not None
                 else validate_project(args.project_root)
             )
         elif args.command == "migrate":
             output = migrate_project(args.project_root)
-        elif args.command == "recover":
-            output = recover_migration(args.project_root)
-        elif args.command == "start-prompt":
-            output = start_prompt(args.project_root, args.session_id, args.turn_id)
-        elif args.command == "plan":
-            output = plan(
-                args.project_root,
-                args.session_id,
-                args.turn_id,
-                turn_token=args.turn_token,
-                rules_file=args.rules_file,
-                render_state_file=args.render_state_file,
-                project_instructions_private_root=(
-                    args.project_instructions_private_root
-                ),
+        elif args.command == "publish":
+            requirements, _requirements_text = _read_file(
+                args.requirements_candidate, "requirements candidate"
             )
-        elif args.command == "open":
-            output = open_implementation(
-                args.project_root,
-                args.session_id,
-                args.turn_id,
-                turn_token=args.turn_token,
+            design, _design_text = _read_file(
+                args.design_candidate, "design candidate"
             )
-        elif args.command == "seal":
-            output = seal(
+            output = publish_spec_pair(
                 args.project_root,
-                args.session_id,
-                args.turn_id,
-                turn_token=args.turn_token,
-                project_instructions_state=args.project_instructions_state,
-                project_instructions_private_root=(
-                    args.project_instructions_private_root
-                ),
+                requirements_candidate=requirements,
+                design_candidate=design,
+                expected_git_head=args.expected_head,
+                expected_requirements_sha256=args.expected_requirements_sha256,
+                expected_design_sha256=args.expected_design_sha256,
+                operation_id=args.operation_id,
             )
         else:
-            output = waive(
-                args.project_root,
-                args.session_id,
-                args.turn_id,
-                args.reason,
-                turn_token=args.turn_token,
-            )
+            output = recover_migration(args.project_root)
     except (ProjectSpecError, OSError) as error:
         code = (
             error.code if isinstance(error, ProjectSpecError) else "ENVIRONMENT_BLOCKER"
         )
         message = error.message if isinstance(error, ProjectSpecError) else str(error)
-        print(
-            json.dumps(
-                {"status": "blocked", "code": code, "error": message},
-                sort_keys=True,
-            )
-        )
-        return 2
+        status = "advisory" if args.command in {"inspect", "validate"} else "blocked"
+        print(json.dumps({"status": status, "code": code, "error": message}, sort_keys=True))
+        return 0 if status == "advisory" else 2
     print(json.dumps(output, indent=2, sort_keys=True))
     return 0
 

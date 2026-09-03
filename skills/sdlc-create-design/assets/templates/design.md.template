@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD003 MD022 MD033 MD041 -->
-<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 ---
-schema: maintain-project-specs/design-v1
+schema: maintain-project-specs/design-v2
 project: "<project-name>"
 owner: "<owner-or-team>"
 status: "draft"
@@ -101,7 +101,7 @@ conditions.
 
 ## Feature Designs
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=draft delivery=not-started priority=P0 version=1 -->
 ### FEAT-001: TODO feature name
 
 #### Requirements Covered
@@ -170,6 +170,14 @@ Tests: passing
 Evaluation: passing
 Commit: required
 UAT impact: included
+
+#### Implementation Evidence
+
+Not implemented yet.
+
+#### Verification Evidence
+
+Not independently verified yet.
 <!-- /FEATURE: FEAT-001 -->
 
 ## Cross-Cutting Validation Strategy

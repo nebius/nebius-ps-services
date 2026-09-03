@@ -9,10 +9,14 @@ from typing import Any
 
 import yaml
 
+from .component_instances import normalize_component_token
+from .soperator_wizard import parse_soperator_wizard_payload
+
 REPO_PREFIX = "git::https://github.com/nebius/nebius-ps-services.git//"
 TREE_PREFIX = "https://github.com/nebius/nebius-ps-services/tree/"
 BUNDLED_COMPONENT_SOURCES_SUFFIX = "nebius_cxcli/component_sources.yaml"
 BUNDLED_COMPONENT_CLI_SETTINGS_SUFFIX = "nebius_cxcli/component_cli_settings.yaml"
+BUNDLED_SOPERATOR_WIZARD_SUFFIX = "nebius_cxcli/soperator_wizard.yaml"
 
 
 def _looks_like_local_path(source: str) -> bool:
@@ -53,6 +57,25 @@ def _app_charts(payload: dict[str, Any], *, subject: str) -> list[tuple[str, dic
     return normalized
 
 
+def _validate_generic_catalog_excludes_soperator(
+    payload: dict[str, Any],
+    *,
+    subject: str,
+    catalog_label: str,
+) -> None:
+    components = payload.get("components")
+    if not isinstance(components, dict):
+        return
+    apps = components.get("apps")
+    if not isinstance(apps, dict):
+        return
+    if any(normalize_component_token(component_id) == "soperator" for component_id in apps):
+        raise ValueError(
+            f"{subject} {catalog_label} must not declare Soperator; "
+            "use the dedicated Soperator lifecycle contract"
+        )
+
+
 def render_release_catalog(
     *,
     input_path: Path,
@@ -60,6 +83,11 @@ def render_release_catalog(
     release_ref: str,
 ) -> None:
     payload = _load_yaml(input_path)
+    _validate_generic_catalog_excludes_soperator(
+        payload,
+        subject=str(input_path),
+        catalog_label="component sources",
+    )
     modules = _infra_modules(payload, subject=str(input_path))
     charts = _app_charts(payload, subject=str(input_path))
     for module in modules:
@@ -162,6 +190,11 @@ def _validate_chart_sources(
 
 def verify_catalog(*, catalog_path: Path, release_ref: str) -> None:
     payload = _load_yaml(catalog_path)
+    _validate_generic_catalog_excludes_soperator(
+        payload,
+        subject=str(catalog_path),
+        catalog_label="component sources",
+    )
     modules = _infra_modules(payload, subject=str(catalog_path))
     charts = _app_charts(payload, subject=str(catalog_path))
     _validate_module_sources(modules, subject=str(catalog_path), release_ref=release_ref)
@@ -170,7 +203,18 @@ def verify_catalog(*, catalog_path: Path, release_ref: str) -> None:
 
 def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
     payload = _load_bundled_wheel_catalog(wheel_path)
-    _load_bundled_wheel_cli_settings(wheel_path)
+    cli_settings_payload = _load_bundled_wheel_cli_settings(wheel_path)
+    _load_bundled_wheel_soperator_wizard(wheel_path)
+    _validate_generic_catalog_excludes_soperator(
+        payload,
+        subject=str(wheel_path),
+        catalog_label="bundled component sources",
+    )
+    _validate_generic_catalog_excludes_soperator(
+        cli_settings_payload,
+        subject=str(wheel_path),
+        catalog_label="bundled component CLI settings",
+    )
     modules = _infra_modules(payload, subject=str(wheel_path))
     charts = _app_charts(payload, subject=str(wheel_path))
     _validate_module_sources(modules, subject=str(wheel_path), release_ref=release_ref)
@@ -179,7 +223,18 @@ def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
 
 def verify_wheel_bundle(*, wheel_path: Path) -> None:
     payload = _load_bundled_wheel_catalog(wheel_path)
-    _load_bundled_wheel_cli_settings(wheel_path)
+    cli_settings_payload = _load_bundled_wheel_cli_settings(wheel_path)
+    _load_bundled_wheel_soperator_wizard(wheel_path)
+    _validate_generic_catalog_excludes_soperator(
+        payload,
+        subject=str(wheel_path),
+        catalog_label="bundled component sources",
+    )
+    _validate_generic_catalog_excludes_soperator(
+        cli_settings_payload,
+        subject=str(wheel_path),
+        catalog_label="bundled component CLI settings",
+    )
     modules = _infra_modules(payload, subject=str(wheel_path))
     charts = _app_charts(payload, subject=str(wheel_path))
     _validate_no_local_sources(modules=modules, charts=charts, subject=str(wheel_path))
@@ -223,6 +278,21 @@ def _load_bundled_wheel_cli_settings(wheel_path: Path) -> dict[str, Any]:
     )
 
 
+def _load_bundled_wheel_soperator_wizard(wheel_path: Path) -> dict[str, Any]:
+    payload = _load_bundled_wheel_yaml(
+        wheel_path,
+        suffix=BUNDLED_SOPERATOR_WIZARD_SUFFIX,
+        label="Soperator wizard settings",
+    )
+    try:
+        parse_soperator_wizard_payload(payload)
+    except ValueError as exc:
+        raise ValueError(
+            f"{wheel_path} bundled Soperator wizard settings are invalid: {exc}"
+        ) from exc
+    return payload
+
+
 def _load_bundled_wheel_yaml(wheel_path: Path, *, suffix: str, label: str) -> dict[str, Any]:
     with zipfile.ZipFile(wheel_path) as zf:
         candidate_names = [name for name in zf.namelist() if name.endswith(suffix)]
@@ -252,14 +322,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     verify_wheel_parser = subparsers.add_parser(
         "verify-wheel",
-        help="Verify bundled component sources and CLI settings inside a wheel.",
+        help="Verify bundled component sources and CLI settings.",
     )
     verify_wheel_parser.add_argument("--wheel", required=True, dest="wheel_path")
     verify_wheel_parser.add_argument("--release-ref", required=True)
 
     verify_wheel_bundle_parser = subparsers.add_parser(
         "verify-wheel-bundle",
-        help="Verify a wheel bundles component_sources.yaml and component_cli_settings.yaml.",
+        help="Verify a wheel bundles component sources and CLI settings.",
     )
     verify_wheel_bundle_parser.add_argument("--wheel", required=True, dest="wheel_path")
     return parser

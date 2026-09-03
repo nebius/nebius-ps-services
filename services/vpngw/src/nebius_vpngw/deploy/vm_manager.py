@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import importlib.resources as resources
 import ipaddress
 import json
@@ -8,6 +9,7 @@ import math
 import os
 import re
 import subprocess
+import sys
 import textwrap
 import time
 import typing as t
@@ -15,6 +17,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..config_loader import GatewayGroupSpec
+from ..nebius_auth import (
+    build_operator_sdk_client,
+    error_chain_has_cli_authentication_failure,
+)
+from ..nebius_pagination import collect_nebius_pages, nebius_resource_id
 from ..schema import (
     VMHAMigrationRouteBinding,
     VMHARole,
@@ -22,10 +29,27 @@ from ..schema import (
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
+from ..vm_ha_credentials import (
+    VMHACredentialIdentity,
+    VMHACredentialSet,
+    credential_bindings_from_runtime,
+    installed_vm_ha_credential_path,
+)
+from .ordinary_ssh_enrollment import (
+    OrdinarySSHEnrollmentTarget,
+    enroll_ordinary_ssh_host_key,
+)
+from .ssh_client_auth import SSHClientAuth, resolve_ssh_client_auth
 from .ssh_policy import (
     VM_HA_SSH_HOST_KEY_PATH,
+    SSHHostKeyEnrollment,
+    SSHHostKeyRecovery,
     SSHTrustPolicy,
+    TrustedSSHMemberImport,
+    VMHASSHTrustScope,
     build_openssh_base_command,
+    managed_ssh_trust_member,
+    require_vm_ha_ssh_policy,
 )
 from .vm_diff import VMDiffAnalyzer, VMSpec
 from .vm_ha_cloud import (
@@ -37,23 +61,31 @@ from .vm_ha_cloud import (
     wait_vm_ha_operation,
 )
 from .vm_ha_identity import (
+    LEGACY_VM_HA_SSH_HOST_KEY_PATH,
     PROVISIONING_MARKER_PREFIX,
     FormerVMHAEvidence,
     FormerVMHAProvenance,
     LegacyVMHAIdentity,
     classify_former_vm_ha_evidence,
     compute_provisioning_provenance,
+    parse_provisioning_marker,
+    recover_product_host_key,
     render_provisioning_marker,
+    validate_provisioning_marker,
 )
 from .vm_ha_lifecycle import (
     VMHALifecycleJournal,
     VMHALifecycleMember,
+    VMHALifecycleSnapshot,
     VMHALifecycleState,
     VMHALifecycleStatus,
+    VMHAMigrationTransaction,
     lifecycle_member_map,
     normalize_vm_ha_observation,
     vm_ha_activation_effect_is_host_only,
     vm_ha_effective_resource_bindings,
+    vm_ha_missing_standby_disk_name_binding_key,
+    vm_ha_missing_standby_replacement_effect,
     vm_ha_observation_changed_paths,
     vm_ha_passive_replacement_binding_key,
     vm_ha_passive_replacement_cycle_for_approval,
@@ -64,6 +96,9 @@ from .vm_ha_lifecycle import (
 
 if t.TYPE_CHECKING:
     from .vm_ha_cloud import VMHACloudAdapter
+
+
+_SDK_CLIENT_UNSET = object()
 
 
 def _read_firewall_setup_script() -> str:
@@ -103,6 +138,18 @@ class VMProvisioningConfig:
     disk_type: str
     disk_block_bytes: int
     cloud_init: str
+
+
+@dataclass(frozen=True)
+class PublicAllocationCandidate:
+    """One stable subnet-bound allocation safe to offer in an interactive selector."""
+
+    allocation_id: str
+    name: str
+    address: str
+    resource_version: int
+    assigned_instance_index: int | None = None
+    assigned_nic_index: int | None = None
 
 
 class VMProvisioningResult(dict[str, str]):
@@ -176,24 +223,34 @@ class VMManager:
     def __init__(
         self,
         project_id: str | None,
-        zone: str | None,
+        region: str | None,
         auth_token: str | None = None,
         tenant_id: str | None = None,
         region_id: str | None = None,
         ssh_policy: SSHTrustPolicy | None = None,
         management_key_path: Path | None = None,
+        management_public_key: str | None = None,
+        vm_ha_credentials: VMHACredentialSet | None = None,
     ) -> None:
         self.project_id = project_id
-        self.zone = zone
+        self.region = region
         self.auth_token = auth_token
         self.tenant_id = tenant_id
         self.region_id = region_id
         self._ssh_policy = ssh_policy
         self._management_key_path = management_key_path
+        self._management_public_key = management_public_key
+        self._ssh_client_auth: SSHClientAuth | None = None
+        self._vm_ha_credentials = vm_ha_credentials
         self.diff_analyzer = VMDiffAnalyzer()
         self._private_alloc_ids: dict[str, list[str]] = {}
         self._vm_ha_shared_allocation_id: str | None = None
         self._former_vm_ha_snapshot: dict[str, tuple[t.Any, str]] | None = None
+        self._ordinary_ssh_preflight_snapshot: dict[str, tuple[t.Any, str]] | None = None
+        self._ordinary_ssh_binding_assertions: dict[str, t.Callable[[], None]] = {}
+        self._vm_ha_ssh_preflight_snapshot: dict[str, tuple[t.Any, str]] | None = None
+        self._vm_ha_ssh_binding_assertions: dict[str, t.Callable[[], None]] = {}
+        self._vm_ha_ssh_lifecycle_snapshot: VMHALifecycleSnapshot | None = None
         self._former_vm_ha_evidence: FormerVMHAEvidence | None = None
         self._former_vm_ha_candidate_provenance: FormerVMHAProvenance | None = None
         self._former_vm_ha_lifecycle: VMHALifecycleState | None = None
@@ -201,7 +258,54 @@ class VMManager:
         self._vm_ha_journal: VMHALifecycleJournal | None = None
         self._vm_ha_effect_spec: GatewayGroupSpec | None = None
         self._vm_ha_effect_prefixes: list[str] | None = None
+        self._vm_ha_accepted_resource_ids: dict[str, str] = {}
         self._reported_gateway_network_messages: set[str] = set()
+        self._sdk_client: t.Any = _SDK_CLIENT_UNSET
+        self._closed = False
+
+    def _require_ssh_client_auth(self) -> SSHClientAuth | None:
+        if not str(self._management_public_key or "").strip():
+            return None
+        if self._ssh_client_auth is None:
+            self._ssh_client_auth = resolve_ssh_client_auth(
+                self._management_public_key,
+                explicit_private_key=self._management_key_path,
+            )
+        return self._ssh_client_auth
+
+    @property
+    def ssh_client_auth(self) -> SSHClientAuth | None:
+        return self._require_ssh_client_auth()
+
+    def __enter__(self) -> VMManager:
+        if self._closed:
+            raise RuntimeError("VMManager is closed")
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: t.Any,
+    ) -> None:
+        del exc_type, exc_value, traceback
+        self.close()
+
+    def close(self) -> None:
+        """Close the owned Nebius SDK at most once without changing command outcome."""
+
+        if self._closed:
+            return
+        self._closed = True
+        if self._sdk_client is _SDK_CLIENT_UNSET:
+            return
+        try:
+            self._sdk_client.sync_close()
+        except Exception:
+            try:
+                sys.stderr.write("[VMManager] Warning: failed to close Nebius SDK resources.\n")
+            except Exception:
+                pass
 
     def _report_gateway_network_once(self, message: str) -> None:
         """Emit one network-resolution notice per manager."""
@@ -224,6 +328,12 @@ class VMManager:
         if self._vm_ha_journal is not None and self._vm_ha_journal is not journal:
             raise RuntimeError("VM-HA lifecycle journal cannot be rebound")
         self._vm_ha_journal = journal
+
+    def set_ssh_policy(self, policy: SSHTrustPolicy) -> None:
+        """Rebind SSH after an authorized Compute transition and recheck its new evidence."""
+
+        policy.assert_current()
+        self._ssh_policy = policy
 
     def _vm_ha_resource_binding(self, key: str) -> str | None:
         journal = self._vm_ha_journal
@@ -261,7 +371,7 @@ class VMManager:
         if not isinstance(members, list):
             raise RuntimeError("VM-HA cloud observation has no member set")
         name = matched.group(1) if matched is not None else ""
-        if not name and effect.startswith("replace-failed-"):
+        if not name and effect.startswith(("replace-failed-", "replace-missing-")):
             candidate_names = [
                 str(item.get("instance_name") or "") for item in members if isinstance(item, dict)
             ]
@@ -277,7 +387,7 @@ class VMManager:
                 if candidate
                 and any(
                     re.fullmatch(
-                        rf"replace-failed-(?:[2-9][0-9]*-)?{re.escape(candidate)}-{action}",
+                        rf"replace-(?:failed|missing)-(?:[2-9][0-9]*-)?{re.escape(candidate)}-{action}",
                         effect,
                     )
                     for action in replacement_actions
@@ -346,7 +456,7 @@ class VMManager:
                 )
             )
         if re.fullmatch(
-            r"(?:provision-.+|replace-failed-(?:[2-9][0-9]*-)?.+-create)-compute",
+            r"(?:provision-.+|replace-(?:failed|missing)-(?:[2-9][0-9]*-)?.+-create)-compute",
             effect,
         ):
             index = self._vm_ha_effect_member_index(effect, observation)
@@ -365,6 +475,7 @@ class VMManager:
                         f"{prefix}/primary_allocation_id",
                         f"{prefix}/public_allocation_id",
                         f"{prefix}/public_ip",
+                        f"{prefix}/state",
                         f"{prefix}/subnet_id",
                     }
                 )
@@ -372,7 +483,7 @@ class VMManager:
         if (
             re.fullmatch(r"provision-.+-boot-disk", effect)
             or re.fullmatch(
-                r"replace-failed-(?:[2-9][0-9]*-)?.+-(?:delete|create)-boot-disk",
+                r"replace-(?:failed|missing)-(?:[2-9][0-9]*-)?.+-(?:delete|create)-boot-disk",
                 effect,
             )
             or re.fullmatch(
@@ -427,6 +538,32 @@ class VMManager:
             raise RuntimeError(f"VM-HA observation has no canonical value for {path}")
         return values[0]
 
+    @staticmethod
+    def _vm_ha_operation_service(client: t.Any, effect: str) -> t.Any:
+        """Bind accepted-operation lookup to the service that created it."""
+
+        if effect == "attach-shared-allocation-active" or (
+            effect.endswith("-compute")
+            and effect.startswith(("provision-", "replace-failed-", "replace-missing-"))
+        ):
+            from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
+
+            return InstanceServiceClient(client).operation_service()
+        if effect.endswith("-boot-disk") and effect.startswith(
+            ("provision-", "replace-failed-", "replace-missing-")
+        ):
+            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+
+            return DiskServiceClient(client).operation_service()
+        if effect == "provision-shared-allocation" or re.fullmatch(
+            r"provision-.+-eth[0-9]+-(?:public|primary)-allocation",
+            effect,
+        ):
+            from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
+
+            return AllocationServiceClient(client).operation_service()
+        raise RuntimeError(f"VM-HA cloud effect {effect} has no operation service binding")
+
     def _validate_vm_ha_effect_postcondition(
         self,
         effect: str,
@@ -453,7 +590,7 @@ class VMManager:
                 raise RuntimeError("VM-HA Compute delete footprint changed unexpectedly")
             return
         if re.fullmatch(
-            r"(?:provision-.+|replace-failed-(?:[2-9][0-9]*-)?.+-create)-compute",
+            r"(?:provision-.+|replace-(?:failed|missing)-(?:[2-9][0-9]*-)?.+-create)-compute",
             effect,
         ):
             index = self._vm_ha_effect_member_index(effect, observation)
@@ -643,14 +780,11 @@ class VMManager:
             client = self._get_client()
             if client is None:
                 raise RuntimeError("VM-HA accepted cloud operation cannot be resumed")
-            from nebius.api.nebius.common.v1 import (  # type: ignore
-                GetOperationRequest,
-                OperationServiceClient,
-            )
+            from nebius.api.nebius.common.v1 import GetOperationRequest  # type: ignore
 
             try:
                 accepted = (
-                    OperationServiceClient(client)
+                    self._vm_ha_operation_service(client, effect)
                     .get(
                         GetOperationRequest(id=transaction.accepted_cloud_operation_id),
                         **vm_ha_request_kwargs(),
@@ -662,6 +796,15 @@ class VMManager:
                     raise
             else:
                 wait_vm_ha_operation(accepted)
+                successful = getattr(accepted, "successful", None)
+                if not callable(successful) or not successful():
+                    raise RuntimeError("VM-HA accepted cloud operation did not succeed")
+                resource = getattr(getattr(accepted, "result", None), "resource", None)
+                resource_id = self._resource_id(resource) or str(
+                    getattr(accepted, "resource_id", "") or ""
+                )
+                if resource_id:
+                    self._vm_ha_accepted_resource_ids[effect] = resource_id
         return operation_id
 
     def _complete_vm_ha_effect(
@@ -777,6 +920,8 @@ class VMManager:
         ):
             raise RuntimeError("VM-HA approved current state changed before mutation")
         observed_bindings = self._observation_resource_bindings(observation)
+        if self._vm_ha_credentials is not None:
+            observed_bindings.update(self._vm_ha_credentials.resource_bindings())
         expected_bindings = vm_ha_effective_resource_bindings(dict(transaction.resource_bindings))
         for key, value in expected_bindings.items():
             if not vm_ha_resource_binding_matches_observation(
@@ -886,7 +1031,7 @@ class VMManager:
         ):
             raise RuntimeError("VM-HA activation resume requires an exact v4 checkpoint")
         state = journal.state
-        transaction = state.transaction
+        transaction = t.cast(VMHAMigrationTransaction, state.transaction)
         assert transaction is not None
         if transaction.pending_effect is not None and not self._is_vm_ha_activation_effect(
             transaction.pending_effect
@@ -946,6 +1091,8 @@ class VMManager:
                 raise RuntimeError("VM-HA cloud state changed before route activation")
 
         observed_bindings = self._observation_resource_bindings(before)
+        if self._vm_ha_credentials is not None:
+            observed_bindings.update(self._vm_ha_credentials.resource_bindings())
         for key, value in vm_ha_effective_resource_bindings(
             dict(transaction.resource_bindings)
         ).items():
@@ -1004,6 +1151,19 @@ class VMManager:
             .wait()
         )
 
+    def _require_ha_compute_absent(self, instance_id: str) -> None:
+        """Accept absence only from the typed lifecycle-bound Compute lookup."""
+
+        try:
+            self.get_ha_instance(instance_id)
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return
+            raise RuntimeError(
+                "VM-HA missing standby Compute identity could not be classified"
+            ) from error
+        raise RuntimeError("VM-HA lifecycle-bound standby Compute still exists")
+
     def _get_ha_instance_by_name(self, client: t.Any, name: str) -> t.Any:
         """Resolve one HA Compute identity without treating SDK errors as absence."""
         if not self.project_id:
@@ -1019,11 +1179,21 @@ class VMManager:
             )
             .wait()
         )
+        metadata = getattr(instance, "metadata", None)
         instance_id = self._resource_id(instance)
-        if not instance_id:
-            raise RuntimeError(f"VM-HA Compute {name} has no authoritative identity")
+        if (
+            not instance_id
+            or str(getattr(metadata, "name", "") or "") != name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"VM-HA Compute {name} returned an inexact identity")
         authoritative = self.get_ha_instance(instance_id)
-        if self._resource_id(authoritative) != instance_id:
+        authoritative_metadata = getattr(authoritative, "metadata", None)
+        if (
+            self._resource_id(authoritative) != instance_id
+            or str(getattr(authoritative_metadata, "name", "") or "") != name
+            or str(getattr(authoritative_metadata, "parent_id", "") or "") != self.project_id
+        ):
             raise RuntimeError(f"VM-HA Compute {name} changed identity during re-read")
         return authoritative
 
@@ -1036,7 +1206,7 @@ class VMManager:
         from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
 
         try:
-            return (
+            disk = (
                 DiskServiceClient(client)
                 .get_by_name(
                     GetByNameRequest(parent_id=self.project_id, name=name),
@@ -1048,6 +1218,38 @@ class VMManager:
             if nebius_request_error_code_is(error, "NOT_FOUND"):
                 return None
             raise RuntimeError(f"VM-HA disk {name} could not be classified") from error
+        metadata = getattr(disk, "metadata", None)
+        if (
+            not self._resource_id(disk)
+            or str(getattr(metadata, "name", "") or "") != name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"VM-HA disk {name} returned an inexact identity")
+        return disk
+
+    def _get_ha_disk_by_id(self, client: t.Any, disk_id: str) -> t.Any | None:
+        """Resolve one exact HA disk, treating only typed NOT_FOUND as absence."""
+
+        if not disk_id:
+            raise ValueError("VM-HA disk lookup requires an exact ID")
+        from nebius.api.nebius.compute.v1 import (  # type: ignore
+            DiskServiceClient,
+            GetDiskRequest,
+        )
+
+        try:
+            return (
+                DiskServiceClient(client)
+                .get(
+                    GetDiskRequest(id=disk_id),
+                    **vm_ha_request_kwargs(),
+                )
+                .wait()
+            )
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError("VM-HA disk identity could not be classified") from error
 
     def _require_retained_allocation(
         self,
@@ -1055,8 +1257,12 @@ class VMManager:
         allocation_id: str,
         *,
         require_detached: bool,
+        expected_owner: AllocationOwner | None = None,
     ) -> t.Any:
         """Reread one exact retained allocation without name-based adoption."""
+
+        if require_detached and expected_owner is not None:
+            raise ValueError("VM-HA retained allocation owner requirement is ambiguous")
 
         from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
 
@@ -1074,7 +1280,14 @@ class VMManager:
         parent_id = str(getattr(getattr(allocation, "metadata", None), "parent_id", "") or "")
         if parent_id and parent_id != (self.project_id or ""):
             raise RuntimeError("VM-HA retained allocation parent project changed")
-        if require_detached and self._allocation_is_attached(allocation):
+        if expected_owner is not None:
+            from .vm_ha_cloud import allocation_observation
+
+            if allocation_observation(allocation_id, allocation).owner != expected_owner:
+                raise RuntimeError(
+                    "VM-HA retained allocation is not attached to the accepted Compute"
+                )
+        elif require_detached and self._allocation_is_attached(allocation):
             raise RuntimeError("VM-HA retained allocation did not detach from the retired passive")
         return allocation
 
@@ -1220,10 +1433,6 @@ class VMManager:
             sleeper=sleeper,
         )
 
-    @staticmethod
-    def _vm_ha_nebius_credentials_path() -> str:
-        return "/etc/nebius-vpngw/vm-ha/nebius-credentials.json"
-
     def _vm_ha_migration_route_bindings(
         self,
         spec: GatewayGroupSpec,
@@ -1361,6 +1570,12 @@ class VMManager:
         route_targets = self._vm_ha_route_targets
         if vm_ha is None or not allocation_id or not route_targets:
             raise RuntimeError("VM-HA runtime binding requires complete provisioning intent")
+        credential_set = self._vm_ha_credentials
+        if credential_set is None or credential_set.project_id != self.project_id:
+            raise RuntimeError("VM-HA runtime credential identity is unavailable")
+        credentials_by_node: dict[str, VMHACredentialIdentity] = credential_set.by_node()
+        if set(credentials_by_node) != {member.node_id for member in vm_ha.members}:
+            raise RuntimeError("VM-HA runtime credential member identity is incomplete")
         allocation = self.get_ha_allocation(allocation_id)
         if self._resource_id(allocation) != allocation_id:
             raise RuntimeError("VM-HA shared allocation changed identity during final re-read")
@@ -1375,6 +1590,7 @@ class VMManager:
         nodes: list[VMHARuntimeNodeBinding] = []
         alias_owners: list[AllocationOwner] = []
         for member in vm_ha.members:
+            credential = credentials_by_node[member.node_id]
             instance_name = f"{spec.name}-{member.instance_index}"
             instance = self._get_ha_instance_by_name(client, instance_name)
             compute_id = self._resource_id(instance)
@@ -1408,7 +1624,12 @@ class VMManager:
                     compute_id=compute_id,
                     network_interface_name=interface_name,
                     peer_endpoint=f"{endpoint_address}:9443",
-                    nebius_credentials_path=self._vm_ha_nebius_credentials_path(),
+                    nebius_credentials_path=installed_vm_ha_credential_path(
+                        node_id=member.node_id,
+                        generation_id=vm_ha.generation.generation_id,
+                        credential_sha256=credential.credential_sha256,
+                    ),
+                    nebius_credentials_sha256=credential.credential_sha256,
                 )
             )
 
@@ -1448,6 +1669,9 @@ class VMManager:
             configuration_digest=digests.configuration,
             static_routes_digest=digests.static_routes,
             bgp_policy_digest=digests.bgp_policy,
+            nebius_project_id=credential_set.project_id,
+            nebius_service_account_id=credential_set.service_account_id,
+            nebius_authorized_key_id=credential_set.authorized_key_id,
         )
 
     @staticmethod
@@ -1700,12 +1924,20 @@ class VMManager:
         route_manager = RouteManager(project_id=self.project_id)
 
         def observe() -> tuple[VMHARouteTarget, ...]:
-            observed = subnet_client.list_by_network(
-                ListSubnetsByNetworkRequest(network_id=network_id),
-                **vm_ha_request_kwargs(),
-            ).wait()
+            subnets = collect_nebius_pages(
+                lambda page_token: subnet_client.list_by_network(
+                    ListSubnetsByNetworkRequest(
+                        network_id=network_id,
+                        page_size=1000,
+                        page_token=page_token,
+                    ),
+                    **vm_ha_request_kwargs(),
+                ),
+                context="VM HA route subnet",
+                item_identity=nebius_resource_id,
+            )
             return route_manager.resolve_vm_ha_route_targets(
-                getattr(observed, "items", ()) or (),
+                subnets,
                 local_prefixes,
                 project_id=self.project_id or "",
                 target_network_id=network_id,
@@ -1844,9 +2076,15 @@ class VMManager:
                 results.append((inst_name, diff))
                 continue
 
-            # Get boot disk
-            boot_disk_name = f"{inst_name}-boot"
-            disk_obj = self._get_disk_by_name(client, boot_disk_name)
+            # Resolve an HA boot disk from the Compute attachment. Replacement
+            # disks are cycle-qualified, while retired canonical disks remain
+            # intentionally untouched.
+            if spec.vm_ha is not None:
+                boot_disk_id = self._instance_boot_disk_id(vm_obj)
+                disk_obj = self._get_ha_disk_by_id(client, boot_disk_id) if boot_disk_id else None
+            else:
+                boot_disk_name = f"{inst_name}-boot"
+                disk_obj = self._get_disk_by_name(client, boot_disk_name)
 
             if disk_obj is None:
                 print(f"[VMManager] Warning: VM {inst_name} exists but boot disk not found")
@@ -1865,96 +2103,53 @@ class VMManager:
 
     def _get_client(self) -> t.Any | None:
         """Get Nebius SDK client (extracted from ensure_group for reuse)."""
-        import os
-
-        if self.auth_token and not os.environ.get("NEBIUS_IAM_TOKEN"):
-            os.environ["NEBIUS_IAM_TOKEN"] = self.auth_token
-
-        try:
-            # Resolve Nebius SDK primary surface
-            Client = None  # type: ignore
-            try:
-                from nebius.sdk import SDK as _C  # type: ignore
-
-                Client = _C
-            except Exception:
-                try:
-                    from nebius.sdk import Client as _C  # type: ignore
-
-                    Client = _C
-                except Exception:
-                    try:
-                        from nebius.client import Client as _C  # type: ignore
-
-                        Client = _C
-                    except Exception:
-                        try:
-                            from nebius import pysdk  # type: ignore
-
-                            Client = pysdk.Client  # type: ignore[attr-defined]
-                        except Exception:
-                            try:
-                                from nebius.pysdk import Client as _C  # type: ignore
-
-                                Client = _C
-                            except Exception:
-                                pass
-            if Client is None:
-                return None
-
-            # Initialize client
-            client_cls = t.cast(t.Any, Client)
-            if self.tenant_id and self.project_id and self.region_id:
-                try:
-                    return client_cls(
-                        tenant_id=self.tenant_id,
-                        project_id=self.project_id,
-                        region_id=self.region_id,
-                    )
-                except TypeError:
-                    return client_cls()
-            else:
-                return client_cls()
-        except Exception:
-            return None
+        return self._build_sdk_client(self.region or self.region_id or "")
 
     def _get_vm_by_name(self, client: t.Any, name: str) -> t.Any | None:
-        """Get VM by name, returns None if not found."""
+        """Get one exact VM by name, treating only typed NOT_FOUND as absence."""
+        if not self.project_id:
+            raise RuntimeError("Gateway VM lookup requires an exact project ID")
         try:
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
             from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
 
             isc = InstanceServiceClient(client)
-            if hasattr(isc, "get_by_name") and self.project_id:
-                try:
-                    vm = isc.get_by_name(
-                        GetByNameRequest(parent_id=self.project_id, name=name)
-                    ).wait()
-                    return vm
-                except Exception:
-                    return None
-        except Exception:
-            pass
-        return None
+            vm = isc.get_by_name(GetByNameRequest(parent_id=self.project_id, name=name)).wait()
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(f"Gateway VM {name!r} could not be classified") from error
+        metadata = getattr(vm, "metadata", None)
+        if (
+            not self._resource_id(vm)
+            or str(getattr(metadata, "name", "") or "") != name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"Gateway VM {name!r} returned an inexact identity")
+        return vm
 
     def _get_disk_by_name(self, client: t.Any, name: str) -> t.Any | None:
-        """Get disk by name, returns None if not found."""
+        """Get one exact disk by name, treating only typed NOT_FOUND as absence."""
+        if not self.project_id:
+            raise RuntimeError("Boot disk lookup requires an exact project ID")
         try:
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
             from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
 
             dsc = DiskServiceClient(client)
-            if hasattr(dsc, "get_by_name") and self.project_id:
-                try:
-                    disk = dsc.get_by_name(
-                        GetByNameRequest(parent_id=self.project_id, name=name)
-                    ).wait()
-                    return disk
-                except Exception:
-                    return None
-        except Exception:
-            pass
-        return None
+            disk = dsc.get_by_name(GetByNameRequest(parent_id=self.project_id, name=name)).wait()
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(f"Boot disk {name!r} could not be classified") from error
+        metadata = getattr(disk, "metadata", None)
+        if (
+            not self._resource_id(disk)
+            or str(getattr(metadata, "name", "") or "") != name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"Boot disk {name!r} returned an inexact identity")
+        return disk
 
     @staticmethod
     def _gateway_subnet_settings(spec: GatewayGroupSpec) -> dict[str, t.Any]:
@@ -2012,10 +2207,16 @@ class VMManager:
         return pools
 
     def _ensure_network_pool_contains_cidr(
-        self, client: t.Any, network_obj: t.Any, desired_network: ipaddress.IPv4Network
+        self,
+        client: t.Any,
+        network_obj: t.Any,
+        desired_network: ipaddress.IPv4Network,
+        *,
+        strict: bool = False,
     ) -> None:
         from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
         from nebius.api.nebius.vpc.v1 import (
+            GetPoolRequest,
             PoolCidr,
             PoolServiceClient,
             PoolSpec,
@@ -2044,11 +2245,31 @@ class VMManager:
 
         pool_id, pool_obj = network_pools[0]
         pool_client = PoolServiceClient(client)  # type: ignore
+        if strict:
+            try:
+                pool_obj = pool_client.get(GetPoolRequest(id=pool_id)).wait()
+            except Exception as error:
+                raise RuntimeError(
+                    "Network private pool could not be reread before extension"
+                ) from error
         pool_meta = getattr(pool_obj, "metadata", None)
         pool_spec = getattr(pool_obj, "spec", None)
         if not pool_meta or not pool_spec:
             raise RuntimeError(f"Network private pool {pool_id} is missing metadata/spec.")
+        if strict:
+            if self._resource_id(pool_obj) != pool_id:
+                raise RuntimeError("Network private pool changed identity before extension")
+            if str(getattr(pool_meta, "parent_id", "") or "") != (self.project_id or ""):
+                raise RuntimeError("Network private pool belongs to a different project")
+            if int(getattr(pool_meta, "resource_version", 0) or 0) < 1:
+                raise RuntimeError("Network private pool has no authoritative resource version")
 
+        preserved_cidrs = {
+            str(network)
+            for pool_cidr in getattr(pool_spec, "cidrs", []) or []
+            if (network := _parse_ipv4_network(str(getattr(pool_cidr, "cidr", "") or "")))
+            is not None
+        }
         updated_cidrs = [
             PoolCidr(
                 cidr=getattr(pool_cidr, "cidr", ""),
@@ -2071,16 +2292,44 @@ class VMManager:
             f"[VMManager] Extending network private pool '{pool_name}' with {desired_network} ..."
         )
 
-        pool_client.update(
+        update_operation = pool_client.update(
             UpdatePoolRequest(
                 metadata=ResourceMetadata(
                     id=getattr(pool_meta, "id", pool_id),
                     parent_id=getattr(pool_meta, "parent_id", ""),
                     name=getattr(pool_meta, "name", ""),
+                    resource_version=int(getattr(pool_meta, "resource_version", 0) or 0),
                 ),
                 spec=updated_spec,
             )
         ).wait()
+        if not strict:
+            return
+        self._sync_preparation_operation(
+            update_operation,
+            action="Network private pool extension",
+        )
+        try:
+            verified_pool = pool_client.get(GetPoolRequest(id=pool_id)).wait()
+        except Exception as error:
+            raise RuntimeError("Extended network private pool could not be reread") from error
+        if self._resource_id(verified_pool) != pool_id:
+            raise RuntimeError("Extended network private pool changed identity")
+        verified_meta = getattr(verified_pool, "metadata", None)
+        if str(getattr(verified_meta, "parent_id", "") or "") != (self.project_id or ""):
+            raise RuntimeError("Extended network private pool belongs to a different project")
+        verified_spec = getattr(verified_pool, "spec", None)
+        verified_cidrs = {
+            str(network)
+            for pool_cidr in getattr(verified_spec, "cidrs", []) or []
+            if (network := _parse_ipv4_network(str(getattr(pool_cidr, "cidr", "") or "")))
+            is not None
+        }
+        required_cidrs = preserved_cidrs | {str(desired_network)}
+        if not required_cidrs.issubset(verified_cidrs):
+            raise RuntimeError(
+                "Network private pool extension did not preserve every observed CIDR"
+            )
 
     @staticmethod
     def _find_first_free_subnet_cidr(
@@ -2189,7 +2438,14 @@ class VMManager:
             pass
         return None
 
-    def wait_for_vm_network(self, vm_name: str, ip_address: str, timeout: int = 180) -> bool:
+    def wait_for_vm_network(
+        self,
+        vm_name: str,
+        ip_address: str,
+        timeout: int = 180,
+        *,
+        progress_callback: t.Callable[[], None] | None = None,
+    ) -> bool:
         """Wait for VM to be reachable via ping.
 
         Args:
@@ -2232,6 +2488,8 @@ class VMManager:
                 pass
 
             time.sleep(1)
+            if progress_callback is not None:
+                progress_callback()
 
         print(f"\n✗ Timeout waiting for {vm_name} to become reachable")
         return False
@@ -2271,12 +2529,19 @@ class VMManager:
             pass
         return allocations
 
-    def check_vm_health(self, vm_name: str, public_ip: str) -> dict:
+    def check_vm_health(
+        self,
+        vm_name: str,
+        public_ip: str,
+        *,
+        username: str = "ubuntu",
+    ) -> dict:
         """Check if VM bootstrap completed and services are running.
 
         Args:
             vm_name: Name of the VM instance
             public_ip: Public IP address to connect to
+            username: Configured SSH management username
 
         Returns:
             Dict with health status: {
@@ -2307,18 +2572,20 @@ class VMManager:
         # Wait a moment for VM to boot and network to initialize
         time.sleep(2)
         ssh_base = build_openssh_base_command(
-            key_path=self._management_key_path,
+            key_path=(self._management_key_path if self._management_public_key is None else None),
+            client_auth=self._require_ssh_client_auth(),
             connect_timeout=5,
             policy=self._ssh_policy,
             hostname=vm_name if self._ssh_policy is not None else None,
         )
+        ssh_target = f"{username}@{public_ip}"
 
         # Test SSH connectivity
         try:
             ssh_test = subprocess.run(
                 ssh_base
                 + [
-                    f"ubuntu@{public_ip}",
+                    ssh_target,
                     "echo connected",
                 ],
                 capture_output=True,
@@ -2343,7 +2610,7 @@ class VMManager:
             cloud_init_check = subprocess.run(
                 ssh_base
                 + [
-                    f"ubuntu@{public_ip}",
+                    ssh_target,
                     "cloud-init status --wait --long 2>/dev/null || cloud-init status",
                 ],
                 capture_output=True,
@@ -2359,7 +2626,7 @@ class VMManager:
                 pip_check = subprocess.run(
                     ssh_base
                     + [
-                        f"ubuntu@{public_ip}",
+                        ssh_target,
                         "python3 -m pip --version 2>/dev/null",
                     ],
                     capture_output=True,
@@ -2377,7 +2644,7 @@ class VMManager:
                 esp4_check = subprocess.run(
                     ssh_base
                     + [
-                        f"ubuntu@{public_ip}",
+                        ssh_target,
                         (
                             "if [ -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then "
                             "echo reboot-pending; exit 75; "
@@ -2407,7 +2674,7 @@ class VMManager:
             pkg_check = subprocess.run(
                 ssh_base
                 + [
-                    f"ubuntu@{public_ip}",
+                    ssh_target,
                     'dpkg -l strongswan frr 2>/dev/null | grep "^ii" && systemctl is-active nebius-vpngw-agent 2>/dev/null',
                 ],
                 capture_output=True,
@@ -2459,68 +2726,15 @@ class VMManager:
             return attr
 
     def _build_sdk_client(self, region: str) -> t.Any | None:
+        del region
+        if self._closed:
+            raise RuntimeError("VMManager is closed")
+        if self._sdk_client is not _SDK_CLIENT_UNSET:
+            return self._sdk_client
         try:
-            import os
-
-            if self.auth_token and not os.environ.get("NEBIUS_IAM_TOKEN"):
-                os.environ["NEBIUS_IAM_TOKEN"] = self.auth_token
-        except Exception:
-            pass
-
-        try:
-            Client = None  # type: ignore
-            try:
-                from nebius.sdk import SDK as _C  # type: ignore
-
-                Client = _C
-            except Exception:
-                try:
-                    from nebius.sdk import Client as _C  # type: ignore
-
-                    Client = _C
-                except Exception:
-                    try:
-                        from nebius.client import Client as _C  # type: ignore
-
-                        Client = _C
-                    except Exception:
-                        try:
-                            from nebius import pysdk  # type: ignore
-
-                            Client = pysdk.Client  # type: ignore[attr-defined]
-                        except Exception:
-                            try:
-                                from nebius.pysdk import Client as _C  # type: ignore
-
-                                Client = _C
-                            except Exception:
-                                Client = None
-
-            if Client is None:
-                raise ImportError("Nebius SDK not found")
-
-            client_cls = t.cast(t.Any, Client)
-            if self.tenant_id and self.project_id and (self.region_id or region):
-                try:
-                    return client_cls(
-                        tenant_id=self.tenant_id,
-                        project_id=self.project_id,
-                        region_id=self.region_id or region,
-                    )
-                except TypeError:
-                    return client_cls()
-                except Exception:
-                    return client_cls()
-
-            try:
-                from nebius.aio.cli_config import Config  # type: ignore
-
-                try:
-                    return client_cls(config_reader=Config(no_parent_id=True))
-                except TypeError:
-                    return client_cls()
-            except Exception:
-                return client_cls()
+            client = build_operator_sdk_client(explicit_token=self.auth_token)
+            self._sdk_client = client
+            return client
         except Exception as e:
             print(
                 "[VMManager] Nebius SDK not available; install with 'pip install nebius'. "
@@ -2579,6 +2793,45 @@ class VMManager:
                 existing.append(vm_obj)
         return existing
 
+    def _get_vm_by_name_for_ordinary_ssh_preflight(
+        self,
+        client: t.Any,
+        name: str,
+    ) -> t.Any | None:
+        if not self.project_id:
+            raise RuntimeError("Gateway SSH discovery requires an exact project ID")
+        try:
+            from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+            from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
+
+            response = (
+                InstanceServiceClient(client)
+                .get_by_name(GetByNameRequest(parent_id=self.project_id, name=name))
+                .wait()
+            )
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            if nebius_request_error_code_is(
+                error, "UNAUTHENTICATED"
+            ) or error_chain_has_cli_authentication_failure(error):
+                raise RuntimeError(
+                    "Gateway cloud authentication failed during SSH trust discovery"
+                ) from error
+            raise RuntimeError(
+                f"Gateway VM {name} could not be classified as existing or fresh"
+            ) from error
+        if response is None:
+            raise RuntimeError(f"Gateway SSH discovery returned no result for {name}")
+        metadata = getattr(response, "metadata", None)
+        if (
+            not self._resource_id(response)
+            or str(getattr(metadata, "name", "") or "") != name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"Gateway VM {name} returned an inexact identity")
+        return response
+
     @staticmethod
     def _vm_public_ip_from_object(vm_obj: t.Any) -> str | None:
         for owner in (getattr(vm_obj, "status", None), getattr(vm_obj, "spec", None)):
@@ -2604,19 +2857,26 @@ class VMManager:
                 .wait()
             )
         except Exception as error:
-            code = getattr(error, "code", None)
-            try:
-                code = code() if callable(code) else code
-            except Exception:
-                code = None
-            code_name = str(getattr(code, "name", code) or "").upper()
-            if code_name == "NOT_FOUND" or "NOT_FOUND" in str(error).upper():
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
                 return None
+            if nebius_request_error_code_is(
+                error, "UNAUTHENTICATED"
+            ) or error_chain_has_cli_authentication_failure(error):
+                raise RuntimeError(
+                    "VM-HA cloud authentication failed while discovering gateway members"
+                ) from error
             raise RuntimeError(
                 f"VM-HA member {name} could not be classified as existing or fresh"
             ) from error
         if response is None:
             raise RuntimeError(f"VM-HA member discovery returned no result for {name}")
+        metadata = getattr(response, "metadata", None)
+        if (
+            not self._resource_id(response)
+            or str(getattr(metadata, "name", "") or "") != name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"VM-HA member {name} returned an inexact identity")
         return response
 
     def _discover_vm_ha_members(
@@ -2660,10 +2920,656 @@ class VMManager:
         client = self._build_sdk_client(spec.region)
         if client is None:
             raise RuntimeError("VM-HA member discovery requires the Nebius SDK")
-        return {
-            name: public_ip
-            for name, (_, public_ip) in self._discover_vm_ha_members(client, spec).items()
+        snapshot = self._discover_vm_ha_members(client, spec)
+        self._vm_ha_ssh_preflight_snapshot = dict(snapshot)
+        return {name: public_ip for name, (_, public_ip) in snapshot.items()}
+
+    def discover_ordinary_gateway_members(self, spec: GatewayGroupSpec) -> dict[str, str]:
+        """Classify existing ordinary gateway VMs with strict read-only Compute calls."""
+
+        if spec.vm_ha is not None:
+            raise RuntimeError("Ordinary SSH discovery cannot inspect a VM-HA plan")
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("Gateway SSH discovery requires the Nebius SDK")
+        snapshot: dict[str, tuple[t.Any, str]] = {}
+        for index in range(spec.instance_count):
+            name = f"{spec.name}-{index}"
+            vm_obj = self._get_vm_by_name_for_ordinary_ssh_preflight(client, name)
+            if vm_obj is None:
+                continue
+            public_ip = self._vm_public_ip_from_object(vm_obj)
+            if not public_ip:
+                raise RuntimeError(f"Existing gateway VM {name} has no readable public SSH address")
+            snapshot[name] = (vm_obj, public_ip)
+        self._ordinary_ssh_preflight_snapshot = dict(snapshot)
+        return {name: public_ip for name, (_, public_ip) in snapshot.items()}
+
+    def _get_vm_by_id_for_ordinary_ssh_preflight(
+        self,
+        client: t.Any,
+        compute_id: str,
+    ) -> t.Any:
+        try:
+            from nebius.api.nebius.compute.v1 import (  # type: ignore
+                GetInstanceRequest,
+                InstanceServiceClient,
+            )
+
+            response = InstanceServiceClient(client).get(GetInstanceRequest(id=compute_id)).wait()
+        except Exception as error:
+            raise RuntimeError("Gateway Compute identity changed after SSH preflight") from error
+        if response is None:
+            raise RuntimeError("Gateway Compute identity changed after SSH preflight")
+        return response
+
+    def ordinary_ssh_trust_bindings(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        retained_hosts: t.Iterable[str],
+    ) -> dict[str, t.Callable[[], None]]:
+        """Bind ordinary retained hosts to immutable Compute identity evidence."""
+
+        if spec.vm_ha is not None or not self.project_id:
+            raise RuntimeError("Ordinary SSH trust requires exact deployment identity")
+        snapshot = self._ordinary_ssh_preflight_snapshot
+        if snapshot is None:
+            raise RuntimeError("Ordinary SSH trust requires prior member discovery")
+        requested = set(retained_hosts)
+        if requested - set(snapshot):
+            raise RuntimeError("Ordinary gateway member set changed after discovery")
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("Ordinary SSH trust requires the Nebius SDK")
+        assertions: dict[str, t.Callable[[], None]] = {}
+        for name in sorted(requested):
+            vm_obj, public_ip = snapshot[name]
+            expected = self._vm_ha_ssh_member_signature(vm_obj)
+            if (
+                not expected[0]
+                or expected[1] != name
+                or expected[2] != self.project_id
+                or expected[4] != public_ip
+            ):
+                raise RuntimeError(f"Gateway Compute binding is incomplete for {name}")
+
+            def assert_current(
+                *,
+                expected_signature: tuple[str, str, str, str, str, str] = expected,
+                expected_name: str = name,
+            ) -> None:
+                current = self._get_vm_by_id_for_ordinary_ssh_preflight(
+                    client,
+                    expected_signature[0],
+                )
+                if self._vm_ha_ssh_member_signature(current) != expected_signature:
+                    raise RuntimeError(f"Gateway SSH trust evidence changed for {expected_name}")
+
+            assertions[name] = assert_current
+        self._ordinary_ssh_binding_assertions = dict(assertions)
+        return assertions
+
+    def recover_ordinary_ssh_host_keys(
+        self,
+        hostnames: frozenset[str],
+        *,
+        spec: GatewayGroupSpec,
+    ) -> dict[str, SSHHostKeyRecovery]:
+        """Recover exact ordinary product identities from authenticated cloud-init."""
+
+        if spec.vm_ha is not None or not self.project_id:
+            raise RuntimeError("Ordinary SSH recovery requires exact deployment identity")
+        snapshot = self._ordinary_ssh_preflight_snapshot
+        if snapshot is None:
+            raise RuntimeError("Ordinary SSH recovery requires prior member discovery")
+        expected_names = {f"{spec.name}-{index}" for index in range(spec.instance_count)}
+        if set(hostnames) - expected_names:
+            raise RuntimeError("Ordinary SSH recovery member is outside the deployment plan")
+        recovered: dict[str, SSHHostKeyRecovery] = {}
+        for name in sorted(hostnames):
+            observed = snapshot.get(name)
+            assertion = self._ordinary_ssh_binding_assertions.get(name)
+            if observed is None or assertion is None:
+                continue
+            assertion()
+            vm_obj, _public_ip = observed
+            cloud_init = str(
+                getattr(getattr(vm_obj, "spec", None), "cloud_init_user_data", "") or ""
+            )
+            if (
+                f"path: {VM_HA_SSH_HOST_KEY_PATH}" not in cloud_init
+                and f"HostKey {VM_HA_SSH_HOST_KEY_PATH}" not in cloud_init
+            ):
+                continue
+            recovered[name] = SSHHostKeyRecovery(
+                hostname=name,
+                private_key=recover_product_host_key(
+                    vm_obj,
+                    path=VM_HA_SSH_HOST_KEY_PATH,
+                ),
+                assert_current=assertion,
+            )
+        return recovered
+
+    def enroll_ordinary_ssh_host_keys(
+        self,
+        spec: GatewayGroupSpec,
+        hostnames: frozenset[str],
+        *,
+        management_public_key: str | None,
+        username: str,
+    ) -> dict[str, SSHHostKeyEnrollment]:
+        """Enroll exactly one unchanged pre-branch ordinary gateway member."""
+
+        if spec.vm_ha is not None or not self.project_id:
+            raise RuntimeError("Ordinary SSH enrollment requires exact deployment identity")
+        if len(hostnames) != 1:
+            raise RuntimeError("Ordinary SSH enrollment requires exactly one retained member")
+        snapshot = self._ordinary_ssh_preflight_snapshot
+        if snapshot is None:
+            raise RuntimeError("Ordinary SSH enrollment requires prior member discovery")
+        name = next(iter(hostnames))
+        observed = snapshot.get(name)
+        assertion = self._ordinary_ssh_binding_assertions.get(name)
+        if observed is None or assertion is None:
+            raise RuntimeError("Ordinary SSH enrollment member changed after discovery")
+        vm_obj, public_ip = observed
+        signature = self._vm_ha_ssh_member_signature(vm_obj)
+        compute_id, instance_name, parent_id = signature[:3]
+        if (
+            not compute_id
+            or instance_name != name
+            or parent_id != self.project_id
+            or signature[4] != public_ip
+        ):
+            raise RuntimeError("Ordinary SSH enrollment Compute binding is incomplete")
+        binding_digest = self._ordinary_compute_binding_digest(signature, spec.region)
+        self._management_public_key = management_public_key
+        client_auth = self._require_ssh_client_auth()
+        if client_auth is None:
+            raise ValueError("Ordinary SSH enrollment requires the configured public client key")
+        enrollment = enroll_ordinary_ssh_host_key(
+            OrdinarySSHEnrollmentTarget(
+                hostname=name,
+                transport_address=public_ip,
+                compute_id=compute_id,
+                project_id=parent_id,
+                instance_name=instance_name,
+                region_id=str(spec.region or ""),
+                compute_binding_sha256=binding_digest,
+                assert_current=assertion,
+            ),
+            client_auth=client_auth,
+            username=username,
+        )
+        return {name: enrollment}
+
+    @staticmethod
+    def _ordinary_compute_binding_digest(
+        signature: tuple[str, str, str, str, str, str],
+        region: str | None,
+    ) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "compute_signature": signature,
+                    "region_id": str(region or ""),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def ordinary_migration_ssh_imports(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        ordinary_scope: VMHASSHTrustScope,
+        hostnames: t.Iterable[str],
+    ) -> dict[str, TrustedSSHMemberImport]:
+        """Rebind ordinary receipt members to unchanged migration Compute resources."""
+
+        if spec.vm_ha is None or not self.project_id:
+            raise RuntimeError("Ordinary SSH trust import requires a VM-HA migration plan")
+        snapshot = self._vm_ha_ssh_preflight_snapshot
+        if snapshot is None:
+            raise RuntimeError("Ordinary SSH trust import requires prior member discovery")
+        imports: dict[str, TrustedSSHMemberImport] = {}
+        for name in sorted(set(hostnames)):
+            observed = snapshot.get(name)
+            assertion = self._vm_ha_ssh_binding_assertions.get(name)
+            member = managed_ssh_trust_member(ordinary_scope, name)
+            if observed is None or assertion is None:
+                raise RuntimeError("Ordinary SSH trust import member changed after discovery")
+            if member is None:
+                raise RuntimeError(
+                    "Ordinary gateway managed SSH receipt is unavailable; run ordinary apply "
+                    "with the original configuration before vm-ha"
+                )
+            vm_obj, public_ip = observed
+            signature = self._vm_ha_ssh_member_signature(vm_obj)
+            if (
+                not signature[0]
+                or signature[1] != name
+                or signature[2] != self.project_id
+                or signature[4] != public_ip
+            ):
+                raise RuntimeError("Ordinary SSH trust import Compute binding is incomplete")
+            binding_digest = self._ordinary_compute_binding_digest(signature, spec.region)
+            prior_binding = member.authority.compute_binding_sha256
+            if prior_binding is not None and not hmac.compare_digest(
+                prior_binding,
+                binding_digest,
+            ):
+                raise RuntimeError("Ordinary SSH trust receipt Compute binding changed")
+            imports[name] = TrustedSSHMemberImport(
+                hostname=name,
+                pins=member.pins,
+                predecessor_receipt_sha256=member.receipt_sha256,
+                compute_binding_sha256=binding_digest,
+                assert_current=assertion,
+            )
+        return imports
+
+    def prepare_ordinary_ssh_policy(
+        self,
+        spec: GatewayGroupSpec,
+        planned_instances: t.Iterable[t.Any],
+        *,
+        trust_scope: VMHASSHTrustScope,
+        recreate: bool,
+        management_public_key: str | None,
+        dry_run: bool,
+        username: str,
+        legacy_host_key_enrollments: t.Mapping[str, SSHHostKeyEnrollment] | None = None,
+    ) -> SSHTrustPolicy:
+        """Pre-pin ordinary gateway SSH identities before any cloud mutation."""
+
+        instances = tuple(planned_instances)
+        self._management_public_key = management_public_key
+        existing = self.discover_ordinary_gateway_members(spec)
+        enrollment = {
+            instance.hostname
+            for instance in instances
+            if recreate or instance.hostname not in existing
         }
+        # Recreate changes the Compute object, never the stable SSH identity.
+        # Present members are both enrollment targets and retained identities;
+        # they must supply the original private key locally or through exact
+        # authenticated product cloud-init recovery.
+        retained = set(existing)
+        targets: list[tuple[str, str]] = []
+        aliases: dict[str, tuple[str, ...]] = {}
+        for instance in instances:
+            configured = str(getattr(instance, "external_ip", "") or "").strip()
+            discovered = str(existing.get(instance.hostname) or "").strip()
+            target = discovered or configured or instance.hostname
+            targets.append((instance.hostname, target))
+            aliases[instance.hostname] = tuple(
+                alias
+                for alias in (configured, discovered)
+                if alias and alias not in {instance.hostname, target}
+            )
+        bindings = self.ordinary_ssh_trust_bindings(spec, retained_hosts=retained)
+        policy = require_vm_ha_ssh_policy(
+            tuple(targets),
+            enrollment_hosts=enrollment,
+            management_key_path=self._management_key_path,
+            management_public_key=management_public_key,
+            require_management_key=False,
+            trust_scope=trust_scope,
+            allow_managed_repair=True,
+            persist_default_host_keys=not dry_run,
+            additional_aliases=aliases,
+            retained_hosts=retained,
+            allow_default_known_hosts_import=not dry_run,
+            default_known_hosts_bindings=bindings,
+            host_identity_recovery=lambda hostnames: self.recover_ordinary_ssh_host_keys(
+                hostnames,
+                spec=spec,
+            ),
+            allow_legacy_ordinary_enrollment=(not recreate and len(retained) == 1),
+            legacy_host_key_enrollments=legacy_host_key_enrollments,
+        )
+        self.verify_ordinary_existing_identities(
+            {name: existing[name] for name in sorted(retained)},
+            policy=policy,
+            username=username,
+        )
+        return policy
+
+    def _get_vm_by_id_for_vm_ha_preflight(self, client: t.Any, compute_id: str) -> t.Any:
+        try:
+            from nebius.api.nebius.compute.v1 import (  # type: ignore
+                GetInstanceRequest,
+                InstanceServiceClient,
+            )
+
+            response = (
+                InstanceServiceClient(client)
+                .get(
+                    GetInstanceRequest(id=compute_id),
+                    **vm_ha_request_kwargs(),
+                )
+                .wait()
+            )
+        except Exception as error:
+            raise RuntimeError("VM-HA Compute identity changed after SSH preflight") from error
+        if response is None:
+            raise RuntimeError("VM-HA Compute identity changed after SSH preflight")
+        return response
+
+    def _vm_ha_ssh_member_signature(self, vm_obj: t.Any) -> tuple[str, str, str, str, str, str]:
+        metadata = getattr(vm_obj, "metadata", None)
+        compute_id = self._resource_id(vm_obj) or ""
+        name = str(getattr(metadata, "name", "") or getattr(vm_obj, "name", "") or "")
+        parent_id = str(getattr(metadata, "parent_id", "") or "")
+        revision = str(
+            getattr(metadata, "resource_version", "") or getattr(metadata, "version", "") or ""
+        )
+        public_ip = self._vm_public_ip_from_object(vm_obj) or ""
+        cloud_init = str(getattr(getattr(vm_obj, "spec", None), "cloud_init_user_data", "") or "")
+        return (
+            compute_id,
+            name,
+            parent_id,
+            revision,
+            public_ip,
+            hashlib.sha256(cloud_init.encode("utf-8")).hexdigest(),
+        )
+
+    def _validate_vm_ha_ssh_member_binding(
+        self,
+        *,
+        name: str,
+        vm_obj: t.Any,
+        public_ip: str,
+        spec: GatewayGroupSpec,
+        lifecycle_snapshot: VMHALifecycleSnapshot | None,
+    ) -> FormerVMHAProvenance:
+        if spec.vm_ha is None or not self.project_id:
+            raise RuntimeError("VM-HA SSH recovery requires exact deployment identity")
+        signature = self._vm_ha_ssh_member_signature(vm_obj)
+        try:
+            index = int(name.rsplit("-", 1)[1])
+        except (IndexError, ValueError) as error:
+            raise RuntimeError("VM-HA SSH recovery member identity is malformed") from error
+        if (
+            not signature[0]
+            or signature[1] != name
+            or signature[2] != self.project_id
+            or signature[4] != public_ip
+            or index not in {0, 1}
+        ):
+            raise RuntimeError("VM-HA SSH recovery Compute binding is incomplete")
+        provenance = compute_provisioning_provenance(vm_obj)
+        if provenance is FormerVMHAProvenance.CURRENT_MARKER:
+            marker = parse_provisioning_marker(vm_obj)
+            topology = (
+                validate_provisioning_marker(
+                    marker,
+                    expected_instance_index=index,
+                    gateway_name=spec.name,
+                    allocation_name=(f"{spec.name}-{spec.vm_ha.cluster_id}-shared-private-ip"),
+                    cluster_id=spec.vm_ha.cluster_id,
+                )
+                if marker is not None
+                else None
+            )
+            if topology is None:
+                raise RuntimeError("VM-HA SSH recovery provisioning identity does not match")
+            return provenance
+        if provenance not in {None, FormerVMHAProvenance.LEGACY_RUNTIME}:
+            raise RuntimeError("VM-HA SSH recovery has no product provisioning identity")
+        if lifecycle_snapshot is None:
+            raise RuntimeError("VM-HA legacy SSH recovery requires hardened lifecycle authority")
+        lifecycle = lifecycle_snapshot.state
+        planned = {f"{spec.name}-{member.instance_index}": member for member in spec.vm_ha.members}
+        lifecycle_members = lifecycle_member_map(lifecycle)
+        member = lifecycle_members.get(name)
+        if (
+            lifecycle.status
+            not in {
+                VMHALifecycleStatus.PROVISIONING,
+                VMHALifecycleStatus.ACTIVATING,
+                VMHALifecycleStatus.ACTIVE,
+            }
+            or lifecycle.project_id != self.project_id
+            or lifecycle.gateway_name != spec.name
+            or lifecycle.cluster_id != spec.vm_ha.cluster_id
+            or set(lifecycle_members) != set(planned)
+            or member is None
+            or member.compute_id != signature[0]
+            or member.public_ip != public_ip
+            or member.node_id != planned[name].node_id
+            or member.role != planned[name].role.value
+            or (
+                provenance is None
+                and (
+                    planned[name].role is not VMHARole.ACTIVE
+                    or member.role != VMHARole.ACTIVE.value
+                )
+            )
+        ):
+            raise RuntimeError("VM-HA legacy SSH recovery lifecycle binding does not match")
+        return FormerVMHAProvenance.LIFECYCLE_STATE if provenance is None else provenance
+
+    def _validate_ordinary_to_vm_ha_ssh_member_binding(
+        self,
+        *,
+        name: str,
+        vm_obj: t.Any,
+        public_ip: str,
+        spec: GatewayGroupSpec,
+        lifecycle_snapshot: VMHALifecycleSnapshot | None = None,
+    ) -> None:
+        """Bind the one retained ordinary active without requiring prior HA provenance."""
+
+        if spec.vm_ha is None or not self.project_id:
+            raise RuntimeError("VM-HA SSH migration requires exact deployment identity")
+        active_names = {
+            f"{spec.name}-{member.instance_index}"
+            for member in spec.vm_ha.members
+            if member.role is VMHARole.ACTIVE
+        }
+        signature = self._vm_ha_ssh_member_signature(vm_obj)
+        if (
+            active_names != {name}
+            or not signature[0]
+            or signature[1] != name
+            or signature[2] != self.project_id
+            or signature[4] != public_ip
+        ):
+            raise RuntimeError("Ordinary-to-HA SSH migration Compute binding is incomplete")
+        if lifecycle_snapshot is None:
+            return
+        lifecycle = lifecycle_snapshot.state
+        planned = {f"{spec.name}-{member.instance_index}": member for member in spec.vm_ha.members}
+        lifecycle_members = lifecycle_member_map(lifecycle)
+        lifecycle_member = lifecycle_members.get(name)
+        planned_member = planned.get(name)
+        if (
+            lifecycle.status
+            not in {
+                VMHALifecycleStatus.PROVISIONING,
+                VMHALifecycleStatus.ACTIVATING,
+                VMHALifecycleStatus.ACTIVE,
+            }
+            or lifecycle.project_id != self.project_id
+            or lifecycle.gateway_name != spec.name
+            or lifecycle.cluster_id != spec.vm_ha.cluster_id
+            or set(lifecycle_members) != set(planned)
+            or lifecycle_member is None
+            or planned_member is None
+            or lifecycle_member.compute_id != signature[0]
+            or lifecycle_member.public_ip != public_ip
+            or lifecycle_member.node_id != planned_member.node_id
+            or lifecycle_member.role != planned_member.role.value
+        ):
+            raise RuntimeError("Ordinary-to-HA SSH migration lifecycle binding does not match")
+
+    def vm_ha_ssh_trust_bindings(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        retained_hosts: t.Iterable[str],
+        lifecycle_snapshot_loader: t.Callable[[], VMHALifecycleSnapshot | None] | None = None,
+        ordinary_migration_hosts: t.Iterable[str] = (),
+    ) -> dict[str, t.Callable[[], None]]:
+        """Bind retained members to immutable Compute and provisioning evidence."""
+
+        snapshot = self._vm_ha_ssh_preflight_snapshot
+        if snapshot is None:
+            raise RuntimeError("VM-HA SSH recovery requires prior member discovery")
+        requested = set(retained_hosts)
+        if requested - set(snapshot):
+            raise RuntimeError("VM-HA SSH recovery member set changed after discovery")
+        ordinary_migration = set(ordinary_migration_hosts)
+        if ordinary_migration - requested or len(ordinary_migration) > 1:
+            raise RuntimeError("VM-HA SSH migration member set is invalid")
+        lifecycle_snapshot = self._vm_ha_ssh_lifecycle_snapshot
+        if lifecycle_snapshot_loader is not None:
+            lifecycle_snapshot = lifecycle_snapshot_loader()
+            self._vm_ha_ssh_lifecycle_snapshot = lifecycle_snapshot
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA SSH recovery requires the Nebius SDK")
+        assertions: dict[str, t.Callable[[], None]] = {}
+        for name in sorted(requested):
+            vm_obj, public_ip = snapshot[name]
+            expected_signature = self._vm_ha_ssh_member_signature(vm_obj)
+            ordinary_migration_member = name in ordinary_migration
+            if ordinary_migration_member:
+                self._validate_ordinary_to_vm_ha_ssh_member_binding(
+                    name=name,
+                    vm_obj=vm_obj,
+                    public_ip=public_ip,
+                    spec=spec,
+                    lifecycle_snapshot=lifecycle_snapshot,
+                )
+
+            def assert_current(
+                *,
+                expected: tuple[str, str, str, str, str, str] = expected_signature,
+                expected_name: str = name,
+                expected_vm: t.Any = vm_obj,
+                expected_public_ip: str = public_ip,
+                expected_ordinary_migration: bool = ordinary_migration_member,
+            ) -> None:
+                raw_expected_provenance = (
+                    None
+                    if expected_ordinary_migration
+                    else compute_provisioning_provenance(expected_vm)
+                )
+                assertion_lifecycle_snapshot = self._vm_ha_ssh_lifecycle_snapshot
+                if lifecycle_snapshot_loader is not None and (
+                    expected_ordinary_migration
+                    or raw_expected_provenance in {None, FormerVMHAProvenance.LEGACY_RUNTIME}
+                ):
+                    assertion_lifecycle_snapshot = lifecycle_snapshot_loader()
+                    self._vm_ha_ssh_lifecycle_snapshot = assertion_lifecycle_snapshot
+                if expected_ordinary_migration:
+                    self._validate_ordinary_to_vm_ha_ssh_member_binding(
+                        name=expected_name,
+                        vm_obj=expected_vm,
+                        public_ip=expected_public_ip,
+                        spec=spec,
+                        lifecycle_snapshot=assertion_lifecycle_snapshot,
+                    )
+                    expected_provenance = None
+                else:
+                    expected_provenance = self._validate_vm_ha_ssh_member_binding(
+                        name=expected_name,
+                        vm_obj=expected_vm,
+                        public_ip=expected_public_ip,
+                        spec=spec,
+                        lifecycle_snapshot=assertion_lifecycle_snapshot,
+                    )
+                current = self._get_vm_by_id_for_vm_ha_preflight(client, expected[0])
+                if self._vm_ha_ssh_member_signature(current) != expected:
+                    raise RuntimeError(f"VM-HA SSH recovery evidence changed for {expected_name}")
+                if expected_ordinary_migration:
+                    self._validate_ordinary_to_vm_ha_ssh_member_binding(
+                        name=expected_name,
+                        vm_obj=current,
+                        public_ip=expected[4],
+                        spec=spec,
+                        lifecycle_snapshot=assertion_lifecycle_snapshot,
+                    )
+                    current_provenance = None
+                else:
+                    current_provenance = self._validate_vm_ha_ssh_member_binding(
+                        name=expected_name,
+                        vm_obj=current,
+                        public_ip=expected[4],
+                        spec=spec,
+                        lifecycle_snapshot=assertion_lifecycle_snapshot,
+                    )
+                if current_provenance is not expected_provenance:
+                    raise RuntimeError(f"VM-HA SSH recovery evidence changed for {expected_name}")
+                if assertion_lifecycle_snapshot is not None and (
+                    expected_ordinary_migration
+                    or expected_provenance
+                    in {
+                        FormerVMHAProvenance.LEGACY_RUNTIME,
+                        FormerVMHAProvenance.LIFECYCLE_STATE,
+                    }
+                ):
+                    assertion_lifecycle_snapshot.assert_current()
+
+            assertions[name] = assert_current
+        self._vm_ha_ssh_binding_assertions = dict(assertions)
+        return assertions
+
+    def recover_vm_ha_ssh_host_keys(
+        self,
+        hostnames: frozenset[str],
+        *,
+        spec: GatewayGroupSpec,
+        ordinary_migration_hosts: t.Iterable[str] = (),
+    ) -> dict[str, SSHHostKeyRecovery]:
+        """Recover exact product-generated private identities from persisted cloud-init."""
+
+        snapshot = self._vm_ha_ssh_preflight_snapshot or {}
+        ordinary_migration = set(ordinary_migration_hosts)
+        if ordinary_migration - set(snapshot) or len(ordinary_migration) > 1:
+            raise RuntimeError("VM-HA SSH migration member set is invalid")
+        recovered: dict[str, SSHHostKeyRecovery] = {}
+        for name in sorted(hostnames):
+            observed = snapshot.get(name)
+            assertion = self._vm_ha_ssh_binding_assertions.get(name)
+            if observed is None or assertion is None:
+                continue
+            assertion()
+            vm_obj, public_ip = observed
+            if name in ordinary_migration:
+                self._validate_ordinary_to_vm_ha_ssh_member_binding(
+                    name=name,
+                    vm_obj=vm_obj,
+                    public_ip=public_ip,
+                    spec=spec,
+                )
+                path = VM_HA_SSH_HOST_KEY_PATH
+            else:
+                provenance = self._validate_vm_ha_ssh_member_binding(
+                    name=name,
+                    vm_obj=vm_obj,
+                    public_ip=public_ip,
+                    spec=spec,
+                    lifecycle_snapshot=self._vm_ha_ssh_lifecycle_snapshot,
+                )
+                path = (
+                    VM_HA_SSH_HOST_KEY_PATH
+                    if provenance is FormerVMHAProvenance.CURRENT_MARKER
+                    else LEGACY_VM_HA_SSH_HOST_KEY_PATH
+                )
+            recovered[name] = SSHHostKeyRecovery(
+                hostname=name,
+                private_key=recover_product_host_key(vm_obj, path=path),
+                assert_current=assertion,
+            )
+        return recovered
 
     def _classify_former_vm_ha_evidence(
         self,
@@ -2894,7 +3800,10 @@ class VMManager:
             raise RuntimeError("VM-HA existing-member verification requires an SSH policy")
         for name, public_ip in existing.items():
             ssh_base = build_openssh_base_command(
-                key_path=self._management_key_path,
+                key_path=(
+                    self._management_key_path if self._management_public_key is None else None
+                ),
+                client_auth=self._require_ssh_client_auth(),
                 connect_timeout=max(1, min(5, math.ceil(probe_timeout))),
                 policy=selected_policy,
                 hostname=name,
@@ -2922,6 +3831,29 @@ class VMManager:
                 )
             raise RuntimeError(f"Existing VM-HA member {name} is unreachable before cloud mutation")
 
+    def verify_ordinary_existing_identities(
+        self,
+        existing: t.Mapping[str, str],
+        *,
+        policy: SSHTrustPolicy | None = None,
+        username: str = "ubuntu",
+        probe_timeout: float = 10.0,
+    ) -> None:
+        """Verify retained ordinary gateway pins without changing remote state."""
+
+        try:
+            self.verify_vm_ha_existing_identities(
+                existing,
+                policy=policy,
+                username=username,
+                probe_timeout=probe_timeout,
+            )
+        except RuntimeError as error:
+            message = str(error)
+            if "existing VM-HA member" in message:
+                message = message.replace("existing VM-HA member", "existing gateway VM")
+            raise RuntimeError(message) from error
+
     def _wait_for_vm_ha_member_ssh(
         self,
         name: str,
@@ -2929,6 +3861,7 @@ class VMManager:
         *,
         username: str,
         timeout: float = 300,
+        progress_callback: t.Callable[[], None] | None = None,
     ) -> None:
         """Wait until one newly created, pinned member accepts management SSH."""
 
@@ -2959,6 +3892,8 @@ class VMManager:
                     f"Replacement VM-HA member {name} did not reach pinned SSH readiness"
                 ) from last_error
             time.sleep(min(5.0, remaining))
+            if progress_callback is not None:
+                progress_callback()
 
     def wait_for_vm_ha_member_ssh(
         self,
@@ -2967,6 +3902,7 @@ class VMManager:
         *,
         username: str,
         timeout: float = 300,
+        progress_callback: t.Callable[[], None] | None = None,
     ) -> None:
         """Wait for one exact pinned VM-HA management endpoint."""
 
@@ -2975,42 +3911,38 @@ class VMManager:
             public_ip,
             username=username,
             timeout=timeout,
+            progress_callback=progress_callback,
         )
 
     @staticmethod
-    def _render_vm_ha_enrollment_cloud_init(
+    def _render_gateway_ssh_enrollment_cloud_init(
         cloud_init: str,
         identity: t.Any,
-        provisioning_marker: str,
+        provisioning_marker: str | None = None,
     ) -> str:
         write_files_anchor = "write_files:\n"
         sshd_anchor = "            Port 22\n"
         cloud_config_anchor = "#cloud-config\n"
         if cloud_init.count(write_files_anchor) != 1:
-            raise RuntimeError("VM-HA cloud-init must contain exactly one write_files anchor")
+            raise RuntimeError("Gateway cloud-init must contain exactly one write_files anchor")
         if cloud_init.count(sshd_anchor) != 1:
-            raise RuntimeError("VM-HA cloud-init must contain exactly one sshd HostKey anchor")
-        if cloud_init.count(cloud_config_anchor) != 1 or "\n" in provisioning_marker:
-            raise RuntimeError("VM-HA cloud-init must contain one safe provisioning marker anchor")
-        return (
-            cloud_init.replace(
+            raise RuntimeError("Gateway cloud-init must contain exactly one sshd HostKey anchor")
+        rendered = cloud_init
+        if provisioning_marker is not None:
+            if cloud_init.count(cloud_config_anchor) != 1 or "\n" in provisioning_marker:
+                raise RuntimeError(
+                    "VM-HA cloud-init must contain one safe provisioning marker anchor"
+                )
+            rendered = rendered.replace(
                 cloud_config_anchor,
                 cloud_config_anchor + PROVISIONING_MARKER_PREFIX + provisioning_marker + "\n",
                 1,
             )
-            .replace(
-                write_files_anchor,
-                write_files_anchor + identity.cloud_init_entries(),
-                1,
-            )
-            .replace(
-                sshd_anchor,
-                sshd_anchor + f"            HostKey {VM_HA_SSH_HOST_KEY_PATH}\n",
-                1,
-            )
-        )
+        return rendered.replace(
+            write_files_anchor, write_files_anchor + identity.cloud_init_entries(), 1
+        ).replace(sshd_anchor, sshd_anchor + f"            HostKey {VM_HA_SSH_HOST_KEY_PATH}\n", 1)
 
-    def _prepare_vm_ha_enrollment_cloud_inits(
+    def _prepare_gateway_ssh_enrollment_cloud_inits(
         self,
         spec: GatewayGroupSpec,
         local_prefixes: list[str] | None,
@@ -3018,7 +3950,7 @@ class VMManager:
         recreate: bool,
     ) -> dict[str, str]:
         if self._ssh_policy is None:
-            raise RuntimeError("VM-HA provisioning requires a validated immutable SSH policy")
+            raise RuntimeError("Gateway provisioning requires a validated immutable SSH policy")
         base = self._build_cloud_init(
             ssh_key=spec.vm_spec.get("ssh_public_key"),
             local_prefixes=local_prefixes,
@@ -3028,10 +3960,10 @@ class VMManager:
             name = f"{spec.name}-{index}"
             if name in existing_names and not recreate:
                 continue
-            rendered[name] = self._render_vm_ha_enrollment_cloud_init(
+            rendered[name] = self._render_gateway_ssh_enrollment_cloud_init(
                 base,
                 self._ssh_policy.identity_for(name),
-                render_provisioning_marker(spec, index),
+                render_provisioning_marker(spec, index) if spec.vm_ha is not None else None,
             )
         return rendered
 
@@ -3187,20 +4119,8 @@ class VMManager:
             )
             time.sleep(15)
 
-    def _instance_exists(self, client: t.Any, instance_api: t.Any, inst_name: str) -> bool:
-        try:
-            vm_obj = self._get_vm_by_name(client, inst_name)
-            if vm_obj is not None:
-                return True
-            if instance_api is not None and hasattr(instance_api, "get_by_name"):
-                try:
-                    inst = instance_api.get_by_name(name=inst_name, project_id=self.project_id)
-                except TypeError:
-                    inst = instance_api.get_by_name(name=inst_name)
-                return inst is not None
-        except Exception:
-            return False
-        return False
+    def _instance_exists(self, client: t.Any, inst_name: str) -> bool:
+        return self._get_vm_by_name(client, inst_name) is not None
 
     @staticmethod
     def _normalize_disk_type(disk_type: t.Any) -> str:
@@ -3277,6 +4197,7 @@ class VMManager:
     def _sync_vm_ha_operation(self, operation: t.Any) -> None:
         """Synchronize an HA mutation without swallowing SDK ambiguity."""
         journal = self._vm_ha_journal
+        effect: str | None = None
         if journal is not None and journal.state.transaction is not None:
             effect = journal.state.transaction.pending_effect
             cloud_operation_id = str(getattr(operation, "id", "") or "")
@@ -3284,6 +4205,12 @@ class VMManager:
                 raise RuntimeError("VM-HA mutation returned no durable operation identity")
             journal.record_cloud_operation(effect, cloud_operation_id)
         wait_vm_ha_operation(operation)
+        resource = getattr(getattr(operation, "result", None), "resource", None)
+        resource_id = self._resource_id(resource) or str(
+            getattr(operation, "resource_id", "") or ""
+        )
+        if effect and resource_id:
+            self._vm_ha_accepted_resource_ids[effect] = resource_id
 
     @staticmethod
     def _resource_state(resource: t.Any) -> str | None:
@@ -3293,34 +4220,29 @@ class VMManager:
 
     def _get_disk_by_name_from_client(self, disk_client: t.Any, disk_name: str) -> t.Any | None:
         if not self.project_id or not hasattr(disk_client, "get_by_name"):
-            return None
+            raise RuntimeError("Boot disk lookup requires the exact-name SDK API")
         try:
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
 
-            return disk_client.get_by_name(
+            disk = disk_client.get_by_name(
                 GetByNameRequest(parent_id=self.project_id, name=disk_name)
             ).wait()
-        except Exception:
-            return None
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(f"Boot disk {disk_name!r} could not be classified") from error
+        metadata = getattr(disk, "metadata", None)
+        if (
+            not self._resource_id(disk)
+            or str(getattr(metadata, "name", "") or "") != disk_name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"Boot disk {disk_name!r} returned an inexact identity")
+        return disk
 
     def _lookup_boot_disk_id(self, disk_client: t.Any, disk_name: str) -> str | None:
         disk_obj = self._get_disk_by_name_from_client(disk_client, disk_name)
-        disk_id = self._resource_id(disk_obj)
-        if disk_id:
-            return disk_id
-        if not self.project_id:
-            return None
-        try:
-            from nebius.api.nebius.compute.v1 import ListDisksRequest  # type: ignore
-
-            disks = disk_client.list(ListDisksRequest(parent_id=self.project_id)).wait()
-            for disk in getattr(disks, "items", []) or []:
-                if getattr(getattr(disk, "metadata", None), "name", None) != disk_name:
-                    continue
-                return self._resource_id(disk)
-        except Exception:
-            return None
-        return None
+        return self._resource_id(disk_obj) or None
 
     def _resolve_existing_boot_disk_id(self, disk_client: t.Any, disk_name: str) -> str | None:
         disk_obj = self._get_disk_by_name_from_client(disk_client, disk_name)
@@ -3474,56 +4396,14 @@ class VMManager:
         print("[VMManager] Timeout waiting for disk deletion to complete")
         return False
 
-    def _ensure_boot_disk_legacy(
-        self,
-        disk_api: t.Any,
-        spec: GatewayGroupSpec,
-        disk_name: str,
-        provisioning: VMProvisioningConfig,
-    ) -> str | None:
-        if disk_api is None:
-            return None
-
-        boot_disk_id = None
-        try:
-            if hasattr(disk_api, "get_by_name"):
-                disk_obj = disk_api.get_by_name(name=disk_name)
-                boot_disk_id = self._resource_id(disk_obj)
-        except Exception:
-            boot_disk_id = None
-
-        if boot_disk_id or not hasattr(disk_api, "create"):
-            return boot_disk_id
-
-        disk_request = {
-            "name": disk_name,
-            "size_gibibytes": provisioning.disk_gb,
-            "type": provisioning.disk_type,
-            "source_image_family": provisioning.boot_image,
-            "block_size_bytes": provisioning.disk_block_bytes,
-            **({"project_id": self.project_id} if self.project_id else {}),
-            **({"zone": self.zone or spec.region} if (self.zone or spec.region) else {}),
-        }
-        try:
-            print(f"[VMManager] Creating boot disk {disk_name} ...")
-            try:
-                disk_obj = disk_api.create(**disk_request)  # type: ignore
-            except TypeError:
-                disk_obj = disk_api.create(disk_request)
-            return self._resource_id(disk_obj)
-        except Exception as e:
-            print(f"[VMManager] boot disk create failed: {e}. Attempted: {disk_request}")
-            return None
-
     def _ensure_boot_disk(
         self,
         client: t.Any,
-        disk_api: t.Any,
         spec: GatewayGroupSpec,
         inst_name: str,
         provisioning: VMProvisioningConfig,
         recreate: bool,
-    ) -> tuple[str, str | None]:
+    ) -> str:
         boot_disk_name = f"{inst_name}-boot"
         boot_disk_id = None
         effect = f"provision-{inst_name}-boot-disk"
@@ -3531,83 +4411,74 @@ class VMManager:
         expected_disk_id = self._vm_ha_resource_binding(binding_key)
         operation_id = self._begin_vm_ha_effect(effect) if spec.vm_ha is not None else None
 
-        try:
-            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+        from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
 
-            disk_client = DiskServiceClient(client)  # type: ignore
-            if expected_disk_id:
-                boot_disk_id = self._resolve_existing_boot_disk_id(disk_client, boot_disk_name)
-                if boot_disk_id != expected_disk_id:
-                    raise RuntimeError(f"VM-HA boot disk identity changed for {inst_name}")
-            elif not recreate and spec.vm_ha is None:
-                boot_disk_id = self._resolve_existing_boot_disk_id(disk_client, boot_disk_name)
+        disk_client = DiskServiceClient(client)  # type: ignore
+        if expected_disk_id:
+            boot_disk_id = self._resolve_existing_boot_disk_id(disk_client, boot_disk_name)
+            if boot_disk_id != expected_disk_id:
+                raise RuntimeError(f"VM-HA boot disk identity changed for {inst_name}")
+        elif not recreate and spec.vm_ha is None:
+            boot_disk_id = self._resolve_existing_boot_disk_id(disk_client, boot_disk_name)
 
-            if not boot_disk_id:
-                print(
-                    f"[VMManager] Creating boot disk {boot_disk_name} (project_id={self.project_id}) ..."
+        if not boot_disk_id:
+            print(
+                f"[VMManager] Creating boot disk {boot_disk_name} (project_id={self.project_id}) ..."
+            )
+            image_id = self._resolve_boot_image_id(client, spec, provisioning)
+            if not image_id:
+                raise RuntimeError(
+                    f"[VMManager] Unable to resolve image id for family '{provisioning.boot_image}'. "
+                    "Ensure the image family exists or provide vm_spec.image_id."
                 )
-                image_id = self._resolve_boot_image_id(client, spec, provisioning)
-                if not image_id:
-                    raise RuntimeError(
-                        f"[VMManager] Unable to resolve image id for family '{provisioning.boot_image}'. "
-                        "Ensure the image family exists or provide vm_spec.image_id."
-                    )
 
-                create_request = self._build_boot_disk_create_request(
-                    boot_disk_name,
-                    provisioning,
-                    image_id,
-                )
-                try:
-                    boot_disk_id = self._submit_boot_disk_create(
-                        disk_client,
-                        create_request,
-                        boot_disk_name,
-                        operation_id,
-                    )
-                except Exception as e:
-                    message = str(e)
-                    print(f"[VMManager] Disk create exception: {message}")
-                    already_exists = "ALREADY_EXISTS" in message or (
-                        f'disk with name "{boot_disk_name}" already exists' in message
-                    )
-                    if already_exists and recreate:
-                        print(
-                            f"[VMManager] Disk {boot_disk_name} still exists (likely deleting), waiting for deletion to complete..."
-                        )
-                        if self._wait_for_boot_disk_deletion(disk_client, boot_disk_name):
-                            try:
-                                boot_disk_id = self._submit_boot_disk_create(
-                                    disk_client,
-                                    create_request,
-                                    boot_disk_name,
-                                    operation_id,
-                                )
-                            except Exception as retry_err:
-                                print(f"[VMManager] Disk creation retry failed: {retry_err}")
-                    elif already_exists and not recreate:
-                        print("[VMManager] Disk already exists, refetching ID...")
-                        boot_disk_id = self._lookup_boot_disk_id(disk_client, boot_disk_name)
-                    else:
-                        print(f"[VMManager] boot disk create failed: {e}")
-        except Exception:
-            if spec.vm_ha is not None:
-                raise
-            boot_disk_id = self._ensure_boot_disk_legacy(
-                disk_api,
-                spec,
+            create_request = self._build_boot_disk_create_request(
                 boot_disk_name,
                 provisioning,
+                image_id,
             )
+            try:
+                boot_disk_id = self._submit_boot_disk_create(
+                    disk_client,
+                    create_request,
+                    boot_disk_name,
+                    operation_id,
+                )
+            except Exception as error:
+                message = str(error)
+                print(f"[VMManager] Disk create exception: {message}")
+                already_exists = nebius_request_error_code_is(error, "ALREADY_EXISTS")
+                if already_exists and recreate:
+                    print(
+                        f"[VMManager] Disk {boot_disk_name} still exists (likely deleting), waiting for deletion to complete..."
+                    )
+                    if self._wait_for_boot_disk_deletion(disk_client, boot_disk_name):
+                        try:
+                            boot_disk_id = self._submit_boot_disk_create(
+                                disk_client,
+                                create_request,
+                                boot_disk_name,
+                                operation_id,
+                            )
+                        except Exception as retry_error:
+                            raise RuntimeError(
+                                f"Boot disk {boot_disk_name!r} creation retry failed"
+                            ) from retry_error
+                elif already_exists and not recreate:
+                    print("[VMManager] Disk already exists, refetching ID...")
+                    boot_disk_id = self._lookup_boot_disk_id(disk_client, boot_disk_name)
+                else:
+                    raise RuntimeError(f"Boot disk {boot_disk_name!r} creation failed") from error
+
+        if not boot_disk_id:
+            raise RuntimeError(f"Boot disk {boot_disk_name!r} has no authoritative identity")
 
         if spec.vm_ha is not None:
-            if not boot_disk_id:
-                raise RuntimeError(f"VM-HA boot disk {boot_disk_name} has no identity")
             self._complete_vm_ha_effect(
                 effect,
                 resource_updates={binding_key: boot_disk_id},
             )
-        return boot_disk_name, boot_disk_id
+        return boot_disk_id
 
     @staticmethod
     def _desired_public_ips(
@@ -3622,30 +4493,56 @@ class VMManager:
             return []
         return [ip for ip in instance_ips[:num_nics] if ip]
 
-    def _get_allocation_by_name(self, alloc_client: t.Any, alloc_name: str) -> t.Any | None:
+    def _get_allocation_by_name(
+        self,
+        alloc_client: t.Any,
+        alloc_name: str,
+        *,
+        strict: bool = False,
+    ) -> t.Any | None:
         if alloc_client is None:
-            return None
+            raise RuntimeError("Public allocation lookup requires the exact-name SDK API")
         try:
             from nebius.api.nebius.vpc.v1 import GetAllocationByNameRequest  # type: ignore
 
-            return alloc_client.get_by_name(
+            allocation = alloc_client.get_by_name(
                 GetAllocationByNameRequest(
                     parent_id=self.project_id or "",
                     name=alloc_name,
                 )
             ).wait()
-        except Exception:
-            return None
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(
+                f"Public allocation {alloc_name!r} could not be classified"
+            ) from error
+        del strict
+        metadata = getattr(allocation, "metadata", None)
+        if (
+            not self._resource_id(allocation)
+            or str(getattr(metadata, "name", "") or "") != alloc_name
+            or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+        ):
+            raise RuntimeError(f"Public allocation {alloc_name!r} returned an inexact identity")
+        return allocation
 
     def _get_allocation_by_id(self, alloc_client: t.Any, allocation_id: str) -> t.Any | None:
         if alloc_client is None:
-            return None
+            raise RuntimeError("Public allocation lookup requires the exact-ID SDK API")
         try:
             from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
 
-            return alloc_client.get(GetAllocationRequest(id=allocation_id)).wait()
-        except Exception:
-            return None
+            allocation = alloc_client.get(GetAllocationRequest(id=allocation_id)).wait()
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError("Public allocation identity could not be classified") from error
+        if self._resource_id(allocation) != allocation_id or str(
+            getattr(getattr(allocation, "metadata", None), "parent_id", "") or ""
+        ) != (self.project_id or ""):
+            raise RuntimeError("Public allocation lookup returned an inexact identity")
+        return allocation
 
     @staticmethod
     def _allocation_name(alloc_obj: t.Any, fallback: str | None = None) -> str:
@@ -3697,6 +4594,7 @@ class VMManager:
         desired_ip: str,
         alloc_name: str,
         require_resolved_ip: bool,
+        expected_attachment: tuple[str, str] | None = None,
     ) -> t.Any:
         alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
         resolved_ip = self._resolve_known_allocation_ip(alloc_client, alloc_obj)
@@ -3713,10 +4611,21 @@ class VMManager:
                 f"external_ips requested {desired_ip}."
             )
         if self._allocation_is_attached(alloc_obj):
-            raise RuntimeError(
-                f"Requested public IP allocation {desired_ip} ({actual_name}) is already attached "
-                "to another resource. Detach it before using it in gateway_group.external_ips."
+            assignment = getattr(
+                getattr(getattr(alloc_obj, "status", None), "assignment", None),
+                "network_interface",
+                None,
             )
+            observed_attachment = (
+                str(getattr(assignment, "instance_id", "") or ""),
+                str(getattr(assignment, "name", "") or ""),
+            )
+            if expected_attachment is None or observed_attachment != expected_attachment:
+                raise RuntimeError(
+                    f"Requested public IP allocation {desired_ip} ({actual_name}) is already "
+                    "attached to another resource. Detach it before using it in "
+                    "gateway_group.external_ips."
+                )
         return alloc_obj
 
     def _require_public_allocation_in_gateway_subnet(
@@ -3795,6 +4704,9 @@ class VMManager:
         alloc_name: str,
         desired_ip: str,
         allocations_by_ip: dict[str, t.Any] | None = None,
+        *,
+        strict: bool = False,
+        expected_attachment: tuple[str, str] | None = None,
     ) -> tuple[t.Any | None, dict[str, t.Any]]:
         normalized_ip = self._normalize_ip_value(desired_ip)
         if not normalized_ip:
@@ -3803,7 +4715,7 @@ class VMManager:
         mapping = allocations_by_ip or {}
         alloc_obj = mapping.get(normalized_ip)
         if alloc_obj is None and alloc_client is not None:
-            mapping = self._list_allocations_by_ip(alloc_client)
+            mapping = self._list_allocations_by_ip(alloc_client, fail_closed=strict)
             alloc_obj = mapping.get(normalized_ip)
 
         if alloc_obj is None and alloc_api is not None:
@@ -3818,7 +4730,11 @@ class VMManager:
             alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
             state = self._allocation_state(alloc_obj)
             if alloc_client is not None and self._allocation_is_transitional(state):
-                mapping = self._wait_for_allocation_release(alloc_client, normalized_ip)
+                mapping = self._wait_for_allocation_release(
+                    alloc_client,
+                    normalized_ip,
+                    fail_closed=strict,
+                )
                 alloc_obj = mapping.get(normalized_ip)
                 alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
             if alloc_obj is not None:
@@ -3828,10 +4744,11 @@ class VMManager:
                     desired_ip=normalized_ip,
                     alloc_name=alloc_name,
                     require_resolved_ip=False,
+                    expected_attachment=expected_attachment,
                 )
                 return alloc_obj, mapping
 
-        by_name = self._get_allocation_by_name(alloc_client, alloc_name)
+        by_name = self._get_allocation_by_name(alloc_client, alloc_name, strict=strict)
         if by_name is None:
             return None, mapping
 
@@ -3841,6 +4758,7 @@ class VMManager:
             desired_ip=normalized_ip,
             alloc_name=alloc_name,
             require_resolved_ip=True,
+            expected_attachment=expected_attachment,
         )
         return by_name, mapping
 
@@ -3936,21 +4854,18 @@ class VMManager:
                 raise RuntimeError(
                     f"VM-HA approved public allocation changed identity for {inst_name}"
                 )
-            if desired_ip and subnet_id:
-                alloc_obj = self._validate_vm_ha_replayed_public_allocation(
-                    alloc_client,
-                    alloc_obj,
-                    alloc_name=alloc_name,
-                    subnet_id=subnet_id,
-                    desired_ip=desired_ip,
+            approved_ip = desired_ip or self._resolve_known_allocation_ip(alloc_client, alloc_obj)
+            if not subnet_id or not approved_ip:
+                raise RuntimeError(
+                    f"VM-HA approved public allocation is incomplete for {inst_name}"
                 )
-            else:
-                alloc_obj = self._require_public_allocation_in_gateway_subnet(
-                    alloc_client,
-                    alloc_obj,
-                    subnet_id,
-                    desired_ip or self._resolve_known_allocation_ip(alloc_client, alloc_obj),
-                )
+            alloc_obj = self._validate_vm_ha_replayed_public_allocation(
+                alloc_client,
+                alloc_obj,
+                alloc_name=alloc_name,
+                subnet_id=subnet_id,
+                desired_ip=approved_ip,
+            )
         elif desired_ip and self._vm_ha_journal is None:
             alloc_obj, _ = self._find_requested_public_allocation(
                 alloc_client,
@@ -4130,30 +5045,40 @@ class VMManager:
             return self._get_allocation_by_name(alloc_client, alloc_name)
 
     def _find_ha_allocation_by_name(self, alloc_client: t.Any, alloc_name: str) -> t.Any | None:
-        """List one named HA allocation without translating API failure to absence."""
+        """Read one exact named HA allocation without translating failure to absence."""
         if alloc_client is None or not self.project_id:
             raise RuntimeError("VM-HA allocation lookup requires an SDK client and project ID")
-        from nebius.api.nebius.vpc.v1 import ListAllocationsRequest  # type: ignore
+        from nebius.api.nebius.vpc.v1 import GetAllocationByNameRequest  # type: ignore
 
-        response = alloc_client.list(
-            ListAllocationsRequest(parent_id=self.project_id),
-            **vm_ha_request_kwargs(),
-        ).wait()
-        allocations = list(getattr(response, "items", response))
-        matching = [
-            allocation
-            for allocation in allocations
-            if getattr(getattr(allocation, "metadata", None), "name", None) == alloc_name
-        ]
-        if len(matching) > 1:
-            raise RuntimeError(f"VM-HA allocation name {alloc_name} is ambiguous")
-        if not matching:
-            return None
-        allocation_id = self._resource_id(matching[0])
-        if not allocation_id:
-            raise RuntimeError(f"VM-HA allocation {alloc_name} has no authoritative identity")
+        try:
+            listed = alloc_client.get_by_name(
+                GetAllocationByNameRequest(
+                    parent_id=self.project_id,
+                    name=alloc_name,
+                ),
+                **vm_ha_request_kwargs(),
+            ).wait()
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(
+                f"VM-HA allocation {alloc_name!r} could not be classified"
+            ) from error
+        metadata = getattr(listed, "metadata", None)
+        allocation_id = self._resource_id(listed)
+        if (
+            not allocation_id
+            or str(getattr(metadata, "name", "") or "") != alloc_name
+            or str(getattr(metadata, "parent_id", "") or "") != self.project_id
+        ):
+            raise RuntimeError(f"VM-HA allocation {alloc_name!r} returned an inexact identity")
         allocation = self.get_ha_allocation(allocation_id)
-        if self._resource_id(allocation) != allocation_id:
+        reread_metadata = getattr(allocation, "metadata", None)
+        if (
+            self._resource_id(allocation) != allocation_id
+            or str(getattr(reread_metadata, "name", "") or "") != alloc_name
+            or str(getattr(reread_metadata, "parent_id", "") or "") != self.project_id
+        ):
             raise RuntimeError(f"VM-HA allocation {alloc_name} changed identity during re-read")
         return allocation
 
@@ -4391,70 +5316,6 @@ class VMManager:
 
         return alloc_ids
 
-    def _resolve_boot_disk_id_before_create(
-        self,
-        client: t.Any,
-        boot_disk_name: str,
-    ) -> str | None:
-        if not self.project_id:
-            return None
-        try:
-            from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
-            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
-
-            dsc2 = DiskServiceClient(client)  # type: ignore
-            if not hasattr(dsc2, "get_by_name"):
-                return None
-            disk_obj = dsc2.get_by_name(
-                GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
-            ).wait()
-            candidate_disk_id = getattr(disk_obj, "id", None) or getattr(
-                getattr(disk_obj, "metadata", None),
-                "id",
-                None,
-            )
-            if not candidate_disk_id:
-                return None
-
-            disk_status = getattr(disk_obj, "status", None)
-            disk_state = getattr(disk_status, "status", None) if disk_status else None
-            if disk_state and "DELET" in str(disk_state).upper():
-                print(
-                    f"[VMManager] Final fallback: disk {boot_disk_name} is deleting (state={disk_state}), waiting up to 120s..."
-                )
-                max_wait = 120
-                wait_interval = 5
-                for wait_attempt in range(max_wait // wait_interval):
-                    time.sleep(wait_interval)
-                    try:
-                        disk_obj = dsc2.get_by_name(
-                            GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
-                        ).wait()
-                        disk_status = getattr(disk_obj, "status", None)
-                        disk_state = getattr(disk_status, "status", None) if disk_status else None
-                        if disk_state and "DELET" in str(disk_state).upper():
-                            print(
-                                f"[VMManager] Still deleting... ({(wait_attempt + 1) * wait_interval}s / {max_wait}s)"
-                            )
-                            continue
-                        print(f"[VMManager] Disk state changed to {disk_state}, can now use disk")
-                        return candidate_disk_id
-                    except Exception:
-                        print(
-                            f"[VMManager] Disk deletion complete after {(wait_attempt + 1) * wait_interval}s"
-                        )
-                        return None
-                print(
-                    f"[VMManager] Timeout waiting {max_wait}s for disk deletion. Will proceed without boot disk (may create new disk)."
-                )
-                return None
-
-            print(f"[VMManager] Final fallback: resolved disk id={candidate_disk_id}")
-            return candidate_disk_id
-        except Exception as e:
-            print(f"[VMManager] Final fallback disk lookup failed: {e}")
-            return None
-
     def _create_instance_with_fallback(
         self,
         client: t.Any,
@@ -4671,7 +5532,6 @@ class VMManager:
         self,
         client: t.Any,
         instance_api: t.Any,
-        disk_api: t.Any,
         alloc_api: t.Any,
         alloc_client: t.Any,
         spec: GatewayGroupSpec,
@@ -4683,7 +5543,7 @@ class VMManager:
         expected_vm_exists: bool | None = None,
     ) -> None:
         inst_name = f"{spec.name}-{instance_index}"
-        vm_exists = self._instance_exists(client, instance_api, inst_name)
+        vm_exists = self._instance_exists(client, inst_name)
         compute_key = f"compute:{inst_name}"
         compute_effect = f"provision-{inst_name}-compute"
         approved_compute_id = self._vm_ha_resource_binding(compute_key)
@@ -4731,9 +5591,8 @@ class VMManager:
                 f"[VMManager] Internal error: provisioning config missing for {inst_name}."
             )
 
-        boot_disk_name, boot_disk_id = self._ensure_boot_disk(
+        boot_disk_id = self._ensure_boot_disk(
             client,
-            disk_api,
             spec,
             inst_name,
             provisioning,
@@ -4749,8 +5608,6 @@ class VMManager:
             preserved_allocations.get(inst_name, []),
             vm_ips,
         )
-        if not boot_disk_id:
-            boot_disk_id = self._resolve_boot_disk_id_before_create(client, boot_disk_name)
         operation_id = self._begin_vm_ha_effect(compute_effect) if spec.vm_ha is not None else None
         created = self._create_instance_with_fallback(
             client,
@@ -4786,6 +5643,386 @@ class VMManager:
             print(
                 f"[VMManager] ensure instance {inst_name} pub_ip={pub_ip} platform={spec.vm_spec.get('platform')} subnet={self._gateway_subnet_name(spec)}"
             )
+
+    def validate_missing_vm_ha_standby_replacement(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+        *,
+        target_instance_name: str,
+        retired_compute_id: str,
+        replacement_disk_name: str,
+        primary_allocation_id: str,
+        public_allocation_id: str,
+    ) -> None:
+        """Prove the creation-only replacement footprint without touching old disks."""
+
+        if spec.vm_ha is None:
+            raise RuntimeError("VM-HA missing standby replacement requires explicit HA intent")
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA missing standby replacement requires the Nebius SDK")
+        self._require_ha_compute_absent(retired_compute_id)
+        if self._get_vm_by_name_for_vm_ha_preflight(client, target_instance_name) is not None:
+            raise RuntimeError("VM-HA missing standby configured Compute name is occupied")
+        if self._get_ha_disk_by_name(client, replacement_disk_name) is not None:
+            raise RuntimeError("VM-HA fresh standby disk name is already occupied")
+        _instance_api, _disk_api, _alloc_api, allocation_client = self._resolve_client_apis(client)
+        if allocation_client is None:
+            raise RuntimeError("VM-HA missing standby replacement requires the Allocation API")
+        self._require_retained_allocation(
+            allocation_client,
+            primary_allocation_id,
+            require_detached=True,
+        )
+        self._require_retained_allocation(
+            allocation_client,
+            public_allocation_id,
+            require_detached=True,
+        )
+        self._vm_ha_effect_spec = spec
+        self._vm_ha_effect_prefixes = local_prefixes
+
+    def replace_missing_vm_ha_standby(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+        *,
+        approval_digest: str,
+    ) -> VMProvisioningResult:
+        """Create a fresh disk and Compute for one lifecycle-proven missing non-owner."""
+
+        journal = self._vm_ha_journal
+        if spec.vm_ha is None or journal is None or journal.state.transaction is None:
+            raise RuntimeError("VM-HA missing standby replacement requires durable HA intent")
+        state = journal.state
+        transaction = t.cast(VMHAMigrationTransaction, state.transaction)
+        if (
+            state.status not in {VMHALifecycleStatus.PROVISIONING, VMHALifecycleStatus.ACTIVATING}
+            or transaction.approval_kind != "recovery"
+        ):
+            raise RuntimeError(
+                "VM-HA missing standby replacement requires its active transaction checkpoint"
+            )
+        bindings = dict(transaction.resource_bindings)
+        matches: list[tuple[VMHALifecycleMember, int]] = []
+        for member in state.members:
+            cycle = vm_ha_passive_replacement_cycle_for_approval(
+                bindings,
+                member.instance_name,
+                approval_digest,
+            )
+            if (
+                cycle is not None
+                and vm_ha_missing_standby_disk_name_binding_key(
+                    member.instance_name,
+                    cycle,
+                )
+                in bindings
+            ):
+                matches.append((member, cycle))
+        if len(matches) != 1:
+            raise RuntimeError("VM-HA missing standby replacement approval is not exact")
+        target, replacement_cycle = matches[0]
+        target_name = target.instance_name
+        retired_compute_id = bindings.get(
+            vm_ha_passive_replacement_binding_key(
+                "retired-compute",
+                target_name,
+                replacement_cycle,
+            )
+        )
+        retired_disk_id = bindings.get(
+            vm_ha_passive_replacement_binding_key(
+                "retired-disk",
+                target_name,
+                replacement_cycle,
+            )
+        )
+        replacement_disk_name = bindings.get(
+            vm_ha_missing_standby_disk_name_binding_key(
+                target_name,
+                replacement_cycle,
+            )
+        )
+        primary_id = vm_ha_effective_resource_bindings(bindings).get(
+            f"primary-allocation:{target_name}:eth0"
+        )
+        public_id = vm_ha_effective_resource_bindings(bindings).get(
+            f"public-allocation:{target_name}:eth0"
+        )
+        if not all(
+            (
+                retired_compute_id,
+                retired_disk_id,
+                replacement_disk_name,
+                primary_id,
+                public_id,
+            )
+        ):
+            raise RuntimeError("VM-HA missing standby replacement bindings are incomplete")
+
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA missing standby replacement requires the Nebius SDK")
+        self._vm_ha_effect_spec = spec
+        self._vm_ha_effect_prefixes = local_prefixes
+
+        def replacement_result() -> VMProvisioningResult:
+            try:
+                route_targets = tuple(
+                    sorted(
+                        (
+                            VMHARouteTarget.model_validate(json.loads(value))
+                            for value in state.route_targets
+                        ),
+                        key=lambda target: (
+                            target.project_id,
+                            target.network_id,
+                            target.workload_subnet_id,
+                            target.route_table_id,
+                        ),
+                    )
+                )
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise RuntimeError("VM-HA lifecycle route targets are malformed") from error
+            self._vm_ha_shared_allocation_id = state.allocation_id
+            self._vm_ha_route_targets = route_targets
+            vm_ips: dict[str, str] = {}
+            for member in state.members:
+                instance = self._get_ha_instance_by_name(client, member.instance_name)
+                public_ip = self._vm_public_ip_from_object(instance)
+                if not public_ip:
+                    raise RuntimeError(
+                        f"VM-HA member {member.instance_name} has no authoritative public IP"
+                    )
+                vm_ips[member.instance_name] = public_ip
+            return VMProvisioningResult(
+                vm_ips,
+                vm_ha_runtime_binding=self._build_vm_ha_runtime_binding(client, spec),
+            )
+
+        completed = set(transaction.completed_effects)
+        create_disk_effect = vm_ha_missing_standby_replacement_effect(
+            target_name,
+            replacement_cycle,
+            "create-boot-disk",
+        )
+        create_compute_effect = vm_ha_missing_standby_replacement_effect(
+            target_name,
+            replacement_cycle,
+            "create-compute",
+        )
+
+        if create_compute_effect in completed:
+            replacement_compute_id = self._vm_ha_resource_binding(f"compute:{target_name}")
+            replacement_compute = self._get_ha_instance_by_name(client, target_name)
+            if (
+                not replacement_compute_id
+                or replacement_compute_id == retired_compute_id
+                or self._resource_id(replacement_compute) != replacement_compute_id
+            ):
+                raise RuntimeError("VM-HA completed missing standby identity drifted")
+            replacement_public_ip = self._vm_public_ip_from_object(replacement_compute)
+            if not replacement_public_ip:
+                raise RuntimeError("VM-HA completed missing standby has no public IP")
+            self._wait_for_vm_ha_member_ssh(
+                target_name,
+                replacement_public_ip,
+                username=(
+                    spec.vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+                ),
+            )
+            return replacement_result()
+
+        self._verify_vm_ha_transaction_preconditions(spec, local_prefixes)
+        self._require_ha_compute_absent(t.cast(str, retired_compute_id))
+        current_target = self._get_vm_by_name_for_vm_ha_preflight(client, target_name)
+        pending_compute = transaction.pending_effect == create_compute_effect
+        accepted_compute = bool(
+            pending_compute
+            and transaction.accepted_cloud_operation_effect == create_compute_effect
+            and transaction.accepted_cloud_operation_id
+        )
+        if current_target is not None and not accepted_compute:
+            raise RuntimeError("VM-HA missing standby Compute name is occupied")
+
+        resumed_compute_operation_id: str | None = None
+        expected_allocation_owner: AllocationOwner | None = None
+        if accepted_compute:
+            resumed_compute_operation_id = self._begin_vm_ha_effect(create_compute_effect)
+            accepted_compute_id = self._vm_ha_accepted_resource_ids.get(create_compute_effect)
+            if (
+                current_target is None
+                or not accepted_compute_id
+                or self._resource_id(current_target) != accepted_compute_id
+                or not target.network_interface_name
+            ):
+                raise RuntimeError("VM-HA accepted missing standby Compute identity is invalid")
+            expected_allocation_owner = AllocationOwner(
+                accepted_compute_id,
+                target.network_interface_name,
+            )
+
+        expected_names = {member.instance_name for member in state.members}
+        rendered = self._prepare_gateway_ssh_enrollment_cloud_inits(
+            spec,
+            local_prefixes,
+            expected_names - {target_name},
+            False,
+        )
+        target_cloud_init = rendered.get(target_name)
+        if not target_cloud_init:
+            raise RuntimeError("VM-HA missing standby cloud-init was not prevalidated")
+        provisioning = replace(
+            self._build_vm_provisioning_config(client, spec, local_prefixes),
+            cloud_init=target_cloud_init,
+        )
+        instance_api, _disk_api, _alloc_api, allocation_client = self._resolve_client_apis(client)
+        if allocation_client is None:
+            raise RuntimeError("VM-HA missing standby replacement requires the Allocation API")
+        self._require_retained_allocation(
+            allocation_client,
+            t.cast(str, primary_id),
+            require_detached=expected_allocation_owner is None,
+            expected_owner=expected_allocation_owner,
+        )
+        self._require_retained_allocation(
+            allocation_client,
+            t.cast(str, public_id),
+            require_detached=expected_allocation_owner is None,
+            expected_owner=expected_allocation_owner,
+        )
+
+        replacement_disk_key = vm_ha_passive_replacement_binding_key(
+            "disk",
+            target_name,
+            replacement_cycle,
+        )
+        replacement_disk_id = bindings.get(replacement_disk_key)
+        if create_disk_effect not in completed:
+            operation_id = self._begin_vm_ha_effect(create_disk_effect)
+            transaction = t.cast(VMHAMigrationTransaction, journal.state.transaction)
+            accepted_disk = bool(
+                transaction.accepted_cloud_operation_effect == create_disk_effect
+                and transaction.accepted_cloud_operation_id
+            )
+            replacement_disk = self._get_ha_disk_by_name(
+                client,
+                t.cast(str, replacement_disk_name),
+            )
+            if replacement_disk is not None and not accepted_disk:
+                raise RuntimeError("VM-HA fresh standby disk name is occupied")
+            accepted_disk_id = self._vm_ha_accepted_resource_ids.get(create_disk_effect)
+            if replacement_disk is None or (accepted_disk and not accepted_disk_id):
+                from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+
+                image_id = self._resolve_boot_image_id(client, spec, provisioning)
+                if not image_id:
+                    raise RuntimeError("VM-HA missing standby boot image could not be resolved")
+                replacement_disk_id = self._submit_boot_disk_create(
+                    DiskServiceClient(client),
+                    self._build_boot_disk_create_request(
+                        t.cast(str, replacement_disk_name),
+                        provisioning,
+                        image_id,
+                    ),
+                    t.cast(str, replacement_disk_name),
+                    operation_id,
+                )
+                replacement_disk = self._get_ha_disk_by_name(
+                    client,
+                    t.cast(str, replacement_disk_name),
+                )
+            else:
+                replacement_disk_id = self._resource_id(replacement_disk)
+            accepted_disk_id = self._vm_ha_accepted_resource_ids.get(create_disk_effect)
+            if (
+                not replacement_disk_id
+                or replacement_disk is None
+                or self._resource_id(replacement_disk) != replacement_disk_id
+                or replacement_disk_id == retired_disk_id
+                or accepted_disk_id != replacement_disk_id
+            ):
+                raise RuntimeError("VM-HA fresh standby disk identity is invalid")
+            self._complete_vm_ha_effect(
+                create_disk_effect,
+                resource_updates={replacement_disk_key: replacement_disk_id},
+            )
+            completed.add(create_disk_effect)
+        else:
+            replacement_disk = self._get_ha_disk_by_name(
+                client,
+                t.cast(str, replacement_disk_name),
+            )
+            if (
+                not replacement_disk_id
+                or replacement_disk is None
+                or self._resource_id(replacement_disk) != replacement_disk_id
+                or replacement_disk_id == retired_disk_id
+            ):
+                raise RuntimeError("VM-HA completed fresh standby disk identity drifted")
+
+        operation_id = resumed_compute_operation_id or self._begin_vm_ha_effect(
+            create_compute_effect
+        )
+        transaction = t.cast(VMHAMigrationTransaction, journal.state.transaction)
+        accepted_compute = bool(
+            transaction.accepted_cloud_operation_effect == create_compute_effect
+            and transaction.accepted_cloud_operation_id
+        )
+        replacement_compute = self._get_vm_by_name_for_vm_ha_preflight(client, target_name)
+        if replacement_compute is not None and not accepted_compute:
+            raise RuntimeError("VM-HA missing standby Compute name is occupied")
+        vm_ips: dict[str, str] = {}
+        self._private_alloc_ids[target_name] = [t.cast(str, primary_id)]
+        accepted_compute_id = self._vm_ha_accepted_resource_ids.get(create_compute_effect)
+        if replacement_compute is None or (accepted_compute and not accepted_compute_id):
+            created = self._create_instance_with_fallback(
+                client,
+                instance_api,
+                target_name,
+                provisioning,
+                replacement_disk_id,
+                [t.cast(str, public_id)],
+                vm_ips,
+                strict_vm_ha=True,
+                operation_id=operation_id,
+            )
+            if not created:
+                raise RuntimeError("VM-HA missing standby Compute was not created")
+            replacement_compute = self._get_ha_instance_by_name(client, target_name)
+        replacement_compute_id = self._resource_id(replacement_compute)
+        accepted_compute_id = self._vm_ha_accepted_resource_ids.get(create_compute_effect)
+        if (
+            not replacement_compute_id
+            or replacement_compute_id == retired_compute_id
+            or accepted_compute_id != replacement_compute_id
+        ):
+            raise RuntimeError("VM-HA fresh standby Compute identity is invalid")
+        self._complete_vm_ha_effect(
+            create_compute_effect,
+            resource_updates={
+                vm_ha_passive_replacement_binding_key(
+                    "compute",
+                    target_name,
+                    replacement_cycle,
+                ): replacement_compute_id,
+            },
+        )
+        replacement_public_ip = self._vm_public_ip_from_object(replacement_compute)
+        if not replacement_public_ip:
+            replacement_public_ip = vm_ips.get(target_name)
+        if not replacement_public_ip:
+            raise RuntimeError("VM-HA fresh standby has no public IP")
+        self._wait_for_vm_ha_member_ssh(
+            target_name,
+            replacement_public_ip,
+            username=(
+                spec.vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+            ),
+        )
+        return replacement_result()
 
     def replace_failed_vm_ha_passive(
         self,
@@ -4894,7 +6131,7 @@ class VMManager:
             frozenset(active_names),
         }:
             raise RuntimeError("VM-HA passive replacement member set changed before deletion")
-        rendered = self._prepare_vm_ha_enrollment_cloud_inits(
+        rendered = self._prepare_gateway_ssh_enrollment_cloud_inits(
             spec,
             local_prefixes,
             expected_names - {passive_name},
@@ -5127,7 +6364,10 @@ class VMManager:
         )
         vm_ips: dict[str, str] = {}
         try:
-            print(f"[VMManager] Using project_id={self.project_id} zone={self.zone or spec.region}")
+            print(
+                f"[VMManager] Using project_id={self.project_id} "
+                f"region={self.region or spec.region}"
+            )
         except Exception:
             pass
         client = self._build_sdk_client(spec.region)
@@ -5137,9 +6377,9 @@ class VMManager:
 
         try:
             if client is not None:
-                instance_api, disk_api, alloc_api, alloc_client = self._resolve_client_apis(client)
+                instance_api, _disk_api, alloc_api, alloc_client = self._resolve_client_apis(client)
                 vm_ha_existing: dict[str, tuple[t.Any, str]] = {}
-                vm_ha_cloud_inits: dict[str, str] = {}
+                gateway_ssh_cloud_inits: dict[str, str] = {}
                 if spec.vm_ha is not None:
                     vm_ha_existing = self._discover_vm_ha_members(client, spec)
                     self.verify_vm_ha_existing_identities(
@@ -5149,7 +6389,7 @@ class VMManager:
                             or os.environ.get("VPNGW_SSH_USER", "ubuntu")
                         ),
                     )
-                    vm_ha_cloud_inits = self._prepare_vm_ha_enrollment_cloud_inits(
+                    gateway_ssh_cloud_inits = self._prepare_gateway_ssh_enrollment_cloud_inits(
                         spec,
                         local_prefixes,
                         set(vm_ha_existing),
@@ -5168,6 +6408,21 @@ class VMManager:
                     existing = [vm_obj for vm_obj, _ in vm_ha_existing.values()]
                 else:
                     existing = self._discover_existing_instances(client, spec)
+                    if self._ssh_policy is not None:
+                        existing_names = {
+                            str(
+                                getattr(getattr(instance, "metadata", None), "name", "")
+                                or getattr(instance, "name", "")
+                                or ""
+                            )
+                            for instance in existing
+                        }
+                        gateway_ssh_cloud_inits = self._prepare_gateway_ssh_enrollment_cloud_inits(
+                            spec,
+                            local_prefixes,
+                            existing_names,
+                            recreate,
+                        )
 
                 print(self._existing_instances_message(len(existing), recreate=recreate))
 
@@ -5210,11 +6465,7 @@ class VMManager:
                         needs_provisioning = recreate or not expected_vm_exists
                     else:
                         expected_vm_exists = None
-                        needs_provisioning = not self._instance_exists(
-                            client,
-                            instance_api,
-                            inst_name,
-                        )
+                        needs_provisioning = not self._instance_exists(client, inst_name)
                     if needs_provisioning and provisioning is None:
                         provisioning = self._build_vm_provisioning_config(
                             client,
@@ -5222,17 +6473,21 @@ class VMManager:
                             local_prefixes,
                         )
                     instance_provisioning = provisioning
-                    if needs_provisioning and spec.vm_ha is not None:
-                        if provisioning is None or f"{spec.name}-{i}" not in vm_ha_cloud_inits:
-                            raise RuntimeError("VM-HA enrollment cloud-init was not prevalidated")
+                    if needs_provisioning and self._ssh_policy is not None:
+                        if (
+                            provisioning is None
+                            or f"{spec.name}-{i}" not in gateway_ssh_cloud_inits
+                        ):
+                            raise RuntimeError(
+                                "Gateway SSH enrollment cloud-init was not prevalidated"
+                            )
                         instance_provisioning = replace(
                             provisioning,
-                            cloud_init=vm_ha_cloud_inits[f"{spec.name}-{i}"],
+                            cloud_init=gateway_ssh_cloud_inits[f"{spec.name}-{i}"],
                         )
                     self._provision_instance(
                         client,
                         instance_api,
-                        disk_api,
                         alloc_api,
                         alloc_client,
                         spec,
@@ -5271,6 +6526,8 @@ class VMManager:
                 self._vm_ha_shared_allocation_id = None
                 self._vm_ha_route_targets = None
                 raise RuntimeError(f"VM-HA provisioning failed closed: {e}") from e
+            if self._ssh_policy is not None:
+                raise RuntimeError(f"Gateway provisioning failed closed: {e}") from e
             print(f"[VMManager] ensure_group failed: {e}. Proceeding in scaffold mode.")
 
         if spec.vm_ha is not None:
@@ -5282,6 +6539,7 @@ class VMManager:
                     binding_effect,
                     resource_updates={
                         "route-runtime-id": binding.route_runtime_id,
+                        **credential_bindings_from_runtime(binding),
                     },
                 )
             except Exception as e:
@@ -5325,31 +6583,46 @@ class VMManager:
             return None
         return None
 
-    def _list_allocations_by_ip(self, alloc_client: t.Any) -> dict[str, t.Any]:
+    def _list_allocations_by_ip(
+        self,
+        alloc_client: t.Any,
+        *,
+        fail_closed: bool = False,
+    ) -> dict[str, t.Any]:
         try:
             from nebius.api.nebius.vpc.v1 import ListAllocationsRequest  # type: ignore
 
-            response = alloc_client.list(ListAllocationsRequest(parent_id=self.project_id or ""))
-            if hasattr(response, "wait"):
-                response = response.wait()
-            items = []
-            if hasattr(response, "items"):
-                items = response.items
-            elif hasattr(response, "__iter__"):
-                items = list(response)
-
             mapping: dict[str, t.Any] = {}
-            for allocation in items:
+            allocations = collect_nebius_pages(
+                lambda page_token: alloc_client.list(
+                    ListAllocationsRequest(
+                        parent_id=self.project_id or "",
+                        page_size=1000,
+                        page_token=page_token,
+                    )
+                ),
+                context="Public allocation",
+                item_identity=nebius_resource_id,
+            )
+            for allocation in allocations:
                 full_allocation = allocation
                 ip_value = self._allocation_ip_from_obj(full_allocation)
                 if not ip_value:
                     full_allocation = self._hydrate_allocation(alloc_client, allocation)
                     ip_value = self._allocation_ip_from_obj(full_allocation)
-                if ip_value:
-                    mapping[ip_value] = full_allocation
+                if not ip_value:
+                    continue
+                existing = mapping.get(ip_value)
+                if (
+                    fail_closed
+                    and existing is not None
+                    and self._resource_id(existing) != self._resource_id(full_allocation)
+                ):
+                    raise RuntimeError("Multiple public allocations report the same address")
+                mapping[ip_value] = full_allocation
             return mapping
-        except Exception:
-            return {}
+        except Exception as error:
+            raise RuntimeError("Public allocations could not be listed") from error
 
     @staticmethod
     def _allocation_state(alloc_obj: t.Any) -> str | None:
@@ -5377,6 +6650,17 @@ class VMManager:
                 pass
             return str(current)
         return None
+
+    @classmethod
+    def _allocation_has_stable_assignment_state(cls, alloc_obj: t.Any) -> bool:
+        """Accept only provider-stable states with a matching assignment shape."""
+
+        state = cls._allocation_state(alloc_obj)
+        normalized_state = state.rsplit(".", 1)[-1].upper() if state else ""
+        attached = cls._allocation_is_attached(alloc_obj)
+        return (normalized_state == "ALLOCATED" and not attached) or (
+            normalized_state == "ASSIGNED" and attached
+        )
 
     @staticmethod
     def _allocation_is_attached(alloc_obj: t.Any) -> bool:
@@ -5407,6 +6691,8 @@ class VMManager:
         self,
         alloc_client: t.Any,
         desired_ip: str,
+        *,
+        fail_closed: bool = False,
     ) -> dict[str, t.Any]:
         print(
             f"[VMManager] Allocation {desired_ip} appears to be releasing. Waiting up to 10s before retry..."
@@ -5414,7 +6700,10 @@ class VMManager:
         allocations_by_ip: dict[str, t.Any] = {}
         for _ in range(5):
             time.sleep(2)
-            allocations_by_ip = self._list_allocations_by_ip(alloc_client)
+            allocations_by_ip = self._list_allocations_by_ip(
+                alloc_client,
+                fail_closed=fail_closed,
+            )
             alloc_obj = allocations_by_ip.get(desired_ip)
             if alloc_obj is None:
                 break
@@ -5445,6 +6734,9 @@ class VMManager:
         alloc_name: str,
         desired_ip: str | None,
         allocations_by_ip: dict[str, t.Any],
+        *,
+        strict: bool = False,
+        expected_attachment: tuple[str, str] | None = None,
     ) -> tuple[t.Any | None, dict[str, t.Any]]:
         alloc_obj = None
 
@@ -5455,6 +6747,8 @@ class VMManager:
                 alloc_name,
                 desired_ip,
                 allocations_by_ip,
+                strict=strict,
+                expected_attachment=expected_attachment,
             )
             if alloc_obj is not None:
                 alloc_obj = self._require_public_allocation_in_gateway_subnet(
@@ -5464,7 +6758,11 @@ class VMManager:
                     desired_ip,
                 )
         else:
-            by_name = self._get_allocation_by_name(alloc_client, alloc_name)
+            by_name = self._get_allocation_by_name(
+                alloc_client,
+                alloc_name,
+                strict=strict,
+            )
             if by_name is not None:
                 alloc_obj = by_name
 
@@ -5492,6 +6790,8 @@ class VMManager:
         alloc_name: str,
         desired_ip: str | None,
         allocations_by_ip: dict[str, t.Any],
+        *,
+        strict: bool = False,
     ) -> t.Any:
         from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
         from nebius.api.nebius.vpc.v1 import (  # type: ignore
@@ -5514,9 +6814,19 @@ class VMManager:
         )
         try:
             operation = alloc_client.create(request).wait()
-            self._sync_operation(operation)
+            if strict:
+                self._sync_preparation_operation(operation, action="Public allocation creation")
+            else:
+                self._sync_operation(operation)
         except Exception as e:
             error_text = str(e).lower()
+            reconciled = self._get_allocation_by_name(
+                alloc_client,
+                alloc_name,
+                strict=strict,
+            )
+            if reconciled is not None:
+                return reconciled
             if "already exists" not in error_text and "duplicate" not in error_text:
                 if desired_ip and ("immutable" in error_text or "subnet" in error_text):
                     print(
@@ -5527,7 +6837,11 @@ class VMManager:
                         f"Failed to create public IP allocation {alloc_name}: {e}"
                     ) from e
 
-        alloc_obj = self._get_allocation_by_name(alloc_client, alloc_name)
+        alloc_obj = self._get_allocation_by_name(
+            alloc_client,
+            alloc_name,
+            strict=strict,
+        )
         if alloc_obj is not None:
             if desired_ip:
                 alloc_obj = self._validate_requested_public_allocation(
@@ -5584,6 +6898,223 @@ class VMManager:
             return desired_ip
         raise RuntimeError(f"Allocation {alloc_name} returned no IP address (API may be delayed).")
 
+    def _strict_allocation_by_id(self, allocation_client: t.Any, allocation_id: str) -> t.Any:
+        from nebius.api.nebius.vpc.v1 import GetAllocationRequest  # type: ignore
+
+        try:
+            allocation = allocation_client.get(GetAllocationRequest(id=allocation_id)).wait()
+        except Exception as error:
+            raise RuntimeError("Public allocation could not be reread by identity") from error
+        if self._resource_id(allocation) != allocation_id or str(
+            getattr(getattr(allocation, "metadata", None), "parent_id", "") or ""
+        ) != (self.project_id or ""):
+            raise RuntimeError("Public allocation changed identity during reread")
+        return allocation
+
+    def _preparation_instance_ids(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+    ) -> dict[int, str | None]:
+        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
+
+        instance_client = InstanceServiceClient(client)
+        identities: dict[int, str | None] = {}
+        for index in range(spec.instance_count):
+            name = f"{spec.name}-{index}"
+            try:
+                instance = instance_client.get_by_name(
+                    GetByNameRequest(parent_id=self.project_id or "", name=name)
+                ).wait()
+            except Exception as error:
+                if nebius_request_error_code_is(error, "NOT_FOUND"):
+                    identities[index] = None
+                    continue
+                raise RuntimeError(
+                    f"Gateway VM {name!r} could not be classified for allocation reuse"
+                ) from error
+            instance_id = self._resource_id(instance)
+            metadata = getattr(instance, "metadata", None)
+            if (
+                not instance_id
+                or str(getattr(metadata, "name", "") or "") != name
+                or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+            ):
+                raise RuntimeError(f"Gateway VM {name!r} returned an inexact identity")
+            identities[index] = instance_id
+        return identities
+
+    def _validate_prepared_public_allocation(
+        self,
+        allocation_client: t.Any,
+        allocation: t.Any,
+        *,
+        subnet_id: str,
+        desired_ip: str | None,
+        expected_attachment: tuple[str, str] | None,
+        expected_resource_version: int | None = None,
+    ) -> tuple[t.Any, str]:
+        allocation_id = self._resource_id(allocation)
+        if not allocation_id:
+            raise RuntimeError("Public allocation has no authoritative identity")
+        allocation = self._strict_allocation_by_id(allocation_client, allocation_id)
+        metadata = getattr(allocation, "metadata", None)
+        allocation_spec = getattr(allocation, "spec", None)
+        ipv4_public = getattr(allocation_spec, "ipv4_public", None)
+        resource_version = int(getattr(metadata, "resource_version", 0) or 0)
+        if expected_resource_version is not None and resource_version != expected_resource_version:
+            raise RuntimeError("Selected public allocation changed after it was displayed")
+        if str(getattr(metadata, "parent_id", "") or "") != (self.project_id or ""):
+            raise RuntimeError("Public allocation belongs to a different project")
+        if ipv4_public is None or getattr(allocation_spec, "ipv4_private", None) is not None:
+            raise RuntimeError("Selected allocation is not exclusively public IPv4")
+        if str(getattr(ipv4_public, "subnet_id", "") or "") != subnet_id:
+            raise RuntimeError("Public allocation belongs to a different subnet")
+        if not self._allocation_has_stable_assignment_state(allocation):
+            raise RuntimeError("Public allocation is not stably allocated")
+        address = self._resolve_known_allocation_ip(allocation_client, allocation)
+        if not address:
+            raise RuntimeError("Public allocation address could not be resolved")
+        if desired_ip and address != self._normalize_ip_value(desired_ip):
+            raise RuntimeError("Public allocation address changed after selection")
+        self._validate_requested_public_allocation(
+            allocation_client,
+            allocation,
+            desired_ip=address,
+            alloc_name=self._allocation_name(allocation),
+            require_resolved_ip=True,
+            expected_attachment=expected_attachment,
+        )
+        return allocation, address
+
+    def list_eligible_public_allocations(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        subnet_id: str,
+    ) -> list[PublicAllocationCandidate]:
+        """Return stable exact-subnet allocations suitable for interactive reuse."""
+
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client not available; cannot list public allocations.")
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore
+            AllocationServiceClient,
+            ListAllocationsRequest,
+        )
+
+        allocation_client = AllocationServiceClient(client)
+        instance_ids = self._preparation_instance_ids(client, spec)
+        index_by_instance_id = {
+            instance_id: index
+            for index, instance_id in instance_ids.items()
+            if instance_id is not None
+        }
+        candidates: list[PublicAllocationCandidate] = []
+        listed_allocations = collect_nebius_pages(
+            lambda page_token: allocation_client.list(
+                ListAllocationsRequest(
+                    parent_id=self.project_id or "",
+                    page_size=1000,
+                    page_token=page_token,
+                )
+            ),
+            context="Public allocation",
+            item_identity=nebius_resource_id,
+        )
+        for listed in listed_allocations:
+            allocation_id = self._resource_id(listed)
+            if not allocation_id:
+                raise RuntimeError("Public allocation inventory contains an unidentified resource")
+            allocation = self._strict_allocation_by_id(allocation_client, allocation_id)
+            metadata = getattr(allocation, "metadata", None)
+            allocation_spec = getattr(allocation, "spec", None)
+            ipv4_public = getattr(allocation_spec, "ipv4_public", None)
+            if (
+                str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+                or ipv4_public is None
+                or getattr(allocation_spec, "ipv4_private", None) is not None
+                or str(getattr(ipv4_public, "subnet_id", "") or "") != subnet_id
+            ):
+                continue
+            if not self._allocation_has_stable_assignment_state(allocation):
+                continue
+            resource_version = int(getattr(metadata, "resource_version", 0) or 0)
+            if resource_version < 1:
+                continue
+            address = self._resolve_known_allocation_ip(allocation_client, allocation)
+            if not address:
+                continue
+            assigned_instance_index: int | None = None
+            assigned_nic_index: int | None = None
+            if self._allocation_is_attached(allocation):
+                assignment = getattr(
+                    getattr(getattr(allocation, "status", None), "assignment", None),
+                    "network_interface",
+                    None,
+                )
+                assigned_instance_id = str(getattr(assignment, "instance_id", "") or "")
+                assigned_nic_name = str(getattr(assignment, "name", "") or "")
+                assigned_instance_index = index_by_instance_id.get(assigned_instance_id)
+                match = re.fullmatch(r"eth([0-9]+)", assigned_nic_name)
+                if assigned_instance_index is None or match is None:
+                    continue
+                assigned_nic_index = int(match.group(1))
+                if assigned_nic_index != 0:
+                    continue
+            candidates.append(
+                PublicAllocationCandidate(
+                    allocation_id=allocation_id,
+                    name=self._allocation_name(allocation),
+                    address=address,
+                    resource_version=resource_version,
+                    assigned_instance_index=assigned_instance_index,
+                    assigned_nic_index=assigned_nic_index,
+                )
+            )
+        return sorted(candidates, key=lambda item: (item.address, item.allocation_id))
+
+    def verify_selected_public_allocations(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        subnet_id: str,
+        selections: t.Mapping[tuple[int, int], PublicAllocationCandidate],
+    ) -> None:
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client not available; cannot verify allocations.")
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient  # type: ignore
+
+        allocation_client = AllocationServiceClient(client)
+        instance_ids = self._preparation_instance_ids(client, spec)
+        selected_ids: set[str] = set()
+        for (instance_index, nic_index), candidate in selections.items():
+            if candidate.resource_version < 1:
+                raise RuntimeError("Selected public allocation has no authoritative version")
+            if candidate.allocation_id in selected_ids:
+                raise RuntimeError("The same public allocation was selected more than once")
+            selected_ids.add(candidate.allocation_id)
+            expected_instance_id = instance_ids.get(instance_index)
+            expected_attachment = (
+                (expected_instance_id, f"eth{nic_index}")
+                if expected_instance_id is not None
+                else None
+            )
+            allocation = self._strict_allocation_by_id(
+                allocation_client,
+                candidate.allocation_id,
+            )
+            self._validate_prepared_public_allocation(
+                allocation_client,
+                allocation,
+                subnet_id=subnet_id,
+                desired_ip=candidate.address,
+                expected_attachment=expected_attachment,
+                expected_resource_version=candidate.resource_version,
+            )
+
     def _prepare_public_allocations_for_subnet(
         self,
         client: t.Any,
@@ -5593,6 +7124,7 @@ class VMManager:
         instance_indices: t.Collection[int],
         desired_external_ips: list[list[str]] | None,
         require_unattached: bool,
+        strict: bool = False,
     ) -> dict[int, list[str]]:
         selected_indices = tuple(sorted(set(instance_indices)))
         if not selected_indices:
@@ -5623,7 +7155,10 @@ class VMManager:
             for index in selected_indices
             for nic_index in range(num_nics)
         )
-        allocations_by_ip = self._list_allocations_by_ip(alloc_client) if desired_any else {}
+        allocations_by_ip = (
+            self._list_allocations_by_ip(alloc_client, fail_closed=strict) if desired_any else {}
+        )
+        preparation_instance_ids = self._preparation_instance_ids(client, spec) if strict else {}
         allocated_by_instance: dict[int, list[str]] = {}
 
         for inst_index in selected_indices:
@@ -5632,24 +7167,49 @@ class VMManager:
             for nic_index in range(num_nics):
                 nic_name = f"eth{nic_index}"
                 alloc_name = f"{inst_name}-{nic_name}-ip"
+                expected_instance_id = preparation_instance_ids.get(inst_index)
+                expected_attachment = (
+                    (expected_instance_id, nic_name) if expected_instance_id is not None else None
+                )
                 desired_ip = self._normalize_ip_value(
                     self._desired_requested_ip(desired_matrix, inst_index, nic_index)
                 )
-                alloc_obj, allocations_by_ip = self._resolve_prepared_public_allocation(
-                    alloc_client,
-                    subnet_id,
-                    alloc_name,
-                    desired_ip,
-                    allocations_by_ip,
-                )
-                if alloc_obj is None:
-                    alloc_obj = self._create_prepared_public_allocation(
+                if strict:
+                    alloc_obj, allocations_by_ip = self._resolve_prepared_public_allocation(
+                        alloc_client,
+                        subnet_id,
+                        alloc_name,
+                        desired_ip,
+                        allocations_by_ip,
+                        strict=True,
+                        expected_attachment=expected_attachment,
+                    )
+                else:
+                    alloc_obj, allocations_by_ip = self._resolve_prepared_public_allocation(
                         alloc_client,
                         subnet_id,
                         alloc_name,
                         desired_ip,
                         allocations_by_ip,
                     )
+                if alloc_obj is None:
+                    if strict:
+                        alloc_obj = self._create_prepared_public_allocation(
+                            alloc_client,
+                            subnet_id,
+                            alloc_name,
+                            desired_ip,
+                            allocations_by_ip,
+                            strict=True,
+                        )
+                    else:
+                        alloc_obj = self._create_prepared_public_allocation(
+                            alloc_client,
+                            subnet_id,
+                            alloc_name,
+                            desired_ip,
+                            allocations_by_ip,
+                        )
 
                 resolved_ip = self._resolve_prepared_public_ip(
                     alloc_client,
@@ -5657,6 +7217,14 @@ class VMManager:
                     alloc_name,
                     desired_ip,
                 )
+                if strict:
+                    alloc_obj, resolved_ip = self._validate_prepared_public_allocation(
+                        alloc_client,
+                        alloc_obj,
+                        subnet_id=subnet_id,
+                        desired_ip=desired_ip or resolved_ip,
+                        expected_attachment=expected_attachment,
+                    )
                 if require_unattached:
                     alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
                     metadata = getattr(alloc_obj, "metadata", None)
@@ -5669,8 +7237,7 @@ class VMManager:
                     state = self._allocation_state(alloc_obj)
                     if (
                         self._allocation_name(alloc_obj) != alloc_name
-                        or str(getattr(metadata, "parent_id", "") or "")
-                        != (self.project_id or "")
+                        or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
                         or ipv4_public is None
                         or getattr(allocation_spec, "ipv4_private", None) is not None
                         or str(getattr(ipv4_public, "subnet_id", "") or "") != subnet_id
@@ -5720,6 +7287,41 @@ class VMManager:
             require_unattached=require_unattached,
         )
 
+    def prepare_network_foundation(self, spec: GatewayGroupSpec) -> str:
+        """Converge and verify the subnet and its required default-egress route."""
+
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client not available; cannot prepare network.")
+        subnet_id = self._ensure_vpngw_subnet(client, spec, strict=True)
+        if not subnet_id:
+            raise RuntimeError("Failed to resolve or create the dedicated gateway subnet.")
+        self._ensure_vpngw_route_table(client, subnet_id)
+        return subnet_id
+
+    def prepare_public_allocations_in_subnet(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        subnet_id: str,
+        desired_external_ips: list[list[str]] | None,
+    ) -> list[list[str]]:
+        """Converge and verify the complete public-allocation matrix in a prepared subnet."""
+
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client not available; cannot prepare allocations.")
+        allocated_by_instance = self._prepare_public_allocations_for_subnet(
+            client,
+            spec,
+            subnet_id,
+            instance_indices=range(spec.instance_count),
+            desired_external_ips=desired_external_ips,
+            require_unattached=False,
+            strict=True,
+        )
+        return [allocated_by_instance[index] for index in range(spec.instance_count)]
+
     def prepare_network(
         self,
         spec: GatewayGroupSpec,
@@ -5731,29 +7333,16 @@ class VMManager:
 
         Returns a list of public IPs per instance (list-of-lists, NIC order).
         """
-        client = self._get_client()
-        if client is None:
-            raise RuntimeError("Nebius SDK client not available; cannot prepare network.")
-
-        subnet_id = self._ensure_vpngw_subnet(client, spec)
-        if not subnet_id:
-            raise RuntimeError("Failed to resolve or create the dedicated gateway subnet.")
-
-        # Ensure route table exists for the dedicated gateway subnet (idempotent).
-        self._ensure_vpngw_route_table(client, subnet_id)
+        subnet_id = self.prepare_network_foundation(spec)
 
         if not allocate_ips:
             return []
 
-        allocated_by_instance = self._prepare_public_allocations_for_subnet(
-            client,
+        return self.prepare_public_allocations_in_subnet(
             spec,
-            subnet_id,
-            instance_indices=range(spec.instance_count),
+            subnet_id=subnet_id,
             desired_external_ips=desired_external_ips,
-            require_unattached=False,
         )
-        return [allocated_by_instance[index] for index in range(spec.instance_count)]
 
     def _resolve_gateway_network(
         self,
@@ -5761,6 +7350,7 @@ class VMManager:
         spec: GatewayGroupSpec,
         *,
         report_selection: bool = False,
+        strict: bool = False,
     ) -> tuple[t.Any, str, str, t.Any]:
         from nebius.api.nebius.vpc.v1 import (  # type: ignore
             GetNetworkByNameRequest,
@@ -5781,7 +7371,7 @@ class VMManager:
                     )
             except Exception as e:
                 raise RuntimeError(
-                    f"[VMManager] Specified network_id '{spec.network_id}' not found: {e}"
+                    f"[VMManager] Specified network_id '{spec.network_id}' could not be read."
                 ) from e
         else:
             if report_selection:
@@ -5795,17 +7385,33 @@ class VMManager:
                         name="default-network",
                     )
                 ).wait()
+                if (
+                    str(getattr(getattr(network_obj, "metadata", None), "name", "") or "")
+                    != "default-network"
+                ):
+                    raise RuntimeError("default-network lookup returned an inexact identity")
                 if report_selection:
                     self._report_gateway_network_once("[VMManager] Found default-network, using it")
-            except Exception:
+            except Exception as error:
+                if not nebius_request_error_code_is(error, "NOT_FOUND"):
+                    raise RuntimeError(
+                        "default-network could not be classified during VPC auto-discovery"
+                    ) from error
                 network_obj = None
 
             if network_obj is None:
                 try:
-                    networks = net_client.list(
-                        ListNetworksRequest(parent_id=self.project_id or "")
-                    ).wait()
-                    items = getattr(networks, "items", []) or []
+                    items = collect_nebius_pages(
+                        lambda page_token: net_client.list(
+                            ListNetworksRequest(
+                                parent_id=self.project_id or "",
+                                page_size=1000,
+                                page_token=page_token,
+                            )
+                        ),
+                        context="Network",
+                        item_identity=nebius_resource_id,
+                    )
                     if not items:
                         raise RuntimeError(
                             "[VMManager] No networks found in project. "
@@ -5833,8 +7439,8 @@ class VMManager:
                         )
                 except RuntimeError:
                     raise
-                except Exception as e:
-                    raise RuntimeError(f"[VMManager] Failed to list networks: {e}") from e
+                except Exception as error:
+                    raise RuntimeError("[VMManager] Failed to list networks") from error
 
         if network_obj is None:
             raise RuntimeError(
@@ -5845,6 +7451,12 @@ class VMManager:
         network_id = self._resource_id(network_obj)
         if not network_id:
             raise RuntimeError("[VMManager] Resolved network is missing an id.")
+        if spec.network_id and network_id != spec.network_id:
+            raise RuntimeError("[VMManager] Specified network lookup returned an inexact identity.")
+        if str(getattr(getattr(network_obj, "metadata", None), "parent_id", "") or "") != (
+            self.project_id or ""
+        ):
+            raise RuntimeError("[VMManager] Resolved network belongs to a different project.")
 
         network_name = (
             getattr(getattr(network_obj, "metadata", None), "name", None) or "default-network"
@@ -5857,30 +7469,34 @@ class VMManager:
         subnet_client: t.Any,
         network_id: str,
         subnet_name: str,
+        *,
+        strict: bool = False,
     ) -> t.Any | None:
-        try:
-            from nebius.api.nebius.vpc.v1 import (  # type: ignore
-                GetSubnetByNameRequest,
-                ListSubnetsByNetworkRequest,
-            )
+        from nebius.api.nebius.vpc.v1 import GetSubnetByNameRequest  # type: ignore
 
+        try:
             candidate = subnet_client.get_by_name(
                 GetSubnetByNameRequest(parent_id=self.project_id or "", name=subnet_name)
             ).wait()
-            if candidate is not None:
-                candidate_network_id = getattr(getattr(candidate, "spec", None), "network_id", None)
-                if candidate_network_id == network_id:
-                    return candidate
-
-            subnets = subnet_client.list_by_network(
-                ListSubnetsByNetworkRequest(network_id=network_id)
-            ).wait()
-            for subnet in getattr(subnets, "items", []) or []:
-                if getattr(getattr(subnet, "metadata", None), "name", None) == subnet_name:
-                    return subnet
-        except Exception:
-            return None
-        return None
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(
+                f"Failed to classify gateway subnet {subnet_name!r} by name."
+            ) from error
+        del strict
+        metadata = getattr(candidate, "metadata", None)
+        candidate_network_id = str(
+            getattr(getattr(candidate, "spec", None), "network_id", "") or ""
+        )
+        if (
+            not self._resource_id(candidate)
+            or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+            or str(getattr(metadata, "name", "") or "") != subnet_name
+            or candidate_network_id != network_id
+        ):
+            raise RuntimeError(f"Gateway subnet {subnet_name!r} returned an inexact identity.")
+        return candidate
 
     def _validate_existing_gateway_subnet(
         self,
@@ -5913,11 +7529,9 @@ class VMManager:
                 f"{subnet_name} exists with CIDR {existing_network}, but the config requires "
                 f"{desired_network}. Delete the subnet manually and rerun the command."
             )
-        if not desired_network and existing_network.prefixlen != desired_prefix_length:
-            raise ValueError(
-                f"{subnet_name} exists with prefix /{existing_network.prefixlen}, but the "
-                f"config requires /{desired_prefix_length}. Delete the subnet manually and rerun the command."
-            )
+        # prefix_length controls creation only. When CIDR is omitted, an existing
+        # exact-name subnet owns its already established explicit CIDR.
+        del desired_prefix_length
         return existing_network
 
     def _list_existing_subnet_networks(
@@ -5927,11 +7541,19 @@ class VMManager:
     ) -> list[ipaddress.IPv4Network]:
         from nebius.api.nebius.vpc.v1 import ListSubnetsByNetworkRequest  # type: ignore
 
-        subnets = subnet_client.list_by_network(
-            ListSubnetsByNetworkRequest(network_id=network_id)
-        ).wait()
         existing_networks: list[ipaddress.IPv4Network] = []
-        for subnet in getattr(subnets, "items", []) or []:
+        subnets = collect_nebius_pages(
+            lambda page_token: subnet_client.list_by_network(
+                ListSubnetsByNetworkRequest(
+                    network_id=network_id,
+                    page_size=1000,
+                    page_token=page_token,
+                )
+            ),
+            context="Subnet",
+            item_identity=nebius_resource_id,
+        )
+        for subnet in subnets:
             existing_networks.extend(self._extract_explicit_subnet_networks(subnet))
         return existing_networks
 
@@ -5944,6 +7566,8 @@ class VMManager:
         desired_network: ipaddress.IPv4Network | None,
         desired_prefix_length: int,
         network_name: str,
+        *,
+        strict: bool = False,
     ) -> str:
         existing_subnet_networks = self._list_existing_subnet_networks(subnet_client, network_id)
         if desired_network is not None:
@@ -5951,7 +7575,12 @@ class VMManager:
                 raise RuntimeError(
                     f"Requested gateway subnet CIDR {desired_network} overlaps with an existing explicit subnet in the target network."
                 )
-            self._ensure_network_pool_contains_cidr(client, network_obj, desired_network)
+            self._ensure_network_pool_contains_cidr(
+                client,
+                network_obj,
+                desired_network,
+                strict=strict,
+            )
             return str(desired_network)
 
         network_pool_cidrs: list[ipaddress.IPv4Network] = []
@@ -5989,7 +7618,6 @@ class VMManager:
         from nebius.api.nebius.vpc.v1 import (  # type: ignore
             CreateSubnetRequest,
             IPv4PrivateSubnetPools,
-            ListSubnetsByNetworkRequest,
             SubnetCidr,
             SubnetPool,
             SubnetSpec,
@@ -6015,13 +7643,13 @@ class VMManager:
         self._sync_operation(operation)
 
         time.sleep(5)
-        refreshed = subnet_client.list_by_network(
-            ListSubnetsByNetworkRequest(network_id=network_id)
-        ).wait()
-        for subnet in getattr(refreshed, "items", []) or []:
-            if getattr(getattr(subnet, "metadata", None), "name", None) != subnet_name:
-                continue
-
+        subnet = self._find_gateway_subnet(
+            subnet_client,
+            network_id,
+            subnet_name,
+            strict=True,
+        )
+        if subnet is not None:
             print(f"[VMManager] ✓ Subnet '{subnet_name}' created successfully")
             subnet_spec = getattr(subnet, "spec", None)
             private_pools = (
@@ -6035,12 +7663,17 @@ class VMManager:
                     "The subnet has been created incorrectly and must be deleted manually."
                 )
 
-            self._create_vpngw_route_table(client, subnet, network_id)
             return subnet
 
         return None
 
-    def _ensure_vpngw_subnet(self, client: t.Any, spec: GatewayGroupSpec) -> str | None:
+    def _ensure_vpngw_subnet(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+        *,
+        strict: bool = False,
+    ) -> str | None:
         """Ensure the configured dedicated gateway subnet exists in the chosen network."""
         if client is None:
             return None
@@ -6056,12 +7689,36 @@ class VMManager:
                 raise ValueError(
                     f"gateway_group.subnet.cidr must be a valid IPv4 CIDR, got {desired_cidr!r}."
                 )
-            network_obj, network_id, network_name, subnet_client = self._resolve_gateway_network(
-                client,
-                spec,
-                report_selection=True,
-            )
-            subnet_obj = self._find_gateway_subnet(subnet_client, network_id, subnet_name)
+            if strict:
+                network_obj, network_id, network_name, subnet_client = (
+                    self._resolve_gateway_network(
+                        client,
+                        spec,
+                        report_selection=True,
+                        strict=True,
+                    )
+                )
+            else:
+                network_obj, network_id, network_name, subnet_client = (
+                    self._resolve_gateway_network(
+                        client,
+                        spec,
+                        report_selection=True,
+                    )
+                )
+            if strict:
+                subnet_obj = self._find_gateway_subnet(
+                    subnet_client,
+                    network_id,
+                    subnet_name,
+                    strict=True,
+                )
+            else:
+                subnet_obj = self._find_gateway_subnet(
+                    subnet_client,
+                    network_id,
+                    subnet_name,
+                )
             if subnet_obj is not None:
                 existing_network = self._validate_existing_gateway_subnet(
                     subnet_obj,
@@ -6084,6 +7741,7 @@ class VMManager:
                         desired_network,
                         desired_prefix_length,
                         network_name,
+                        strict=strict,
                     )
                     subnet_obj = self._create_gateway_subnet(
                         client,
@@ -6092,228 +7750,403 @@ class VMManager:
                         network_id,
                         cidr_to_use,
                     )
+                    if strict:
+                        subnet_obj = self._find_gateway_subnet(
+                            subnet_client,
+                            network_id,
+                            subnet_name,
+                            strict=True,
+                        )
+                        created_network = _parse_ipv4_network(cidr_to_use)
+                        if created_network is None:
+                            raise RuntimeError(
+                                "Created gateway subnet CIDR could not be normalized"
+                            )
+                        if subnet_obj is None:
+                            raise RuntimeError(
+                                "Created gateway subnet could not be reread by exact name"
+                            )
+                        self._validate_existing_gateway_subnet(
+                            subnet_obj,
+                            subnet_name,
+                            created_network,
+                            desired_prefix_length,
+                        )
                 except Exception as e:
                     raise RuntimeError(
                         f"[VMManager] Failed to create '{subnet_name}' in {network_name}: {e}. "
                         "Please provide gateway_group.network_id with sufficient IP space or pre-create the subnet."
                     ) from e
 
-            return self._resource_id(subnet_obj)
+            if strict and subnet_obj is not None:
+                subnet_metadata = getattr(subnet_obj, "metadata", None)
+                subnet_network_id = str(
+                    getattr(getattr(subnet_obj, "spec", None), "network_id", "") or ""
+                )
+                if str(getattr(subnet_metadata, "parent_id", "") or "") != (self.project_id or ""):
+                    raise RuntimeError("Gateway subnet belongs to a different project.")
+                if subnet_network_id != network_id:
+                    raise RuntimeError("Gateway subnet belongs to a different VPC network.")
+            subnet_id = self._resource_id(subnet_obj)
+            if strict and not subnet_id:
+                raise RuntimeError(f"Gateway subnet {subnet_name!r} has no authoritative identity.")
+            return subnet_id
         except Exception as e:
+            if strict:
+                raise
             print(f"[VMManager] Error in _ensure_vpngw_subnet: {e}")
             return None
 
-    def _ensure_vpngw_route_table(self, client: t.Any, subnet_id: str | None) -> None:
-        """Ensure the gateway subnet has a dedicated route table.
+    @staticmethod
+    def _sync_preparation_operation(operation: t.Any, *, action: str) -> None:
+        """Wait for one prep mutation without turning ambiguity into success."""
 
-        This method is idempotent - it checks if RT exists, creates if missing.
-        Called both during subnet creation and when updating existing VMs.
+        try:
+            if hasattr(operation, "sync_wait"):
+                operation.sync_wait()
+            elif hasattr(operation, "wait"):
+                operation.wait()
+            successful = getattr(operation, "successful", None)
+            if callable(successful) and not successful():
+                raise RuntimeError(f"{action} operation reported failure")
+        except Exception as error:
+            raise RuntimeError(f"{action} did not complete successfully") from error
 
-        Args:
-            client: Nebius SDK client
-            subnet_id: Subnet ID for the dedicated gateway subnet
-        """
-        if not client or not subnet_id:
+    def _strict_route_table_by_name(self, route_table_client: t.Any, name: str) -> t.Any | None:
+        from nebius.api.nebius.vpc.v1 import GetRouteTableByNameRequest  # type: ignore
+
+        try:
+            route_table = route_table_client.get_by_name(
+                GetRouteTableByNameRequest(parent_id=self.project_id or "", name=name)
+            ).wait()
+        except Exception as error:
+            if nebius_request_error_code_is(error, "NOT_FOUND"):
+                return None
+            raise RuntimeError(f"Route table {name!r} could not be classified") from error
+        metadata = getattr(route_table, "metadata", None)
+        if (
+            not self._resource_id(route_table)
+            or str(getattr(metadata, "name", "") or "") != name
+            or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+        ):
+            raise RuntimeError(f"Route table {name!r} returned an inexact identity")
+        return route_table
+
+    def _strict_route_table_by_id(self, route_table_client: t.Any, route_table_id: str) -> t.Any:
+        from nebius.api.nebius.vpc.v1 import GetRouteTableRequest  # type: ignore
+
+        try:
+            route_table = route_table_client.get(GetRouteTableRequest(id=route_table_id)).wait()
+        except Exception as error:
+            raise RuntimeError("Attached route table could not be read") from error
+        if self._resource_id(route_table) != route_table_id or str(
+            getattr(getattr(route_table, "metadata", None), "parent_id", "") or ""
+        ) != (self.project_id or ""):
+            raise RuntimeError("Attached route table changed identity during verification")
+        return route_table
+
+    @staticmethod
+    def _route_destination_cidr(route: t.Any) -> str:
+        return str(
+            getattr(getattr(getattr(route, "spec", None), "destination", None), "cidr", "") or ""
+        )
+
+    @staticmethod
+    def _route_uses_default_egress(route: t.Any) -> bool:
+        next_hop = getattr(getattr(route, "spec", None), "next_hop", None)
+        return bool(getattr(next_hop, "default_egress_gateway", False))
+
+    def _list_route_table_routes(self, route_client: t.Any, route_table_id: str) -> list[t.Any]:
+        from nebius.api.nebius.vpc.v1 import ListRoutesRequest  # type: ignore
+
+        return list(
+            collect_nebius_pages(
+                lambda page_token: route_client.list(
+                    ListRoutesRequest(
+                        parent_id=route_table_id,
+                        page_size=1000,
+                        page_token=page_token,
+                    )
+                ),
+                context="Route table route",
+                item_identity=nebius_resource_id,
+            )
+        )
+
+    def _route_table_attached_subnets(
+        self,
+        subnet_client: t.Any,
+        *,
+        network_id: str,
+        route_table_id: str,
+    ) -> set[str]:
+        from nebius.api.nebius.vpc.v1 import ListSubnetsByNetworkRequest  # type: ignore
+
+        subnets = collect_nebius_pages(
+            lambda page_token: subnet_client.list_by_network(
+                ListSubnetsByNetworkRequest(
+                    network_id=network_id,
+                    page_size=1000,
+                    page_token=page_token,
+                )
+            ),
+            context="Route table subnet assignment",
+            item_identity=nebius_resource_id,
+        )
+        attached: set[str] = set()
+        for subnet in subnets:
+            if (
+                str(getattr(getattr(subnet, "spec", None), "route_table_id", "") or "")
+                == route_table_id
+            ):
+                subnet_identity = self._resource_id(subnet)
+                if not subnet_identity:
+                    raise RuntimeError("An attached subnet has no authoritative identity")
+                attached.add(subnet_identity)
+        return attached
+
+    def _validate_preparation_route_table(
+        self,
+        route_table: t.Any,
+        *,
+        network_id: str,
+    ) -> str:
+        route_table_id = self._resource_id(route_table)
+        metadata = getattr(route_table, "metadata", None)
+        table_network_id = str(getattr(getattr(route_table, "spec", None), "network_id", "") or "")
+        if not route_table_id:
+            raise RuntimeError("Route table has no authoritative identity")
+        if str(getattr(metadata, "parent_id", "") or "") != (self.project_id or ""):
+            raise RuntimeError("Route table belongs to a different project")
+        if table_network_id != network_id:
+            raise RuntimeError("Route table belongs to a different VPC network")
+        return route_table_id
+
+    def _ensure_default_egress_route(
+        self,
+        route_client: t.Any,
+        subnet_client: t.Any,
+        route_table: t.Any,
+        *,
+        network_id: str,
+        subnet_id: str,
+        require_exclusive_before_create: bool,
+    ) -> None:
+        if require_exclusive_before_create:
+            attached = self._route_table_attached_subnets(
+                subnet_client,
+                network_id=network_id,
+                route_table_id=self._resource_id(route_table) or "",
+            )
+            if attached != {subnet_id}:
+                raise RuntimeError(
+                    "The attached route table is not exclusively assigned to the gateway subnet"
+                )
+
+        routes = self._list_route_table_routes(route_client, self._resource_id(route_table) or "")
+        default_routes = [
+            route for route in routes if self._route_destination_cidr(route) == "0.0.0.0/0"
+        ]
+        if len(default_routes) > 1:
+            raise RuntimeError("Route table has multiple default routes; refusing to choose one")
+        if default_routes:
+            if not self._route_uses_default_egress(default_routes[0]):
+                raise RuntimeError("Route table has a conflicting 0.0.0.0/0 next hop")
             return
 
-        try:
-            from nebius.api.nebius.vpc.v1 import (
-                GetRouteTableRequest,
-                GetSubnetRequest,
-                RouteTableServiceClient,
-                SubnetServiceClient,
-            )  # type: ignore
-
-            subnet_client = SubnetServiceClient(client)  # type: ignore
-
-            # Get subnet to check if it has a route table
-            try:
-                subnet_obj = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
-            except Exception as e:
-                print(f"[VMManager] Could not get subnet {subnet_id}: {e}")
-                return
-
-            # Check if subnet has route table attached
-            subnet_spec = getattr(subnet_obj, "spec", None)
-            subnet_name = (
-                getattr(getattr(subnet_obj, "metadata", None), "name", None) or "gateway subnet"
-            )
-            rt_id = getattr(subnet_spec, "route_table_id", None) if subnet_spec else None
-
-            if rt_id:
-                # Route table exists, verify it's valid
-                try:
-                    rt_client = RouteTableServiceClient(client)  # type: ignore
-                    rt_obj = rt_client.get(GetRouteTableRequest(id=rt_id)).wait()
-                    rt_name = getattr(getattr(rt_obj, "metadata", None), "name", None) or "unknown"
-                    print(f"[VMManager] Route table '{rt_name}' already attached to {subnet_name}")
-                    return
-                except Exception:
-                    # RT ID exists but not found - will recreate
-                    print(
-                        "[VMManager] Route table ID found but not accessible, creating new one..."
-                    )
-
-            # No route table or invalid RT - create one
-            network_id = subnet_spec.network_id if subnet_spec else None
-            if not network_id:
-                print("[VMManager] Cannot create route table: network_id not found")
-                return
-
-            self._create_vpngw_route_table(client, subnet_obj, network_id)
-
-        except Exception as e:
-            print(f"[VMManager] Error ensuring route table for gateway subnet: {e}")
-
-    def _create_vpngw_route_table(self, client: t.Any, subnet_obj: t.Any, network_id: str) -> None:
-        """Create a dedicated route table for the gateway subnet with default egress route.
-
-        Args:
-            client: Nebius SDK client
-            subnet_obj: Subnet object for the dedicated gateway subnet
-            network_id: Network ID containing the subnet
-        """
-        try:
-            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-            from nebius.api.nebius.vpc.v1 import (  # type: ignore
-                CreateRouteRequest,
-                CreateRouteTableRequest,
-                RouteServiceClient,
-                RouteTableServiceClient,
-                RouteTableSpec,
-                SubnetServiceClient,
-                SubnetSpec,
-                UpdateSubnetRequest,
-                route_pb2,  # type: ignore
-            )  # type: ignore
-
-            subnet_name = (
-                getattr(getattr(subnet_obj, "metadata", None), "name", None) or "vpngw-subnet"
-            )
-            rt_name = self._gateway_route_table_name(subnet_name)
-            rt_client = RouteTableServiceClient(client)  # type: ignore
-            route_client = RouteServiceClient(client)  # type: ignore
-            subnet_client = SubnetServiceClient(client)  # type: ignore
-
-            # Get subnet ID
-            subnet_id = getattr(subnet_obj, "id", None)
-            if not subnet_id:
-                subnet_id = getattr(getattr(subnet_obj, "metadata", None), "id", None)
-
-            if not subnet_id:
-                print("[VMManager] Cannot create route table: subnet_id not found")
-                return
-
-            print(f"[VMManager] Creating dedicated route table '{rt_name}' for {subnet_name}...")
-
-            # Create route table (handle ALREADY_EXISTS)
-            rt_id = None
-            try:
-                rt_req = CreateRouteTableRequest(
-                    metadata=ResourceMetadata(
-                        name=rt_name,
-                        parent_id=self.project_id or "",
-                    ),
-                    spec=RouteTableSpec(network_id=network_id),
+        for route in routes:
+            if str(getattr(getattr(route, "metadata", None), "name", "") or "") == "default-egress":
+                raise RuntimeError(
+                    "Route name default-egress already exists with different semantics"
                 )
-                rt_op = rt_client.create(rt_req).wait()
-                try:
-                    rt_op.sync_wait()
-                except Exception:
-                    pass
 
-                rt_id = rt_op.resource_id or ""
-            except Exception as e:
-                if "ALREADY_EXISTS" in str(e) or "already exists" in str(e):
-                    print(f"[VMManager] Route table '{rt_name}' already exists, reusing...")
-                    # Get existing route table by name
-                    try:
-                        from nebius.api.nebius.vpc.v1 import GetRouteTableByNameRequest
+        route_table_id = self._resource_id(route_table) or ""
 
-                        rt_obj = rt_client.get_by_name(
-                            GetRouteTableByNameRequest(
-                                parent_id=self.project_id or "", name=rt_name
-                            )
-                        ).wait()
-                        rt_id = getattr(rt_obj, "id", None) or getattr(
-                            getattr(rt_obj, "metadata", None), "id", None
-                        )
-                    except Exception as get_err:
-                        print(f"[VMManager] Could not retrieve existing route table: {get_err}")
-                        return
-                else:
-                    print(f"[VMManager] Error creating route table: {e}")
-                    return
+        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+        from nebius.api.nebius.vpc.v1 import CreateRouteRequest, route_pb2  # type: ignore
 
-            if not rt_id:
-                print("[VMManager] Route table creation returned no resource_id")
-                return
+        request = CreateRouteRequest(
+            metadata=ResourceMetadata(name="default-egress", parent_id=route_table_id),
+            spec=route_pb2.RouteSpec(
+                destination=route_pb2.DestinationMatch(cidr="0.0.0.0/0"),
+                next_hop=route_pb2.NextHop(default_egress_gateway=True),
+            ),
+        )
+        try:
+            operation = route_client.create(request).wait()
+            self._sync_preparation_operation(operation, action="Default egress route creation")
+        except Exception as error:
+            # The result of an accepted create may be lost. Re-list once and accept only
+            # the exact postcondition, which also prevents duplicate retry creation.
+            routes = self._list_route_table_routes(route_client, route_table_id)
+            exact = [
+                route
+                for route in routes
+                if self._route_destination_cidr(route) == "0.0.0.0/0"
+                and self._route_uses_default_egress(route)
+            ]
+            if len(exact) != 1:
+                raise RuntimeError("Default egress route creation could not be verified") from error
 
-            print(f"[VMManager] Created route table: {rt_name} (ID: {rt_id})")
+        verified = self._list_route_table_routes(route_client, route_table_id)
+        exact = [
+            route
+            for route in verified
+            if self._route_destination_cidr(route) == "0.0.0.0/0"
+            and self._route_uses_default_egress(route)
+        ]
+        conflicting = [
+            route
+            for route in verified
+            if self._route_destination_cidr(route) == "0.0.0.0/0"
+            and not self._route_uses_default_egress(route)
+        ]
+        if len(exact) != 1 or conflicting:
+            raise RuntimeError("Default egress route postcondition is not uniquely satisfied")
 
-            # Add default egress route (0.0.0.0/0 -> default-egress)
+    def _reconcile_vpngw_route_table(self, client: t.Any, subnet_id: str) -> None:
+        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore
+            CreateRouteTableRequest,
+            GetSubnetRequest,
+            RouteServiceClient,
+            RouteTableServiceClient,
+            RouteTableSpec,
+            SubnetServiceClient,
+            SubnetSpec,
+            UpdateSubnetRequest,
+        )
+
+        subnet_client = SubnetServiceClient(client)
+        route_table_client = RouteTableServiceClient(client)
+        route_client = RouteServiceClient(client)
+        try:
+            subnet = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
+        except Exception as error:
+            raise RuntimeError(
+                "Gateway subnet could not be read before route preparation"
+            ) from error
+        if self._resource_id(subnet) != subnet_id:
+            raise RuntimeError("Gateway subnet changed identity during route preparation")
+        subnet_spec = getattr(subnet, "spec", None)
+        subnet_metadata = getattr(subnet, "metadata", None)
+        network_id = str(getattr(subnet_spec, "network_id", "") or "")
+        if not network_id:
+            raise RuntimeError("Gateway subnet has no VPC network identity")
+        attached_route_table_id = str(getattr(subnet_spec, "route_table_id", "") or "")
+
+        if attached_route_table_id:
+            route_table = self._strict_route_table_by_id(
+                route_table_client,
+                attached_route_table_id,
+            )
+            self._validate_preparation_route_table(route_table, network_id=network_id)
+            self._ensure_default_egress_route(
+                route_client,
+                subnet_client,
+                route_table,
+                network_id=network_id,
+                subnet_id=subnet_id,
+                require_exclusive_before_create=True,
+            )
+            return
+
+        subnet_name = str(getattr(subnet_metadata, "name", "") or "vpngw-subnet")
+        route_table_name = self._gateway_route_table_name(subnet_name)
+        route_table = self._strict_route_table_by_name(route_table_client, route_table_name)
+        if route_table is None:
+            request = CreateRouteTableRequest(
+                metadata=ResourceMetadata(
+                    name=route_table_name,
+                    parent_id=self.project_id or "",
+                ),
+                spec=RouteTableSpec(network_id=network_id),
+            )
             try:
-                route_req = CreateRouteRequest(
-                    metadata=ResourceMetadata(
-                        name="default-egress",
-                        parent_id=rt_id,
-                    ),
-                    spec=route_pb2.RouteSpec(
-                        destination=route_pb2.DestinationMatch(cidr="0.0.0.0/0"),
-                        next_hop=route_pb2.NextHop(default_egress_gateway=True),
-                    ),
+                operation = route_table_client.create(request).wait()
+                self._sync_preparation_operation(operation, action="Route table creation")
+            except Exception as error:
+                route_table = self._strict_route_table_by_name(
+                    route_table_client,
+                    route_table_name,
                 )
-                route_client.create(route_req).wait()
-                print("[VMManager] Added route: 0.0.0.0/0 -> default-egress")
-            except Exception as e:
-                err_str = str(e)
-                if "ALREADY_EXISTS" in err_str or "already exists" in err_str:
-                    print("[VMManager] Default egress route already exists, skipping")
-                else:
-                    print(f"[VMManager] Warning: Could not create default egress route: {e}")
+                if route_table is None:
+                    raise RuntimeError("Route table creation could not be verified") from error
+            if route_table is None:
+                route_table = self._strict_route_table_by_name(
+                    route_table_client,
+                    route_table_name,
+                )
+        if route_table is None:
+            raise RuntimeError("Canonical route table could not be resolved")
+        route_table_id = self._validate_preparation_route_table(
+            route_table,
+            network_id=network_id,
+        )
+        attached = self._route_table_attached_subnets(
+            subnet_client,
+            network_id=network_id,
+            route_table_id=route_table_id,
+        )
+        if attached - {subnet_id}:
+            raise RuntimeError("Canonical route table is already assigned to another subnet")
+        self._ensure_default_egress_route(
+            route_client,
+            subnet_client,
+            route_table,
+            network_id=network_id,
+            subnet_id=subnet_id,
+            require_exclusive_before_create=False,
+        )
 
-            # Attach route table to subnet
-            try:
-                subnet_meta = getattr(subnet_obj, "metadata", None)
-                subnet_spec = getattr(subnet_obj, "spec", None)
-                if subnet_meta and subnet_spec:
-                    # Get subnet's network_id - required by API
-                    subnet_network_id = getattr(subnet_spec, "network_id", None)
-                    if not subnet_network_id:
-                        print(
-                            "[VMManager] Warning: Subnet has no network_id, cannot attach route table"
-                        )
-                        return
+        update = UpdateSubnetRequest(
+            metadata=ResourceMetadata(
+                id=subnet_id,
+                parent_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
+                name=subnet_name,
+                resource_version=int(getattr(subnet_metadata, "resource_version", 0) or 0),
+            ),
+            spec=SubnetSpec(
+                network_id=network_id,
+                route_table_id=route_table_id,
+                ipv4_private_pools=getattr(subnet_spec, "ipv4_private_pools", None),
+                ipv4_public_pools=getattr(subnet_spec, "ipv4_public_pools", None),
+            ),
+        )
+        operation = subnet_client.update(update).wait()
+        self._sync_preparation_operation(operation, action="Route table attachment")
+        try:
+            verified_subnet = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
+        except Exception as error:
+            raise RuntimeError("Route table attachment could not be reread") from error
+        verified_route_table_id = str(
+            getattr(getattr(verified_subnet, "spec", None), "route_table_id", "") or ""
+        )
+        if (
+            self._resource_id(verified_subnet) != subnet_id
+            or verified_route_table_id != route_table_id
+        ):
+            raise RuntimeError("Route table attachment postcondition was not satisfied")
+        verified_table = self._strict_route_table_by_id(route_table_client, route_table_id)
+        self._validate_preparation_route_table(verified_table, network_id=network_id)
+        self._ensure_default_egress_route(
+            route_client,
+            subnet_client,
+            verified_table,
+            network_id=network_id,
+            subnet_id=subnet_id,
+            require_exclusive_before_create=True,
+        )
 
-                    # CRITICAL: Preserve existing ipv4_private_pools when updating
-                    # If we don't include it, the API resets use_network_pools=true!
-                    existing_ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
-                    existing_ipv4_public_pools = getattr(subnet_spec, "ipv4_public_pools", None)
-
-                    # ResourceMetadata requires: id, parent_id (required), and name (validated)
-                    # SubnetSpec requires: network_id (required) and route_table_id (what we're updating)
-                    update_req = UpdateSubnetRequest(
-                        metadata=ResourceMetadata(
-                            id=getattr(subnet_meta, "id", subnet_id),
-                            parent_id=getattr(subnet_meta, "parent_id", ""),
-                            name=getattr(subnet_meta, "name", ""),
-                        ),
-                        spec=SubnetSpec(
-                            network_id=subnet_network_id,
-                            route_table_id=rt_id,
-                            ipv4_private_pools=existing_ipv4_private_pools,
-                            ipv4_public_pools=existing_ipv4_public_pools,
-                        ),
-                    )
-                    subnet_client.update(update_req).wait()
-                    print(f"[VMManager] ✓ Attached route table '{rt_name}' to {subnet_name}")
-                else:
-                    print("[VMManager] Warning: Could not get subnet metadata/spec for update")
-            except Exception as e:
-                print(f"[VMManager] Warning: Could not attach route table to subnet: {e}")
-
-        except Exception as e:
-            print(f"[VMManager] Error creating route table for gateway subnet: {e}")
+    def _ensure_vpngw_route_table(
+        self,
+        client: t.Any,
+        subnet_id: str | None,
+    ) -> None:
+        """Converge and verify the gateway subnet's dedicated route table."""
+        if not client or not subnet_id:
+            raise RuntimeError("Gateway subnet identity is required for route preparation")
+        self._reconcile_vpngw_route_table(client, subnet_id)
 
     def get_instance_ssh_target(self, instance_index: int) -> str:
         # Placeholder fallback if external IP wasn't available in plan

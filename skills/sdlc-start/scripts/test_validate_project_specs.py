@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the Agentic SDLC project-spec validation receipt."""
+"""Tests for advisory Agentic SDLC project-spec inspection."""
 
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ validation = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validation)
 
 
-REQUIREMENTS = """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+REQUIREMENTS = """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
 ---
-schema: maintain-project-specs/requirements-v1
+schema: maintain-project-specs/requirements-v2
 project: Example
 status: ready
 created_by_skill: maintain-project-specs
@@ -59,9 +59,9 @@ Manual review.
 <!-- maintain-project-specs:requirements:end -->
 """
 
-DESIGN = """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+DESIGN = """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 ---
-schema: maintain-project-specs/design-v1
+schema: maintain-project-specs/design-v2
 project: Example
 status: ready
 created_by_skill: maintain-project-specs
@@ -71,7 +71,7 @@ source_requirements: docs/requirements.md
 
 # Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-001: Project instructions
 
 #### Requirements Covered
@@ -122,6 +122,14 @@ Adopt and retire only with exact-digest approval.
 
 Requirements mapped and checks passing.
 
+#### Implementation Evidence
+
+The implementation predates schema v2 evidence tracking.
+
+#### Verification Evidence
+
+Independent verification predates schema v2 evidence tracking.
+
 <!-- /FEATURE: FEAT-001 -->
 <!-- maintain-project-specs:design:end -->
 """
@@ -156,22 +164,21 @@ class SpecValidationTests(unittest.TestCase):
         )
         (self.project / "docs/design.md").write_text(design, encoding="utf-8")
 
-    def test_valid_specs_emit_full_file_and_traceability_receipt(self) -> None:
-        receipt = validation.validate(self.project)
-        self.assertEqual(receipt["owner"], "maintain-project-specs")
-        self.assertEqual(receipt["project_scope"], ".")
-        self.assertRegex(receipt["traceability_sha256"], r"^[0-9a-f]{64}$")
-        self.assertRegex(receipt["requirements"]["sha256"], r"^[0-9a-f]{64}$")
+    def test_valid_specs_emit_current_advisory_snapshot(self) -> None:
+        snapshot = validation.validate(self.project)
+        self.assertEqual(snapshot["status"], "current")
+        self.assertEqual(snapshot["owner"], "maintain-project-specs")
+        self.assertEqual(snapshot["project_scope"], ".")
+        self.assertRegex(snapshot["traceability_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(snapshot["requirements"]["sha256"], r"^[0-9a-f]{64}$")
 
     def test_ready_feature_with_placeholder_is_rejected(self) -> None:
         self.write(REQUIREMENTS, DESIGN.replace("Generate deterministic rules", "TODO"))
-        with self.assertRaises(validation.SpecValidationError):
-            validation.validate(self.project)
+        self.assertEqual(validation.validate(self.project)["status"], "advisory")
 
     def test_unknown_requirement_mapping_is_rejected(self) -> None:
         self.write(REQUIREMENTS, DESIGN.replace("reqs=REQ-001", "reqs=REQ-999"))
-        with self.assertRaises(validation.SpecValidationError):
-            validation.validate(self.project)
+        self.assertEqual(validation.validate(self.project)["status"], "advisory")
 
     def test_untracked_specs_are_rejected(self) -> None:
         subprocess.run(
@@ -181,8 +188,7 @@ class SpecValidationTests(unittest.TestCase):
             stdout=subprocess.DEVNULL,
         )
 
-        with self.assertRaises(validation.SpecValidationError):
-            validation.validate(self.project)
+        self.assertEqual(validation.validate(self.project)["status"], "advisory")
 
     def test_every_applicable_requirement_must_be_mapped(self) -> None:
         second_requirement = REQUIREMENTS[
@@ -190,8 +196,7 @@ class SpecValidationTests(unittest.TestCase):
         ].replace("REQ-001", "REQ-002")
         self.write(REQUIREMENTS + "\n" + second_requirement, DESIGN)
 
-        with self.assertRaises(validation.SpecValidationError):
-            validation.validate(self.project)
+        self.assertEqual(validation.validate(self.project)["status"], "advisory")
 
     def test_superseded_requirement_and_stale_feature_are_not_current_coverage(
         self,
@@ -203,13 +208,12 @@ class SpecValidationTests(unittest.TestCase):
 
         receipt = validation.validate(self.project)
 
-        self.assertEqual(receipt["validator_version"], 1)
+        self.assertEqual(receipt["validator_version"], 2)
 
     def test_requirements_covered_must_match_feature_marker(self) -> None:
         self.write(REQUIREMENTS, DESIGN.replace("- REQ-001", "- REQ-999"))
 
-        with self.assertRaises(validation.SpecValidationError):
-            validation.validate(self.project)
+        self.assertEqual(validation.validate(self.project)["status"], "advisory")
 
     def test_requirements_covered_rejects_embedded_or_malformed_ids(self) -> None:
         for invalid in (
@@ -219,15 +223,15 @@ class SpecValidationTests(unittest.TestCase):
         ):
             with self.subTest(invalid=invalid):
                 self.write(REQUIREMENTS, DESIGN.replace("- REQ-001", invalid))
-                with self.assertRaises(validation.SpecValidationError):
-                    validation.validate(self.project)
+                self.assertEqual(
+                    validation.validate(self.project)["status"], "advisory"
+                )
 
     def test_foreign_owner_marker_is_rejected(self) -> None:
         self.write(
             REQUIREMENTS + "\n<!-- task-implementer:requirements:start -->\n", DESIGN
         )
-        with self.assertRaises(validation.SpecValidationError):
-            validation.validate(self.project)
+        self.assertEqual(validation.validate(self.project)["status"], "advisory")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
@@ -12,7 +11,6 @@ import yaml
 from nebius_vpngw.config_loader import (
     _detect_vendor,
     _validate_tunnel_inner_ips,
-    _validate_vm_ha_nebius_credentials,
     load_local_config,
     merge_peer_configs_into_local_config,
     merge_with_peer_configs,
@@ -42,6 +40,78 @@ def test_load_local_config_reads_ssh_public_key_from_path(
     assert loaded["gateway_group"]["vm_spec"]["ssh_public_key"] == public_key_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_load_local_config_applies_region_override_before_schema_validation(
+    tmp_path: Path,
+    sample_config: dict,
+) -> None:
+    sample_config.pop("region_id", None)
+    sample_config["gateway_group"].pop("region", None)
+    config_path = tmp_path / "region-override.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    loaded = load_local_config(config_path, region_override="eu-north1")
+
+    assert loaded["region_id"] == "eu-north1"
+    assert loaded["gateway_group"]["region"] == "eu-north1"
+
+
+def test_load_local_config_region_override_replaces_conflicting_placeholders(
+    tmp_path: Path,
+    sample_config: dict,
+) -> None:
+    sample_config["region_id"] = "${TOP_LEVEL_REGION}"
+    sample_config["gateway_group"]["region"] = "${GROUP_REGION}"
+    config_path = tmp_path / "conflicting-region-override.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    loaded = load_local_config(config_path, region_override="eu-north1")
+
+    assert loaded["region_id"] == "eu-north1"
+    assert loaded["gateway_group"]["region"] == "eu-north1"
+
+
+def test_load_local_config_region_override_does_not_hide_other_missing_references(
+    tmp_path: Path,
+    sample_config: dict,
+) -> None:
+    sample_config["region_id"] = "${REGION_ID}"
+    sample_config["gateway_group"]["region"] = "${REGION_ID}"
+    sample_config["project_id"] = "${REGION_ID}"
+    config_path = tmp_path / "shared-region-placeholder.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="REGION_ID"):
+        load_local_config(config_path, region_override="eu-north1")
+
+
+def test_load_local_config_rejects_blank_explicit_region(
+    tmp_path: Path,
+    sample_config: dict,
+) -> None:
+    config_path = tmp_path / "blank-region-override.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="--region must resolve"):
+        load_local_config(config_path, region_override="   ")
+
+
+def test_merge_treats_blank_group_region_as_absent(
+    tmp_path: Path,
+    sample_config: dict,
+) -> None:
+    sample_config["region_id"] = "eu-north1"
+    sample_config["gateway_group"]["region"] = "   "
+    config_path = tmp_path / "blank-group-region.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    loaded = load_local_config(config_path)
+    plan = merge_with_peer_configs(loaded, [])
+
+    assert plan.gateway_group.region == "eu-north1"
+    assert loaded["region_id"] == "eu-north1"
+    assert loaded["gateway_group"]["region"] == "eu-north1"
 
 
 def test_omitted_vm_ha_preserves_single_node_resolved_plan(
@@ -76,13 +146,11 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
                         "node_id": "gateway-a",
                         "instance_index": 0,
                         "role": "active",
-                        "nebius_credentials_path": _credential_path("gateway-a"),
                     },
                     {
                         "node_id": "gateway-b",
                         "instance_index": 1,
                         "role": "passive",
-                        "nebius_credentials_path": _credential_path("gateway-b"),
                     },
                 ],
             },
@@ -133,163 +201,6 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
         for manifest in manifests
     )
     assert all("credential_sources" not in yaml.safe_dump(manifest) for manifest in manifests)
-
-
-def _credential_path(node_id: str) -> str:
-    return f"/operator-secrets/{node_id}/nebius-credentials.json"
-
-
-def test_vm_ha_nebius_credential_preflight_accepts_json_and_redacts_paths(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "nebius-credentials.json"
-    source.write_text('{"service_account_id":"fixture"}', encoding="utf-8")
-    source.chmod(0o600)
-    config = {
-        "gateway_group": {
-            "vm_ha": {
-                "enabled": True,
-                "members": [
-                    {
-                        "node_id": "gateway-a",
-                        "nebius_credentials_path": str(source),
-                    }
-                ],
-            }
-        }
-    }
-
-    _validate_vm_ha_nebius_credentials(config)
-
-    missing = tmp_path / "missing-nebius-credentials"
-    config["gateway_group"]["vm_ha"]["members"][0]["nebius_credentials_path"] = str(
-        missing
-    )
-    with pytest.raises(ValueError) as exc_info:
-        _validate_vm_ha_nebius_credentials(config)
-    assert str(missing) not in str(exc_info.value)
-    assert "Nebius credentials for gateway-a are unavailable" in str(exc_info.value)
-
-
-def test_vm_ha_nebius_credential_preflight_accepts_distinct_member_files(
-    tmp_path: Path,
-) -> None:
-    members: list[dict[str, str]] = []
-    for node_id in ("gateway-a", "gateway-b"):
-        source = tmp_path / f"{node_id}.json"
-        source.write_text(json.dumps({"node": node_id}), encoding="utf-8")
-        source.chmod(0o600)
-        members.append({"node_id": node_id, "nebius_credentials_path": str(source)})
-    config = {
-        "gateway_group": {
-            "vm_ha": {
-                "enabled": True,
-                "members": members,
-            }
-        }
-    }
-
-    _validate_vm_ha_nebius_credentials(config)
-
-
-def test_vm_ha_credential_preflight_rejects_symlinks_without_reading_them(tmp_path: Path) -> None:
-    real = tmp_path / "real"
-    real.write_text('{"credential":"fixture"}', encoding="utf-8")
-    real.chmod(0o600)
-    link = tmp_path / "link"
-    link.symlink_to(real)
-
-    with pytest.raises(ValueError, match="are unavailable"):
-        _validate_vm_ha_nebius_credentials(
-            {
-                "gateway_group": {
-                    "vm_ha": {
-                        "enabled": True,
-                        "members": [
-                            {
-                                "node_id": "gateway-a",
-                                "nebius_credentials_path": str(link),
-                            }
-                        ],
-                    }
-                }
-            }
-        )
-
-
-@pytest.mark.parametrize("unsafe_mode", [0o644, 0o640, 0o660])
-def test_vm_ha_credential_preflight_requires_mode_0600_and_redacts_path(
-    tmp_path: Path,
-    unsafe_mode: int,
-) -> None:
-    unsafe = tmp_path / "nebius-credentials.json"
-    unsafe.write_text('{"credential":"fixture"}', encoding="utf-8")
-    unsafe.chmod(unsafe_mode)
-
-    with pytest.raises(ValueError, match="owner-only") as exc_info:
-        _validate_vm_ha_nebius_credentials(
-            {
-                "gateway_group": {
-                    "vm_ha": {
-                        "enabled": True,
-                        "members": [
-                            {
-                                "node_id": "gateway-a",
-                                "nebius_credentials_path": str(unsafe),
-                            }
-                        ],
-                    }
-                }
-            }
-        )
-
-    assert str(unsafe) not in str(exc_info.value)
-
-
-def test_vm_ha_credential_preflight_rejects_cross_member_hardlink_aliases(
-    tmp_path: Path,
-) -> None:
-    first = tmp_path / "gateway-a.json"
-    second = tmp_path / "gateway-b.json"
-    first.write_text('{"credential":"fixture"}', encoding="utf-8")
-    first.chmod(0o600)
-    os.link(first, second)
-    members = [
-        {"node_id": "gateway-a", "nebius_credentials_path": str(first)},
-        {"node_id": "gateway-b", "nebius_credentials_path": str(second)},
-    ]
-
-    with pytest.raises(ValueError, match="non-linked regular file") as exc_info:
-        _validate_vm_ha_nebius_credentials(
-            {"gateway_group": {"vm_ha": {"enabled": True, "members": members}}}
-        )
-
-    assert str(second) not in str(exc_info.value)
-
-
-def test_vm_ha_credential_preflight_rejects_malformed_json(tmp_path: Path) -> None:
-    source = tmp_path / "malformed.json"
-    source.write_text("not-json", encoding="utf-8")
-    source.chmod(0o600)
-
-    with pytest.raises(ValueError, match="not valid JSON") as exc_info:
-        _validate_vm_ha_nebius_credentials(
-            {
-                "gateway_group": {
-                    "vm_ha": {
-                        "enabled": True,
-                        "members": [
-                            {
-                                "node_id": "gateway-a",
-                                "nebius_credentials_path": str(source),
-                            }
-                        ],
-                    }
-                }
-            }
-        )
-
-    assert str(source) not in str(exc_info.value)
 
 
 def test_template_and_vm_ha_example_match_the_schema() -> None:

@@ -1,6 +1,6 @@
 ---
 name: ai-stack
-description: "Select or review an undecided AI stack across models, agents/workflows, training/inference, interoperability, retrieval, evals, safety, and operations. Use app-stack for non-AI layers, research for one technology, and design for whole solutions."
+description: "Select or review undecided AI components across models, runtimes, training/inference, interoperability, retrieval, evals, safety, and operations. Consume ai-agent-design's frozen agent-subsystem contract; use app-stack for non-AI layers, research for one technology, and design for whole solutions."
 ---
 
 # AI Stack
@@ -28,8 +28,9 @@ per accepted outcome among candidates that pass. Treat every recommendation as
 workload-dependent, dated, and replaceable. Prefer no new component, a direct
 API, or an existing platform until evidence justifies another layer.
 
-This skill owns the AI stack decision. It does not own the complete product
-architecture, repository topology, project scaffolding, or implementation.
+This skill owns AI component and technology selection. It does not own agent-
+subsystem behavior, topology, policy, or contracts; the complete product
+architecture; repository topology; project scaffolding; or implementation.
 
 ## Use This Skill For
 
@@ -49,6 +50,9 @@ architecture, repository topology, project scaffolding, or implementation.
 - Use `app-stack` for the surrounding frontend, API, backend, ordinary data,
   deployment, and product stack. When both are undecided, each skill owns its
   layer and returns the scoped decision to `design` or the user.
+- Use `ai-agent-design` for agent-subsystem behavior classification, topology,
+  authority, contracts, context, memory, failure policy, evaluation, and
+  governance. Consume its frozen handoff without calling it back recursively.
 - Use `research` for deep due diligence on one technology, protocol, model,
   paper, or disputed claim. Bring the findings back here for selection.
 - Use `design` when the user needs cross-layer interfaces, flows, failure
@@ -63,7 +67,8 @@ architecture, repository topology, project scaffolding, or implementation.
 
 ## Inputs
 
-- User outcome, workload classes, failure impact, and acceptance criteria.
+- User outcome, frozen behavior and policy contract when supplied, workload
+  classes, failure impact, and acceptance criteria.
 - Existing architecture, fixed decisions, migration constraints, and baseline.
 - Data classes, modalities, provenance, license, residency, retention, and
   tenant boundaries.
@@ -121,10 +126,12 @@ Read only the references that match the request:
 
 ## Core Decision Rules
 
-### AI Behavior Level
+### AI Behavior Contract
 
-Classify every AI-enabled capability before selecting products:
+Consume the four-class capability map frozen by `ai-agent-design` before
+selecting products:
 
+- `Deterministic code`: no model judgment is needed.
 - `Direct model call`: one model request can solve the task.
 - `Deterministic workflow`: application code knows the steps and owns the
   transitions and continuation conditions; model calls occur only at explicit
@@ -139,7 +146,16 @@ alone justify agentic control flow. Neither does an unknown-count loop when
 application code owns its continuation condition. When latency or cost
 predictability is a hard requirement, prefer a direct call or deterministic
 workflow unless it fails a representative acceptance gate. One application
-may contain all three levels.
+may contain all four behavior classes.
+
+For a direct stack-only request without a frozen handoff, perform only the
+minimum provisional classification needed to avoid unnecessary agent
+components. Mark it `Provisional`, and route disputed behavior, topology,
+policy, or contract decisions to `ai-agent-design`. The originating workflow
+waits for the frozen contract and then performs component selection exactly
+once; `ai-agent-design` skips its nested stack-selection phase for this caller.
+During an active `ai-agent-design` handoff, accept its classification as fixed
+and never call it back.
 
 Map the selected level to the smallest supported runtime. Control-flow
 classification and framework primitive are separate decisions:
@@ -210,8 +226,9 @@ of quality, scale, recovery, or production readiness.
 ### 1. Establish Scope And Mode
 
 Determine whether the request is a selection, review, simplification, migration,
-or logical implementation handoff. Identify fixed decisions and the surrounding
-layers owned by `app-stack` or `design`.
+or logical implementation handoff. Identify fixed decisions, any frozen
+`ai-agent-design` contract, and the surrounding layers owned by `app-stack` or
+`design`.
 
 Stay read-only for advisory work. Do not treat a recommendation as authority to
 install packages, provision infrastructure, contact paid services, deploy,
@@ -221,8 +238,9 @@ publish, or mutate production.
 
 Create a separate contract for each materially different workload: training,
 online inference, batch inference, embeddings, agent execution, retrieval,
-synthetic data, or evaluation. Record baseline, acceptance thresholds, data,
-model, environment, scale, economics, lifecycle, ownership, and unknowns.
+synthetic data, or evaluation. Preserve supplied behavior, topology, authority,
+and policy decisions. Record baseline, acceptance thresholds, data, model,
+environment, scale, economics, lifecycle, ownership, and unknowns.
 
 Do not combine workloads merely because they use the same model.
 
@@ -231,9 +249,10 @@ Do not combine workloads merely because they use the same model.
 Map only the required planes: experience, agent application, durability,
 capability/interoperability, model access, model execution, data/state, and
 trust/operations. Start with the current system or no-new-component baseline.
-Apply the AI behavior classification and escalation ladders, and name the
-trigger for every added layer. Do not select an agent framework until direct
-and deterministic paths have been rejected by the workload contract.
+Apply the frozen or explicitly provisional AI behavior classification and the
+escalation ladders, and name the trigger for every added layer. Do not select an
+agent framework until direct and deterministic paths have been rejected by the
+workload contract.
 
 ### 4. Select And Verify Candidates
 
@@ -356,6 +375,8 @@ For a completed decision, verify that:
 - quality, safety, reliability, cost, recovery, rollback, and owners are
   covered;
 - volatile vendor claims have current official sources;
+- frozen `ai-agent-design` decisions were preserved, or a direct stack-only
+  classification is explicitly marked provisional;
 - implementation and live validation remain separately authorized.
 
 ## Learning Loop
@@ -372,8 +393,9 @@ URLs, customer data, raw logs, or one-off local state.
 Return:
 
 - decision scope, workload contracts, assumptions, and blocking unknowns;
-- direct-call, deterministic-workflow, or agent classification for every
-  AI-enabled capability;
+- deterministic-code, direct-call, deterministic-workflow, or agent
+  classification for every AI-enabled capability, marked `Frozen` or
+  `Provisional`;
 - simplest sufficient baseline and architecture planes;
 - component table with technology, status, evidence, requirement, owner,
   acceptance gate, and revisit trigger;

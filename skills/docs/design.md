@@ -1,8 +1,8 @@
 <!-- markdownlint-disable MD001 MD024 -->
-<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 # Project Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001,REQ-005 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001,REQ-005 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-001: Source-owned skill and installation boundary
 
 #### Requirements Covered
@@ -77,9 +77,17 @@ runtime hook before restarting.
 The canonical root, installer behavior, documentation, tests, and reported
 activation boundary agree without a duplicate installed skill tree.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002,REQ-003 status=ready priority=P0 version=7 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002,REQ-003 status=superseded delivery=unassessed priority=P0 version=11 -->
 ### FEAT-002: Receipt-bound project lifecycle and coordinator trust
 
 #### Requirements Covered
@@ -106,6 +114,22 @@ Retained lifecycle evidence also shows that rendering an inapplicable
 `existing-sufficient` decision for a managed target could publish empty private
 rules, while the corrected `needed` decision then failed with `UNSAFE_TARGET`
 because the renderer accepted only byte-identical reuse of that owned path.
+Current-session evidence exposed a separate guidance mismatch: the installed
+hook correctly rejected the skill's repo-relative checkout helper, while the
+literal absolute installed coordinator with a trusted absolute interpreter was
+accepted. The denial reason did not distinguish that trust mismatch from
+missing project-instructions inspect flags.
+Session `01a03b98-76cf-7413-ba14-919e9d2669ca` exposed an ownership-continuity
+gap after discovery had already loaded the selected-project `AGENTS.md`: an
+earlier sealed session held a verified active receipt for the exact target
+digest, but the new session inspected only its own empty bundle and therefore
+requested redundant exact-digest adoption approval.
+Current runtime evidence exposed a separate historical-audit defect: a
+workspace with 138 lifecycle sessions and one structural directory occupied
+only about 4 MiB, yet `SessionStart` emitted an audit failure because it
+materialized all workspace children and rejected more than 128 before project
+scope or terminal phase filtering. The message was additional context rather
+than a tool or coordinator gate, and no records were moved or archived.
 
 #### Design Details
 
@@ -122,6 +146,15 @@ through as a non-material Python invocation. An installed hook resolves those
 scripts from the canonical `${HOME}/.agents/skills` root. Source tests inject
 or derive an explicit source-bundle root; a copied installed hook never infers
 repository trust from its runtime location.
+
+Runtime examples expose the trust contract directly: use one literal absolute
+trusted Python path and the literal absolute installed coordinator discovered
+under the user skills root. Do not advertise repo-relative checkout helpers,
+shell variables, substitutions, symlinks, or basename lookalikes. A malformed
+coordinator denial names the installed-helper mismatch separately from the
+additional absolute bundle and `--codex-home` bindings required by
+project-instructions inspect. The hook remains fail-closed; this is a guidance
+and diagnostic correction, not an alternate trust path.
 
 `PostToolUse` remains registered and records every successful material
 selected-project write by advancing the write epoch and moving or retaining the
@@ -229,6 +262,43 @@ continues to bind the effective marker configuration and instruction files;
 replay recomputes the discovery root without adding a schema field, public
 flag, or bypass path.
 
+Keep ownership continuity inside `project-agent-instructions`, the owner of the
+managed region. Give each Git-workspace bucket one dedicated owner-only shared
+private root containing a bounded exact-schema ownership registry and one
+advisory lock. The registry maps a canonical digest of project, Git root, scope,
+and target path to a monotonic generation, active/pending/blocked/retired
+status, exact target digest, optional active or retired receipt, and optional
+sealed or completed-apply source-state digest. First use builds a complete
+generation-zero registry in a
+private sibling directory and atomically renames that directory into place, so
+no caller can observe an initialized but incomplete root. Inspect reads an
+existing entry as authoritative and never falls back when the registry is
+initialized but missing, unsafe, malformed, or mismatched. Apply acquires the
+shared lock before authority and registry preflight, then holds it across target
+mutation, final state, conditional registry publication, and retained
+recovery-evidence release. A stale active writer therefore cannot publish after
+retirement, and publication failure leaves the transition blocked and
+recoverable.
+
+For workspaces created before the registry, permit one fail-closed bootstrap.
+Scan sibling lifecycle sessions only as an unordered evidence set. Validate the
+complete sealed lifecycle, exact regular mode-safe final state, and exact
+regular mode-safe receipt for every relevant same-scope event. Bootstrap only
+when at least one active event exactly matches the current whole target and all
+relevant valid events agree on the same active authority. Any retirement,
+different generation, malformed or unsafe relevant evidence, or ambiguity
+blocks bootstrap. If the scan instead finds exactly one completed active apply
+whose registry publication was interrupted, publish a pending generation bound
+to its exact receipt, whole-target digest, and state digest. Other sessions
+cannot import it; only the matching writer can promote it to active. Never
+infer causality from a session ID, timestamp, directory
+order, or filesystem metadata. The first failed or empty scan publishes a
+receipt-free blocked subject generation; later evidence removal cannot make an
+older active event authoritative, while an exact-digest adoption may publish a
+new active generation. Marker-only drift remains continuable only from a
+receipt already in the current session. If registry lookup or bootstrap does
+not satisfy the complete proof, preserve `ADOPTION_APPROVAL_REQUIRED`.
+
 #### Selected Option
 
 Resolve trusted installed coordinators from the canonical user-skill root,
@@ -247,7 +317,37 @@ matching-state publication I/O failure a distinct exact-rerun result. Make
 explicit user-dependence intent durable through a `needed`
 project rule unless an active selected-project instruction is already
 sufficient, and derive the instruction chain from the nearest effective marker
-ancestor without changing the selected-project target.
+ancestor without changing the selected-project target. Continue exact managed
+ownership across sessions from a locked monotonic workspace-private registry,
+with unanimous unordered sealed history only as a one-time missing-entry
+bootstrap; instruction discovery and marker presence remain non-authoritative
+for mutation ownership.
+
+Remove the cross-session historical audit from the correctness path.
+`SessionStart` loads and reports only the exact current session; reopening an
+expired session binds a fresh lifecycle from the canonical repository specs.
+A separate best-effort maintenance component owns no semantic project decision
+and never injects routine context. It uses stable locks outside movable session
+bundles, refreshes non-authoritative activity evidence, and shares the
+project-instructions registry validator so missing or pending ownership
+authority protects its sealed history. A root cursor rotates one workspace per
+start, including inactive workspaces, while workspace-private scan and journal
+cursors bound each slice without turning a visit count into retention policy. A
+validated candidate is journaled and fsynced, atomically renamed to same-device
+staging, then removed by directory-file-descriptor traversal that rejects
+links, device crossings, and unexpected identities. Unknown staging remains
+protected. The normal age policy removes terminal bundles after 30 days and
+unfinished planning, planned, implementation, or reconciliation bundles after
+90 days; current and `seal-armed` sessions remain protected. A 1-GiB allocated
+storage high watermark activates only from a complete root aggregate and
+reclaims oldest-first within each complete workspace pressure slice toward
+768 MiB before eligible unfinished state. No archive is created.
+Crash recovery deletes a staged ownership-bound bundle only while both the
+recorded registry generation and canonical registry digest remain current;
+generation or same-generation digest drift and unreadable authority restore the
+exact staged inode to its original session path for reclassification. Exact
+status validation disables pressure from malformed state, and a rotating
+journal cursor prevents malformed prefix journals from starving valid recovery.
 
 #### Alternatives Considered
 
@@ -267,7 +367,25 @@ spec edits throughout `implementation-open` weakens the phase boundary. A
 Task Implementer-only retry or bypass would leave the lifecycle defect in every
 other long-running consumer. Requiring byte identity forever strands corrected
 decisions, while deleting or blindly overwriting the old render would discard
-ownership evidence and weaken the fail-closed boundary.
+ownership evidence and weaken the fail-closed boundary. Requiring a new user
+adoption approval in every session was rejected because session-private storage
+is an implementation detail, not an ownership change. Treating every intact
+marker as owned was also rejected because a hand-crafted or copied marker is
+not sealed lifecycle proof. Session-ID, timestamp, directory, or file-metadata
+ordering was rejected because none is an established strict causal sequence;
+it can resurrect an older active receipt after retirement. Unordered sealed
+history alone is retained only for unanimous one-time bootstrap. A locked
+workspace registry is accepted despite its shared-writer cost because it is the
+smallest boundary that can record monotonic revocation and re-adoption without
+a perpetual prompt or an unsafe inferred order.
+Raising the 128-entry cap or moving an arbitrary oldest set was rejected
+because both preserve cross-project coupling and recur independently of actual
+storage. Archiving was rejected because no consumer requires historical paths
+and it retains the privacy and storage burden. A second active-session index
+was rejected because exact current-session state already owns correctness and
+another cross-writer authority would add reconciliation risk. Retention age
+and allocated bytes are policy; visit limits are only a resumable startup work
+budget.
 
 #### Implementation Boundaries
 
@@ -283,7 +401,18 @@ receipt persistence and an opaque turn-token input while preserving raw turn
 IDs for direct owner tests. The project-instructions renderer owns disposition
 preflight, dual-predecessor validation, atomic private rules replacement,
 matching render-state publication, and the bounded publication-incomplete
-result; hooks do not order or perform that repair.
+result; hooks do not order or perform that repair. The same owner also validates
+and imports exact workspace-registry ownership into the current bundle,
+bootstraps a missing entry only from unanimous sealed history, and publishes
+active or retired generations before recovery evidence is released; the
+lifecycle hook, discovery chain, and repository marker do not independently
+grant ownership. Private maintenance adds only non-authoritative activity,
+root/scan/journal cursors, journal, staging, and aggregate status records under
+the workspace
+maintenance namespace; it does not change lifecycle or registry schemas and
+exposes no public flag or user maintenance workflow. Lifecycle and
+project-instructions writers adopt the stable external workspace/session lock
+order before cleanup is enabled.
 
 #### Test-First Success Criteria
 
@@ -347,6 +476,60 @@ result; hooks do not order or perform that repair.
   mode, link, or schema failures remain `UNSAFE_TARGET`. Lock creation or
   metadata failures return one bounded structured blocker without exposing
   private paths or writing render artifacts.
+- TDD-020: Public inspect, migrate, validate, and project-instructions inspect
+  examples use literal absolute interpreter and installed-helper placeholders;
+  no repo-relative coordinator form remains. Malformed-command feedback names
+  that trust boundary while copied installed-hook tests continue rejecting the
+  checkout helper and accepting the installed helper.
+- TDD-021: A second session imports an exact active workspace-registry receipt
+  and reaches `existing-sufficient` or an owner-authorized refresh without
+  adoption approval or an unrelated repository mutation. Missing, stale,
+  retired, subject-, target-, or body-mismatched authority is not imported and
+  retains `ADOPTION_APPROVAL_REQUIRED`; an unsafe or malformed existing
+  registry fails closed without historical fallback.
+- TDD-022: Unanimous exact active sealed history bootstraps the shared registry
+  once. Any retirement, different generation, invalid relevant evidence,
+  same-millisecond reverse UUID order, or clock regression blocks bootstrap and
+  publishes a durable blocked subject generation. Removing that conflicting
+  evidence cannot trigger another bootstrap or resurrect older ownership. A
+  serialized later exact adoption may publish a new active generation that
+  supersedes the blocked state or retirement tombstone.
+- TDD-023: Shared registry reads and writes reject unsafe mode, links, schema,
+  subject, digest, generation, initialized-but-missing state, and
+  concurrent-lock drift. A retirement holding the lock rejects a stale active
+  writer. Publication failure leaves target recovery evidence or a safely
+  retryable created/adopted transition and never reports a sealed success
+  without the matching monotonic entry. Two paused first-use initializers expose
+  only one complete generation-zero root, and the losing caller continues from
+  that valid registry. After a created transition loses registry publication,
+  another session records a pending generation rather than a generic block;
+  that observer cannot import it, and the exact original receipt/state writer
+  can recover it to active. Regular workspace files are ignored during bounded
+  legacy bootstrap.
+- TDD-024: Repeated inspection after a same-session retirement is
+  `not-applicable` while the target remains absent or human-owned; managed
+  reappearance remains adoption-gated.
+- TDD-025: More than 128 safe terminal, unfinished, sibling-scope, structural,
+  and unknown workspace entries do not fail `SessionStart`, inject a historical
+  reconciliation request, or delete records by count. Current-session context
+  remains exact.
+- TDD-026: Age and storage-pressure maintenance deletes only whole eligible
+  bundles: terminal after 30 inactive days, unfinished after 90 inactive days,
+  and ownership-safe terminal evidence from a complete 1 GiB aggregate toward
+  768 MiB. Current,
+  `seal-armed`, pending, legacy-required, malformed, unsafe, and unknown state
+  remains unchanged; no archive is created.
+- TDD-027: Stable workspace/session and ownership locks prevent lifecycle
+  writes, apply/bootstrap, and cleanup classification or rename from racing.
+  An fsynced journal recovers an exact staged deletion after interruption;
+  identity or canonical registry digest drift, links, hard links, device
+  crossings, unsafe activity, missing sealed final state, malformed status, and
+  unknown residue fail closed without following or deleting them.
+- TDD-028: Maintenance is idempotent and bounded across concurrent starts.
+  Missing safe activity metadata initializes protection, subsequent session
+  activity refreshes it, persisted scan cursors converge, aggregate private
+  status explains protected pressure without routine hook context, and an
+  expired session re-enters through a fresh planning lifecycle.
 
 #### Validation Plan
 
@@ -370,7 +553,16 @@ event. Cover managed-target disposition preflight, owned empty-to-nonempty
 rerender, idempotent identical output, stale state, digest mismatch, unsafe
 metadata, hard links, concurrent lock contention, interrupted state
 publication recovery, concurrent predecessor change, and lifecycle-plan
-admission of the revised bundle.
+admission of the revised bundle. Cover exact sealed history bootstrap and
+workspace-registry continuity plus every rejected lifecycle, state, ownership,
+subject, target, digest, mode, link, retirement, ambiguity, concurrency, and
+publication-recovery case, including first-use root publication and blocked
+bootstrap replay after conflicting evidence is removed, plus an interrupted
+created publication observed before its exact writer retries. Add historical
+audit, age/pressure maintenance, activity, stable-lock ordering, ownership
+retention, crash staging, unsafe filesystem, bounded cursor, concurrency, and
+fresh-expired-session regressions using disposable private roots and patched
+small thresholds.
 
 #### Evaluation Plan
 
@@ -389,12 +581,49 @@ fresh-session instruction discovery. Reproduce the retained empty-render
 deadlock in a disposable bundle and confirm the corrected source rejects the
 invalid first decision or atomically admits an exactly owned revised render;
 do not alter the retained failed-session evidence.
+In a disposable installation with more than 128 historical entries, confirm
+the installed hook emits normal current-session context, maintenance stays
+non-blocking, and only eligible bundles are reclaimed. Installation parity,
+restart and `/hooks` trust, and a real fresh-session probe remain separate from
+source validation.
+
+#### Implementation Evidence
+
+`project_specs_maintenance.py` now owns the private activity, complete aggregate
+usage, bounded root, scan, and journal cursors, stable lock, digest-bound cleanup
+journal, same-device staging, and
+directory-FD traversal contracts. The lifecycle hook imports that exact sibling
+module, reports only the current session, refreshes activity, and invokes a
+nonblocking maintenance slice. Both canonical coordinator CLIs participate in
+the same stable lock order. `workflow.retention_disposition` reuses the
+workspace ownership registry and sealed final-state binding; its private runner
+exposes no public workflow flag.
+
+Focused source tests cover 140 and 300 historical sessions, inactive-workspace
+rotation, complete and partial aggregate pressure, cross-slice oldest-first
+terminal ordering, 30/90-day expiry,
+`planned` expiry,
+current and `seal-armed` protection, missing/future/unsafe activity, hard links,
+lock contention, exact status validation, strict journal identity and rotation,
+registry-generation and same-generation digest drift restore,
+matching-snapshot resume, sealed missing-final-state protection, no archive,
+closed ownership dispositions, and
+concurrent lifecycle writers. Coordinator, hook, project-instructions, Ruff,
+Markdown, structure, and installer tests pass. A disposable install verified
+the exact source/installed skill trees apart from installer provenance, all
+three hook payloads, and the installed maintenance and retention suites. A
+separate disposable hook probe produced normal
+current-session context with 140 historical bundles. The active user hook was
+not replaced; restart/trust and a real fresh-session activation probe remain
+unverified rollout gates.
 
 #### Rollout And Rollback
 
-Install the reviewed hook with a recoverable backup, restart Codex, review and
-trust the changed hook, then use a fresh selected-project session. Restore the
-exact backup if the fresh probe fails before accepting further project writes.
+Install the reviewed skills and hook with recoverable backups only after the
+entire affected dirty skill folders are reviewed, restart Codex, review and
+trust the changed hook, then use a fresh selected-project session. Cleanup is
+disabled until every writer uses the stable lock generation. Restore the exact
+backup if the fresh probe fails before accepting further project writes.
 
 #### Done Definition
 
@@ -406,11 +635,24 @@ revisions cannot deadlock on their own private rules, unowned changes remain
 blocked,
 explicit compatibility intent governs the current change and future sessions,
 nested selected projects follow effective Codex root discovery without changing
-their target scope, and noncanonical commands still fail closed.
+their target scope, sealed managed ownership continues across ordinary sessions
+without redundant human approval, unproven markers remain adoption-gated, and
+noncanonical commands still fail closed. Historical session quantity no longer
+affects startup correctness; safe private state converges under the approved
+30-day, 90-day, and 1-GiB/768-MiB policy without archives, loss of protected
+recovery evidence, or routine user maintenance.
+
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-002 -->
 
-<!-- FEATURE: FEAT-003 reqs=REQ-004 status=ready priority=P0 version=2 -->
+<!-- FEATURE: FEAT-003 reqs=REQ-004 status=superseded delivery=unassessed priority=P0 version=2 -->
 ### FEAT-003: Project-owned lifecycle protection boundary
 
 #### Requirements Covered
@@ -489,9 +731,17 @@ hook if project or lifecycle-private containment regresses.
 External writes are no longer denied by the project hook, while selected-project
 sequencing and authoritative lifecycle state remain protected.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-003 -->
 
-<!-- FEATURE: FEAT-004 reqs=REQ-005 status=ready priority=P1 version=1 -->
+<!-- FEATURE: FEAT-004 reqs=REQ-005 status=ready delivery=unassessed priority=P1 version=1 -->
 ### FEAT-004: Layered repair verification and activation
 
 #### Requirements Covered
@@ -501,8 +751,9 @@ sequencing and authoritative lifecycle state remain protected.
 #### Context Evidence
 
 `install-skills.sh` provides idempotent skill and opt-in hook synchronization,
-registration merging, provenance, backups, and restart guidance. The lifecycle
-and global-context references distinguish source tests from runtime activation.
+registration merging, provenance, backups, and restart guidance. The
+project-spec observer and global-context references distinguish source tests
+from runtime activation.
 
 #### Design Details
 
@@ -534,19 +785,19 @@ local runtime state and are never committed.
 - TDD-001: Focused source tests fail for the stale trust root and pass for the
   canonical root.
 - TDD-002: Installed hook bytes match reviewed source after synchronization.
-- TDD-003: A fresh runtime executes the canonical coordinator and creates or
-  reconciles the selected project's spec pair through the owner lifecycle.
+- TDD-003: A fresh runtime executes the advisory project-spec observer without
+  creating spec state, denying tools, continuing Stop, or gating completion.
 
 #### Validation Plan
 
 Run changed-scope review, lint and syntax, security, regression, installer
-parity, and fresh-session lifecycle checks in that order.
+parity, and fresh-session advisory hook checks in that order.
 
 #### Test Plan
 
 Use disposable source tests before local installation; after restart, run one
-clean project lifecycle from inspection through sealing and separately verify
-postconditions.
+clean SessionStart, tool, and Stop sequence and separately verify bounded
+advice plus neutral progression.
 
 #### Evaluation Plan
 
@@ -564,9 +815,17 @@ source history remains available for correction.
 Source, installed parity, registration/trust, and fresh runtime are all proven
 or any missing gate is explicitly reported as the remaining blocker.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-004 -->
 
-<!-- FEATURE: FEAT-005 reqs=REQ-006 status=ready priority=P0 version=2 -->
+<!-- FEATURE: FEAT-005 reqs=REQ-006 status=superseded delivery=unassessed priority=P0 version=3 -->
 ### FEAT-005: Effect-proportional command and private-input classification
 
 #### Requirements Covered
@@ -583,6 +842,14 @@ blocking a repository-root-relative intent-to-add command. The focused hook
 suite now carries regressions for each of those reproduced deadlocks and false
 blocks.
 
+A later internal-knowledge lookup exposed a narrower false block. Codex passed
+canonical Atlassian Rovo tool names whose provider-prefixed operation segments
+did not match the generic read-only verb grammar, so exact Confluence reads and
+the connector's authentication bootstrap were denied as targetless ambiguous
+effects before the connector ran. The denial proved local lifecycle
+classification only; it did not establish whether Atlassian authorization was
+present or absent.
+
 #### Design Details
 
 Replace the universal read-command allowlist with effect-oriented detection.
@@ -592,6 +859,33 @@ composition is decomposed or conservatively scanned for those effects rather
 than rejected merely for using a pipe or separator. Commands without a known
 material effect pass through the project lifecycle and remain subject to their
 normal execution sandbox, permissions, and product-specific hooks.
+
+Classify the reviewed Atlassian Rovo read surface before the generic MCP method
+grammar. Use exact full-name membership with the canonical hook prefix
+`mcp__codex_apps__atlassian_rovo__` for these operation suffixes:
+`atlassianuserinfo`, `fetch`, `getaccessibleatlassianresources`,
+`getconfluencecommentchildren`, `getconfluencepage`,
+`getconfluencepagedescendants`, `getconfluencepagefootercomments`,
+`getconfluencepageinlinecomments`, `getconfluencespaces`,
+`getissuelinktypes`, `getjiraissue`, `getjiraissueremoteissuelinks`,
+`getjiraissuetypemetawithfields`, `getjiraprojectissuetypesmetadata`,
+`getpagesinconfluencespace`, `gettransitionsforjiraissue`,
+`getvisiblejiraprojects`, `lookupjiraaccountid`, `search`,
+`searchconfluenceusingcql`, and `searchjiraissuesusingjql`. Both PreToolUse and
+PostToolUse consume the same classifier, so these exact names remain
+lifecycle-neutral for successful, failed, or conservatively shaped responses.
+
+The provider branch is fail-closed. Reserve a case-normalized Rovo family stem
+before generic parsing, while requiring case-sensitive exact membership for a
+neutral result; known mutators, newly added methods, spelling, case, or version
+drift, malformed separators, and the callable single-underscore alias remain
+potential writes. Reserve Browser, Chrome, Playwright, Computer Use, and
+arbitrary-JavaScript provider namespaces the same way so read-like method names
+cannot inherit the generic exception. Other MCP providers retain the existing
+generic verb grammar. An allowlisted connector may independently open the
+default browser, refresh credentials, or store connector-owned authentication
+state; those effects belong to connector settings, workspace policy, and
+runtime trust rather than the selected-project write epoch.
 
 Add one narrow lifecycle-private write class before selected-project
 containment: direct `runtime-config.json` or `decision.json` members of the
@@ -699,12 +993,24 @@ action approval.
 - TDD-007: Fixed commands wholly outside the selected project are admitted and
   epoch-neutral, while selected-project, mixed, lifecycle-state, dynamic, and
   ambiguous mutations retain their existing gates.
+- TDD-008: Every exact reviewed Atlassian Rovo read name is nonmaterial in all
+  lifecycle phases, and both successful and failed PostToolUse payloads leave
+  lifecycle bytes unchanged.
+- TDD-009: Every current Rovo mutator plus unknown, renamed, case-drifted,
+  malformed, spoofed, cross-provider, browser-control, and arbitrary-code names
+  remains material and denied before execution when the phase requires it.
+- TDD-010: A successful unknown or mutating Rovo PostToolUse response retains
+  conservative material accounting if pre-use enforcement was absent or
+  bypassed; an explicit failure remains epoch-neutral.
+- TDD-011: Generic read-only MCP classification for other providers remains
+  unchanged.
 
 #### Validation Plan
 
-Run focused lifecycle-hook tests, project-instruction contract tests, shell
-syntax and lint checks, changed-scope security review, installer tests, and a
-fresh-runtime lifecycle probe.
+Run focused and full source lifecycle-hook tests, project-spec contract tests,
+Python syntax and changed-scope lint checks, skill-structure validation, and
+changed-scope security and code review. Keep installed parity, restart, hook
+trust, fresh-session behavior, and live connector access outside this tranche.
 
 #### Test Plan
 
@@ -715,16 +1021,18 @@ transitions, and unchanged write epochs.
 
 #### Evaluation Plan
 
-Repeat the blocked commands from this incident and complete a clean lifecycle
-bootstrap. Independently verify that an implementation edit before `open` and
-an authoritative private-state edit are still rejected.
+Replay the exact blocked Rovo tool names in disposable lifecycle fixtures across
+every phase, and independently verify that writes, provider drift, browser
+control, implementation edits before `open`, and authoritative private-state
+edits remain rejected. Do not invoke the live connector for source evaluation.
 
 #### Rollout And Rollback
 
-Install the repaired source hook through `install-skills.sh`, restart Codex,
-review hook trust, and test in a fresh session. Preserve the installer backup
-until the fresh probe succeeds; rollback restores only that exact hook and
-registration state.
+For the Atlassian Rovo classification tranche, validate source only. Do not
+install or synchronize the hook, restart Codex, authenticate the connector, or
+perform a live internal-document read. Installed parity, hook trust, fresh
+session behavior, and live connector access remain separate follow-up gates.
+Rollback reverts only the source classifier, tests, and aligned documentation.
 
 #### Done Definition
 
@@ -735,10 +1043,21 @@ Agents can investigate and prepare required private inputs without lifecycle
 deadlocks, while project mutations and authoritative lifecycle transitions
 remain fail-closed and receipt-bound. Installation and fresh-runtime activation
 remain separate rollout gates under REQ-005.
+The exact reviewed Atlassian Rovo read set is additionally lifecycle-neutral by
+canonical full name, while provider drift, mutations, browser control, and
+arbitrary code remain fail-closed.
+
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-005 -->
 
-<!-- FEATURE: FEAT-006 reqs=REQ-007 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-006 reqs=REQ-007 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-006: Owner-correct recovery from config write denials
 
 #### Requirements Covered
@@ -789,13 +1108,14 @@ cross-surface tests, root changelog, and the canonical source/install workflow.
 - TDD-001: Static contract tests require no-evasion wording, owner/provenance
   gates, source-first repair, separate install/restart, identical retry, and
   external-policy manual fallback across all config-codex surfaces.
-- TDD-002: The project lifecycle false-block regression proves the unchanged
-  config write passes after source repair while project-specs state stays denied.
+- TDD-002: The repo-owned guard false-block regression proves the unchanged
+  config write passes after source repair while owner-private state remains
+  protected and the project-spec observer remains neutral.
 
 #### Validation Plan
 
-Run config-codex contract tests, lifecycle-hook tests, installer checks, source
-to installed parity, and a fresh-runtime review boundary.
+Run config-codex contract tests, advisory project-spec hook tests, installer
+checks, source-to-installed parity, and a fresh-runtime review boundary.
 
 #### Test Plan
 
@@ -817,9 +1137,17 @@ hook if regression checks fail before a fresh runtime is trusted.
 Config-codex repairs a proven in-scope owner defect and retries the original
 operation without teaching or using a bypass.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-006 -->
 
-<!-- FEATURE: FEAT-007 reqs=REQ-008 status=ready priority=P0 version=6 -->
+<!-- FEATURE: FEAT-007 reqs=REQ-008 status=ready delivery=unassessed priority=P0 version=7 -->
 ### FEAT-007: Single-report troubleshoot safety obligation
 
 #### Requirements Covered
@@ -845,6 +1173,13 @@ safety class as secrets and containment escape. The selected correction uses
 the resolved Git repository root as the single authorization boundary and
 separates harmless format defects from unsafe destinations.
 
+A later session exposed a separate remediation-profile divergence. A valid
+`resolved` marker caused a new bare `$troubleshoot` invocation to mint pending
+next-tranche authorization before any second remediation or independent
+blocker existed. PreToolUse then denied discovery, and its repair text did not
+state the parser's exact operation boundary: update an existing file, add only
+an absent file, and never delete or delete/add-replace it.
+
 #### Design Details
 
 At `UserPromptSubmit`, every explicit `$troubleshoot` invocation keeps the
@@ -860,6 +1195,17 @@ has one canonical compact shape:
 2. `Root Cause And Fix`: root cause and changes made.
 3. `Verification`: verified scope and explicitly unverified scope.
 4. `Next Action`: owner, action, and done condition.
+
+Treat `resolved` as completed evidence rather than an exhausted terminal lock.
+A later bare invocation returns the saved profile context and admits discovery
+without pending authorization or marker replacement. If explicit profile flags
+are supplied, reuse the profile-only resize handshake and preserve the resolved
+blocker, tranche, attempt ledger, counters, lifecycle, and timestamps. Keep the
+existing post-exhaustion next-tranche flow unchanged. While either handshake is
+actually pending, admit only one exact `apply_patch` targeting the advertised
+`current.md`: require `*** Update File` when it exists and permit `*** Add File`
+only when it is absent. Deny `*** Delete File`, delete/add replacement, shell
+rewrites, and every other tool with actionable feedback.
 
 Use field-specific validation. Confidence is exactly `High`, `Medium`, `Low`,
 or `Unknown`; short enum values are valid. Narrative fields reject empty,
@@ -1007,6 +1353,11 @@ local hook control.
   ordinary and exhausted-fallback containment, local Markdown links,
   absolute/home/file URI targets, encoded and symlink escape, public URLs,
   nonreference prose, and API routes.
+- TDD-007: A bare invocation from valid resolved state returns profile context,
+  creates no pending or terminal authorization, and admits inspection. Explicit
+  profile flags preserve resolved marker state through a profile-only handshake,
+  while pending admission requires update for an existing task-state file, add
+  only for an absent file, and rejects delete, delete/add, or shell alternatives.
 
 #### Validation Plan
 
@@ -1029,7 +1380,7 @@ for report quality alone. Recreate the installed-runtime-pending case and
 confirm the source repair is reported as `DIAGNOSED-FIXED` with a concise exact
 activation action. In a disposable fresh session, force fake sensitive content
 and verify the original may remain visible but no synthetic continuation or
-second assistant report is created and peer lifecycle cleanup still occurs.
+second assistant report is created and peer workflow cleanup still occurs.
 
 #### Rollout And Rollback
 
@@ -1054,9 +1405,17 @@ output never causes an automatic replacement report, peer delegates retain
 their state effects, strict budget boundaries remain enforced, and source
 proof remains separate from installed and fresh-runtime activation.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-007 -->
 
-<!-- FEATURE: FEAT-008 reqs=REQ-009 status=ready priority=P0 version=3 -->
+<!-- FEATURE: FEAT-008 reqs=REQ-009 status=ready delivery=unassessed priority=P0 version=4 -->
 ### FEAT-008: Objective-owned hybrid prompt-session intake
 
 #### Requirements Covered
@@ -1078,19 +1437,28 @@ That body-first journal conflicts with data minimization and makes downstream
 classification too late to prevent over-capture. The repository already
 composes terminal workflow checks through one shared Stop arbiter.
 
+In the observed direct `$troubleshoot` session, no Task Implementer command was
+invoked, but the submit hook found one compatible active Task Implementer
+objective in its registry and silently bound the fresh session. That
+auto-attachment staged metadata, injected a Task Implementer adapter
+instruction, and caused an unrelated adapter validation attempt.
+
 #### Design Details
 
 Keep the separately owned internal `prompt-session-intake` skill, but make its
 `UserPromptSubmit` process an unconditional pass-through boundary. After an
-exact explicit Task Implementer or SDLC binding, or an unambiguous compatible
-active objective, it may acquire only a bounded session-state lock and
+exact Task Implementer or SDLC init/run invocation binds the current session,
+later direct turns in that same session may acquire only a bounded
+session-state lock and
 atomically stage an event-v2 metadata receipt with causal session/turn,
 project, workflow, submitted digest, versioned operation identity, and an
 unguessable acceptance token. It never writes the prompt body or `raw.md`.
-Recognized secrets create no event. Binding, writer, ambiguity, unsafe-state,
-or unexpected failures return bounded capture-skipped context or no context
-with `continue: true`; they never stop the user turn. The hook never
-semantically edits a prompt or invokes a workflow.
+An unbound direct turn returns no intake context before capture-specific
+content checks. In an explicitly bound session, recognized secrets create no
+event. Binding, writer, ambiguity, unsafe-state, or unexpected failures return
+bounded capture-skipped context or no context with `continue: true`; they never
+stop the user turn. The hook never semantically edits a prompt or invokes a
+workflow.
 
 The current agent starts handling the direct prompt normally. Prompt capture is
 a subordinate same-turn sidecar. The coordinator records one disposition:
@@ -1134,17 +1502,18 @@ classification; later turns cannot classify an older staged event from new
 context. An already-accepted immutable projection may finish its exact merge
 and consume transition. Session identity binds provenance only; it is not an
 execution or capture lease. The full prompt ID remains canonical objective
-identity. Fresh sessions stage capture only when exactly one compatible active
-objective exists; no candidate stays capture-inert and multiple candidates
-skip capture without blocking the prompt. The registry retains bounded writer
-session provenance for diagnostics but never rejects a current turn because a
-different or stale writer value exists.
+identity. A fresh session without its own exact binding remains capture-inert
+even when the registry contains exactly one compatible active objective. The
+registry retains objective identity and bounded writer-session provenance for
+diagnostics and validation, but it neither creates a new session binding nor
+rejects a current turn because a different or stale writer value exists.
 
 For Task Implementer, resolve logical project identity through the validated
 workspace manifest. Treat `primary_root + scope` and the manifest-proven lane
-`source_root` as aliases of one objective for attachment, writer-provenance
-updates, objective replacement, and result validation. Continue to reject a
-project that is not one of those two canonical identities.
+`source_root` as aliases of one objective for explicitly bound capture,
+writer-provenance updates, objective replacement, and result validation.
+Those aliases never bind a fresh session. Continue to reject a project that is
+not one of those two canonical identities.
 
 Upgrade both prompt workspaces to schema v3. Derive a stable five-character
 reference from the full prompt ID, extend it deterministically on collision,
@@ -1190,6 +1559,10 @@ is rejected because it cannot prove that intervening bytes were capture-owned
 rather than a manual edit. One prompt file per session would fragment a
 long-lived objective across sessions. Dual event-v1/event-v2 readers or writers
 would create compatibility paths and prolong private-state ambiguity.
+Automatically attaching an unbound fresh session to a unique active objective
+is rejected because project-level objective identity is not evidence that the
+user selected that workflow in the new session; the explicit init/run path is
+the single canonical binding transition.
 
 #### Implementation Boundaries
 
@@ -1222,8 +1595,11 @@ restart, and fresh-session validation require separate explicit authorization.
   classification; event-v1 records remain inert while event-v2 stages in its
   separate namespace. Accepted immutable transitions recover only by exact
   projection and result identity.
-- TDD-007: Primary and lane Task project identities attach to and update one
-  logical registry objective, while unrelated projects remain capture-inert.
+- TDD-007: An unbound fresh session receives no intake context, binding, or
+  event, including for secret-matching input and while one compatible Task or
+  SDLC objective is active. After an exact binding, primary and lane Task
+  project identities update one logical registry objective, while unrelated
+  projects remain capture-inert.
 - TDD-008: Prompt intake composes through the single Stop arbiter, never blocks
   Stop for incomplete capture, and does not make the generic UserPromptSubmit
   hook route either workflow.
@@ -1251,9 +1627,12 @@ migration and explicit rerun cases.
 In a separately authorized fresh runtime, bind one session per workflow,
 exercise managed-lane direct project intent, no-op categories, mixed prompts,
 commands as data, secrets, stale event receipts, stale writer provenance,
-ambiguous attachment, manual edit, and ref-based explicit rerun. Verify every
-direct prompt reaches the agent, only the project-intent projection reaches the
-canonical prompt once, and run counts change only after explicit `run`.
+manual edit, and ref-based explicit rerun. Before binding, leave one compatible
+objective active and verify that a direct fresh-session prompt receives no
+prompt-intake context and creates no binding or event. After binding, verify
+every direct prompt reaches the agent, only the project-intent projection
+reaches the canonical prompt once, and run counts change only after explicit
+`run`.
 
 #### Rollout And Rollback
 
@@ -1270,12 +1649,21 @@ independent explicit execution ownership, use canonical v3 prompt identity with
 stable user-facing refs, preserve manual control and immutable evidence, and
 pass the source validation matrix without claiming runtime activation. A Task
 Implementer prompt submitted from either its primary project or verified
-managed lane reaches the current agent and, when safe and material, is captured
-in the same canonical objective prompt.
+managed lane reaches the current agent and, only after an exact binding in that
+session, is captured in the same canonical objective prompt when safe and
+material. An otherwise unbound fresh session remains capture-inert.
+
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-008 -->
 
-<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready priority=P0 version=3 -->
+<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=unassessed priority=P0 version=3 -->
 ### FEAT-009: Evidence-intensive troubleshooting and technology playbooks
 
 #### Requirements Covered
@@ -1417,9 +1805,17 @@ boundary, exercised paths, and observation window. The user sees a compact,
 accurate projection of the fixed scope, material gaps, and next action rather
 than the full evidence ledger by default.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready priority=P0 version=4 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=unassessed priority=P0 version=4 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -1428,12 +1824,11 @@ than the full evidence ledger by default.
 
 #### Context Evidence
 
-The `commit` contract already requires repository-root `git add -A`, staged
-review, `git write-tree`, normal hooks, and final tree verification. The
-selected-project lifecycle hook classifies every mutating Git command as
-material but has no Git target model, so general staging becomes ambiguous and
-is denied before the documented commit workflow can run. Worktree already uses
-durable preparation claims and direct-child/tree verification; Task Implementer
+The `commit` contract requires repository-root `git add -A`, staged review,
+`git write-tree`, normal hooks, and final tree verification. Earlier project
+lifecycle enforcement denied that documented path before its transaction owner
+could run; the project-spec hook is now advisory. Worktree already uses durable
+preparation claims and direct-child/tree verification; Task Implementer
 and Agentic SDLC retain separate lane and feature-promotion owners. The initial
 prompt matcher accepts only a first `$commit` token, so equally explicit user
 directives such as `run $commit` fail to mint the transaction authorization.
@@ -1459,7 +1854,7 @@ Add an installed commit transaction helper with `prepare`, `execute`, and
 private `review` transitions. `prepare` copies the current index into a private
 temporary index, applies whole-repository `git add -A`, writes the candidate
 tree, and persists only repository/worktree/ref identities, head and tree IDs,
-bounded digests, the lifecycle binding, authorization source, status, and a
+bounded digests, explicit authorization source, status, and a
 token hash. `execute` acquires the shared common-directory/ref lock, recomputes
 and compares the candidate, stages the real index, runs cached checks and the
 normal-hook commit, then proves unchanged branch, one direct child, matching
@@ -1485,18 +1880,12 @@ cannot acquire committed claim state through crash recovery. Never clear
 ownership by PID or timeout and never reset, amend, unstage, or remove
 repository changes.
 
-Keep the current project lifecycle single-scope. A fresh zero-write commit-only
-turn may record the existing bounded non-project waiver; a nonterminal selected
-scope with project writes still blocks. Sibling project lifecycle state is not
-discovered or aggregated because committing Git metadata must not turn the
-selected-project hook into a repository-wide semantic owner.
-
-The lifecycle hook admits only one uncomposed canonical installed helper whose
-interpreter, path, digest, current session, selected project, repository,
-worktree, authorization, claim, and action flags match. Protect commit private
-state as control-plane data. Verified Git-only completion is epoch-neutral;
-helper-reported hook or concurrent file mutation invalidates current lifecycle
-evidence and requires review.
+Project lifecycle state is advisory and is not part of commit admission. The
+transaction accepts only one uncomposed canonical installed helper whose
+interpreter, path, digest, current session, repository, worktree,
+authorization, claim, and action flags match. Protect commit private state as
+control-plane data. Existing repository instructions, Worktree ownership, and
+active workflow commit policy remain independent gates.
 
 For delegated Task Implementer commits, trust the hook runtime or one exact
 executable named `python3` or `python3.N` that resolves to the same file by
@@ -1504,7 +1893,7 @@ basename through the hook process PATH. This admits a canonical worker Python
 version different from the hook runtime while rejecting arbitrary same-name
 paths and wrappers. `task-start` and base-state `task-recover` return a
 transient structured commit context containing that resolved executable, the
-canonical helper, outer lifecycle cwd, worker root, raw `CODEX_THREAD_ID`,
+canonical helper, exact scope cwd, worker root, raw `CODEX_THREAD_ID`,
 evidence paths, and exact prepare argv. Persist only the session fingerprint;
 name it explicitly as evidence in worker-facing output so it cannot be
 mistaken for the helper's raw `--session-id` argument.
@@ -1538,9 +1927,9 @@ cross-workflow ownership.
 #### Alternatives Considered
 
 Allowing raw repo-root Git is simpler but cannot bind explicit intent, reviewed
-tree, hook output, one-shot consumption, or recovery. Requiring every affected
-project to emit a lifecycle attestation adds user ceremony and incorrectly
-turns a selected-project guard into a monorepo semantic coordinator. Letting
+tree, hook output, one-shot consumption, or recovery. Requiring any affected
+project to emit a lifecycle attestation adds user ceremony without improving
+the transaction's Git proof. Letting
 Task Implementer auto-commit dirty source state broadens its explicit
 integration authority. Allowing ordinary commit inside active Agentic SDLC
 invalidates coordinator evidence and exact-head guarantees.
@@ -1548,10 +1937,10 @@ invalidates coordinator evidence and exact-head guarantees.
 #### Implementation Boundaries
 
 Owned surfaces are the `commit` helper, prompt hook, contract and real-Git
-tests; lifecycle helper admission and protected state; shared Worktree ref
-coordination and delegated adapter; Task Implementer dirty-source handoff;
-Agentic SDLC helper classification; corresponding README, lifecycle reference,
-installer registration, canonical specs, and changelog. Lane integration,
+tests; transaction-private authorization and protected state; shared Worktree
+ref coordination and delegated adapter; Task Implementer dirty-source handoff;
+Agentic SDLC helper classification; corresponding README, installer
+registration, canonical specs, and changelog. Lane integration,
 feature sealing/promotion, publishing, and runtime installation remain with
 their existing owners.
 
@@ -1560,7 +1949,7 @@ their existing owners.
 - TDD-001: A direct `$commit` or a bounded leading directive such as
   `run $commit`, `apply $commit`, or `execute $commit` prepares and creates one
   exact commit from root files plus changes in multiple sibling project folders
-  without sibling lifecycle state.
+  without project-spec lifecycle state.
 - TDD-002: Raw Git, conversational mentions, questions, quotations, help,
   later prose references, malformed helpers, non-PATH interpreter or helper
   digest, stale sessions, alternate worktrees/refs, and token replay fail
@@ -1586,8 +1975,8 @@ their existing owners.
 #### Validation Plan
 
 Run commit contract and disposable-repository transaction tests first, then
-lifecycle hook, Worktree, Task Implementer interoperability, SDLC policy and
-managed-outer integration, installer registration, security review, lint,
+the neutral project-spec hook, Worktree, Task Implementer interoperability,
+SDLC policy and managed-outer integration, installer registration, security review, lint,
 changed-scope review, and project-wide alignment.
 
 #### Test Plan
@@ -1621,9 +2010,17 @@ user action, while casual mentions and raw Git remain denied, workflow owners
 remain isolated, recovery is idempotent, and installation plus fresh-session
 behavior are reported as separate proof gates.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-010 -->
 
-<!-- FEATURE: FEAT-011 reqs=REQ-012 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-011 reqs=REQ-012 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-011: Run-owned whole-lane checkpoint and generation open
 
 #### Requirements Covered
@@ -1705,7 +2102,7 @@ ceremony and lets users move managed history independently of `run`. Calling
 the general `$commit` transaction cannot publish lane generation state or
 provisional claims atomically. Committing only selected-project paths can split
 one coherent cross-project change and contradict repository-root `git add -A`.
-Checkpointing active-generation or source-checkout dirt would blur lifecycle
+Checkpointing active-generation or source-checkout dirt would blur lane
 ownership and invalidate existing resume and integration evidence.
 
 #### Implementation Boundaries
@@ -1774,9 +2171,17 @@ persistent lane across project folders as its exact generation baseline, while
 the primary checkout and other public actions remain untouched and every
 failure retains recoverable evidence without automatic cleanup.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-011 -->
 
-<!-- FEATURE: FEAT-012 reqs=REQ-013 status=ready priority=P1 version=1 -->
+<!-- FEATURE: FEAT-012 reqs=REQ-013 status=ready delivery=unassessed priority=P1 version=1 -->
 ### FEAT-012: Existing-only workspace reopen through the live lane anchor
 
 #### Requirements Covered
@@ -1890,9 +2295,17 @@ unchanged because no persisted schema was introduced.
 One explicit source-project command reopens the exact existing managed
 workspace without requiring private paths or changing Git or workflow state.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-012 -->
 
-<!-- FEATURE: FEAT-013 reqs=REQ-014 status=ready priority=P0 version=4 -->
+<!-- FEATURE: FEAT-013 reqs=REQ-014 status=superseded delivery=unassessed priority=P0 version=4 -->
 ### FEAT-013: Attested Task Implementer lifecycle bridge
 
 #### Requirements Covered
@@ -2066,9 +2479,17 @@ boundary without weakening ordinary lifecycle evidence, reaches worker
 dispatch, and leaves the selected lane lifecycle ready for one final semantic
 reconciliation and seal.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-013 -->
 
-<!-- FEATURE: FEAT-014 reqs=REQ-015 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-014 reqs=REQ-015 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-014: Evidence-preserving active-wave worktree rehydration
 
 #### Requirements Covered
@@ -2186,7 +2607,7 @@ and promotion state before allowing a fresh worker to call `task-recover`.
 
 #### Rollout And Rollback
 
-Land Task Implementer, Worktree, lifecycle hook, tests, specs, docs, and
+Land Task Implementer, Worktree, tests, specs, docs, and
 changelog together. Install the cooperating skills and hook from one reviewed
 source revision, verify parity, restart, and use a disposable probe before any
 retained real run. Roll back the exact installed payload if activation fails;
@@ -2198,9 +2619,17 @@ A stopped retained run can restore only its exactly proven active-wave
 checkouts and continue through normal fresh-worker recovery without pretending
 that lost filesystem-only edits, a commit, or a promotion survived.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-014 -->
 
-<!-- FEATURE: FEAT-015 reqs=REQ-016 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-015 reqs=REQ-016 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-015: Revision-to-contract impact ledger
 
 #### Requirements Covered
@@ -2388,9 +2817,17 @@ unsubstantiated no-effect label, stale downstream evidence fails closed, and
 users receive a concise sanitized explanation without prompt-file hash
 ceremony.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-015 -->
 
-<!-- FEATURE: FEAT-016 reqs=REQ-017 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-016 reqs=REQ-017 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-016: Sealed promotion-review correction round
 
 #### Requirements Covered
@@ -2521,9 +2958,17 @@ A combined-review blocker can be corrected by fresh isolated workers without
 promoting known-bad code or rewriting accepted history, and the lane moves only
 once to the newly reviewed integration head.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-016 -->
 
-<!-- FEATURE: FEAT-017 reqs=REQ-018 status=ready priority=P0 version=3 -->
+<!-- FEATURE: FEAT-017 reqs=REQ-018 status=ready delivery=unassessed priority=P0 version=3 -->
 ### FEAT-017: Digest-bound Task Implementer resume control
 
 #### Requirements Covered
@@ -2557,8 +3002,8 @@ supporting audit evidence.
 Add a pure private resume planner that validates manifest and revision
 identity; every indexed coordinator, wave, task, assignment, result, and
 incoming-handoff artifact; Worktree interop and the external generation and
-lease; Git refs, registrations, worktree identity, heads, and index state; and
-the relevant project lifecycle binding. It returns exactly one of `execute`,
+lease; and Git refs, registrations, worktree identity, heads, and index state.
+Project lifecycle evidence is not an input. The planner returns exactly one of `execute`,
 `wait`, `requires_confirmation`, `blocked`, or `complete`. Only `execute`
 contains an opaque single-use token binding the state digest, epoch, and exact
 next private transition. The executor reacquires the scope, Git, and Worktree
@@ -2609,9 +3054,9 @@ Before creating the recovery journal, require the ready requirements-refinement
 contract to match the current managed requirements. Publish its current prompt
 impact through the existing append-only CAS ledger, require `retain_plan`, and
 bind the resulting impact digest in the fixed recovery identity. This admits a
-canonical spec-receipt or non-managed-byte refresh after the Task owner has
-updated the compiled requirements binding, while a stale refinement or material
-impact still fails before plan mutation. Construct the new plan basis from the
+canonical requirements/design identity or non-managed-byte refresh after the
+Task owner has updated the compiled requirements binding, while a stale
+refinement or material impact still fails before plan mutation. Construct the new plan basis from the
 validated current impact and combined plan digest, then preserve the existing
 basis-first/coordinator-second order. A crash after impact publication is safe
 because impact publication is itself exact and idempotent; a replayed recovery
@@ -2665,22 +3110,10 @@ are unchanged; intake then performs full verification again. `workspace reuse`
 remains observation-only, and every other mismatch retains the existing
 fail-closed behavior.
 
-Route project lifecycle recovery through an explicit owner continuation. Never
-simulate hook delivery or depend on Stop generating `UserPromptSubmit`. If
-installed source or project instructions require a fresh process, preserve the
-run and return the exact reload requirement before further mutation.
-
-Add a hidden current-v7 contract-delta adoption beside digest recovery. It
-accepts only a sealed lifecycle state rooted in the current private Codex home,
-the exact selected project and lane head, current canonical spec hashes, and a
-verified project-instructions target hash. Lane status must contain only
-unstaged modifications to requirements, design, and optionally the managed
-project instruction file. Journal exact source and integration identities and
-file digests before copying those public bytes into the clean retained
-promotion-review integration, then create one fixed-message direct-child
-coordinator commit. Private lifecycle state never enters Git. Resume and wave
-operations may waive external `outer_clean` only while this committed journal,
-lane overlay, integration ancestry, and file digests all agree.
+Project-spec status is advisory during resume. Never simulate hook delivery,
+wait for lifecycle continuation, or turn a recommended instruction change into
+an automatic mutation. Already-effective repository instructions remain in
+force; a separate explicit instruction workflow may be invoked independently.
 
 Consume a dependent promotion-review correction graph one ready frontier per
 integration cycle. The retained wave appends only tasks whose dependencies are
@@ -2688,11 +3121,8 @@ already indexed and merged, dispatches them from the latest integration head,
 and leaves later frontiers unindexed until the next promotion-review boundary.
 A future planned task may defer, then adopt, a dependency-only change to the
 new correction chain; every other field and its resource-free plane remain
-unchanged. Before final fast-forward, require the integration target to contain
-the adopted contract bytes, journal removal of only those exact lane overlays,
-and restore them from the integration commit if promotion does not complete.
-This preserves canonical truth across an interrupted cleanup without admitting
-general dirty-lane execution.
+unchanged. Final fast-forward still requires the ordinary clean-lane and exact
+integration-head proof.
 
 Project machine task states through one canonical human-status mapping before
 writing handoff Markdown: planned is pending, assigned/running/committed/merged
@@ -2726,9 +3156,9 @@ Task Implementer owns the resume planner, sidecar, adoption, transition
 journaling, reentrant scope/execution fencing, machine status, handoff
 projection, immutable pending-plan staging, and focused crash harness.
 Worktree retains lease, generation, path, and promotion authority. Git retains
-ref, worktree, and commit truth. Maintain Project Specs retains lifecycle
-transitions and project-instruction receipts. Workers retain product changes
-and direct-child commits. No public Task Implementer action or flag changes.
+ref, worktree, and commit truth. Maintain Project Specs retains canonical spec
+semantics and advisory validation. Workers retain product changes and
+direct-child commits. No public Task Implementer action or flag changes.
 
 #### Test-First Success Criteria
 
@@ -2766,20 +3196,14 @@ and direct-child commits. No public Task Implementer action or flag changes.
   resume rejection, repeats the unchanged replan without changing coordinator
   or wave bytes, rejects live workers and broken control symlinks, replays
   interruption after either durable repair write without a second identity,
-  republishes and binds a spec-receipt-only `retain_plan` impact, rejects a
+  republishes and binds a canonical-spec-only `retain_plan` impact, rejects a
   stale refinement or changed recovery impact, keeps the owner command out of
   ordinary help, and reaches ordinary resume adoption plus its controlled wave
   preparation afterward.
-- TDD-013: A real-Git promotion-review fixture binds an exact sealed lifecycle
-  receipt to dirty requirements, design, and provenance-only project
-  instructions; commits those bytes once in the retained integration; rejects
-  any extra, staged, unsafe, or changed path; and admits resume observation
-  only while lane and integration bytes match the adoption journal.
 - TDD-014: A dependent correction chain is consumed one ready frontier at a
   time from successive integrated heads, updates a future planned task only by
-  adding dependencies on the completed correction chain, and restores adopted
-  lane bytes after an injected pre-promotion interruption before converging to
-  one clean fast-forward.
+  adding dependencies on the completed correction chain, then converges to one
+  clean fast-forward.
 - TDD-015: Projection tests cover every machine-to-human task status, repeat
   resume after an unpromoted merged task without parse failure, recover the
   exact current-v7 unsupported `committed` writer output through an interrupted
@@ -2806,7 +3230,7 @@ fresh subprocesses. Inject failures around intake, snapshot, refinement,
 checkpoint, generation open, plan and correction publication, resource
 creation, dispatch, worker start and result, ordered merge, promotion, cleanup,
 lease release, local interop reconciliation, handoff projection, queue
-activation, and lifecycle continuation. Assert stable run/revision/plan/task
+activation, and workflow-owned finalization. Assert stable run/revision/plan/task
 identity, one active generation and lease, immutable completed evidence, an
 unchanged source checkout, no duplicate Git effects, and retained ambiguous
 resources.
@@ -2835,9 +3259,17 @@ mutation, or reports exact completion; machine and human status agree, no
 completed identity or external effect is duplicated, and unsupported legacy
 coordinators remain rejected.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-017 -->
 
-<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready priority=P0 version=3 -->
+<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=unassessed priority=P0 version=4 -->
 ### FEAT-018: PydanticAI-first portable agent application architecture
 
 #### Requirements Covered
@@ -2846,13 +3278,15 @@ coordinators remain rejected.
 
 #### Context Evidence
 
-`ai-stack` already applies the least-agentic ladder, typed boundaries, hard
-gates, replaceability, and conditional infrastructure. Its existing vendor
-mapping, however, treats Pydantic AI mainly as the non-OpenAI agent option and
-maps OpenAI-native agents directly to a provider runtime. That fragments the
-default application model and understates Pydantic AI's current direct model,
-provider profile, capability, Agent Spec, Harness, durable execution,
-instrumentation, MCP, and evaluation surfaces.
+The repository separates whole-product design, agent-subsystem design, and AI
+component selection across `design`, `ai-agent-design`, and `ai-stack`.
+`ai-stack` applies typed boundaries, hard gates, replaceability, and
+conditional infrastructure after it receives a frozen workload contract. Its
+existing vendor mapping, however, treats Pydantic AI mainly as the non-OpenAI
+agent option and maps OpenAI-native agents directly to a provider runtime. That
+fragments the default application model and understates Pydantic AI's current
+direct model, provider profile, capability, Agent Spec, Harness, durable
+execution, instrumentation, MCP, and evaluation surfaces.
 
 Current official Pydantic AI documentation describes model-agnostic access
 over provider SDKs, a direct model request API, typed agents and dependencies,
@@ -2865,10 +3299,16 @@ specialized runtimes rather than ordinary model adapters.
 
 #### Design Details
 
-Keep direct calls, deterministic workflows containing model calls, and agents
-as separate capability-level choices. A direct call describes one-request
-control flow, not a prohibition on the Pydantic AI `Agent` primitive. For
-portable Python direct calls, use the low-level direct model API when the
+Consume the capability-level classification frozen by `ai-agent-design`:
+deterministic code, direct calls, deterministic workflows containing model
+calls, and agents remain separate choices. For a direct stack-only request,
+`ai-stack` may perform the minimum provisional least-agentic check needed to
+avoid selecting an agent runtime unnecessarily, but routes any disputed
+behavior, topology, policy, or contract decision to `ai-agent-design`. During
+an active handoff it never re-enters that skill. A direct call describes
+one-request control flow, not a prohibition on the Pydantic AI `Agent`
+primitive. For portable Python direct calls, use the low-level direct model API
+when the
 caller needs `ModelResponse` control, or a no-tools single-request `Agent` when
 typed output parsing, validation retries, typed dependencies, or similar
 request services are required. Use a Pydantic AI model-directed `Agent` loop
@@ -2923,10 +3363,11 @@ evidence.
 #### Selected Option
 
 Adopt Pydantic AI as the default portable Python execution boundary while
-preserving the least-agentic ladder and application ownership above it. Add a
-focused provider-agnostic runtime reference, then align the skill core,
-architecture, provider, baseline, evaluation, metadata, README, source map,
-root catalog, project specs, and changelog.
+preserving the behavior and policy contract frozen by `ai-agent-design` and
+application ownership above it. Add a focused provider-agnostic runtime
+reference, then align the skill core, architecture, provider, baseline,
+evaluation, metadata, README, source map, root catalog, project specs, and
+changelog.
 
 #### Alternatives Considered
 
@@ -2943,9 +3384,10 @@ provider extensions preserve useful differentiated capabilities.
 
 Owned surfaces are `ai-stack/SKILL.md`, its focused architecture, provider,
 baseline, compatibility, evaluation, source-map, README, metadata, and eval
-references; the root README; canonical specs; and the `[Unreleased]`
-changelog. No provider, service, infrastructure, credential, or production
-mutation is part of this source change.
+references; the adjacent `design` and `ai-agent-design` routing contracts; the
+root README; canonical specs; and the `[Unreleased]` changelog. No provider,
+service, infrastructure, credential, or production mutation is part of this
+source change.
 
 #### Test-First Success Criteria
 
@@ -2970,6 +3412,10 @@ mutation is part of this source change.
 - TDD-009: Resume and cancel reject a wrong tenant or principal, a stale
   expected state version, a duplicate or conflicting idempotency identity, and
   a mismatched approval receipt before changing canonical run state.
+- TDD-010: Whole-product work follows `design` to `ai-agent-design` to
+  `ai-stack` exactly once; direct stack-only work marks any local
+  classification provisional and routes disputed behavior or policy decisions
+  to `ai-agent-design` without recursive delegation.
 
 #### Validation Plan
 
@@ -3003,15 +3449,23 @@ partial vendor mapping.
 
 #### Done Definition
 
-The skill selects the least-agentic sufficient architecture, uses Pydantic AI
-as its portable Python default, preserves differentiated provider features,
-keeps application controls and state outside provider runtimes, justifies every
-specialist or native escape, and distinguishes source readiness from installed
-or fresh-runtime behavior.
+The skill selects technology for the behavior and policy contract frozen by
+`ai-agent-design`, uses Pydantic AI as its portable Python default, preserves
+differentiated provider features, keeps application controls and state outside
+provider runtimes, justifies every specialist or native escape, and
+distinguishes source readiness from installed or fresh-runtime behavior.
+
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-018 -->
 
-<!-- FEATURE: FEAT-019 reqs=REQ-020 status=ready priority=P0 version=2 -->
+<!-- FEATURE: FEAT-019 reqs=REQ-020 status=ready delivery=unassessed priority=P0 version=2 -->
 ### FEAT-019: Concise zero-write Task Implementer lane status
 
 #### Requirements Covered
@@ -3165,9 +3619,17 @@ zero-write and fail-closed; migrations are exact; run-summary-v1 and the five
 public actions remain unchanged; and source, installed, and fresh-session proof
 are reported separately.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-019 -->
 
-<!-- FEATURE: FEAT-020 reqs=REQ-021 status=ready priority=P0 version=2 -->
+<!-- FEATURE: FEAT-020 reqs=REQ-021 status=ready delivery=unassessed priority=P0 version=2 -->
 ### FEAT-020: Incremental lean-skill alignment and evaluation evidence
 
 #### Requirements Covered
@@ -3375,26 +3837,31 @@ compatible with unrelated legacy skills; higher-cost evidence is reported
 truthfully; long skills are classified rather than blindly summarized; and no
 installation or broad migration is implied by source proof.
 
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
 <!-- /FEATURE: FEAT-020 -->
 
-<!-- FEATURE: FEAT-021 reqs=REQ-022 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-021 reqs=REQ-022 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-021: Semantic Git-effect classification for commit-push
 
 #### Requirements Covered
 
-- REQ-022: Admit bounded commit-push Git effects without weakening lifecycle safety.
+- REQ-022: Keep bounded commit-push Git effects workflow-owned.
 
 #### Context Evidence
 
-The project lifecycle currently decides whether Git is material through a
-small subcommand allowlist. Any other Git command is material, but the generic
-path-target extractor cannot identify remote refs or repository metadata, so
-remote URL lookup, remote-ref queries, constrained fetch, and the exact
-authorized push all become `EFFECT_AMBIGUOUS` before cwd scoping is considered.
-Moving the command outside the checkout therefore cannot change the result.
-The existing commit transaction already owns reviewed local staging and commit
-effects; publication needs a separate, narrow semantic classification rather
-than a second raw-Git compatibility path.
+The former project lifecycle classifier treated publication Git commands as
+ambiguous and blocked the documented workflow before its owner could validate
+them. Project lifecycle is now advisory. The existing commit transaction owns
+reviewed local staging and commit effects; `commit-push` itself owns a narrow
+semantic publication contract rather than relying on a project-spec hook or a
+second raw-Git path.
 
 #### Design Details
 
@@ -3404,8 +3871,8 @@ lookup for `origin`, remote and local symbolic-ref reads, remote-ref listing,
 show-ref verification, rev-list, and the existing read allowlist. Reject
 unknown or write-capable options rather than generalizing entire subcommands.
 
-Introduce a bounded Git-effect classifier before generic filesystem target
-extraction. Resolve the repository's literal current branch from
+Keep the bounded Git-effect classifier inside the publication workflow. Resolve
+the repository's literal current branch from
 `refs/heads/BRANCH` and require the command's source and destination to encode
 that same branch without shell expansion, wildcard, additional refspec, or URL
 target. Resolve every applicable `origin` URL with `get-url --all`, require
@@ -3414,13 +3881,13 @@ strictly enough to reject local, file, external-helper, option-like, whitespace,
 and multiple-target forms. The only admitted fetch is `origin` plus
 `refs/heads/BRANCH:refs/remotes/origin/BRANCH` with flags that suppress
 `FETCH_HEAD`, tag following, automatic maintenance, and commit-graph writes.
-Its object and matching remote-tracking-ref updates are known Git control-plane
-effects outside the selected project contract only when no executable
-reference-transaction hook can add unmodeled worktree effects.
+Its object and matching remote-tracking-ref updates are admitted by the
+publication owner only when no executable reference-transaction hook can add
+unmodeled worktree effects.
 
 The only admitted publication is a non-force `git push` to `origin` from
-`HEAD` to that literal branch, optionally with upstream setup. Before treating
-it as external, resolve `core.hooksPath` and the repository's effective
+`HEAD` to that literal branch, optionally with upstream setup. Before executing
+it, resolve `core.hooksPath` and the repository's effective
 `pre-push` and `reference-transaction` paths. Any active hook or inspection
 ambiguity keeps the command denied because it can introduce unmodeled project
 effects. Upstream setup is a known local Git-config effect, not a project-file
@@ -3429,16 +3896,16 @@ effect, and remains bounded to the already validated branch and remote.
 Teach the existing commit prompt-intent owner that a bounded leading
 `$commit-push` invocation also authorizes its local commit phase. Update the
 workflow to call the claim-bound commit helper whenever the checkout is dirty;
-raw staging and commit remain lifecycle-denied. Keep repository-owned
-publication policies and remote authentication authoritative after lifecycle
+raw staging and commit remain transaction-denied. Keep repository-owned
+publication policies and remote authentication authoritative after workflow
 classification.
 
 #### Selected Option
 
-Add exact semantic Git-effect recognition at the lifecycle boundary and reuse
-the existing claim-bound commit transaction for local changes. This repairs
-the false ambiguity without making cwd a proxy for Git safety or creating dual
-old/new commit paths.
+Keep exact semantic Git-effect recognition at the `commit-push` boundary and
+reuse the existing claim-bound commit transaction for local changes. Project
+lifecycle remains neutral; cwd is not a proxy for Git safety, and no dual
+commit path is created.
 
 #### Alternatives Considered
 
@@ -3452,9 +3919,9 @@ owns exactly that local effect.
 
 #### Implementation Boundaries
 
-Owned surfaces are lifecycle Git parsing and classification, focused hook
-tests, commit prompt intent, `commit-push` workflow guidance and trigger
-coverage, root documentation, canonical specs, and changelog. Remote policy,
+Owned surfaces are commit-push Git parsing and classification, focused workflow
+tests, commit prompt intent, `commit-push` guidance and trigger coverage, root
+documentation, canonical specs, and changelog. Remote policy,
 credentials, hosting-provider behavior, runtime installation, and an actual
 push are outside this source repair.
 
@@ -3476,15 +3943,16 @@ push are outside this source repair.
 
 #### Validation Plan
 
-Run focused lifecycle and commit-intent tests first, then disposable Git-effect
-tests, scoped Ruff and Python compilation, Markdownlint, source catalog and
+Run focused commit-push and commit-intent tests first, then a neutral
+project-spec hook regression, disposable Git-effect tests, scoped Ruff and
+Python compilation, Markdownlint, source catalog and
 project-spec validation, security review, code review, explicit changed-surface
 alignment, and `git diff --check`.
 
 #### Test Plan
 
-Use a table-driven lifecycle-hook matrix for exact and adversarial Git shapes,
-including `-C`, long/short option variants, config and worktree hook paths,
+Use a table-driven publication-workflow matrix for exact and adversarial Git
+shapes, including `-C`, long/short option variants, config and worktree hook paths,
 detached heads, unsafe or multiple URLs, unsafe refspecs, and composed shell
 commands. Extend commit intent cases for direct and leading-imperative
 `commit-push` invocations.
@@ -3506,11 +3974,616 @@ denials.
 
 #### Done Definition
 
-The exact commit-push preflight and current-branch publication path no longer
-hit false lifecycle ambiguity, unsafe or hidden-effect Git remains fail-closed,
-dirty local commits retain the established transaction owner, and validation
-claims distinguish source repair from installed and live behavior.
+The exact commit-push preflight and current-branch publication path are owned
+by the publication workflow while project lifecycle remains neutral. Unsafe or
+hidden-effect Git remains fail-closed, dirty local commits retain the
+established transaction owner, and validation claims distinguish source repair
+from installed and live behavior.
+
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-021 -->
+
+<!-- FEATURE: FEAT-022 reqs=REQ-023 status=ready delivery=unassessed priority=P1 version=3 -->
+### FEAT-022: Provider-neutral AI agent design workflow
+
+#### Requirements Covered
+
+- REQ-023: Design governed production AI agent subsystems.
+
+#### Context Evidence
+
+The repository already separates whole-solution design, non-AI stack
+selection, AI component selection, focused research, and architecture review
+across `design`, `app-stack`, `ai-stack`, `research`, and
+`system-design-rules`. The missing surface is a focused workflow that applies
+production agent patterns and policies, freezes a workload contract for
+`ai-stack`, and synthesizes the returned component decision into one governed
+agent-subsystem architecture.
+
+Current primary guidance converges on starting with the simplest sufficient
+control flow, including a terminal deterministic-code result when no model is
+needed; keeping consequential controls outside model discretion; defining
+typed tool and state boundaries; evaluating trajectories as well as outcomes;
+and treating durability, retries, idempotency, observability, and release
+governance as software-system responsibilities.
+
+The supplied production-agent engineering guide confirms those foundations
+and exposes targeted gaps in the current skill: the trusted control plane,
+model-directed execution plane, and durable session record are not yet a
+first-class reference architecture; the bounded loop and session recovery
+contract are implicit; and context compaction, memory curation, credential
+mediation, sandbox isolation, independent outcome verification, and operator
+control need more explicit design obligations.
+
+#### Design Details
+
+Create one implicitly invokable, stateless `ai-agent-design` skill. Whole-
+product work follows `design` to `ai-agent-design`; it continues to
+`ai-stack` exactly once only when a model-backed capability remains. A
+deterministic-only classification takes precedence over an initial request for
+AI-stack review and terminates with the explicit no-AI decision.
+Its core workflow freezes outcome and acceptance gates; classifies each
+capability as deterministic code, a direct model call, a deterministic AI
+workflow, or an agent; selects the smallest sufficient single- or multi-agent
+pattern; separates trusted control and policy, model-directed execution, and
+durable session state behind versioned provider-neutral interfaces when an
+agent is accepted; rejects those layers for simpler classes when they have no
+current owner or requirement; defines the bounded agent loop, operator
+controls, contracts, authority, context, state, failure, independent outcome
+verification, evaluation, and operations policies; invokes `ai-stack` with the
+fixed workload and constraints when AI component selection is needed, or
+records that no AI component is required for deterministic-only scope; and
+returns a complete logical subsystem architecture without performing
+implementation.
+
+Keep the always-loaded entrypoint focused on routing, workflow, guardrails,
+validation, and output. Put detailed guidance in six topic references:
+classification and patterns; runtime architecture and sessions; contracts,
+context, and memory; tools, authority, and security; durability, failures, and
+effects; and evaluation, observability, and governance. Keep technology
+choices dated and replaceable by routing volatile selection to `ai-stack` and
+`research` rather than freezing one provider framework in this skill.
+
+The runtime architecture reference owns logical component responsibilities,
+provider-neutral interfaces, the minimum session envelope and event taxonomy,
+effect-aware checkpoints, leases, the bounded observe/decide/authorize/
+persist-intent/act/record-receipt/verify loop, and user or operator progress,
+steer, cancel, approval, and
+escalation controls. For effect-capable actions it persists an authorized
+immutable intent and idempotency identity before dispatch, then records the
+receipt and independent verification so resume reconciles rather than blindly
+replays a crash between dispatch and receipt persistence. Existing references
+retain detailed ownership of context
+and memory governance; action authority, credential mediation, sandbox and
+supply-chain boundaries; effect recovery; and verifier, rollout, and incident
+policy. A model completion claim is never completion proof: deterministic
+environmental or programmatic verification takes precedence, semantic graders
+are independent and bounded, and no grader may waive policy or safety gates.
+
+When required, the `ai-stack` handoff contains the outcome, behavior class,
+acceptance gates,
+failure impact, data and tenant constraints, autonomy ceiling, tool inventory,
+durability needs, quality, latency, availability, cost, ownership, fixed
+decisions, and blocking unknowns. The returning component table retains each
+component's status, evidence, requirement, owner, acceptance gate, and revisit
+trigger. `ai-agent-design` integrates that table with control flow, contracts,
+security, recovery, evaluation, and rollout decisions.
+
+#### Selected Option
+
+Use a provider-neutral agent-design coordinator with explicit adjacent-skill
+handoffs and progressive disclosure. Keep it advisory and implicitly
+invokable because matching work is read-only and does not authorize material
+effects.
+
+#### Alternatives Considered
+
+Embedding the full methodology in `SKILL.md` was rejected because it would
+make every invocation context-heavy. Duplicating `ai-stack` technology
+selection was rejected because it would create two drifting authorities.
+Making the skill own whole-product architecture was rejected because
+`design` and `app-stack` already own those layers. A provider-specific skill
+was rejected because the reusable policies and patterns do not require one
+vendor.
+
+#### Implementation Boundaries
+
+Owned surfaces are the new skill entrypoint, metadata, README, six focused
+references, trigger/process/quality evaluations, adjacent `design` and
+`ai-stack` routing contracts, root catalog, changelog, and canonical specs.
+Shared validators, installed copies, runtime configuration, provider accounts,
+applications, and infrastructure remain unchanged by the source
+implementation.
+
+#### Test-First Success Criteria
+
+- TDD-001: Trigger cases select the skill for agent-subsystem design and reject
+  adjacent stack-only, whole-product, research-only, review-only, and
+  implementation requests.
+- TDD-002: A fixed known sequence remains a deterministic workflow, while
+  model-owned tool choice or continuation is classified as agentic.
+- TDD-003: A fixed support sequence remains a deterministic AI workflow with
+  typed tools and approval before sending; it introduces one bounded agent only
+  if model-owned action or continuation is a proven workload requirement.
+- TDD-004: A long-running decomposable case uses explicit orchestrator-worker
+  contracts, durable state, deduplication, partial-failure recovery, bounded
+  authority, and layered evaluation.
+- TDD-005: Every design with a model-backed capability passes a complete
+  workload contract to `ai-stack` and incorporates its scoped component
+  decision without inventing vendor facts. A deterministic-only design records
+  `Skipped - no AI component required` and does not invoke AI technology
+  selection.
+- TDD-006: Whole-product work delegates from `design` to `ai-agent-design` and,
+  when AI remains in scope, then to `ai-stack` exactly once; the frozen
+  behavior, topology, policy, and contract decision is not reopened by the
+  component-selection handoff. A
+  disputed direct `ai-stack` classification delegates to `ai-agent-design`,
+  receives only the frozen contract back, and completes component selection
+  once without a nested stack handoff.
+- TDD-007: Approval bindings carry authenticated approver identity,
+  authorization evidence, decision time, separation-of-duties status, exact
+  action arguments and preview, expiry, policy version, and one-use replay
+  protection.
+- TDD-008: Every accepted agent design separates trusted control and policy,
+  model-directed execution, and durable session state; defines versioned model,
+  session, tool, sandbox, memory, and trace interfaces; and leaves product
+  selection to `ai-stack` capability negotiation.
+- TDD-009: Long-running designs use an explicit session state machine,
+  event/effect record, lease, budgets, effect-aware checkpoint, reconcile-
+  before-retry behavior, and visible progress, steer, cancel, approval,
+  escalation, notification, and cleanup controls.
+- TDD-010: Completion is independently verified through deterministic checks
+  before bounded semantic grading or human review. Revision loops cannot
+  repeat consequential effects, waive hard gates, or continue after
+  contradictory or non-actionable feedback.
+- TDD-011: Governed memory uses candidate validation, provenance, scope,
+  sensitivity, conflict/quarantine, versioning, promotion, correction,
+  deletion, retrieval-impact evaluation, and rollback; offline curation is not
+  represented as model self-improvement.
+- TDD-012: Credential non-disclosure never substitutes for action
+  authorization. Delegated credentials are short-lived and destination-bound,
+  sandboxes are isolated with constrained mounts, resources, and egress, and
+  outputs cross a validated artifact publication boundary.
+- TDD-013: A fixed rules-based capability remains deterministic code and skips
+  AI component selection. A direct model call remains one application-level
+  operation when bounded transport or schema-repair retries occur without
+  model-owned continuation, tools, or side effects.
+- TDD-014: Every effect-capable dispatch persists its authorized immutable
+  intent, exact action digest, and idempotency identity first. A crash after
+  dispatch but before receipt persistence resumes through authoritative
+  reconciliation, never an unqualified replay.
+- TDD-015: A quality case entered from an active `ai-stack` workflow returns
+  only the frozen disputed contract to the caller, performs no nested stack
+  handoff, and leaves component selection to execute exactly once in the
+  originating workflow.
+
+#### Validation Plan
+
+Run portable quick validation and the repository's strict target validator;
+validate eval JSON; lint changed Markdown; run source-catalog and project-spec
+validation; perform target-scoped code and security review; run changed-surface
+alignment; and finish with `git diff --check`.
+
+#### Test Plan
+
+Use at least eight positive and eight negative trigger prompts, process cases
+for classification and routing, and eight output-quality cases covering the
+direct-call lower bound, a deterministic-code lower bound, a deterministic
+approval-aware workflow, one bounded diagnostic agent, a durable
+orchestrator-worker design, controlled effect recovery, and governed memory
+curation, plus an originating `ai-stack` non-recursive handoff. Assert runtime
+separation, contracts, authority, operator control, failure handling,
+independent verification, evaluation, and rollout. Do not add validator
+self-tests because shared validator logic is not changing.
+
+#### Evaluation Plan
+
+Compare the eight output-quality cases with the captured previous working-byte
+baseline when a clean
+runner is available. Treat trigger CSV validation as static evidence only;
+installation, source-to-install parity, fresh-session routing, and evaluated
+output quality remain separate gates.
+
+#### Rollout And Rollback
+
+Land and validate source first. Install only through the repository installer,
+verify source-to-install parity, and use a fresh session for routing checks.
+Rollback removes the new skill and its catalog/spec/changelog records together;
+no compatibility shim or deprecated alias is retained.
+
+#### Done Definition
+
+The source skill is lean, public-safe, strictly validated, correctly routed
+against adjacent skills, grounded in current production-agent practices, and
+able to return a complete agent-subsystem architecture with explicit control,
+execution, durable session, context, memory, effect, verification, and
+operator-control contracts; an explicit `ai-stack` decision when an AI
+component remains or a documented deterministic-only skip; and no implied
+implementation authority.
+
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
+<!-- /FEATURE: FEAT-022 -->
+
+<!-- FEATURE: FEAT-023 reqs=REQ-003,REQ-024 status=ready delivery=unassessed priority=P0 version=2 -->
+### FEAT-023: Advisory historical lifecycle observer
+
+#### Requirements Covered
+
+- REQ-003: Bind explicit helpers without restoring lifecycle authority.
+- REQ-024: Remove historical lifecycle-phase authority from ordinary work, Task Implementer, and Agentic SDLC.
+
+#### Context Evidence
+
+The enforcing lifecycle existed in three layers: the global project hook,
+workflow-local historical phase receipts, and terminal completion gates. The
+implementation now removes those authority edges while retaining canonical
+spec validation and publication, bounded advisory observation, workflow-owned
+controls, and the separate explicit project-instruction mutation service.
+
+#### Design Details
+
+Replace the historical lifecycle state machine with best-effort document
+observation and metadata-only prompt intake. SessionStart reads the actual v2
+markers and is silent when they are current; UserPromptSubmit injects
+root-agent classification guidance without storing raw prompts. Project-spec
+PreToolUse, PostToolUse, and Stop registrations do not exist. Hook failure or
+unsafe input skips intake without denying tools or completion, while shared
+Stop arbiters retain independent troubleshooting and SDLC decisions.
+
+Task Implementer removes hook-facing lifecycle authorization,
+project-instruction readiness, and terminal lifecycle seals from its
+authoritative state and transition predicates. Its root coordinator still
+binds the canonical v2 project-spec receipt as project-truth evidence before
+dispatch. Prompt revision, semantic spec inputs, locked task graph, claims,
+worktree identity, test and review evidence, promotion compare-and-swap,
+journals, and recovery remain authoritative.
+
+The ordinary `commit` workflow also treats project lifecycle status as
+advisory. Its explicit current-turn authorization, claim-bound transaction,
+repository instructions, Git state, secret checks, Worktree ownership, and
+active workflow commit policy remain the only admission boundaries.
+
+Agentic SDLC removes project instructions from the mandatory phase graph but
+uses the canonical v2 pair before spec-dependent planning. Requirements,
+design, plan, TDD, evaluation, UAT, Git, authorization, retry, and recovery
+remain SDLC-owned gates. The exact intent/spec receipt is assignment evidence,
+not transition authority; future project instructions remain a separate
+advisory outcome under the instructions already loaded.
+
+Explicit project-instruction mutation remains separate from the observer. Its
+helper keeps canonical path, ownership, digest, concurrency, and recovery
+checks, but a refusal or `reload_required` result cannot terminate an enclosing
+Task Implementer or SDLC run.
+
+#### State And Migration
+
+No authoritative Task Implementer or SDLC schema migration is required because
+the removed lifecycle receipts and overlays were adjunct evidence rather than
+workflow identity. Loaders no longer import or evaluate them. Historical
+lifecycle-only files are ignored; no successor record, no dual execution path,
+and no compatibility command is created. Invalid workflow-owned state still
+follows the owning workflow's existing recovery contract.
+
+Private lifecycle observation records remain owner-only and content-free.
+Maintenance counts the protected current bundle in aggregate bytes without
+making it deletion-eligible, treats valid sibling project subjects as
+irrelevant, and disables cleanup when registry or aggregate authority is
+incomplete.
+
+Remove the retired lifecycle transition functions from the importable project
+spec library as well as from the public CLI. Historical records remain passive
+inputs to inspection, migration, and retention only. SessionStart resolves the
+canonical source-sibling or disposable-installed ownership-retention helper,
+validates its owner-controlled ancestry and complete imported source set,
+snapshots their identity and digests, copies only those verified bytes into an
+owner-only temporary execution tree, and runs the classifier there under an
+isolated bounded interpreter. It validates the exact structured result and
+falls back to `unsafe` on missing, spoofed, timed-out, malformed, failed, or
+concurrently changed classification. This makes 30/90-day cleanup reachable
+without granting the helper project or workflow authority or allowing an
+unsnapshotted sibling module into import resolution.
+
+An auto-steering disposition for future project instructions remains advisory
+unless the current user explicitly invokes the separate mutation workflow.
+Task Implementer removes its orphaned owner-receipt validator instead of
+keeping a second blocked validation path. Its transient worker commit context
+uses `scope_cwd` under a hard-cut v2 schema rather than retaining a lifecycle-
+named field. Both stateful skill contracts expose
+the repository-required inputs, writes, process, idempotency, failure, and
+must-not headings without reintroducing lifecycle gates.
+
+#### Selected Option
+
+Use one advisory historical-lifecycle/document observer with no tool,
+workflow-transition, or Stop authority. Keep the canonical v2 project-spec
+pair authoritative for spec-dependent planning and dispatch, keep Task
+Implementer and Agentic SDLC as the sole owners of execution safety state, and
+keep project-instruction mutation as a separately invoked guarded operation.
+
+#### Alternatives Considered
+
+Fixing only lock recursion was rejected because workflow-local and terminal
+gates would still stop sessions. Retaining selected historical lifecycle
+safety gates was rejected by the requested fully advisory boundary. Making
+canonical spec validity advisory was rejected because durable intent, design,
+and delivery evidence must remain one authoritative project contract. Deleting
+canonical specs and project-instruction helpers was rejected because their
+diagnostics and explicit mutation service remain useful.
+
+#### Implementation Boundaries
+
+Owned changes are the lifecycle hooks and maintenance helpers, duplicated Stop
+arbiters, Task Implementer spec/prompt/terminal adapters, ordinary commit
+guidance and transient Task commit context, Agentic SDLC phase and prompt-impact
+adapters, explicit project-instruction integration, tests, skill metadata,
+references, README guidance, installer surfaces, and release notes. Unrelated
+service work and workflow-owned safety state are excluded.
+
+#### Test-First Success Criteria
+
+- TDD-001: Every lifecycle phase and lifecycle evidence failure allows an
+  ordinary project write and Stop completion.
+- TDD-002: Task Implementer completes planning through promotion and cleanup
+  without lifecycle receipts or a terminal seal, while stale prompt, missing
+  evidence, ownership mismatch, dirty integration, and branch drift still
+  fail.
+- TDD-003: Agentic SDLC completes its golden path without project-instruction
+  or spec-alignment phases, while invalid artifacts, missing evaluation or UAT,
+  unauthorized Git, and exhausted repair budgets still fail.
+- TDD-004: A composed Stop result ignores malformed lifecycle advice but
+  preserves an independent SDLC or troubleshooting blocker.
+- TDD-005: Active legacy workflow state remains readable with lifecycle-only
+  adjunct fields ignored and without predecessor rewriting or a compatibility
+  execution path.
+- TDD-006: Project-instruction render, ownership, or reload failure is reported
+  without stopping Task Implementer or SDLC.
+- TDD-007: Current-bundle storage accounting and sibling-project bootstrap
+  regressions remain covered.
+- TDD-008: No production import or public command exposes lifecycle transition
+  actions, and legacy transition tests are removed rather than converted to
+  compatibility behavior.
+- TDD-009: The actual SessionStart callback deletes an eligible ownership-safe
+  historical bundle and protects candidates when the canonical classifier is
+  missing, spoofed, malformed, failed, timed out, rooted under writable
+  ancestry, replaced during classification, or returns partial registry proof.
+  A sibling module named like a standard-library import is excluded from the
+  isolated execution tree.
+- TDD-010: SDLC project-instruction steering stays advisory without explicit
+  user invocation, the orphaned Task validator is absent, and strict stateful
+  skill-structure validation passes.
+- TDD-011: Direct commit needs no lifecycle seal or waiver, while explicit
+  authorization, whole-repository review, secrets, Git state, Worktree
+  ownership, and active SDLC policy still block their unsafe cases. Task worker
+  commit context contains `scope_cwd` and no lifecycle-named cwd field.
+
+#### Validation Plan
+
+Run focused deterministic tests for each changed hook and workflow adapter,
+then the complete Task Implementer and Agentic SDLC verifiers. Validate every
+changed skill with the stateful alignment profile where applicable, run
+Markdown and Python checks, perform code and security review, and finish with
+changed-scope alignment and `git diff --check`.
+
+#### Test Plan
+
+Cover lifecycle-missing and lifecycle-faulted ordinary, Task Implementer, and
+SDLC paths; composed Stop arbitration; old-state migration; explicit
+project-instruction failure; and the independent maintenance regressions. Pair
+each permissive lifecycle case with a workflow-owned failure that must remain
+denied.
+
+#### Evaluation Plan
+
+Compare deterministic source results with the captured working-byte baseline,
+then run disposable installed and fresh-session workflow probes. Report static,
+runtime, and output-quality evidence separately without inferring activation
+from source parity.
+
+#### Rollout And Rollback
+
+Land source and migration tests first. Install into a disposable Codex home,
+verify source parity, start a fresh session, and run disposable Task
+Implementer and SDLC probes with injected lifecycle faults. A rollback restores
+the prior source as one coherent version; do not reintroduce mixed advisory and
+enforcing layers.
+
+#### Done Definition
+
+Historical project lifecycle state can be observed and reported but cannot
+deny, continue Stop, or gate ordinary, Task Implementer, or SDLC completion.
+Canonical spec validity remains required at spec-dependent planning and
+dispatch boundaries, workflow-owned safety controls remain proven by paired
+negative tests, and activation claims remain separated from source validation.
+
+#### Implementation Evidence
+
+No implementation evidence was recorded before schema v2 migration.
+
+#### Verification Evidence
+
+No independent verification evidence was recorded before schema v2 migration.
+
+<!-- /FEATURE: FEAT-023 -->
+
+<!-- FEATURE: FEAT-024 reqs=REQ-025 status=ready delivery=verified priority=P0 version=4 -->
+### FEAT-024: Unified prompt-to-project-contract lifecycle
+
+#### Requirements Covered
+
+- REQ-025: Maintain one project contract across every agent workflow.
+
+#### Context Evidence
+
+The former implementation split semantic parsing between the canonical owner
+and Task Implementer, bound prompt capture only after explicit workflow startup,
+used schema v1 documents, and derived SessionStart/UserPromptSubmit advice from
+an optional historical `lifecycle.json`. The installer merged current source
+registrations but did not retire source-owned event registrations removed from a
+new manifest.
+
+#### Design Details
+
+Use `maintain-project-specs` as the single semantic owner. Schema v2 keeps
+requirement status, design readiness, and delivery evidence distinct. The owner
+exposes byte-level document and pair inspection for worktrees and arbitrary Git
+commits, envelope-preserving rendering, explicit v1 migration, and a locked,
+failure-atomic pair publisher bound to Git HEAD and both prior byte digests.
+The publisher retains verified no-follow project/docs directory descriptors,
+performs every read/replace/restore relative to the held docs descriptor,
+rechecks Git and both document states after each replacement, and restores only
+bytes still equal to its candidate. Canonical inspection takes the matching
+shared lock so owner-aware readers cannot observe an in-process split pair;
+uncoordinated direct reads are not a transaction interface.
+
+Register only SessionStart and UserPromptSubmit observers. UserPromptSubmit
+stores an owner-only metadata receipt containing identity digests and injects a
+bounded root-agent classification contract. It excludes secret-bearing and
+non-root generated turns and serializes identical concurrent turn delivery.
+SessionStart reads actual document markers through
+bounded, no-follow, owner-controlled regular-file reads and stays silent when
+v2 ownership is current. Neither event supplies tool or Stop authority.
+
+Ordinary root agents classify and publish. Task Implementer and Agentic SDLC
+are authoring adapters over the owner contract and reconstruct required syncing
+from immutable workflow prompts when needed. Workers receive the root intent
+identity and canonical spec receipt; they may return typed `spec_gap` proposals
+but never write the documents or set verified delivery. Task and Agentic path
+inventories disable Git rename folding so a protected source remains visible
+after a move, and their typed gap summaries/evidence are sensitive-screened
+before persistence or dispatcher output.
+
+#### Selected Option
+
+Use one v2 owner with two non-blocking intake/observation hooks and explicit
+workflow adapters. Keep classification in the root agent because hooks have no
+model-semantic authority, while deterministic owner code validates and publishes
+the resulting canonical pair.
+
+#### Alternatives Considered
+
+Retaining lifecycle phases was rejected because unavailable observer state
+created misleading status and risked implicit workflow authority. Letting every
+workflow keep its parser was rejected because formats and completion semantics
+diverged. Hook-side keyword classification was rejected because it cannot
+reliably distinguish durable requirements from conversational requests.
+
+#### Implementation Boundaries
+
+Owned surfaces are the canonical contract/parser/renderer/migration/transaction,
+project-spec hooks and manifest, hook installer retirement, Task Implementer and
+Agentic SDLC adapters/templates/contracts, project instruction schema references,
+focused tests, READMEs, the root project contract, and release notes. Unrelated
+service projects and their dirty specification documents remain excluded.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing `lifecycle.json` is silent and cannot emit
+  `ADVISORY_UNAVAILABLE`; missing or v1 canonical documents report their actual
+  bounded status.
+- TDD-002: Every eligible direct prompt receives root classification context and
+  metadata-only intake, while secrets and generated worker/continuation turns
+  create no prompt receipt; concurrent delivery of one turn remains idempotent.
+- TDD-003: Normal parsing rejects all v1 formats and explicit migration produces
+  one valid v2 rich-record pair with stable IDs and preserved envelopes.
+- TDD-004: Paired publication rejects stale HEAD or document bytes, detects
+  boundary-time Git/document changes, cannot follow a swapped `docs` path,
+  restores exact unchanged originals after a later write failure, and blocks an
+  owner-aware reader until the pair is complete.
+- TDD-005: Task Implementer and Agentic SDLC accept the same v2 receipt and do
+  not carry independent schema/semantic validation paths. Both reject a
+  protected spec rename even when its destination is broadly claimed, and
+  typed gaps containing sensitive text fail before persistence or output.
+- TDD-006: Hook installation removes only exact obsolete source-owned
+  PreToolUse/PostToolUse registrations and preserves unrelated hooks and the one
+  shared Stop arbiter.
+
+#### Validation Plan
+
+Run Python compilation and lint for changed modules, focused owner/hook/workflow
+and installer tests, skill contract checks, Markdown lint, changed-surface
+alignment, and `git diff --check`. Then install into a disposable Codex home and
+compare exact hook bytes and registrations. Treat a fresh Codex session as a
+separate activation check.
+
+#### Test Plan
+
+Add deterministic unit tests for byte-level parsing, status separation,
+migration, CAS publication, prompt metadata safety, direct/worker/generated
+classification routing, actual-document SessionStart reporting, adapter
+delegation, and targeted installer retirement. Preserve workflow-owned negative
+controls for authorization, state, and evidence failures.
+
+#### Evaluation Plan
+
+Verify an ordinary direct implementation request, Task Implementer prompt, and
+Agentic SDLC prompt all reach the same canonical contract semantics. Separately
+probe a question/status prompt, secret-bearing prompt, and worker result to prove
+they do not create lifecycle writes.
+
+#### Rollout And Rollback
+
+Migrate source documents and validate them before installing. Use the repository
+installer for a disposable home, verify exact source/install parity, and restart
+Codex for hook activation. Rollback restores the prior coherent source and
+manifest; it does not reintroduce dual normal parsers or lifecycle phase state.
+
+#### Done Definition
+
+One v2 project-contract owner serves ordinary, Task Implementer, and Agentic SDLC
+work; direct prompts receive best-effort root classification; paired documents
+record requirements, design, implementation, and verification honestly; workers
+cannot fork project truth; obsolete hook authority is absent; and focused source,
+install, and activation evidence is reported independently.
+
+#### Implementation Evidence
+
+- `maintain-project-specs` now owns schema-v2 parsing, rendering, migration,
+  byte-pair validation, and Git/document-digest-bound paired publication. Its
+  transaction uses held directory descriptors, repeated boundary checks,
+  guarded rollback, and a shared owner-reader lock.
+- SessionStart observes the canonical documents with bounded no-follow
+  regular-file reads and UserPromptSubmit stages serialized digest-only
+  root-turn intake.
+  The project-spec manifest has no tool or Stop event, and installer
+  reconciliation retires only its obsolete exact registrations.
+- Task Implementer and Agentic SDLC assignments bind the root intent and the
+  accepted project-spec receipt. Worker results carry typed `spec_gaps` and
+  cannot publish or independently reclassify project intent. Their path checks
+  disable rename folding and their gap fields reject sensitive text.
+- Canonical templates, workflow documentation, release notes, project
+  instructions, and path-scoped CI use the same owner and schema-v2 contract.
+
+#### Verification Evidence
+
+- Canonical owner, paired transaction, and project-spec hook suites pass 24,
+  10, and 38 cases respectively, including committed-exact disable policy,
+  boundary races, reader serialization, and rejection of symlinked or oversized
+  canonical documents.
+- Task Implementer passes 65 wave, 13 worktree-interoperability, 13 spec, and
+  49 resume cases plus its contract smoke check.
+- Agentic SDLC passes 79 execution, 108 hook, 45 prompt-workspace, 9 canonical
+  validation, 11 start-contract, and 12 worker-dispatch cases.
+- Installer hook reconciliation passes 29 cases; project-instruction generation
+  and retention pass 88 and 8 cases. Ruff, ShellCheck, actionlint, Markdown
+  lint, skill-structure checks, and canonical pair inspection pass.
+- Disposable installed-package parity and activation in a newly started Codex
+  session were not executed and are not inferred from source verification. The
+  current session may continue to emit its already-loaded older hook message.
+
+<!-- /FEATURE: FEAT-024 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

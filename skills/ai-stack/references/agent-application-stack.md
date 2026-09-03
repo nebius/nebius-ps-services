@@ -182,7 +182,8 @@ cost, rollout, rollback, incident response, and version identity.
 
 ## Framework Decision Model
 
-Classify model autonomy first:
+Consume the model-autonomy classification from `ai-agent-design` first. For a
+direct stack-only request, any local result is provisional:
 
 ```text
 deterministic function

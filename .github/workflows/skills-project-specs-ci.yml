@@ -1,0 +1,132 @@
+name: Skills project specs CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skills-project-specs-ci.yml"
+      - "skills/maintain-project-specs/**"
+      - "skills/task-implementer/**"
+      - "skills/sdlc-create-requirements/**"
+      - "skills/sdlc-create-design/**"
+      - "skills/sdlc-align-specs/**"
+      - "skills/sdlc-start/**"
+      - "skills/sdlc-prepare-execution/**"
+      - "skills/sdlc-implement-plan/**"
+      - "skills/project-agent-instructions/**"
+      - "skills/align-skill/scripts/validate-skill-structure.py"
+      - "skills/agent-nebius-auth-setup/scripts/test_install_hook_registration.py"
+      - "skills/install-skills.sh"
+      - "skills/docs/requirements.md"
+      - "skills/docs/design.md"
+      - "skills/README.md"
+      - "skills/CHANGELOG.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/skills-project-specs-ci.yml"
+      - "skills/maintain-project-specs/**"
+      - "skills/task-implementer/**"
+      - "skills/sdlc-create-requirements/**"
+      - "skills/sdlc-create-design/**"
+      - "skills/sdlc-align-specs/**"
+      - "skills/sdlc-start/**"
+      - "skills/sdlc-prepare-execution/**"
+      - "skills/sdlc-implement-plan/**"
+      - "skills/project-agent-instructions/**"
+      - "skills/align-skill/scripts/validate-skill-structure.py"
+      - "skills/agent-nebius-auth-setup/scripts/test_install_hook_registration.py"
+      - "skills/install-skills.sh"
+      - "skills/docs/requirements.md"
+      - "skills/docs/design.md"
+      - "skills/README.md"
+      - "skills/CHANGELOG.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skills-project-specs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Skills project specs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install lint dependency
+        run: |
+          set -euo pipefail
+          python -m pip install ruff==0.14.11
+
+      - name: Validate source contracts
+        run: |
+          set -euo pipefail
+          bash -n install-skills.sh
+          python -m json.tool maintain-project-specs/assets/hooks.json.template >/dev/null
+          python -m json.tool sdlc-implement-plan/assets/worker-result.schema.json >/dev/null
+          python -B maintain-project-specs/scripts/validate_project_specs.py \
+            --project-root .
+          for skill in \
+            maintain-project-specs \
+            task-implementer \
+            sdlc-create-requirements \
+            sdlc-create-design \
+            sdlc-align-specs \
+            sdlc-start \
+            sdlc-prepare-execution \
+            sdlc-implement-plan \
+            project-agent-instructions; do
+            python -B align-skill/scripts/validate-skill-structure.py \
+              --require-evals "$skill"
+          done
+          ruff check \
+            maintain-project-specs/scripts/project_specs_lib \
+            maintain-project-specs/assets/hooks/project_specs_lifecycle.py \
+            task-implementer/scripts/prompt_workspace_specs.py \
+            task-implementer/scripts/prompt_workspace_execution.py \
+            task-implementer/scripts/prompt_workspace_waves.py \
+            task-implementer/scripts/prompt_workspace_resume.py \
+            sdlc-start/scripts/prompt_workspace.py \
+            sdlc-prepare-execution/scripts/sdlc_evidence_security.py \
+            sdlc-prepare-execution/scripts/sdlc_execution_core.py \
+            sdlc-implement-plan/scripts/worker_dispatch.py
+
+      - name: Run canonical owner and hook tests
+        run: |
+          set -euo pipefail
+          python -B maintain-project-specs/scripts/test_project_specs.py
+          python -B maintain-project-specs/scripts/test_project_specs_transaction.py
+          python -B -m unittest discover \
+            -s maintain-project-specs/assets/hooks/tests -p 'test_*.py'
+
+      - name: Run workflow adapter tests
+        run: |
+          set -euo pipefail
+          python -B task-implementer/scripts/test-task-specs.py
+          python -B task-implementer/scripts/test-task-implementer-contract.py
+          python -B task-implementer/scripts/test-task-waves.py
+          python -B task-implementer/scripts/test-worktree-interoperability.py
+          python -B task-implementer/scripts/test-task-resume.py
+          python -B sdlc-start/scripts/test_validate_project_specs.py
+          python -B sdlc-start/scripts/test_prompt_workspace.py
+          python -B sdlc-start/scripts/test_sdlc_start_contract.py
+          python -B -m unittest discover \
+            -s sdlc-start/assets/hooks/tests -p 'test_*.py'
+          python -B sdlc-implement-plan/scripts/test_worker_dispatch.py
+          python -B sdlc-prepare-execution/scripts/test_sdlc_execution.py
+          python -B project-agent-instructions/scripts/test_project_agent_instructions.py
+          python -B project-agent-instructions/scripts/test_project_specs_retention.py
+          python -B agent-nebius-auth-setup/scripts/test_install_hook_registration.py

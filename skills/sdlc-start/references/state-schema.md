@@ -109,9 +109,8 @@ to categorized extraction, stable `Q-*` clarification state and provenance,
 the compiled requirements digest, and `extracting`, `needs_clarification`, or
 `ready` status. Material open or reopened questions prevent `ready`.
 
-`prompt-impact-claim.json` uses
-`maintain-project-specs.prompt-impact-claim.v1`. The shared owner converts its
-complete statement-occurrence dispositions into immutable
+`prompt-impact-claim.json` uses the workflow's prompt-impact contract. The SDLC
+adapter converts complete statement-occurrence dispositions into immutable
 `prompt-impact/attempt-NNNN.json` receipts and atomically selects the current
 head in `prompt-impact/ledger.json`. Per-run locked publication compare-checks
 the observed head and skips rather than overwrites a conflicting orphan attempt.
@@ -149,7 +148,6 @@ active run and execution resources are terminal and released.
     "requirements": 0,
     "context": 0,
     "design": 0,
-    "project-agent-instructions": 0,
     "sdlc-auto-steering": 0,
     "plan": 0,
     "execution_preparation": 0,
@@ -161,7 +159,7 @@ active run and execution resources are terminal and released.
     "failure_classification": 0,
     "troubleshoot": 0,
     "sdlc-update-documents": 0,
-    "sdlc-align-specs": 0,
+    "align": 0,
     "sdlc-commit": 0,
     "uat": 0,
     "create-pr": 0,
@@ -170,15 +168,10 @@ active run and execution resources are terminal and released.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
-  "project_agent_instructions": {
-    "outcome": "not-needed",
-    "decision_fingerprint": "<sha256>",
-    "spec_receipt": "project-agent-instructions/spec-receipt.json",
-    "ownership_receipt": "project-agent-instructions/ownership.json",
-    "state": "project-agent-instructions/state.json",
-    "active_instruction": null,
-    "effective_config_fingerprint": "<sha256>",
-    "reload_required": false
+  "project_spec_observation": {
+    "status": "current|pending|invalid|migration-required",
+    "observed_at": "<RFC3339 timestamp>",
+    "message": "<sanitized advisory>"
   },
   "repair": null,
   "execution": {
@@ -251,7 +244,8 @@ clean exact dispatch to the queue. The coordinator-owned `task-finish` creates
 the task commit after recording its assignment/base/tree/message/evidence
 intent. Retry can adopt only that clean direct-child commit and an exact result
 from either persistence crash window. A
-`worker-result-v4` carries an explicit summary, decisions, open risks, and,
+`worker-result-v5` carries an explicit summary, decisions, open risks, typed
+`spec_gaps`, and,
 for corrective tasks, digest-protected `regression-oracle-evidence-v1` bound
 to the exact diagnosis, oracle, and coordinator-created task commit. Atomic private
 `execution/<feature>/sessions/<hash>.json` claims prevent concurrent reuse of
@@ -284,7 +278,6 @@ without conversation history.
     "requirements": 0,
     "context": 0,
     "design": 0,
-    "project-agent-instructions": 0,
     "sdlc-auto-steering": 0,
     "plan": 0,
     "execution_preparation": 0,
@@ -296,7 +289,7 @@ without conversation history.
     "failure_classification": 0,
     "troubleshoot": 0,
     "sdlc-update-documents": 0,
-    "sdlc-align-specs": 0,
+    "align": 0,
     "sdlc-commit": 0,
     "uat": 0,
     "create-pr": 0,
@@ -305,21 +298,15 @@ without conversation history.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
-  "project_agent_instructions": {
-    "outcome": "not-needed",
-    "decision_fingerprint": "<sha256>",
-    "spec_receipt": "project-agent-instructions/spec-receipt.json",
-    "ownership_receipt": "project-agent-instructions/ownership.json",
-    "state": "project-agent-instructions/state.json",
-    "active_instruction": null,
-    "effective_config_fingerprint": "<sha256>",
-    "reload_required": false
+  "project_spec_observation": {
+    "status": "current|pending|invalid|migration-required",
+    "observed_at": "<RFC3339 timestamp>",
+    "message": "<sanitized advisory>"
   },
   "repair": null,
   "fingerprint_ids": [
     "requirements:sha256:<digest>",
-    "design:sha256:<digest>",
-    "project-agent-instructions:sha256:<digest>"
+    "design:sha256:<digest>"
   ],
   "evidence": {
     "context": "context/FEAT-001.context.md",
@@ -437,25 +424,24 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 1. requirements
 2. context
 3. design
-4. project-agent-instructions
-5. sdlc-auto-steering
-6. plan
-7. execution preparation
-8. sdlc-tdd, in the integration worktree
-9. implementation dependency waves, in worker and integration worktrees
-10. validation, at the recorded integration HEAD
-11. test, at the recorded integration HEAD
-12. evaluation, at the recorded integration HEAD
-13. sdlc-update-documents, in the integration worktree
-14. sdlc-align-specs, in the integration worktree
-15. sdlc-commit: final seal, ff-only promotion, and integration cleanup
-16. uat, from the promoted project checkout
-17. managed child only: outer-integration-pending, then return the recorded
+4. sdlc-auto-steering
+5. plan
+6. execution preparation
+7. sdlc-tdd, in the integration worktree
+8. implementation dependency waves, in worker and integration worktrees
+9. validation, at the recorded integration HEAD
+10. test, at the recorded integration HEAD
+11. evaluation, at the recorded integration HEAD
+12. sdlc-update-documents, in the integration worktree
+13. general align quality gate, in the integration worktree
+14. sdlc-commit: final seal, ff-only promotion, and integration cleanup
+15. uat, from the promoted project checkout
+16. managed child only: outer-integration-pending, then return the recorded
     primary path and await a fresh explicit user invocation of
     `$worktree integrate` from that primary checkout
-18. create-pr, from the final unmanaged source branch only
-19. review-pr
-20. sdlc-merge-pr, only after explicit user request
+17. create-pr, from the final unmanaged source branch only
+18. review-pr
+19. sdlc-merge-pr, only after explicit user request
 
 `troubleshoot` is a conditional diagnostic branch, not an additional
 golden-path phase. A proven cause routes directly from
@@ -518,7 +504,9 @@ Only compact active reminders and unresolved routing decisions should be
 injected into the agent loop. Durable product changes still route through
 `sdlc-create-requirements` and `sdlc-create-design`; documentation-only changes
 route through `sdlc-update-documents`; durable changes to generated project
-instructions route through `project-agent-instructions`.
+instructions route through `project-agent-instructions` only when the current
+user explicitly requested the separate mutation workflow. Otherwise the entry
+is recorded as advisory and does not block SDLC progress.
 
 ## Hook Boundary
 

@@ -1,0 +1,33 @@
+# Glossary
+
+- **AIPerf**: NVIDIA's current client workflow for measuring generative-AI endpoint latency and throughput under a declared request distribution.
+- **Arithmetic intensity (AI)**: work divided by data movement for the same boundary, expressed in FLOP/byte. An algorithmic estimate and a profiler's measured traffic are different quantities and must be labeled.
+- **Baseline**: the frozen, correct workload and environment against which one controlled change is compared.
+- **CUDA Graph**: a captured device-work graph replayed with lower launch overhead under stable-address and capture-safety constraints.
+- **DCGM**: NVIDIA Data Center GPU Manager, which provides health, job, and interval telemetry; its averages do not identify a source operator or kernel.
+- **DCGM Exporter**: an operator-owned service that exposes selected DCGM fields for Prometheus; it provides time-series telemetry, not source-level attribution.
+- **Distribution**: multiple measurements summarized with median and tail or dispersion information rather than a single sample.
+- **Effective workload TFLOP/s**: declared useful floating-point operations divided by elapsed time. It is an application estimate, not hardware peak throughput or a count of all issued instructions.
+- **Exposed communication**: collective time that remains on the critical path after any useful overlap.
+- **Fusion**: combining operations so intermediate traffic or launch overhead is reduced.
+- **GenAI-Perf**: NVIDIA's legacy generative-AI load client, retained for existing reproducibility while the official project transitions new workflows to AIPerf.
+- **Graph break**: a point where compilation cannot keep a region in one captured graph, potentially reducing optimization scope.
+- **Inactive split bytes**: allocator-reserved bytes in split blocks that are not currently serving a live allocation; useful fragmentation evidence only in context.
+- **Inductor**: PyTorch's default compiler backend for many `torch.compile` workflows.
+- **Limiter**: the resource or dependency most constraining the declared workload boundary under the measured conditions.
+- **MLPerf**: MLCommons benchmark suites with defined scenarios, quality targets, rules, and result checks; an informal course run is not an MLPerf result.
+- **NCCL Tests**: NVIDIA collective microbenchmarks used to sweep operations and message sizes independently of framework scheduling.
+- **`nvbandwidth`**: NVIDIA's copy-path utility for measuring declared host/device and device/device bandwidth or latency cases.
+- **Nsight Compute**: a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
+- **Nsight Systems**: a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
+- **NVTX**: semantic ranges and markers added by an application so profiler timelines can be connected to phases such as input, forward, backward, prefill, or decode.
+- **Occupancy**: active warps relative to the SM limit; one diagnostic dimension, not an optimization target by itself.
+- **PyTorch Profiler**: the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **Reserved bytes**: CUDA memory held by the framework allocator, including both live allocations and eligible cached space retained for reuse.
+- **Roofline model**: a plot of achieved FLOP/s against arithmetic intensity with memory-bandwidth and compute ceilings. It classifies a measured kernel or boundary; it does not prove the end-to-end bottleneck.
+- **SDPA**: scaled dot-product attention API that can dispatch among supported attention implementations.
+- **Speedup**: baseline time divided by candidate time for an equivalent declared boundary.
+- **Synchronization trap**: an operation that forces host/device or device/device completion and distorts a measurement or prevents overlap.
+- **Throughput**: completed useful work per unit time, defined only after the unit and boundary are declared.
+- **TTFT**: time to first token for inference; distinct from steady-state inter-token latency and end-to-end latency.
+- **Warm-up**: untimed execution used to exclude initialization, compilation, allocation, and cache setup according to a declared policy.

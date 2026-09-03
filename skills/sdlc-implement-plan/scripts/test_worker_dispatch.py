@@ -44,13 +44,34 @@ with Path(os.environ["FAKE_CODEX_LOG"]).open("a", encoding="utf-8") as handle:
     handle.write(json.dumps({"argv": sys.argv[1:], "prompt": prompt, "task": assignment["task_id"]}) + "\\n")
 if os.environ.get("FAKE_CODEX_FAIL_TASK") == assignment["task_id"]:
     raise SystemExit(7)
+spec_gaps = []
+status = "implemented"
+if os.environ.get("FAKE_CODEX_SPEC_GAP") == assignment["task_id"]:
+    status = "replan_required"
+    spec_gaps = [{
+        "kind": "design",
+        "summary": "The assigned boundary cannot satisfy the requirement.",
+        "evidence": ["The required interface is outside the immutable claim."],
+        "requirement_ids": ["REQ-001"],
+        "design_ids": ["FEAT-001"],
+    }]
+if os.environ.get("FAKE_CODEX_SECRET_GAP") == assignment["task_id"]:
+    status = "replan_required"
+    spec_gaps = [{
+        "kind": "design",
+        "summary": "token=abcdefghijklmnopqrstuvwxyz123456",
+        "evidence": ["The required interface is outside the immutable claim."],
+        "requirement_ids": ["REQ-001"],
+        "design_ids": ["FEAT-001"],
+    }]
 print(json.dumps({
     "task_id": assignment["task_id"],
     "assignment_digest": assignment["assignment_digest"],
-    "status": "implemented",
+    "status": status,
     "summary": "implemented scoped task",
     "decisions": [],
     "open_risks": [],
+    "spec_gaps": spec_gaps,
     "validation": "focused tests passed",
     "review": "focused review passed",
 }))
@@ -104,10 +125,16 @@ print(json.dumps({
         handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
         handoff_path.chmod(0o600)
         value = {
-            "schema": "agentic-sdlc/worker-assignment-v3",
+            "schema": "agentic-sdlc/worker-assignment-v4",
             "feature_id": "FEAT-001",
             "wave_id": "WAVE-001",
             "task_id": task_id,
+            "root_intent_sha256": "b" * 64,
+            "project_spec_receipt": {
+                "schema": "maintain-project-specs.worker-receipt.v1",
+                "requirements_sha256": "c" * 64,
+                "design_sha256": "d" * 64,
+            },
             "scope_cwd": str(scope),
             "incoming_handoff_path": str(handoff_path),
             "incoming_handoff_digest": handoff["handoff_digest"],
@@ -185,6 +212,33 @@ print(json.dumps({
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual([entry["task"] for entry in entries], ["TASK-001"])
         self.assertNotIn("FAKE_CODEX", str(caught.exception))
+
+    def test_worker_can_return_typed_spec_gap_without_editing_specs(self) -> None:
+        assignment = self.assignment("TASK-001")
+        with mock.patch.dict(
+            os.environ,
+            {"FAKE_CODEX_LOG": str(self.log), "FAKE_CODEX_SPEC_GAP": "TASK-001"},
+        ):
+            results = dispatch.dispatch_sequential(
+                [assignment], self.schema, codex_binary=str(self.fake)
+            )
+        self.assertEqual(results[0]["status"], "replan_required")
+        self.assertEqual(results[0]["spec_gaps"][0]["kind"], "design")
+
+    def test_sensitive_spec_gap_is_rejected_before_dispatch_output(self) -> None:
+        assignment = self.assignment("TASK-001")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FAKE_CODEX_LOG": str(self.log),
+                "FAKE_CODEX_SECRET_GAP": "TASK-001",
+            },
+        ):
+            with self.assertRaises(dispatch.DispatchError) as caught:
+                dispatch.dispatch_sequential(
+                    [assignment], self.schema, codex_binary=str(self.fake)
+                )
+        self.assertEqual(caught.exception.code, "WORKER_FAILED")
 
     def test_missing_codex_is_environment_blocker(self) -> None:
         assignment = self.assignment("TASK-001")
@@ -357,7 +411,7 @@ child.wait()
     def test_legacy_assignment_requires_upgrade(self) -> None:
         assignment = self.assignment("TASK-001")
         value = json.loads(assignment.read_text(encoding="utf-8"))
-        value["schema"] = "agentic-sdlc/worker-assignment-v2"
+        value["schema"] = "agentic-sdlc/worker-assignment-v3"
         assignment.write_text(json.dumps(value), encoding="utf-8")
 
         with self.assertRaises(dispatch.DispatchError) as caught:

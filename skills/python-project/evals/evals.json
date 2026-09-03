@@ -1,0 +1,64 @@
+{
+  "skill_name": "python-project",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Scaffold a new deployable Python CLI application with Ruff, pytest, and GitHub Actions.",
+      "expected_output": "A uv-first scaffold with profile-selected runtime dependencies, a generated committed lockfile, and matching locked local and CI commands.",
+      "files": [],
+      "assertions": [
+        "Uses pyproject.toml as dependency intent and uv.lock as the generated reviewed install graph",
+        "Uses uv lock --check, uv sync --locked, and uv run --locked without a parallel pip install path",
+        "Reports lock generation as pending instead of hand-authoring uv.lock when resolution was not run"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add a supported runtime dependency and a development-only test tool to this published uv library.",
+      "expected_output": "A role-correct scoped dependency change that preserves unrelated locked packages and validates both the normal graph and declared library lower bounds.",
+      "files": [],
+      "assertions": [
+        "Places the runtime package in project.dependencies and the test tool in dependency-groups.dev",
+        "Uses role-specific uv add --no-sync commands and reviews pyproject.toml with uv.lock before syncing",
+        "Keeps the normal committed lock separate from a disposable lowest-direct library test lane",
+        "Forces lower-bound re-resolution with uv lock --upgrade --resolution lowest-direct --no-sources only in that disposable lane",
+        "Does not use a broad uv lock --upgrade for the ordinary scoped dependency change"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Our private package index and PyPI expose the same name and uv cannot resolve the requested graph. Fix the project.",
+      "expected_output": "A fail-closed diagnosis that preserves resolver evidence and proposes explicit index binding without weakening source trust or exposing credentials.",
+      "files": [],
+      "assertions": [
+        "Preserves uv's resolver explanation before changing dependency intent",
+        "Keeps first-index behavior and uses a named explicit index with a package source binding where appropriate",
+        "Keeps index credentials outside pyproject.toml and uv.lock",
+        "Does not widen Python support, weaken constraints, or enable an unsafe index strategy silently"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Harden this existing pip-tools project, but do not migrate its package manager.",
+      "expected_output": "A Python project hardening plan that retains the existing manager and does not introduce uv as a second lock or install authority.",
+      "files": [],
+      "assertions": [
+        "Detects and preserves the existing package manager because migration was not requested",
+        "Does not add uv.lock, uv sync, or a parallel uv CI path",
+        "Still aligns relevant Python layout, test, and documentation surfaces within the requested scope"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Scaffold a uv-managed Python systemd service whose long-running entrypoint is acme_worker.service.",
+      "expected_output": "A locked deployment whose unit uses the project-owned interpreter and the explicitly generated, importable service module.",
+      "files": [],
+      "assertions": [
+        "Generates an importable acme_worker.service module instead of assuming an agent.main path",
+        "Runs the module with /opt/<project>/.venv/bin/python after uv sync --locked --no-dev",
+        "Adds service arguments only when the generated entrypoint implements and tests them",
+        "Validates module importability and the rendered systemd unit"
+      ]
+    }
+  ]
+}

@@ -122,9 +122,10 @@ creation; projection content that uses the reserved operation-marker namespace
 is rejected. Editing or saving a prompt file
 never triggers execution; captured updates and manual changes require explicit
 `run`. Secrets and capture failures do not persist or block the direct request.
-Explicit bound runs register the authoritative active prompt for unique
-fresh-session attachment and close it only after verified terminal completion;
-queued prompts remain inactive until activation.
+Explicit bound runs register and close the authoritative active prompt for
+objective identity and validation; they never bind another session. Every
+fresh session requires its own exact init or run command before later capture,
+and queued prompts remain inactive until activation.
 
 The editor workspace exposes private `new`, `list`, `queue-list`, and
 `queue-cancel` tasks. `new` is the default build task and creates a

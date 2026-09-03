@@ -10,6 +10,7 @@ Peer state and checkpoints are deliberately never cloud-ownership authority.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Protocol
@@ -37,7 +38,7 @@ class ConfiguredRole(str, Enum):
 
 
 class TransferIntent(str, Enum):
-    """One role-directed transfer trigger, independent of execution state."""
+    """One typed transfer trigger, independent of execution state."""
 
     PLANNED_FAILOVER = "planned-failover"
     PLANNED_FAILBACK = "planned-failback"
@@ -130,9 +131,7 @@ class LocalReadiness:
     def transfer_ready(self) -> bool:
         """Return whether a non-owner can safely enter the fenced transfer chain."""
 
-        return self.routing_hygiene_ready and (
-            self.promotion_ready or self.cold_standby_ready
-        )
+        return self.routing_hygiene_ready and (self.promotion_ready or self.cold_standby_ready)
 
     @property
     def transfer_blocked_reasons(self) -> tuple[str, ...]:
@@ -250,6 +249,8 @@ class ControllerSnapshot:
     transfer_intent: TransferIntent | None = None
     transfer_effect_started: bool = False
     apply_owner_adoption: bool = False
+    transfer_inhibited: bool = False
+    standby_replacement_inhibited: bool = False
 
     def __post_init__(self) -> None:
         if not all(
@@ -556,20 +557,10 @@ class VMHAController:
                     replace(checkpoint, state=HAState.BLOCKED, pending_action=None),
                     guard_action,
                 )
-            postcondition_met = bool(
-                pending.boot_id == snapshot.boot_id
-                and self._postcondition(pending, snapshot)
-                and (
-                    pending.kind in _LOCAL_SAFETY_ACTIONS
-                    or (
-                        pending.kind is ActionKind.ATTACH_CANDIDATE
-                        and self._attach_completion_context_matches(pending, snapshot, checkpoint)
-                    )
-                    or (
-                        pending.kind is not ActionKind.ATTACH_CANDIDATE
-                        and self._pending_action_context_matches(pending, snapshot, checkpoint)
-                    )
-                )
+            postcondition_met = self.pending_action_postcondition(
+                pending,
+                snapshot,
+                checkpoint,
             )
             if pending.boot_id != snapshot.boot_id or postcondition_met:
                 continuity = checkpoint.transfer_continuity
@@ -613,12 +604,19 @@ class VMHAController:
                     passive_action,
                 )
             elif not self._pending_action_safe(pending, snapshot, checkpoint):
+                retire_locked_repair = bool(
+                    pending.kind is ActionKind.REPAIR_LOCAL_DATAPLANE and snapshot.apply_locked
+                )
                 checkpoint = self._invalidate_ownership_if_lost(
                     snapshot,
                     replace(
                         checkpoint,
                         state=HAState.BLOCKED,
                         pending_action=None,
+                        repair_attempt=(
+                            None if retire_locked_repair else checkpoint.repair_attempt
+                        ),
+                        suspect_since=(None if retire_locked_repair else checkpoint.suspect_since),
                     ),
                 )
                 if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
@@ -727,8 +725,7 @@ class VMHAController:
             )
         if (
             snapshot.configured_role is ConfiguredRole.ACTIVE
-            and snapshot.transfer_intent
-            in {TransferIntent.PLANNED_FAILOVER, TransferIntent.AUTOMATIC_FAILOVER}
+            and snapshot.transfer_intent is TransferIntent.PLANNED_FAILOVER
         ):
             return self._result(
                 HAState.BLOCKED,
@@ -747,6 +744,13 @@ class VMHAController:
                 ActionKind.ENTER_PASSIVE,
             )
 
+        if snapshot.transfer_inhibited:
+            return self._result(
+                HAState.BLOCKED,
+                ("mtls-rotation-active",),
+                snapshot,
+                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+            )
         if snapshot.apply_locked:
             return self._result(
                 HAState.BLOCKED,
@@ -776,16 +780,11 @@ class VMHAController:
                 replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
             )
 
-        manual_failback_required = snapshot.configured_role is ConfiguredRole.ACTIVE
-        if manual_failback_required and snapshot.transfer_intent is not TransferIntent.PLANNED_FAILBACK:
-            return self._result(
-                HAState.NORMAL,
-                ("manual-failback-required",),
-                snapshot,
-                replace(checkpoint, state=HAState.NORMAL, suspect_since=None),
-            )
-
-        if not self._planned_transfer_requested(snapshot) and self._peer_fresh(snapshot):
+        if (
+            not snapshot.transfer_effect_started
+            and not self._planned_transfer_requested(snapshot)
+            and self._peer_fresh(snapshot)
+        ):
             return self._result(
                 HAState.NORMAL,
                 ("authoritative-owner-peer-is-healthy",),
@@ -801,6 +800,35 @@ class VMHAController:
         checkpoint: ControllerCheckpoint,
         parity_reasons: tuple[str, ...],
     ) -> ControllerResult:
+        if snapshot.apply_locked:
+            checkpoint = replace(
+                checkpoint,
+                repair_attempt=None,
+                suspect_since=None,
+            )
+            if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                return self._action(
+                    HAState.BLOCKED,
+                    ("apply-lock-held",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.DISABLE_ACTIVE,
+                )
+            if snapshot.data_plane_mode is not DataPlaneMode.PASSIVE:
+                return self._action(
+                    HAState.NORMAL,
+                    ("owner-must-materialize-passive-dataplane",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.ENTER_PASSIVE,
+                )
+            return self._result(
+                HAState.BLOCKED,
+                ("apply-lock-held",),
+                snapshot,
+                replace(checkpoint, state=HAState.BLOCKED),
+            )
+
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
         routes_current = self._routes_current(snapshot, checkpoint)
         repair = checkpoint.repair_attempt
@@ -810,9 +838,7 @@ class VMHAController:
 
         if not parity_reasons and routes_current:
             if snapshot.readiness.promotion_ready and not snapshot.readiness.path_degraded:
-                checkpoint, waiting_for_health = self._record_repair_health(
-                    snapshot, checkpoint
-                )
+                checkpoint, waiting_for_health = self._record_repair_health(snapshot, checkpoint)
                 repair = checkpoint.repair_attempt
                 if waiting_for_health:
                     return self._result(
@@ -850,9 +876,7 @@ class VMHAController:
                 state = HAState.DEGRADED
             elif snapshot.readiness.path_degraded:
                 state = HAState.DEGRADED_PATH
-                reasons = snapshot.readiness.degraded_reasons or (
-                    "redundant-path-degraded",
-                )
+                reasons = snapshot.readiness.degraded_reasons or ("redundant-path-degraded",)
             else:
                 state = HAState.ACTIVE
             return self._result(
@@ -1034,19 +1058,14 @@ class VMHAController:
             healthy_since=healthy_since,
             healthy_observations=observations,
         )
-        if (
-            observations >= 2
-            and snapshot.now - healthy_since >= _REPAIR_HEALTHY_RESET_SECONDS
-        ):
+        if observations >= 2 and snapshot.now - healthy_since >= _REPAIR_HEALTHY_RESET_SECONDS:
             return replace(checkpoint, repair_attempt=None), False
         return replace(checkpoint, repair_attempt=repair), observations < 2
 
     @staticmethod
     def _reset_repair_health(checkpoint: ControllerCheckpoint) -> ControllerCheckpoint:
         repair = checkpoint.repair_attempt
-        if repair is None or (
-            repair.healthy_since is None and repair.healthy_observations == 0
-        ):
+        if repair is None or (repair.healthy_since is None and repair.healthy_observations == 0):
             return checkpoint
         return replace(
             checkpoint,
@@ -1356,6 +1375,30 @@ class VMHAController:
             and cloud.local_attachment_exact(snapshot.local_node_id),
         }[kind]
 
+    def pending_action_postcondition(
+        self,
+        action: ControllerAction,
+        snapshot: ControllerSnapshot,
+        checkpoint: ControllerCheckpoint,
+    ) -> bool:
+        """Return the exact full postcondition used to clear a pending action."""
+
+        return bool(
+            action.boot_id == snapshot.boot_id
+            and self._postcondition(action, snapshot)
+            and (
+                action.kind in _LOCAL_SAFETY_ACTIONS
+                or (
+                    action.kind is ActionKind.ATTACH_CANDIDATE
+                    and self._attach_completion_context_matches(action, snapshot, checkpoint)
+                )
+                or (
+                    action.kind is not ActionKind.ATTACH_CANDIDATE
+                    and self._pending_action_context_matches(action, snapshot, checkpoint)
+                )
+            )
+        )
+
     def _pending_action_safe(
         self,
         action: ControllerAction,
@@ -1384,12 +1427,20 @@ class VMHAController:
                 and cloud.local_attachment_exact(snapshot.local_node_id)
                 and snapshot.guard_boot_id == snapshot.boot_id
                 and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                and not snapshot.apply_locked
                 and self._routes_current(snapshot, checkpoint)
             )
         if kind is ActionKind.PREPARE_CANDIDATE_DATAPLANE:
             return bool(
                 cloud.authoritative
                 and self._local_ownership_safe(snapshot, checkpoint)
+                and (
+                    not snapshot.transfer_inhibited
+                    or self._standby_replacement_owner_recovery_allowed(
+                        snapshot,
+                        checkpoint,
+                    )
+                )
                 and snapshot.data_plane_mode is DataPlaneMode.PASSIVE
                 and snapshot.readiness.candidate_preparation_required
                 and (
@@ -1400,11 +1451,32 @@ class VMHAController:
                     )
                 )
             )
-        if not cloud.authoritative or not self._promotion_gates_clear(snapshot):
+        if not cloud.authoritative:
             return False
         if kind in _PASSIVE_REPLAY_ACTIONS and (
             snapshot.data_plane_mode is not DataPlaneMode.PASSIVE
         ):
+            return False
+        if kind is ActionKind.ENABLE_ACTIVE:
+            # Transfer inhibition fences ownership-changing work, not
+            # forwarding restoration on the already-authoritative owner.  The
+            # owner must still reprove every ordinary local forwarding gate.
+            return bool(
+                not snapshot.apply_locked
+                and not snapshot.emergency_active_only
+                and not self._parity_reasons(snapshot)
+                and self._local_ownership_safe(snapshot, checkpoint)
+                and snapshot.readiness.promotion_ready
+                and self._routes_current(snapshot, checkpoint)
+            )
+        if kind is ActionKind.RECONCILE_ROUTES and (
+            self._standby_replacement_owner_recovery_allowed(snapshot, checkpoint)
+        ):
+            return bool(
+                snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+                and snapshot.readiness.promotion_ready
+            )
+        if not self._promotion_gates_clear(snapshot):
             return False
         if kind in {
             ActionKind.STOP_FORMER_OWNER,
@@ -1446,13 +1518,26 @@ class VMHAController:
                 self._local_ownership_safe(snapshot, checkpoint)
                 and snapshot.readiness.promotion_ready
             )
-        if kind is ActionKind.ENABLE_ACTIVE:
-            return bool(
-                self._local_ownership_safe(snapshot, checkpoint)
-                and snapshot.readiness.promotion_ready
-                and self._routes_current(snapshot, checkpoint)
-            )
         return False
+
+    def _standby_replacement_owner_recovery_allowed(
+        self,
+        snapshot: ControllerSnapshot,
+        checkpoint: ControllerCheckpoint,
+    ) -> bool:
+        """Admit only local owner recovery behind the replacement writer gate."""
+
+        return bool(
+            snapshot.transfer_inhibited
+            and snapshot.standby_replacement_inhibited
+            and snapshot.transfer_intent is None
+            and not snapshot.transfer_effect_started
+            and not snapshot.apply_locked
+            and not snapshot.emergency_active_only
+            and snapshot.cloud.authoritative
+            and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+            and self._local_ownership_safe(snapshot, checkpoint)
+        )
 
     @staticmethod
     def _pending_action_context_matches(
@@ -1529,6 +1614,7 @@ class VMHAController:
     def _promotion_gates_clear(self, snapshot: ControllerSnapshot) -> bool:
         return not (
             snapshot.apply_locked
+            or snapshot.transfer_inhibited
             or snapshot.emergency_active_only
             or self._parity_reasons(snapshot)
             or not snapshot.readiness.transfer_ready
@@ -1543,13 +1629,9 @@ class VMHAController:
         if intent is TransferIntent.PLANNED_FAILOVER:
             return snapshot.configured_role is ConfiguredRole.PASSIVE
         if intent is TransferIntent.AUTOMATIC_FAILOVER:
-            if snapshot.configured_role is not ConfiguredRole.PASSIVE:
-                return False
             if snapshot.transfer_effect_started:
                 return True
         elif intent is not None:
-            return False
-        if snapshot.configured_role is ConfiguredRole.ACTIVE:
             return False
         return bool(
             checkpoint.suspect_since is not None
@@ -1561,9 +1643,7 @@ class VMHAController:
     def _transfer_in_progress(
         snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> bool:
-        return bool(
-            snapshot.transfer_intent is not None or checkpoint.suspect_since is not None
-        )
+        return bool(snapshot.transfer_intent is not None or checkpoint.suspect_since is not None)
 
     @staticmethod
     def _planned_transfer_requested(snapshot: ControllerSnapshot) -> bool:
@@ -1684,17 +1764,25 @@ class RecoverableController:
         snapshots: SnapshotPort,
         checkpoints: CheckpointStore,
         effects: EffectPort,
+        decision_observer: (
+            Callable[[ControllerSnapshot, ControllerCheckpoint, ControllerResult], None] | None
+        ) = None,
     ) -> None:
         self.policy = policy
         self.snapshots = snapshots
         self.checkpoints = checkpoints
         self.effects = effects
+        self.decision_observer = decision_observer or (
+            lambda _snapshot, _checkpoint, _decision: None
+        )
 
     def step(self) -> ControllerResult:
         checkpoint = self.checkpoints.load()
-        decision = self.policy.decide(self.snapshots.observe(), checkpoint)
+        snapshot = self.snapshots.observe()
+        decision = self.policy.decide(snapshot, checkpoint)
         if decision.checkpoint != checkpoint:
             self.checkpoints.save(decision.checkpoint)
+        self.decision_observer(snapshot, checkpoint, decision)
         if decision.action is not None:
             self.effects.apply(decision.action)
         return decision

@@ -11,6 +11,11 @@ from typing import Any
 
 import yaml
 
+from ..vm_ha_rearm import _acquire_rearm_lock
+from .auto_healing import (
+    AutoHealingPolicyError,
+    require_auto_healing_writer_quiescent,
+)
 from .models import canonical_json
 from .mtls import (
     ManagedMTLSError,
@@ -108,16 +113,16 @@ def execute_mtls_action(
         try:
             payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, yaml.YAMLError):
-            raise ManagedMTLSError("managed mTLS installed runtime identity is unavailable") from None
+            raise ManagedMTLSError(
+                "managed mTLS installed runtime identity is unavailable"
+            ) from None
         vm_ha = payload.get("vm_ha") if isinstance(payload, Mapping) else None
         node = vm_ha.get("node") if isinstance(vm_ha, Mapping) else None
         generation = vm_ha.get("generation") if isinstance(vm_ha, Mapping) else None
         expected = (
             str(vm_ha.get("cluster_id") or "") if isinstance(vm_ha, Mapping) else "",
             str(node.get("node_id") or "") if isinstance(node, Mapping) else "",
-            str(generation.get("generation_id") or "")
-            if isinstance(generation, Mapping)
-            else "",
+            str(generation.get("generation_id") or "") if isinstance(generation, Mapping) else "",
         )
         requested = (
             str(request["cluster_id"]),
@@ -127,15 +132,32 @@ def execute_mtls_action(
         if requested != expected:
             raise ManagedMTLSError("managed mTLS inhibition runtime identity is stale")
         operation_id = _require_operation_id(request["operation_id"])
-        if action == "inhibit":
-            result = store.install_inhibition(
-                operation_id=operation_id,
-                cluster_id=requested[0],
-                node_id=requested[1],
-                generation_id=requested[2],
-            )
-        else:
-            result = store.release_inhibition(operation_id)
+        writer_lock = _acquire_rearm_lock(
+            state_dir / "rearm.lock",
+            timeout_seconds=25.0,
+        )
+        if writer_lock is None:
+            raise ManagedMTLSError("managed mTLS inhibition writer is busy")
+        try:
+            if action == "inhibit":
+                if (state_dir / "apply.lock").exists():
+                    raise ManagedMTLSError("managed mTLS inhibition conflicts with an apply lock")
+                try:
+                    require_auto_healing_writer_quiescent(state_dir)
+                except AutoHealingPolicyError as error:
+                    raise ManagedMTLSError(
+                        "managed mTLS inhibition conflicts with standby auto-healing"
+                    ) from error
+                result = store.install_inhibition(
+                    operation_id=operation_id,
+                    cluster_id=requested[0],
+                    node_id=requested[1],
+                    generation_id=requested[2],
+                )
+            else:
+                result = store.release_inhibition(operation_id)
+        finally:
+            os.close(writer_lock)
     elif action == "prepare":
         _require_keys(
             request,

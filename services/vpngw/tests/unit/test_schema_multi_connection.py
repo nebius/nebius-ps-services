@@ -83,13 +83,11 @@ def _enable_vm_ha(cfg: dict) -> None:
                 "node_id": "gateway-a",
                 "instance_index": 0,
                 "role": "active",
-                "nebius_credentials_path": _credential_path("gateway-a"),
             },
             {
                 "node_id": "gateway-b",
                 "instance_index": 1,
                 "role": "passive",
-                "nebius_credentials_path": _credential_path("gateway-b"),
             },
         ],
     }
@@ -105,10 +103,6 @@ def _enable_vm_ha(cfg: dict) -> None:
         }
     )
     cfg["connections"][0]["tunnels"].append(second_tunnel)
-
-
-def _credential_path(node_id: str) -> str:
-    return f"/operator-secrets/{node_id}/nebius-credentials.json"
 
 
 def test_schema_accepts_explicit_vm_ha_with_roles_distinct_from_tunnel_roles(
@@ -130,22 +124,18 @@ def test_schema_accepts_explicit_vm_ha_with_roles_distinct_from_tunnel_roles(
     ]
 
 
-def test_schema_requires_exact_node_scoped_nebius_credentials(sample_config: dict) -> None:
+def test_schema_rejects_removed_member_credential_path(sample_config: dict) -> None:
     cfg = _base_bgp_config(sample_config)
     _enable_vm_ha(cfg)
-    cfg["gateway_group"]["vm_ha"]["members"][1]["nebius_credentials_path"] = cfg[
-        "gateway_group"
-    ]["vm_ha"]["members"][0]["nebius_credentials_path"]
+    cfg["gateway_group"]["vm_ha"]["members"][0]["nebius_credentials_path"] = (
+        "/operator-secrets/legacy.json"
+    )
 
-    with pytest.raises(ValueError, match="nebius_credentials_path values must be node-scoped"):
-        validate_config(cfg)
-
-    del cfg["gateway_group"]["vm_ha"]["members"][1]["nebius_credentials_path"]
-    with pytest.raises(ValueError, match="nebius_credentials_path"):
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         validate_config(cfg)
 
 
-def test_schema_rejects_removed_vm_ha_tls_sources_with_conversion_guidance(
+def test_schema_rejects_removed_vm_ha_tls_sources(
     sample_config: dict,
 ) -> None:
     cfg = _base_bgp_config(sample_config)
@@ -155,10 +145,10 @@ def test_schema_rejects_removed_vm_ha_tls_sources_with_conversion_guidance(
         "certificate_authority": "/old/ca.pem",
         "certificate": "/old/node.pem",
         "private_key": "/old/node.key",
-        "nebius_credentials": member.pop("nebius_credentials_path"),
+        "nebius_credentials": "/old/nebius-credentials.json",
     }
 
-    with pytest.raises(ValueError, match="credential_sources was removed.*manages mTLS"):
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         validate_config(cfg)
 
 
@@ -228,10 +218,56 @@ def test_vm_ha_runtime_binding_is_secret_free_and_requires_absolute_references()
     payload = binding.model_dump(mode="json")
     payload["migration_routes"] = [migration.model_dump(mode="json")]
     assert VMHARuntimeBinding.model_validate(payload).migration_routes == (migration,)
-
     payload["migration_routes"][0]["allocation_id"] = "allocation-1"
     adopted = VMHARuntimeBinding.model_validate(payload)
     assert adopted.migration_routes[0].allocation_id == "allocation-1"
+
+
+def test_vm_ha_runtime_binding_requires_one_shared_credential_digest() -> None:
+    digest = "a" * 64
+    route_targets = (
+        VMHARouteTarget(
+            project_id="project-1",
+            network_id="network-1",
+            workload_subnet_id="subnet-1",
+            route_table_id="route-table-1",
+        ),
+    )
+
+    def node(node_id: str, compute_id: str, credential_digest: str) -> VMHARuntimeNodeBinding:
+        return VMHARuntimeNodeBinding(
+            node_id=node_id,
+            role="active" if node_id == "gateway-a" else "passive",
+            compute_id=compute_id,
+            network_interface_name="eth0",
+            peer_endpoint="10.0.0.10:9443",
+            nebius_credentials_path=(
+                f"/etc/nebius-vpngw/vm-ha-credentials/{digest}/{node_id}/"
+                f"{credential_digest}/nebius-credentials.json"
+            ),
+            nebius_credentials_sha256=credential_digest,
+        )
+
+    with pytest.raises(ValueError, match="one shared credential digest"):
+        VMHARuntimeBinding(
+            cluster_id="gateway-cluster",
+            shared_allocation_id="allocation-1",
+            nodes=(
+                node("gateway-a", "compute-a", "d" * 64),
+                node("gateway-b", "compute-b", "e" * 64),
+            ),
+            route_targets=route_targets,
+            route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
+                "gateway-cluster", "allocation-1", route_targets
+            ),
+            generation_id=digest,
+            configuration_digest=digest,
+            static_routes_digest="b" * 64,
+            bgp_policy_digest="c" * 64,
+            nebius_project_id="project-1",
+            nebius_service_account_id="service-account-1",
+            nebius_authorized_key_id="authorized-key-1",
+        )
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,13 @@ Capacity batches are enforced: only the active batch owns assignments and
 worktrees, and the next batch opens only after the current batch commits.
 Every assignment binds a private dependency handoff, and every task uses a
 worker session identity that has never owned another task in the run.
+Assignment v4 also binds the accepted root-intent digest and exact canonical
+project-spec receipt. Workers never reclassify user intent or edit specs; they
+return typed `spec_gaps` to the root coordinator, and any non-empty list stops
+before task commit for reconciliation and replanning. The sequential launcher
+rejects sensitive gap summaries/evidence before returning coordinator-visible
+JSON; execution path inventories keep rename folding disabled so protected
+source paths remain visible.
 
 Native isolated agents are preferred. When unavailable, the private launcher
 uses one sequential ephemeral `codex exec` process per assignment with exact

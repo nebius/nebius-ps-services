@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +32,33 @@ from .routing_guard import (
 )
 from .state_store import StateStore
 from .strongswan_renderer import StrongSwanRenderer
+from .vm_ha.auto_healing import (
+    AUTO_HEALING_CAPABILITY,
+    AUTO_HEALING_REQUEST_SCHEMA,
+    AUTO_HEALING_STATUS_SCHEMA,
+    AutoHealingPolicyError,
+    AutoHealingPolicyPhase,
+    AutoHealingPolicyRecord,
+    AutoHealingPolicyStore,
+    AutoHealingRecoveryPhase,
+    AutoHealingRecoveryRecord,
+    AutoHealingRecoveryStore,
+    StandbyAutoHealing,
+    decode_policy_request,
+    load_peer_policy_heartbeat,
+    peer_policy_agrees,
+    require_auto_healing_writer_quiescent,
+)
+from .vm_ha.inhibition import (
+    LIVE_PEER_REPLACEMENT_CAPABILITY,
+    STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
+    STANDBY_REPLACEMENT_INHIBITION_FILENAME,
+    STANDBY_REPLACEMENT_INHIBITION_SCHEMA,
+    STANDBY_REPLACEMENT_RELEASE_FILENAME,
+    STANDBY_REPLACEMENT_RELEASE_SCHEMA,
+    standby_replacement_inhibition_operation_id,
+    standby_replacement_release_operation_id,
+)
 from .vm_ha.models import (
     DigestSet,
     PeerHeartbeat,
@@ -38,7 +66,37 @@ from .vm_ha.models import (
     StateValidationError,
 )
 from .vm_ha.mtls import ManagedMTLSError, ManagedMTLSStore
-from .vm_ha.runtime import VMHARuntimePorts, build_runtime_ports
+from .vm_ha.progress import (
+    TRANSFER_PROGRESS_ACTIONS,
+    TransferProgressIdentity,
+    TransferProgressStore,
+    planned_request_fingerprint,
+    validate_transfer_progress,
+)
+from .vm_ha.promotion_receipt import (
+    PROMOTION_RECEIPT_FILENAME,
+    PROMOTION_RECEIPT_SCHEMA,
+    promotion_receipt_id_v1,
+)
+from .vm_ha.restoration import (
+    STANDBY_RESTORATION_CAPABILITY,
+    PolicyAgreementCertificate,
+    PolicyAgreementStore,
+    RestorationPhase,
+    RestorationSource,
+    StandbyRestorationAuthorization,
+    StandbyRestorationError,
+    StandbyRestorationStore,
+    policy_authorizes_certificate,
+    policy_authorizes_restoration,
+    require_standby_restoration_writer_quiescent,
+    restoration_is_active,
+)
+from .vm_ha.runtime import (
+    VMHARuntimePorts,
+    build_runtime_ports,
+    runtime_identity_public_status,
+)
 from .vm_ha.store import AtomicGenerationStore
 from .vm_ha.transport import PeerTransportError
 from .vm_ha_controller import (
@@ -75,18 +133,23 @@ VM_HA_FAILBACK_PATH = VM_HA_STATE_DIR / "manual-failback.json"
 VM_HA_FAILOVER_PATH = VM_HA_STATE_DIR / "manual-failover.json"
 VM_HA_EFFECT_RECEIPT_PATH = VM_HA_STATE_DIR / "effect-receipt.json"
 VM_HA_TRANSFER_LINEAGE_PATH = VM_HA_STATE_DIR / "transfer-lineage.json"
-VM_HA_PROMOTION_RECEIPT_PATH = VM_HA_STATE_DIR / "promotion-receipt.json"
+VM_HA_TRANSFER_PROGRESS_PATH = VM_HA_STATE_DIR / "transfer-progress.json"
+VM_HA_PROMOTION_RECEIPT_PATH = VM_HA_STATE_DIR / PROMOTION_RECEIPT_FILENAME
 VM_HA_REARM_STATUS_PATH = VM_HA_STATE_DIR / "rearm-status.json"
 VM_HA_STANDBY_READY_PATH = VM_HA_STATE_DIR / "standby-ready.json"
 VM_HA_APPLY_LOCK_PATH = VM_HA_STATE_DIR / "apply.lock"
 VM_HA_APPLY_OWNER_ADOPTION_PATH = VM_HA_STATE_DIR / "apply-owner-adoption.json"
 VM_HA_EMERGENCY_PATH = VM_HA_STATE_DIR / "emergency-active-only.json"
+VM_HA_STANDBY_REPLACEMENT_INHIBITION_PATH = (
+    VM_HA_STATE_DIR / STANDBY_REPLACEMENT_INHIBITION_FILENAME
+)
 
 _CHECKPOINT_SCHEMA_V1 = "nebius-vpngw/vm-ha-controller-checkpoint-v1"
 _CHECKPOINT_SCHEMA_V2 = "nebius-vpngw/vm-ha-controller-checkpoint-v2"
 _CHECKPOINT_SCHEMA_V3 = "nebius-vpngw/vm-ha-controller-checkpoint-v3"
 _CHECKPOINT_SCHEMA = "nebius-vpngw/vm-ha-controller-checkpoint-v4"
 _STATUS_SCHEMA = "nebius-vpngw/vm-ha-status-v1"
+_VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY = "vm-ha-mtls-rotation-quiescence-v1"
 _RUNTIME_BLOCKERS: tuple[str, ...] = ()
 VM_HA_STANDBY_READY_MAX_AGE_SECONDS = 10.0
 
@@ -536,6 +599,8 @@ class VMHASnapshotProviders:
     data_plane: Callable[[], DataPlaneMode]
     routes: Callable[[], RouteReconciliationContext | None]
     apply_lock_operation_id: Callable[[], str | None] = lambda: None
+    transfer_inhibition_operation_id: Callable[[], str | None] = lambda: None
+    standby_replacement_inhibition_operation_id: Callable[[], str | None] = lambda: None
     emergency_active_only: Callable[[], bool] = lambda: False
     transfer_intent: Callable[[], tuple[TransferIntent | None, bool]] = lambda: (None, False)
     completed_effect: Callable[[], tuple[str, str] | None] = lambda: None
@@ -662,15 +727,52 @@ def _read_apply_owner_adoption(
         and all(character in "0123456789abcdef" for character in recorded_generation)
     ):
         raise ValueError("VM-HA apply-owner adoption record is invalid or foreign")
-    if (
-        recorded_generation != generation.get("generation_id")
-        or recorded_digests.to_dict() != generation.get("digests")
-    ):
+    if recorded_generation != generation.get(
+        "generation_id"
+    ) or recorded_digests.to_dict() != generation.get("digests"):
         # The exact apply lock is installed before the staged manifest becomes
         # active. The old runtime ignores the well-formed target-generation
         # declaration while continuing to honor the lock itself.
         return None
     return payload
+
+
+def _vm_ha_apply_lock_operation_id(
+    *,
+    state_dir: Path,
+    cluster_id: str,
+    node_id: str,
+    generation_id: str,
+) -> str | None:
+    return _strict_apply_lock_record(
+        state_dir / VM_HA_APPLY_LOCK_PATH.name,
+        cluster_id=cluster_id,
+        node_id=node_id,
+        generation_id=generation_id,
+    )
+
+
+def _vm_ha_transfer_inhibition_operation_id(
+    *,
+    state_dir: Path,
+    cluster_id: str,
+    node_id: str,
+    generation_id: str,
+) -> str | None:
+    mtls_operation = ManagedMTLSStore(state_dir / "mtls", create=False).inhibition_operation_id(
+        cluster_id=cluster_id,
+        node_id=node_id,
+        generation_id=generation_id,
+    )
+    replacement_operation = standby_replacement_inhibition_operation_id(
+        state_dir,
+        cluster_id=cluster_id,
+        node_id=node_id,
+        generation_id=generation_id,
+    )
+    if mtls_operation is not None and replacement_operation is not None:
+        raise ValueError("VM-HA has conflicting transfer inhibitions")
+    return mtls_operation or replacement_operation
 
 
 def _vm_ha_writer_inhibition_operation_id(
@@ -680,15 +782,14 @@ def _vm_ha_writer_inhibition_operation_id(
     node_id: str,
     generation_id: str,
 ) -> str | None:
-    apply_operation = _strict_apply_lock_record(
-        state_dir / VM_HA_APPLY_LOCK_PATH.name,
+    apply_operation = _vm_ha_apply_lock_operation_id(
+        state_dir=state_dir,
         cluster_id=cluster_id,
         node_id=node_id,
         generation_id=generation_id,
     )
-    mtls_operation = ManagedMTLSStore(
-        state_dir / "mtls", create=False
-    ).inhibition_operation_id(
+    mtls_operation = _vm_ha_transfer_inhibition_operation_id(
+        state_dir=state_dir,
         cluster_id=cluster_id,
         node_id=node_id,
         generation_id=generation_id,
@@ -708,30 +809,53 @@ def _manual_transfer_provider(
     configured_role: str,
 ) -> Callable[[], bool]:
     path = state_dir / path_name
+
+    def requested() -> bool:
+        return (
+            _read_manual_transfer_request(
+                path=path,
+                config=config,
+                schema=schema,
+                operation=operation,
+                configured_role=configured_role,
+            )
+            is not None
+        )
+
+    return requested
+
+
+def _read_manual_transfer_request(
+    *,
+    path: Path,
+    config: Mapping[str, Any],
+    schema: str,
+    operation: str,
+    configured_role: str,
+) -> dict[str, Any] | None:
+    """Read one exact planned-transfer request without reducing it to a boolean."""
+
+    if not path.exists():
+        return None
     expected = {
         "cluster_id": config.get("cluster_id"),
         "node_id": (config.get("node") or {}).get("node_id"),
         "generation_id": (config.get("generation") or {}).get("generation_id"),
     }
-
-    def requested() -> bool:
-        if not path.exists():
-            return False
-        if (config.get("node") or {}).get("role") != configured_role:
-            raise ValueError(f"VM-HA manual {operation} request is invalid for this role")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not (
-            isinstance(payload, dict)
-            and set(payload) == {"schema", "cluster_id", "node_id", "generation_id", "requested_at"}
-            and payload.get("schema") == schema
-            and all(payload.get(key) == value for key, value in expected.items())
-            and isinstance(payload.get("requested_at"), (int, float))
-            and not isinstance(payload.get("requested_at"), bool)
-        ):
-            raise ValueError(f"VM-HA manual {operation} request is invalid or stale")
-        return True
-
-    return requested
+    if (config.get("node") or {}).get("role") != configured_role:
+        raise ValueError(f"VM-HA manual {operation} request is invalid for this role")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not (
+        isinstance(payload, dict)
+        and set(payload) == {"schema", "cluster_id", "node_id", "generation_id", "requested_at"}
+        and payload.get("schema") == schema
+        and all(payload.get(key) == value for key, value in expected.items())
+        and isinstance(payload.get("requested_at"), (int, float))
+        and not isinstance(payload.get("requested_at"), bool)
+        and math.isfinite(float(payload["requested_at"]))
+    ):
+        raise ValueError(f"VM-HA manual {operation} request is invalid or stale")
+    return payload
 
 
 def _manual_failback_provider(*, state_dir: Path, config: Mapping[str, Any]) -> Callable[[], bool]:
@@ -753,6 +877,23 @@ def _manual_failover_provider(*, state_dir: Path, config: Mapping[str, Any]) -> 
         schema="nebius-vpngw/vm-ha-manual-failover-v1",
         operation="failover",
         configured_role="passive",
+    )
+
+
+def _transfer_intent_matches_candidate_role(intent: TransferIntent, role: str) -> bool:
+    """Keep manual preference directional while automatic owner loss is role-neutral."""
+
+    if intent is TransferIntent.PLANNED_FAILBACK:
+        return role == ConfiguredRole.ACTIVE.value
+    if intent is TransferIntent.PLANNED_FAILOVER:
+        return role == ConfiguredRole.PASSIVE.value
+    return bool(
+        intent
+        in {
+            TransferIntent.AUTOMATIC_FAILOVER,
+            TransferIntent.APPLY_OWNER_ADOPTION,
+        }
+        and role in {ConfiguredRole.ACTIVE.value, ConfiguredRole.PASSIVE.value}
     )
 
 
@@ -808,10 +949,7 @@ def _read_transfer_lineage(path: Path, *, config: Mapping[str, Any]) -> dict[str
     ):
         raise ValueError("VM-HA transfer lineage is invalid or stale")
     role = str(node.get("role") or "")
-    if (intent is TransferIntent.PLANNED_FAILBACK and role != "active") or (
-        intent in {TransferIntent.PLANNED_FAILOVER, TransferIntent.AUTOMATIC_FAILOVER}
-        and role != "passive"
-    ):
+    if not _transfer_intent_matches_candidate_role(intent, role):
         raise ValueError("VM-HA transfer lineage is invalid for this configured role")
     return payload
 
@@ -878,11 +1016,9 @@ def _read_promotion_receipt(path: Path, *, config: Mapping[str, Any]) -> dict[st
     )
     if not identity_and_shape_valid:
         raise ValueError("VM-HA promotion receipt is invalid or stale")
+    assert intent is not None
     role = str(node.get("role") or "")
-    if (intent is TransferIntent.PLANNED_FAILBACK and role != "active") or (
-        intent in {TransferIntent.PLANNED_FAILOVER, TransferIntent.AUTOMATIC_FAILOVER}
-        and role != "passive"
-    ):
+    if not _transfer_intent_matches_candidate_role(intent, role):
         raise ValueError("VM-HA promotion receipt is invalid for this configured role")
     if (
         payload.get("generation_id") == generation.get("generation_id")
@@ -948,7 +1084,31 @@ def _typed_transfer_intent_provider(
             return requested, False
         sticky = TransferIntent(str(lineage["intent"]))
         if requested is not None and requested is not sticky:
-            raise ValueError("manual VM-HA request conflicts with sticky transfer lineage")
+            if requested is TransferIntent.PLANNED_FAILBACK:
+                request_path = state_dir / VM_HA_FAILBACK_PATH.name
+                request = _read_manual_transfer_request(
+                    path=request_path,
+                    config=config,
+                    schema="nebius-vpngw/vm-ha-manual-failback-v1",
+                    operation="failback",
+                    configured_role="active",
+                )
+            else:
+                request_path = state_dir / VM_HA_FAILOVER_PATH.name
+                request = _read_manual_transfer_request(
+                    path=request_path,
+                    config=config,
+                    schema="nebius-vpngw/vm-ha-manual-failover-v1",
+                    operation="failover",
+                    configured_role="passive",
+                )
+            if request is None or float(request["requested_at"]) < float(lineage["started_at"]):
+                raise ValueError("manual VM-HA request conflicts with sticky transfer lineage")
+            # Older request entrypoints admitted a new manual preference after
+            # an effect-backed lineage was already durable. The earlier lineage
+            # remains authoritative; retire only the provably later request so
+            # it cannot crash the controller or run after the transfer completes.
+            _durably_unlink(request_path)
         return sticky, True
 
     return intent
@@ -1012,6 +1172,7 @@ class VMHASnapshotAdapter:
         self.boot_id = boot_id
         self.last_snapshot: ControllerSnapshot | None = None
         self.last_apply_operation_id: str | None = None
+        self.last_transfer_inhibition_operation_id: str | None = None
 
     def observe(self) -> ControllerSnapshot:
         peer, peer_received_at = self.providers.peer()
@@ -1023,6 +1184,17 @@ class VMHASnapshotAdapter:
         if not isinstance(guard, Mapping):
             raise ValueError("VM-HA guard record is invalid")
         apply_operation_id = self.providers.apply_lock_operation_id()
+        transfer_inhibition_operation_id = self.providers.transfer_inhibition_operation_id()
+        standby_replacement_inhibition_operation_id = (
+            self.providers.standby_replacement_inhibition_operation_id()
+        )
+        if (
+            standby_replacement_inhibition_operation_id is not None
+            and standby_replacement_inhibition_operation_id != transfer_inhibition_operation_id
+        ):
+            raise ValueError("VM-HA standby replacement inhibition is not the active transfer gate")
+        if apply_operation_id is not None and transfer_inhibition_operation_id is not None:
+            raise ValueError("VM-HA has conflicting writer inhibitions")
         completed_effect = self.providers.completed_effect()
         transfer_intent, transfer_effect_started = self.providers.transfer_intent()
         adoption_path = self.state_dir / VM_HA_APPLY_OWNER_ADOPTION_PATH.name
@@ -1106,8 +1278,11 @@ class VMHASnapshotAdapter:
             transfer_intent=transfer_intent,
             transfer_effect_started=transfer_effect_started,
             apply_owner_adoption=adoption_authorized,
+            transfer_inhibited=transfer_inhibition_operation_id is not None,
+            standby_replacement_inhibited=(standby_replacement_inhibition_operation_id is not None),
         )
         self.last_apply_operation_id = apply_operation_id
+        self.last_transfer_inhibition_operation_id = transfer_inhibition_operation_id
         self.last_snapshot = snapshot
         return snapshot
 
@@ -1134,6 +1309,102 @@ _INITIAL_OWNER_RECONCILIATION_ACTIONS = frozenset(
 )
 
 
+@contextmanager
+def _vm_ha_transfer_effect_guard(
+    action: ControllerAction,
+    *,
+    snapshots: VMHASnapshotAdapter,
+    state_dir: Path,
+) -> Iterator[bool]:
+    """Serialize transfer effects and re-check mutable authority at dispatch."""
+
+    if action.kind not in _TRANSFER_EFFECT_ACTIONS:
+        yield True
+        return
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    descriptor = _acquire_rearm_lock(
+        state_dir / REARM_LOCK_PATH.name,
+        timeout_seconds=0.0,
+    )
+    if descriptor is None:
+        yield False
+        return
+    try:
+        snapshot = snapshots.last_snapshot
+        observed_intent = (
+            (snapshot.transfer_intent, snapshot.transfer_effect_started)
+            if snapshot is not None
+            else None
+        )
+        current_apply_lock = snapshots.providers.apply_lock_operation_id()
+        current_inhibition = snapshots.providers.transfer_inhibition_operation_id()
+        current_intent = snapshots.providers.transfer_intent()
+        inhibited_owner_recovery = False
+        if snapshot is not None and action.kind in {
+            ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+            ActionKind.RECONCILE_ROUTES,
+            ActionKind.ENABLE_ACTIVE,
+        }:
+            routes = snapshot.routes_reconciled_context
+            replacement_provider = getattr(
+                snapshots.providers,
+                "standby_replacement_inhibition_operation_id",
+                lambda: None,
+            )
+            current_replacement_inhibition = replacement_provider()
+            exact_owner_forwarding = bool(
+                current_inhibition is not None
+                and current_inhibition == snapshots.last_transfer_inhibition_operation_id
+                and snapshot.transfer_inhibited
+                and snapshot.transfer_intent is None
+                and not snapshot.transfer_effect_started
+                and not snapshot.apply_locked
+                and not snapshot.emergency_active_only
+                and snapshot.guard_boot_id == snapshot.boot_id
+                and snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+                and action.target_node_id == snapshot.local_node_id
+                and action.allocation_id == snapshot.cloud.allocation_id
+                and action.ownership_epoch == snapshot.cloud.ownership_epoch
+                and action.generation_id == snapshot.local_generation_id
+                and action.digests == snapshot.local_digests
+                and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+            )
+            exact_replacement_recovery = bool(
+                exact_owner_forwarding
+                and snapshot.standby_replacement_inhibited
+                and current_replacement_inhibition == current_inhibition
+            )
+            if action.kind is ActionKind.PREPARE_CANDIDATE_DATAPLANE:
+                inhibited_owner_recovery = bool(
+                    exact_replacement_recovery and snapshot.readiness.candidate_preparation_required
+                )
+            elif action.kind is ActionKind.RECONCILE_ROUTES:
+                inhibited_owner_recovery = bool(
+                    exact_replacement_recovery and snapshot.readiness.promotion_ready
+                )
+            else:
+                inhibited_owner_recovery = bool(
+                    exact_owner_forwarding
+                    and snapshot.readiness.promotion_ready
+                    and routes is not None
+                    and bool(routes.operation_id)
+                    and replace(routes, operation_id="")
+                    == replace(
+                        snapshot.route_reconciliation_context,
+                        ownership_incarnation=action.ownership_incarnation,
+                    )
+                )
+        yield bool(
+            snapshot is not None
+            and current_apply_lock is None
+            and (current_inhibition is None or inhibited_owner_recovery)
+            and current_intent == observed_intent
+        )
+    finally:
+        os.close(descriptor)
+
+
 def _record_transfer_effect_lineage(
     *,
     action: ControllerAction,
@@ -1151,10 +1422,58 @@ def _record_transfer_effect_lineage(
         raise RuntimeError("VM-HA transfer effect has no observed snapshot")
     existing = _read_transfer_lineage(path, config=config)
     intent = snapshot.transfer_intent
-    promotion_receipt = _read_promotion_receipt(
-        path.parent / VM_HA_PROMOTION_RECEIPT_PATH.name,
-        config=config,
-    )
+    promotion_receipt_path = path.parent / VM_HA_PROMOTION_RECEIPT_PATH.name
+    try:
+        promotion_receipt = _read_promotion_receipt(
+            promotion_receipt_path,
+            config=config,
+        )
+    except _PriorGenerationPromotionReceipt:
+        cloud = snapshot.cloud
+        intent_matches_role = bool(
+            intent is None
+            or _transfer_intent_matches_candidate_role(
+                intent,
+                snapshot.configured_role.value,
+            )
+        )
+        first_effect_matches_cloud = bool(
+            (
+                action.kind is ActionKind.STOP_FORMER_OWNER
+                and cloud.former_owner_compute_state is ComputeState.RUNNING
+            )
+            or (
+                action.kind is ActionKind.DETACH_FORMER_ATTACHMENT
+                and cloud.former_owner_compute_state is ComputeState.STOPPED
+            )
+        )
+        if not (
+            existing is None
+            and intent_matches_role
+            and not snapshot.transfer_effect_started
+            and first_effect_matches_cloud
+            and action.target_node_id == snapshot.peer_node_id
+            and action.allocation_id == cloud.allocation_id
+            and action.ownership_epoch == cloud.ownership_epoch
+            and action.generation_id == snapshot.local_generation_id
+            and action.digests == snapshot.local_digests
+            and cloud.authoritative
+            and cloud.observed_owner_node_id == snapshot.peer_node_id
+            and cloud.former_owner_node_id == snapshot.peer_node_id
+            and cloud.former_attachment_exact
+            and not cloud.former_attachment_absent
+            and cloud.candidate_attachment_absent
+            and not cloud.candidate_attachment_exact
+        ):
+            raise
+        # A non-owner retains its last locally committed receipt across an
+        # apply because only the exact apply-declared owner can adopt the new
+        # generation.  At the first explicitly requested transfer effect, the
+        # unchanged authoritative pre-transfer topology proves that this exact
+        # prior-generation receipt no longer grants local owner authority.
+        # Retire it durably before recording current-generation lineage.
+        _durably_unlink(promotion_receipt_path)
+        promotion_receipt = None
     committed_owner_reconciliation = _promotion_receipt_matches_current_owner(
         promotion_receipt,
         cloud=snapshot.cloud,
@@ -1166,8 +1485,7 @@ def _record_transfer_effect_lineage(
         apply_operation_id=getattr(snapshots, "last_apply_operation_id", None),
     )
     adopted_owner_reconciliation = bool(
-        adoption is not None
-        and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+        adoption is not None and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
     )
     if (
         intent is None
@@ -1189,22 +1507,86 @@ def _record_transfer_effect_lineage(
         # manufacture a transfer lineage.
         return
     if intent is None:
-        if snapshot.configured_role is not ConfiguredRole.PASSIVE:
-            raise RuntimeError("configured active cannot begin an automatic VM-HA transfer")
         intent = TransferIntent.AUTOMATIC_FAILOVER
-    if (intent is TransferIntent.PLANNED_FAILBACK) != (
-        snapshot.configured_role is ConfiguredRole.ACTIVE
+    if not _transfer_intent_matches_candidate_role(
+        intent,
+        snapshot.configured_role.value,
     ):
-        if not (
-            snapshot.configured_role is ConfiguredRole.PASSIVE
-            and intent in {TransferIntent.PLANNED_FAILOVER, TransferIntent.AUTOMATIC_FAILOVER}
-        ):
-            raise RuntimeError("VM-HA transfer intent does not match the candidate role")
+        raise RuntimeError("VM-HA transfer intent does not match the candidate role")
 
     if existing is not None:
         if TransferIntent(str(existing["intent"])) is not intent:
             raise RuntimeError("VM-HA transfer effect conflicts with durable lineage")
         return
+    restoration_store = StandbyRestorationStore(path.parent)
+    source = RestorationSource(intent.value)
+    if intent is TransferIntent.AUTOMATIC_FAILOVER:
+        try:
+            certificate = PolicyAgreementStore(path.parent).load()
+            binding, local, peer = _auto_healing_context(config)
+            policy = AutoHealingPolicyStore(path.parent).require_bound(
+                cluster_id=binding.cluster_id,
+                node_id=local.node_id,
+                peer_node_id=peer.node_id,
+                generation_id=binding.generation_id,
+            )
+            if certificate is not None and policy_authorizes_certificate(
+                policy,
+                certificate,
+                allow_prepared_disable=True,
+            ):
+                restoration_store.arm(
+                    source=source,
+                    certificate=certificate,
+                    owner_node_id=snapshot.local_node_id,
+                    former_owner_node_id=snapshot.peer_node_id,
+                    allocation_id=snapshot.cloud.allocation_id,
+                    generation_id=snapshot.local_generation_id,
+                    digests=snapshot.local_digests.to_dict(),
+                    request_fingerprint=None,
+                    first_operation_id=action.operation_id,
+                    updated_at=clock(),
+                )
+        except (AutoHealingPolicyError, StandbyRestorationError):
+            # Automatic owner-loss promotion remains availability-authoritative.
+            # Missing enabled-policy agreement inhibits only later restoration.
+            pass
+    else:
+        authorization = restoration_store.load()
+        request_path = (
+            path.parent / VM_HA_FAILOVER_PATH.name
+            if intent is TransferIntent.PLANNED_FAILOVER
+            else path.parent / VM_HA_FAILBACK_PATH.name
+        )
+        request = _read_manual_transfer_request(
+            path=request_path,
+            config=config,
+            schema=(
+                "nebius-vpngw/vm-ha-manual-failover-v1"
+                if intent is TransferIntent.PLANNED_FAILOVER
+                else "nebius-vpngw/vm-ha-manual-failback-v1"
+            ),
+            operation=("failover" if intent is TransferIntent.PLANNED_FAILOVER else "failback"),
+            configured_role=("passive" if intent is TransferIntent.PLANNED_FAILOVER else "active"),
+        )
+        if not (
+            authorization is not None
+            and authorization.phase is RestorationPhase.ARMED
+            and authorization.source is source
+            and request is not None
+            and authorization.request_fingerprint == planned_request_fingerprint(request)
+            and authorization.owner_node_id == snapshot.local_node_id
+            and authorization.former_owner_node_id == snapshot.peer_node_id
+            and authorization.allocation_id == snapshot.cloud.allocation_id
+            and authorization.generation_id == snapshot.local_generation_id
+            and dict(authorization.digests) == snapshot.local_digests.to_dict()
+        ):
+            raise RuntimeError("planned VM-HA transfer restoration authority is unavailable")
+        restoration_store.bind_first_effect(
+            authorization_id=authorization.authorization_id,
+            operation_id=action.operation_id,
+            updated_at=clock(),
+        )
     _atomic_write_json(
         path,
         {
@@ -1220,6 +1602,117 @@ def _record_transfer_effect_lineage(
             "started_at": clock(),
         },
     )
+
+
+def _transfer_progress_identity(
+    *,
+    action: ControllerAction,
+    snapshots: VMHASnapshotAdapter,
+    config: Mapping[str, Any],
+    state_dir: Path,
+    store: TransferProgressStore,
+) -> TransferProgressIdentity | None:
+    """Build presentation identity only from exact durable transfer authority."""
+
+    if action.kind.value not in TRANSFER_PROGRESS_ACTIONS:
+        return None
+    snapshot = snapshots.last_snapshot
+    if snapshot is None:
+        return None
+    lineage = _read_transfer_lineage(
+        state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name,
+        config=config,
+    )
+    if lineage is None:
+        return None
+    intent = str(lineage["intent"])
+    request_fingerprint: str | None = None
+    if intent in {TransferIntent.PLANNED_FAILOVER.value, TransferIntent.PLANNED_FAILBACK.value}:
+        if intent == TransferIntent.PLANNED_FAILOVER.value:
+            request_path = state_dir / VM_HA_FAILOVER_PATH.name
+            request_schema = "nebius-vpngw/vm-ha-manual-failover-v1"
+            operation = "failover"
+            configured_role = "passive"
+        else:
+            request_path = state_dir / VM_HA_FAILBACK_PATH.name
+            request_schema = "nebius-vpngw/vm-ha-manual-failback-v1"
+            operation = "failback"
+            configured_role = "active"
+        request = _read_manual_transfer_request(
+            path=request_path,
+            config=config,
+            schema=request_schema,
+            operation=operation,
+            configured_role=configured_role,
+        )
+        if request is not None:
+            request_fingerprint = planned_request_fingerprint(request)
+        else:
+            current = store.load()
+            lineage_keys = {
+                "allocation_id",
+                "candidate_node_id",
+                "cluster_id",
+                "digests",
+                "first_operation_id",
+                "former_owner_node_id",
+                "generation_id",
+                "intent",
+            }
+            if current is None or any(current.get(key) != lineage.get(key) for key in lineage_keys):
+                return None
+            request_fingerprint = cast(str, current["request_fingerprint"])
+    return TransferProgressIdentity(
+        cluster_id=str(lineage["cluster_id"]),
+        candidate_node_id=str(lineage["candidate_node_id"]),
+        former_owner_node_id=str(lineage["former_owner_node_id"]),
+        allocation_id=str(lineage["allocation_id"]),
+        generation_id=str(lineage["generation_id"]),
+        digests=cast(Mapping[str, str], lineage["digests"]),
+        route_runtime_id=snapshot.route_runtime_id,
+        intent=intent,
+        request_fingerprint=request_fingerprint,
+        first_operation_id=str(lineage["first_operation_id"]),
+        ownership_incarnation=action.ownership_incarnation,
+    )
+
+
+def _before_vm_ha_transfer_effect(
+    *,
+    action: ControllerAction,
+    snapshots: VMHASnapshotAdapter,
+    config: Mapping[str, Any],
+    state_dir: Path,
+    progress: TransferProgressStore,
+) -> None:
+    """Record authoritative lineage, then best-effort presentation progress."""
+
+    _record_transfer_effect_lineage(
+        action=action,
+        snapshots=snapshots,
+        config=config,
+        path=state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name,
+    )
+    try:
+        identity = _transfer_progress_identity(
+            action=action,
+            snapshots=snapshots,
+            config=config,
+            state_dir=state_dir,
+            store=progress,
+        )
+        if identity is not None:
+            progress.attempting(
+                identity,
+                action=action.kind.value,
+                operation_id=action.operation_id,
+                boot_id=action.boot_id,
+                ownership_epoch=action.ownership_epoch,
+            )
+    except Exception:
+        # Transfer progress is presentation-only and must never become
+        # ownership, routing, forwarding, or terminal-success authority.
+        return
 
 
 def _durably_unlink(path: Path) -> None:
@@ -1293,8 +1786,7 @@ def _commit_promotion_receipt(
         and (
             former_owner_state == ComputeState.STOPPED.value
             if lineage is not None
-            else former_owner_state
-            in {ComputeState.STOPPED.value, ComputeState.RUNNING.value}
+            else former_owner_state in {ComputeState.STOPPED.value, ComputeState.RUNNING.value}
         )
         and status.get("former_attachment_absent") is True
         and status.get("candidate_attachment_exact") is True
@@ -1311,20 +1803,17 @@ def _commit_promotion_receipt(
     ):
         return None
     committed_at = clock()
-    identity = {
-        "allocation_id": authority["allocation_id"],
-        "first_operation_id": authority["operation_id"],
-        "generation_id": authority["generation_id"],
-        "intent": authority["intent"],
-        "owner_node_id": authority["owner_node_id"],
-        "ownership_epoch": status.get("ownership_epoch"),
-        "route_operation_id": route["operation_id"],
-    }
-    receipt_id = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    receipt_id = promotion_receipt_id_v1(
+        allocation_id=str(authority["allocation_id"]),
+        first_operation_id=str(authority["operation_id"]),
+        generation_id=str(authority["generation_id"]),
+        intent=str(authority["intent"]),
+        owner_node_id=str(authority["owner_node_id"]),
+        ownership_epoch=str(status["ownership_epoch"]),
+        route_operation_id=str(route["operation_id"]),
+    )
     receipt = {
-        "schema": "nebius-vpngw/vm-ha-promotion-receipt-v1",
+        "schema": PROMOTION_RECEIPT_SCHEMA,
         "receipt_id": receipt_id,
         "intent": authority["intent"],
         "cluster_id": authority["cluster_id"],
@@ -1337,9 +1826,7 @@ def _commit_promotion_receipt(
         "route_operation_id": route["operation_id"],
         "committed_at": committed_at,
         "common_cutover_seconds": (
-            max(0.0, committed_at - float(lineage["started_at"]))
-            if lineage is not None
-            else 0.0
+            max(0.0, committed_at - float(lineage["started_at"])) if lineage is not None else 0.0
         ),
     }
     if receipt_path.exists():
@@ -1347,7 +1834,7 @@ def _commit_promotion_receipt(
         if not (
             isinstance(current, dict)
             and set(current) == set(receipt)
-            and current.get("schema") == "nebius-vpngw/vm-ha-promotion-receipt-v1"
+            and current.get("schema") == PROMOTION_RECEIPT_SCHEMA
             and isinstance(current.get("receipt_id"), str)
             and bool(current["receipt_id"])
             and current.get("cluster_id") == authority["cluster_id"]
@@ -1357,13 +1844,140 @@ def _commit_promotion_receipt(
             and current.get("generation_id") == authority["generation_id"]
         ):
             raise ValueError("existing VM-HA promotion receipt is invalid or foreign")
+    if adoption is not None:
+        restoration_store = StandbyRestorationStore(receipt_path.parent)
+        restoration = restoration_store.load()
+        if restoration is not None:
+            if restoration.phase not in {
+                RestorationPhase.COMPLETED,
+                RestorationPhase.BLOCKED,
+            }:
+                raise StandbyRestorationError(
+                    "active standby restoration conflicts with apply owner adoption"
+                )
+            restoration_store.retire_terminal(
+                authorization_id=restoration.authorization_id,
+            )
     if not receipt_path.exists() or current.get("receipt_id") != receipt_id:
         _atomic_write_json(receipt_path, receipt)
+    if lineage is not None:
+        # The receipt is terminal transfer authority. Commit the exact
+        # restoration authorization before retiring lineage so a crash cannot
+        # leave a promoted owner with no durable way to restart its peer.
+        restoration_store = StandbyRestorationStore(receipt_path.parent)
+        try:
+            restoration_store.commit(
+                receipt=receipt,
+                updated_at=committed_at,
+            )
+        except StandbyRestorationError:
+            if lineage["intent"] != TransferIntent.AUTOMATIC_FAILOVER.value:
+                raise
+            # Automatic owner-loss promotion is availability-authoritative.
+            # Unusable restoration evidence disables only the optional
+            # standby restart; it must not invalidate an otherwise fenced,
+            # terminal promotion.
+            restoration_store.discard_unusable_authorization()
     if lineage is not None:
         _durably_unlink(lineage_path)
     if adoption is not None and adoption_path is not None:
         _durably_unlink(adoption_path)
     return receipt
+
+
+def _advance_standby_restoration(
+    *,
+    status: Mapping[str, Any],
+    state_dir: Path,
+    clock: Callable[[], float],
+) -> None:
+    """Complete or time-bound the exact post-promotion restoration."""
+
+    store = StandbyRestorationStore(state_dir)
+    record = store.load()
+    if record is None or record.phase is not RestorationPhase.AWAITING_STANDBY:
+        return
+    now = clock()
+    if (
+        status.get("redundancy_ready") is True
+        and status.get("observed_owner_node_id") == record.owner_node_id
+        and status.get("allocation_id") == record.allocation_id
+        and status.get("generation_id") == record.generation_id
+        and status.get("digests") == dict(record.digests)
+    ):
+        assert record.promotion_receipt_id is not None
+        store.complete(receipt_id=record.promotion_receipt_id, updated_at=now)
+        return
+    if record.standby_deadline_at is not None and now >= record.standby_deadline_at:
+        assert record.promotion_receipt_id is not None
+        store.block(
+            receipt_id=record.promotion_receipt_id,
+            reason="standby-readiness-timeout",
+            updated_at=now,
+        )
+
+
+def _advance_standby_restoration_under_writer_lock(
+    *,
+    status: Mapping[str, Any],
+    state_dir: Path,
+    clock: Callable[[], float],
+) -> None:
+    """Advance restoration only while holding its shared writer lock."""
+
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    descriptor = _acquire_rearm_lock(
+        state_dir / REARM_LOCK_PATH.name,
+        timeout_seconds=0.0,
+    )
+    if descriptor is None:
+        return
+    try:
+        _advance_standby_restoration(
+            status=status,
+            state_dir=state_dir,
+            clock=clock,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _promotion_committed_for_status(
+    *,
+    snapshot: ControllerSnapshot,
+    config: Mapping[str, Any],
+    route_context: RouteReconciliationContext | None,
+    receipt_path: Path,
+    promotion_ready: bool,
+    pending_operation: ControllerAction | None,
+) -> bool:
+    """Project a terminal receipt without exposing its durable identity."""
+
+    if (
+        not promotion_ready
+        or snapshot.apply_locked
+        or pending_operation is not None
+        or route_context is None
+    ):
+        return False
+    try:
+        receipt = _read_promotion_receipt(receipt_path, config=config)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return bool(
+        _promotion_receipt_matches_current_owner(
+            receipt,
+            cloud=snapshot.cloud,
+            node_id=snapshot.local_node_id,
+        )
+        and receipt is not None
+        and receipt.get("route_operation_id") == route_context.operation_id
+        and route_context.owner_node_id == snapshot.local_node_id
+        and route_context.ownership_epoch == snapshot.cloud.ownership_epoch
+        and route_context.generation_id == snapshot.local_generation_id
+        and route_context.digests == snapshot.local_digests
+    )
 
 
 class VMHAEffectAdapter:
@@ -1377,6 +1991,8 @@ class VMHAEffectAdapter:
         clock: Callable[[], float] = time.monotonic,
         event_sink: Callable[[Mapping[str, object]], None] | None = None,
         before_effect: Callable[[ControllerAction], None] | None = None,
+        effect_failed: Callable[[ControllerAction], None] | None = None,
+        effect_guard: (Callable[[ControllerAction], AbstractContextManager[bool]] | None) = None,
     ) -> None:
         if set(handlers) != set(ActionKind):
             raise ValueError("VM-HA effect adapter requires every controller action")
@@ -1385,6 +2001,8 @@ class VMHAEffectAdapter:
         self.clock = clock
         self.event_sink = event_sink or self._print_event
         self.before_effect = before_effect or (lambda _action: None)
+        self.effect_failed = effect_failed or (lambda _action: None)
+        self.effect_guard = effect_guard or (lambda _action: nullcontext(True))
 
     @staticmethod
     def _print_event(event: Mapping[str, object]) -> None:
@@ -1419,6 +2037,12 @@ class VMHAEffectAdapter:
         return _completed_effect_operation(self.receipt_path)
 
     def apply(self, action: ControllerAction) -> None:
+        with self.effect_guard(action) as permitted:
+            if not permitted:
+                return
+            self._apply_permitted(action)
+
+    def _apply_permitted(self, action: ControllerAction) -> None:
         self.before_effect(action)
         started_at = self.clock()
         self._event(action, event="started", started_at=started_at)
@@ -1440,6 +2064,10 @@ class VMHAEffectAdapter:
                 },
             )
         except Exception as error:
+            try:
+                self.effect_failed(action)
+            except Exception:
+                pass
             self._event(
                 action,
                 event="failed",
@@ -1461,20 +2089,47 @@ class VMHAControllerRuntime:
         checkpoints: VMHACheckpointFileStore,
         status_path: Path,
         guard: Callable[[], Mapping[str, Any]],
+        transfer_progress: TransferProgressStore | None = None,
         peer_timeout_seconds: float = 10.0,
         suspicion_seconds: float = 5.0,
     ) -> None:
         self.snapshots = snapshots
         self.status_path = status_path
         self.guard = guard
+        policy = VMHAController(
+            peer_timeout_seconds=peer_timeout_seconds,
+            suspicion_seconds=suspicion_seconds,
+        )
+
+        def observe_decision(
+            snapshot: ControllerSnapshot,
+            previous: ControllerCheckpoint,
+            decision: ControllerResult,
+        ) -> None:
+            if transfer_progress is None or previous.pending_action is None:
+                return
+            pending = previous.pending_action
+            if pending.kind.value not in TRANSFER_PROGRESS_ACTIONS:
+                return
+            current_pending = decision.checkpoint.pending_action
+            if current_pending is not None and current_pending.operation_id == pending.operation_id:
+                return
+            try:
+                if policy.pending_action_postcondition(pending, snapshot, previous):
+                    transfer_progress.completed(
+                        action=pending.kind.value,
+                        operation_id=pending.operation_id,
+                    )
+            except Exception:
+                # Presentation evidence cannot affect controller authority.
+                return
+
         self.controller = RecoverableController(
-            policy=VMHAController(
-                peer_timeout_seconds=peer_timeout_seconds,
-                suspicion_seconds=suspicion_seconds,
-            ),
+            policy=policy,
             snapshots=snapshots,
             checkpoints=checkpoints,
             effects=effects,
+            decision_observer=observe_decision,
         )
 
     def _write_status(self, result: ControllerResult) -> dict[str, Any]:
@@ -1504,6 +2159,7 @@ class VMHAControllerRuntime:
             (snapshot.cloud.candidate_attachment_absent, "local-shared-alias-present"),
             (snapshot.readiness.transfer_ready, "standby-transfer-readiness-unavailable"),
             (not snapshot.apply_locked, "apply-lock-held"),
+            (not snapshot.transfer_inhibited, "mtls-rotation-active"),
             (result.checkpoint.pending_action is None, "controller-effect-pending"),
         )
         standby_reasons.extend(reason for passed, reason in standby_checks if not passed)
@@ -1549,6 +2205,8 @@ class VMHAControllerRuntime:
         }
         if snapshot.cloud.observed_owner_node_id == snapshot.local_node_id:
             rearm_path = self.status_path.parent / VM_HA_REARM_STATUS_PATH.name
+            rearm_status_valid = False
+            rearm_receipt_id: str | None = None
             if rearm_path.exists():
                 try:
                     rearm = json.loads(rearm_path.read_text(encoding="utf-8"))
@@ -1600,6 +2258,8 @@ class VMHAControllerRuntime:
                         rearm_phase = "blocked"
                         rearm_reason = "rearm-status-invalid"
                     else:
+                        rearm_status_valid = True
+                        rearm_receipt_id = cast(str | None, rearm.get("promotion_receipt_id"))
                         rearm_phase = str(rearm["phase"])
                         rearm_reason = (
                             None if rearm.get("reason") is None else str(rearm.get("reason"))
@@ -1615,6 +2275,8 @@ class VMHAControllerRuntime:
                         isinstance(promotion, dict)
                         and promotion.get("schema") == "nebius-vpngw/vm-ha-promotion-receipt-v1"
                         and promotion.get("owner_node_id") == snapshot.local_node_id
+                        and isinstance(promotion.get("receipt_id"), str)
+                        and bool(promotion["receipt_id"])
                         and isinstance(promotion.get("committed_at"), (int, float))
                         and isinstance(promotion.get("common_cutover_seconds"), (int, float))
                         and not isinstance(promotion.get("committed_at"), bool)
@@ -1624,7 +2286,10 @@ class VMHAControllerRuntime:
                     ):
                         raise ValueError
                     phase_durations["common_cutover"] = float(promotion["common_cutover_seconds"])
-                    if rearm_phase == "running" and rearm_path.exists():
+                    if rearm_status_valid and rearm_receipt_id != promotion["receipt_id"]:
+                        rearm_phase = "idle"
+                        rearm_reason = "rearm-status-unavailable"
+                    elif rearm_phase == "running" and rearm_path.exists():
                         phase_durations["redundancy_restoration"] = max(
                             0.0,
                             float(rearm.get("completed_at") or 0.0)
@@ -1653,6 +2318,12 @@ class VMHAControllerRuntime:
         )
         payload = {
             "schema": _STATUS_SCHEMA,
+            "controller_capabilities": [
+                _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
+                LIVE_PEER_REPLACEMENT_CAPABILITY,
+                STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
+                STANDBY_RESTORATION_CAPABILITY,
+            ],
             "state": result.state.value,
             "reasons": list(result.reasons),
             "recovery_action": None,
@@ -1675,6 +2346,15 @@ class VMHAControllerRuntime:
             "digests": snapshot.local_digests.to_dict(),
             "apply_locked": snapshot.apply_locked,
             "apply_operation_id": self.snapshots.last_apply_operation_id,
+            "transfer_inhibition_operation_id": (
+                self.snapshots.last_transfer_inhibition_operation_id
+            ),
+            "transfer_inhibition_quiescent": bool(
+                self.snapshots.last_transfer_inhibition_operation_id is not None
+                and result.checkpoint.pending_action is None
+                and not (self.status_path.parent / "accepted-cloud-operation.json").exists()
+                and not (self.status_path.parent / "rearm-cloud-operation.json").exists()
+            ),
             "route_runtime_id": snapshot.route_runtime_id,
             "route_reconciliation": (
                 None
@@ -1691,6 +2371,14 @@ class VMHAControllerRuntime:
                 }
             ),
             "promotion_ready": ready,
+            "promotion_committed": _promotion_committed_for_status(
+                snapshot=snapshot,
+                config=self.snapshots.config,
+                route_context=route_context,
+                receipt_path=self.status_path.parent / VM_HA_PROMOTION_RECEIPT_PATH.name,
+                promotion_ready=ready,
+                pending_operation=result.checkpoint.pending_action,
+            ),
             "standby_ready": standby_ready,
             "standby_tunnel_state": standby_tunnel_state,
             "standby_readiness_reasons": standby_reasons,
@@ -1883,6 +2571,12 @@ class DefaultVMHAControllerRuntime:
             self.started_guarded = True
         self._start_peer_listener()
         self._exchange_peer_state()
+        if self.config is not None and self.promotion_receipt_path is not None:
+            _refresh_standby_restoration_agreement(
+                config=self.config,
+                state_dir=self.promotion_receipt_path.parent,
+                clock=self.clock,
+            )
         status = self.controller.step()
         if status.get("promotion_ready") is True:
             _atomic_write_json(
@@ -1908,35 +2602,60 @@ class DefaultVMHAControllerRuntime:
                 "active": self.manual_failback_path,
                 "passive": self.manual_failover_path,
             }.get(self.ports.local.role.value)
-            if (
-                request_path is not None
-                and status.get("observed_owner_node_id") == self.ports.local.node_id
-                and request_path.exists()
-            ):
-                _durably_unlink(request_path)
-            if (
-                self.config is not None
-                and self.transfer_lineage_path is not None
-                and self.promotion_receipt_path is not None
-            ):
-                _commit_promotion_receipt(
-                    status=status,
-                    config=self.config,
-                    lineage_path=self.transfer_lineage_path,
-                    receipt_path=self.promotion_receipt_path,
-                    adoption_path=(
-                        self.promotion_receipt_path.parent
-                        / VM_HA_APPLY_OWNER_ADOPTION_PATH.name
-                    ),
-                    request_paths=tuple(
-                        path
-                        for path in (self.manual_failback_path, self.manual_failover_path)
-                        if path is not None
-                    ),
-                    clock=self.clock,
+            writer_state_dir = (
+                self.promotion_receipt_path.parent
+                if self.promotion_receipt_path is not None
+                else (request_path.parent if request_path is not None else None)
+            )
+            if writer_state_dir is not None:
+                from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+                descriptor = _acquire_rearm_lock(
+                    writer_state_dir / REARM_LOCK_PATH.name,
+                    timeout_seconds=0.0,
                 )
+                if descriptor is not None:
+                    try:
+                        if (
+                            request_path is not None
+                            and status.get("observed_owner_node_id") == self.ports.local.node_id
+                            and request_path.exists()
+                        ):
+                            _durably_unlink(request_path)
+                        if (
+                            self.config is not None
+                            and self.transfer_lineage_path is not None
+                            and self.promotion_receipt_path is not None
+                        ):
+                            _commit_promotion_receipt(
+                                status=status,
+                                config=self.config,
+                                lineage_path=self.transfer_lineage_path,
+                                receipt_path=self.promotion_receipt_path,
+                                adoption_path=(
+                                    self.promotion_receipt_path.parent
+                                    / VM_HA_APPLY_OWNER_ADOPTION_PATH.name
+                                ),
+                                request_paths=tuple(
+                                    path
+                                    for path in (
+                                        self.manual_failback_path,
+                                        self.manual_failover_path,
+                                    )
+                                    if path is not None
+                                ),
+                                clock=self.clock,
+                            )
+                    finally:
+                        os.close(descriptor)
         else:
             self.active_reconcile_requested = False
+        if self.promotion_receipt_path is not None:
+            _advance_standby_restoration_under_writer_lock(
+                status=status,
+                state_dir=self.promotion_receipt_path.parent,
+                clock=self.clock,
+            )
         return status
 
     def close(self, *, restore_guard: bool = True) -> None:
@@ -1995,6 +2714,8 @@ def build_default_vm_ha_controller_runtime(
     clock: Callable[[], float] = time.time,
     monotonic_clock: Callable[[], float] | None = None,
     boot_id: Callable[[], str] = _boot_id,
+    identity_proof_mode: str = "online",
+    systemd_invocation_id: str | None = None,
 ) -> DefaultVMHAControllerRuntime:
     """Build the only production VM-HA runtime from the installed manifest."""
 
@@ -2003,12 +2724,23 @@ def build_default_vm_ha_controller_runtime(
         raise RuntimeError("VM HA is not enabled on this node")
     current_boot_id = boot_id()
     effective_monotonic_clock = monotonic_clock or (time.monotonic if clock is time.time else clock)
+    generation_store = AtomicGenerationStore(state_dir / "generation-store")
+    if identity_proof_mode in {"systemd-preflight", "systemd-controller"}:
+        binding, _local, peer = _auto_healing_context(config)
+        generation_store.consume_accepted_peer_heartbeat_reset(
+            peer.node_id,
+            generation_id=binding.generation_id,
+        )
     ports = build_runtime_ports(
         config,
         state_dir=state_dir,
-        replay_store=AtomicGenerationStore(state_dir / "generation-store"),
+        replay_store=generation_store,
+        peer_heartbeat_store=generation_store,
         clock=clock,
         monotonic_clock=effective_monotonic_clock,
+        boot_id=current_boot_id,
+        identity_proof_mode=identity_proof_mode,
+        systemd_invocation_id=systemd_invocation_id,
         active_preparer=lambda: _prepare_vm_ha_active_data_plane(config_path),
         blocked_preparer=lambda: _prepare_vm_ha_blocked_bgp(config_path),
     )
@@ -2022,11 +2754,27 @@ def build_default_vm_ha_controller_runtime(
                 cloud=ports.cloud.observe,
                 data_plane=ports.data_plane.mode,
                 routes=ports.routes.receipt_context,
-                apply_lock_operation_id=lambda: _vm_ha_writer_inhibition_operation_id(
+                apply_lock_operation_id=lambda: _vm_ha_apply_lock_operation_id(
                     state_dir=state_dir,
                     cluster_id=str(config.get("cluster_id") or ""),
                     node_id=str((config.get("node") or {}).get("node_id") or ""),
                     generation_id=str((config.get("generation") or {}).get("generation_id") or ""),
+                ),
+                transfer_inhibition_operation_id=lambda: _vm_ha_transfer_inhibition_operation_id(
+                    state_dir=state_dir,
+                    cluster_id=str(config.get("cluster_id") or ""),
+                    node_id=str((config.get("node") or {}).get("node_id") or ""),
+                    generation_id=str((config.get("generation") or {}).get("generation_id") or ""),
+                ),
+                standby_replacement_inhibition_operation_id=lambda: (
+                    standby_replacement_inhibition_operation_id(
+                        state_dir,
+                        cluster_id=str(config.get("cluster_id") or ""),
+                        node_id=str((config.get("node") or {}).get("node_id") or ""),
+                        generation_id=str(
+                            (config.get("generation") or {}).get("generation_id") or ""
+                        ),
+                    )
                 ),
                 emergency_active_only=lambda: _strict_boolean_record(
                     state_dir / VM_HA_EMERGENCY_PATH.name,
@@ -2084,16 +2832,31 @@ def build_vm_ha_controller_runtime(
         clock=clock,
         boot_id=boot_id,
     )
+    transfer_progress = TransferProgressStore(
+        state_dir / VM_HA_TRANSFER_PROGRESS_PATH.name,
+        writer=_atomic_write_json,
+        clock=clock,
+    )
     return VMHAControllerRuntime(
         snapshots=snapshots,
         effects=VMHAEffectAdapter(
             handlers,
             receipt_path=state_dir / VM_HA_EFFECT_RECEIPT_PATH.name,
-            before_effect=lambda action: _record_transfer_effect_lineage(
+            effect_guard=lambda action: _vm_ha_transfer_effect_guard(
+                action,
+                snapshots=snapshots,
+                state_dir=state_dir,
+            ),
+            before_effect=lambda action: _before_vm_ha_transfer_effect(
                 action=action,
                 snapshots=snapshots,
                 config=config,
-                path=state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name,
+                state_dir=state_dir,
+                progress=transfer_progress,
+            ),
+            effect_failed=lambda action: transfer_progress.failed(
+                action=action.kind.value,
+                operation_id=action.operation_id,
             ),
         ),
         checkpoints=VMHACheckpointFileStore(state_dir / VM_HA_CHECKPOINT_PATH.name),
@@ -2102,6 +2865,7 @@ def build_vm_ha_controller_runtime(
             state_dir=state_dir,
             boot_id=boot_id(),
         ),
+        transfer_progress=transfer_progress,
     )
 
 
@@ -2144,6 +2908,12 @@ def _blocked_vm_ha_status(
     config = _read_vm_ha_config()
     return {
         "schema": _STATUS_SCHEMA,
+        "controller_capabilities": [
+            _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
+            LIVE_PEER_REPLACEMENT_CAPABILITY,
+            STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
+            STANDBY_RESTORATION_CAPABILITY,
+        ],
         "state": HAState.BLOCKED.value,
         "reasons": list(vm_ha_runtime_blockers()),
         "recovery_action": None,
@@ -2164,6 +2934,7 @@ def _blocked_vm_ha_status(
         "generation_id": ((config or {}).get("generation") or {}).get("generation_id"),
         "digests": ((config or {}).get("generation") or {}).get("digests"),
         "promotion_ready": False,
+        "promotion_committed": False,
         "standby_ready": False,
         "standby_tunnel_state": "not-standby",
         "standby_readiness_reasons": ["authoritative-cloud-observation-unavailable"],
@@ -2180,6 +2951,31 @@ def _blocked_vm_ha_status(
             checkpoint.pending_action.operation_id if checkpoint.pending_action else None
         ),
     }
+
+
+def _project_runtime_identity_status(
+    payload: dict[str, Any],
+    *,
+    state_dir: Path,
+    current_boot_id: str,
+) -> dict[str, Any]:
+    projected = dict(payload)
+    identity = runtime_identity_public_status(
+        state_dir=state_dir,
+        current_boot_id=current_boot_id,
+    )
+    projected["runtime_identity"] = identity
+    if identity["state"] in {"blocked", "migration-required"}:
+        projected["state"] = HAState.BLOCKED.value
+        projected["data_plane_mode"] = "blocked"
+        projected["promotion_ready"] = False
+        projected["standby_ready"] = False
+        projected["redundancy_ready"] = False
+        reasons = list(projected.get("reasons") or [])
+        if "runtime-identity-blocked" not in reasons:
+            reasons.append("runtime-identity-blocked")
+        projected["reasons"] = reasons
+    return projected
 
 
 def require_vm_ha_runtime_prerequisites(*, state_dir: Path = VM_HA_STATE_DIR) -> None:
@@ -2205,9 +3001,7 @@ def require_vm_ha_current_boot_readiness(*, state_dir: Path = VM_HA_STATE_DIR) -
     )
 
 
-def require_vm_ha_route_maintenance_readiness(
-    *, state_dir: Path = VM_HA_STATE_DIR
-) -> None:
+def require_vm_ha_route_maintenance_readiness(*, state_dir: Path = VM_HA_STATE_DIR) -> None:
     config = _read_vm_ha_config()
     if config is None:
         return
@@ -2501,6 +3295,7 @@ def _project_current_vm_ha_status(
             apply_operation_id=apply_operation_id,
             route_reconciliation=None,
             promotion_ready=False,
+            promotion_committed=False,
             standby_ready=False,
             standby_tunnel_state="not-standby",
             standby_readiness_reasons=[reason],
@@ -2525,7 +3320,7 @@ def _project_current_vm_ha_status(
         isinstance(value, str) and value
         for value in (live_cluster_id, live_node_id, live_generation_id)
     ):
-        apply_operation_id = _vm_ha_writer_inhibition_operation_id(
+        apply_operation_id = _vm_ha_apply_lock_operation_id(
             state_dir=state_dir,
             cluster_id=str(live_cluster_id),
             node_id=str(live_node_id),
@@ -2550,7 +3345,15 @@ def _project_current_vm_ha_status(
             controller_ready_boot_id=None,
             data_plane_mode="blocked",
             promotion_ready=False,
+            promotion_committed=False,
         )
+    if not (
+        payload.get("promotion_ready") is True
+        and payload.get("data_plane_mode") == DataPlaneMode.ACTIVE.value
+        and payload.get("apply_locked") is False
+        and payload.get("pending_operation_id") is None
+    ):
+        payload["promotion_committed"] = False
     if payload.get("standby_ready") is True and not _standby_ready_evidence_matches(
         state_dir=state_dir,
         status=payload,
@@ -2568,6 +3371,654 @@ def _project_current_vm_ha_status(
     return payload
 
 
+def _project_transfer_progress(
+    payload: dict[str, Any],
+    *,
+    state_dir: Path,
+    current_boot_id: str,
+) -> dict[str, Any]:
+    """Add optional exact-lineage progress without making it status authority."""
+
+    if payload.get("promotion_committed") is True or payload.get("apply_locked") is True:
+        return payload
+    try:
+        progress_path = state_dir / VM_HA_TRANSFER_PROGRESS_PATH.name
+        if not progress_path.exists():
+            return payload
+        raw = json.loads(progress_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            return payload
+        progress = validate_transfer_progress(raw)
+        checkpoint = VMHACheckpointFileStore(state_dir / VM_HA_CHECKPOINT_PATH.name).load()
+        exact = bool(
+            progress["cluster_id"] == payload.get("cluster_id")
+            and progress["candidate_node_id"] == payload.get("node_id")
+            and progress["allocation_id"] == payload.get("allocation_id")
+            and progress["generation_id"] == payload.get("generation_id")
+            and progress["digests"] == payload.get("digests")
+            and progress["route_runtime_id"] == payload.get("route_runtime_id")
+            and progress["ownership_incarnation"] == checkpoint.ownership_incarnation
+        )
+        latest = progress["history"][-1]
+        if not exact or latest["boot_id"] != current_boot_id:
+            return payload
+        if latest["state"] == "attempting":
+            pending = checkpoint.pending_action
+            if not (
+                pending is not None
+                and pending.kind.value == latest["action"]
+                and pending.operation_id == latest["operation_id"]
+                and pending.boot_id == latest["boot_id"]
+                and pending.ownership_epoch == latest["ownership_epoch"]
+                and pending.allocation_id == progress["allocation_id"]
+                and pending.generation_id == progress["generation_id"]
+                and pending.digests.to_dict() == progress["digests"]
+                and pending.ownership_incarnation == progress["ownership_incarnation"]
+            ):
+                return payload
+        payload["transfer_progress"] = progress
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return payload
+    return payload
+
+
+def _auto_healing_context(
+    config: Mapping[str, Any],
+) -> tuple[VMHARuntimeBinding, Any, Any]:
+    binding = VMHARuntimeBinding.model_validate(config.get("runtime_binding"))
+    node = config.get("node")
+    if not isinstance(node, Mapping):
+        raise AutoHealingPolicyError("installed VM-HA node binding is invalid")
+    local_node_id = str(node.get("node_id") or "")
+    local = next((item for item in binding.nodes if item.node_id == local_node_id), None)
+    if local is None or len(binding.nodes) != 2:
+        raise AutoHealingPolicyError("installed VM-HA member set is invalid")
+    peer = next(item for item in binding.nodes if item.node_id != local.node_id)
+    return binding, local, peer
+
+
+def _require_auto_healing_mutation_admission(
+    *,
+    state_dir: Path,
+    recovery_operation_id: str | None = None,
+    allow_matching_recovery: bool = False,
+    allow_accepted_rearm: bool = False,
+    matching_apply_lock: tuple[str, str, str, str] | None = None,
+    matching_mtls_apply_operation: tuple[str, str, str, str] | None = None,
+    matching_mtls_inhibition_operation_id: str | None = None,
+) -> None:
+    """Reject every conflicting durable VM-HA writer under rearm.lock."""
+
+    apply_lock_path = state_dir / VM_HA_APPLY_LOCK_PATH.name
+    if matching_apply_lock is not None and not apply_lock_path.exists():
+        raise AutoHealingPolicyError("replacement policy adoption apply lock is missing")
+    if apply_lock_path.exists():
+        if matching_apply_lock is None:
+            raise AutoHealingPolicyError("policy mutation conflicts with an apply or removal lock")
+        cluster_id, node_id, generation_id, operation_id = matching_apply_lock
+        try:
+            observed_apply_operation = _strict_apply_lock_record(
+                apply_lock_path,
+                cluster_id=cluster_id,
+                node_id=node_id,
+                generation_id=generation_id,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+            raise AutoHealingPolicyError(
+                "replacement policy adoption apply lock is invalid"
+            ) from error
+        if observed_apply_operation != operation_id:
+            raise AutoHealingPolicyError("replacement policy adoption apply lock changed")
+    try:
+        require_standby_restoration_writer_quiescent(state_dir)
+    except StandbyRestorationError as error:
+        raise AutoHealingPolicyError(
+            "policy mutation conflicts with standby restoration"
+        ) from error
+    try:
+        mtls_status = ManagedMTLSStore(state_dir / "mtls", create=False).status()
+    except (OSError, UnicodeError, json.JSONDecodeError, ManagedMTLSError) as error:
+        raise AutoHealingPolicyError("policy mutation mTLS state is invalid") from error
+    observed_mtls_inhibition = mtls_status.inhibition_operation_id
+    if observed_mtls_inhibition != matching_mtls_inhibition_operation_id:
+        raise AutoHealingPolicyError("policy mutation conflicts with mTLS rotation")
+    expected_mtls_apply_operation_id = (
+        None if matching_mtls_apply_operation is None else matching_mtls_apply_operation[3]
+    )
+    if mtls_status.operation_id != expected_mtls_apply_operation_id:
+        raise AutoHealingPolicyError("policy mutation conflicts with an mTLS apply transaction")
+    if matching_mtls_apply_operation is not None:
+        cluster_id, node_id, compute_id, _operation_id = matching_mtls_apply_operation
+        if not (
+            mtls_status.cluster_id == cluster_id
+            and mtls_status.node_id == node_id
+            and mtls_status.compute_id == compute_id
+            and mtls_status.operation_kind in {"bootstrap", "replacement", "recovery"}
+            and mtls_status.phase in {"local-active", "verified", "committed"}
+        ):
+            raise AutoHealingPolicyError(
+                "replacement policy adoption mTLS apply authority is invalid"
+            )
+    if (state_dir / "accepted-cloud-operation.json").exists():
+        raise AutoHealingPolicyError("policy mutation conflicts with a controller effect")
+    recovery = AutoHealingRecoveryStore(state_dir).load()
+    matching_recovery = bool(
+        allow_matching_recovery
+        and recovery is not None
+        and recovery.operation_id == recovery_operation_id
+        and recovery.phase
+        in {
+            AutoHealingRecoveryPhase.ARMED,
+            AutoHealingRecoveryPhase.CONSUMED,
+            AutoHealingRecoveryPhase.COMPLETED,
+        }
+    )
+    if (state_dir / "rearm-cloud-operation.json").exists() and not (
+        matching_recovery and allow_accepted_rearm
+    ):
+        raise AutoHealingPolicyError("policy mutation conflicts with accepted standby start")
+    checkpoint = VMHACheckpointFileStore(state_dir / VM_HA_CHECKPOINT_PATH.name).load()
+    if checkpoint.pending_action is not None:
+        raise AutoHealingPolicyError("policy mutation conflicts with pending controller work")
+    if (
+        recovery is not None
+        and recovery.phase is not AutoHealingRecoveryPhase.COMPLETED
+        and recovery.operation_id != recovery_operation_id
+    ):
+        raise AutoHealingPolicyError("policy mutation conflicts with another recovery intent")
+
+
+def vm_ha_auto_healing_policy(
+    action: str,
+    request_token: str | None = None,
+    *,
+    config_path: Path = CONFIG_PATH,
+    state_dir: Path = VM_HA_STATE_DIR,
+    clock: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    """Read or mutate one strict local participant under the rearm lock."""
+
+    if action not in {
+        "status",
+        "initialize",
+        "adopt-replacement",
+        "prepare",
+        "commit",
+        "arm-recovery",
+        "cancel-recovery",
+        "clear-recovery",
+    }:
+        raise AutoHealingPolicyError("unsupported policy action")
+    config = _read_vm_ha_config(config_path)
+    if config is None:
+        raise AutoHealingPolicyError("VM HA is not enabled on this node")
+    binding, local, peer = _auto_healing_context(config)
+    store = AutoHealingPolicyStore(state_dir)
+    recovery_store = AutoHealingRecoveryStore(state_dir)
+
+    descriptor: int | None = None
+    if action != "status":
+        from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+        descriptor = _acquire_rearm_lock(
+            state_dir / REARM_LOCK_PATH.name,
+            timeout_seconds=30.0,
+        )
+        if descriptor is None:
+            raise AutoHealingPolicyError("rearm writer did not quiesce for policy change")
+    try:
+        record: AutoHealingPolicyRecord | None
+        if action == "initialize":
+            if request_token is not None:
+                raise AutoHealingPolicyError("initialize does not accept a request")
+            # Activation deliberately discards only restart-parity cache. A
+            # previous agent may have written an older private heartbeat
+            # schema, while the replay boundary remains valid security state.
+            # The restarted controller must receive fresh authenticated peer
+            # evidence before using it for policy agreement.
+            AtomicGenerationStore(
+                state_dir / "generation-store"
+            ).request_accepted_peer_heartbeat_reset(
+                peer.node_id,
+                generation_id=binding.generation_id,
+            )
+            record = store.initialize(
+                cluster_id=binding.cluster_id,
+                node_id=local.node_id,
+                peer_node_id=peer.node_id,
+                generation_id=binding.generation_id,
+                updated_at=clock(),
+            )
+            # This activation action owns only the local policy commit and
+            # cache invalidation. Do not turn that successful mutation into a
+            # failure by projecting unrelated peer or recovery evidence.
+            return {
+                "schema": "nebius-vpngw/vm-ha-auto-healing-initialize-result-v1",
+                "cluster_id": binding.cluster_id,
+                "node_id": local.node_id,
+                "configured_role": local.role.value,
+                "generation_id": binding.generation_id,
+                "desired": record.desired.value,
+                "phase": record.phase.value,
+                "operation_id": record.operation_id,
+                "decision_digest": record.decision_digest,
+            }
+        elif action in {
+            "adopt-replacement",
+            "prepare",
+            "commit",
+            "arm-recovery",
+            "cancel-recovery",
+            "clear-recovery",
+        }:
+            if request_token is None:
+                raise AutoHealingPolicyError("policy mutation requires a request")
+            request = decode_policy_request(request_token)
+            policy_keys = {
+                "schema",
+                "desired",
+                "operation_id",
+                "coordinator_node_id",
+                "predecessor_digest",
+                "peer_record",
+            }
+            replacement_keys = {
+                "apply_operation_id",
+                "mtls_apply_operation_id",
+                "mtls_inhibition_operation_id",
+                "schema",
+                "operation_id",
+                "peer_record",
+            }
+            recovery_keys = {
+                "schema",
+                "desired",
+                "operation_id",
+                "approval_digest",
+                "policy_digest",
+                "predecessor_digest",
+                "promotion_receipt_id",
+                "allocation_id",
+                "ownership_epoch",
+                "stopped_revision",
+                "target_node_id",
+            }
+            expected_keys = (
+                replacement_keys
+                if action == "adopt-replacement"
+                else policy_keys
+                if action in {"prepare", "commit"}
+                else recovery_keys
+                if action == "arm-recovery"
+                else {"schema", "operation_id", "approval_digest"}
+                if action == "cancel-recovery"
+                else {"schema", "operation_id", "recovery_digest"}
+            )
+            if (
+                set(request) != expected_keys
+                or request.get("schema") != AUTO_HEALING_REQUEST_SCHEMA
+            ):
+                raise AutoHealingPolicyError("policy request has an invalid shape")
+            operation_id = str(request["operation_id"])
+            replacement_mtls_apply_operation_id: str | None = None
+            replacement_mtls_inhibition_operation_id: str | None = None
+            if action == "adopt-replacement":
+                raw_mtls_apply_operation = request["mtls_apply_operation_id"]
+                raw_mtls_inhibition_operation = request["mtls_inhibition_operation_id"]
+                for label, raw_operation in (
+                    ("apply", raw_mtls_apply_operation),
+                    ("inhibition", raw_mtls_inhibition_operation),
+                ):
+                    if raw_operation is not None and not (
+                        isinstance(raw_operation, str)
+                        and len(raw_operation) == 64
+                        and all(character in "0123456789abcdef" for character in raw_operation)
+                    ):
+                        raise AutoHealingPolicyError(
+                            f"replacement policy adoption mTLS {label} operation is invalid"
+                        )
+                replacement_mtls_apply_operation_id = cast(str | None, raw_mtls_apply_operation)
+                replacement_mtls_inhibition_operation_id = cast(
+                    str | None, raw_mtls_inhibition_operation
+                )
+            _require_auto_healing_mutation_admission(
+                state_dir=state_dir,
+                recovery_operation_id=operation_id,
+                allow_matching_recovery=action in {"arm-recovery", "cancel-recovery"},
+                allow_accepted_rearm=action == "arm-recovery",
+                matching_apply_lock=(
+                    (
+                        binding.cluster_id,
+                        local.node_id,
+                        binding.generation_id,
+                        str(request["apply_operation_id"]),
+                    )
+                    if action == "adopt-replacement"
+                    else None
+                ),
+                matching_mtls_apply_operation=(
+                    (
+                        binding.cluster_id,
+                        local.node_id,
+                        local.compute_id,
+                        replacement_mtls_apply_operation_id,
+                    )
+                    if action == "adopt-replacement"
+                    and replacement_mtls_apply_operation_id is not None
+                    else None
+                ),
+                matching_mtls_inhibition_operation_id=(
+                    replacement_mtls_inhibition_operation_id
+                    if action == "adopt-replacement"
+                    else None
+                ),
+            )
+            if action == "adopt-replacement":
+                if recovery_store.load() is not None:
+                    raise AutoHealingPolicyError(
+                        "replacement policy adoption conflicts with recovery state"
+                    )
+                peer_record = AutoHealingPolicyRecord.from_mapping(request["peer_record"])
+                if operation_id != peer_record.operation_id:
+                    raise AutoHealingPolicyError(
+                        "replacement policy adoption operation is inconsistent"
+                    )
+                record = store.adopt_replacement_peer(
+                    cluster_id=binding.cluster_id,
+                    node_id=local.node_id,
+                    peer_node_id=peer.node_id,
+                    generation_id=binding.generation_id,
+                    peer=peer_record,
+                    updated_at=clock(),
+                )
+                AtomicGenerationStore(
+                    state_dir / "generation-store"
+                ).request_accepted_peer_heartbeat_reset(
+                    peer.node_id,
+                    generation_id=binding.generation_id,
+                )
+            if action in {"prepare", "commit"}:
+                try:
+                    desired = StandbyAutoHealing(str(request["desired"]))
+                except ValueError as error:
+                    raise AutoHealingPolicyError(
+                        "policy request has an invalid desired state"
+                    ) from error
+                peer_record = AutoHealingPolicyRecord.from_mapping(request["peer_record"])
+                common = {
+                    "cluster_id": binding.cluster_id,
+                    "node_id": local.node_id,
+                    "peer_node_id": peer.node_id,
+                    "generation_id": binding.generation_id,
+                    "desired": desired,
+                    "operation_id": operation_id,
+                    "coordinator_node_id": str(request["coordinator_node_id"]),
+                    "predecessor_digest": str(request["predecessor_digest"]),
+                    "peer": peer_record,
+                    "updated_at": clock(),
+                }
+            if action == "adopt-replacement":
+                pass
+            elif action == "prepare":
+                record = store.prepare(
+                    **common,
+                )
+            elif action == "commit":
+                record = store.commit(
+                    **common,
+                )
+            elif action == "arm-recovery":
+                from .vm_ha_rearm import PROMOTION_RECEIPT_PATH, _promotion_receipt
+
+                try:
+                    desired = StandbyAutoHealing(str(request["desired"]))
+                except ValueError as error:
+                    raise AutoHealingPolicyError(
+                        "recovery request has an invalid desired state"
+                    ) from error
+                current = store.require_bound(
+                    cluster_id=binding.cluster_id,
+                    node_id=local.node_id,
+                    peer_node_id=peer.node_id,
+                    generation_id=binding.generation_id,
+                )
+                policy_digest = str(request["policy_digest"])
+                predecessor_digest = str(request["predecessor_digest"])
+                terminal_disabled = bool(
+                    current.phase is AutoHealingPolicyPhase.COMMITTED
+                    and current.desired is StandbyAutoHealing.DISABLED
+                    and current.peer_ack_digest == current.decision_digest
+                    and desired is StandbyAutoHealing.ENABLED
+                    and policy_digest == current.decision_digest
+                    and predecessor_digest == current.decision_digest
+                )
+                partial_same_operation = bool(
+                    current.operation_id == operation_id
+                    and current.desired is desired
+                    and current.phase
+                    in {AutoHealingPolicyPhase.PREPARED, AutoHealingPolicyPhase.COMMITTED}
+                    and policy_digest == current.decision_digest
+                    and predecessor_digest == current.predecessor_digest
+                )
+                if not (terminal_disabled or partial_same_operation):
+                    raise AutoHealingPolicyError(
+                        "recovery request does not match the local policy transaction"
+                    )
+                receipt = _promotion_receipt(
+                    state_dir / PROMOTION_RECEIPT_PATH.name,
+                    binding=binding,
+                    local=local,
+                    peer=peer,
+                )
+                if receipt is None or not (
+                    request["promotion_receipt_id"] == receipt.receipt_id
+                    and request["allocation_id"] == receipt.allocation_id
+                    and request["ownership_epoch"] == receipt.ownership_epoch
+                    and request["target_node_id"] == peer.node_id
+                ):
+                    raise AutoHealingPolicyError("recovery authority is stale or foreign")
+                recovery_store.arm(
+                    AutoHealingRecoveryRecord(
+                        cluster_id=binding.cluster_id,
+                        node_id=local.node_id,
+                        target_node_id=peer.node_id,
+                        generation_id=binding.generation_id,
+                        desired=desired,
+                        operation_id=operation_id,
+                        approval_digest=str(request["approval_digest"]),
+                        policy_digest=policy_digest,
+                        predecessor_digest=predecessor_digest,
+                        promotion_receipt_id=receipt.receipt_id,
+                        allocation_id=receipt.allocation_id,
+                        ownership_epoch=receipt.ownership_epoch,
+                        stopped_revision=str(request["stopped_revision"]),
+                        phase=AutoHealingRecoveryPhase.ARMED,
+                        rearm_operation_id=None,
+                        updated_at=clock(),
+                    )
+                )
+                record = current
+            elif action == "cancel-recovery":
+                current = store.require_bound(
+                    cluster_id=binding.cluster_id,
+                    node_id=local.node_id,
+                    peer_node_id=peer.node_id,
+                    generation_id=binding.generation_id,
+                )
+                if not (
+                    current.desired is StandbyAutoHealing.DISABLED
+                    and current.phase is AutoHealingPolicyPhase.COMMITTED
+                    and current.peer_ack_digest == current.decision_digest
+                ):
+                    raise AutoHealingPolicyError(
+                        "recovery cancellation requires committed disabled policy"
+                    )
+                recovery_store.cancel_armed(
+                    operation_id=operation_id,
+                    approval_digest=str(request["approval_digest"]),
+                )
+                record = current
+            else:
+                current = store.require_bound(
+                    cluster_id=binding.cluster_id,
+                    node_id=local.node_id,
+                    peer_node_id=peer.node_id,
+                    generation_id=binding.generation_id,
+                )
+                if not (
+                    current.operation_id == operation_id
+                    and current.desired is StandbyAutoHealing.ENABLED
+                    and current.phase is AutoHealingPolicyPhase.COMMITTED
+                ):
+                    raise AutoHealingPolicyError(
+                        "recovery clear requires the committed enabled transaction"
+                    )
+                recovery_store.clear_completed(
+                    operation_id=operation_id,
+                    recovery_digest=str(request["recovery_digest"]),
+                )
+                record = current
+        else:
+            if request_token is not None:
+                raise AutoHealingPolicyError("status does not accept a request")
+            try:
+                record = store.require_bound(
+                    cluster_id=binding.cluster_id,
+                    node_id=local.node_id,
+                    peer_node_id=peer.node_id,
+                    generation_id=binding.generation_id,
+                )
+            except AutoHealingPolicyError:
+                record = None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    peer_heartbeat = load_peer_policy_heartbeat(state_dir, peer_node_id=peer.node_id)
+    accepted_start = (state_dir / "rearm-cloud-operation.json").exists()
+    recovery = recovery_store.load()
+    recovery_authority: dict[str, str] | None = None
+    try:
+        from .vm_ha_rearm import PROMOTION_RECEIPT_PATH, _promotion_receipt
+
+        receipt = _promotion_receipt(
+            state_dir / PROMOTION_RECEIPT_PATH.name,
+            binding=binding,
+            local=local,
+            peer=peer,
+        )
+        if receipt is not None:
+            recovery_authority = {
+                "allocation_id": receipt.allocation_id,
+                "ownership_epoch": receipt.ownership_epoch,
+                "promotion_receipt_id": receipt.receipt_id,
+            }
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        recovery_authority = None
+    peer_agrees = bool(
+        record is not None
+        and (
+            peer_policy_agrees(record, peer_heartbeat, now=clock())
+            or (
+                record.desired is StandbyAutoHealing.DISABLED
+                and record.phase is AutoHealingPolicyPhase.COMMITTED
+                and record.peer_ack_digest == record.decision_digest
+            )
+        )
+    )
+    return {
+        "schema": AUTO_HEALING_STATUS_SCHEMA,
+        "cluster_id": binding.cluster_id,
+        "node_id": local.node_id,
+        "configured_role": local.role.value,
+        "generation_id": binding.generation_id,
+        "desired": None if record is None else record.desired.value,
+        "phase": "blocked" if record is None else record.phase.value,
+        "operation_id": None if record is None else record.operation_id,
+        "decision_digest": None if record is None else record.decision_digest,
+        "peer_agrees": peer_agrees,
+        "accepted_start": accepted_start,
+        "recovery_authority": recovery_authority,
+        "recovery_phase": None if recovery is None else recovery.phase.value,
+        "recovery": None if recovery is None else recovery.to_dict(),
+        "record": None if record is None else record.to_dict(),
+    }
+
+
+def _restoration_matches_auto_healing_policy(
+    restoration: StandbyRestorationAuthorization,
+    policy: object,
+) -> bool:
+    try:
+        record = AutoHealingPolicyRecord.from_mapping(policy)
+    except AutoHealingPolicyError:
+        return False
+    return policy_authorizes_restoration(record, restoration)
+
+
+def _project_auto_healing_status(
+    payload: dict[str, Any],
+    *,
+    state_dir: Path,
+) -> dict[str, Any]:
+    projected = dict(payload)
+    try:
+        status = vm_ha_auto_healing_policy("status", state_dir=state_dir)
+        desired = status["desired"]
+        phase = status["phase"]
+        peer_agrees = status["peer_agrees"]
+        restoration = StandbyRestorationStore(state_dir).load()
+        restoration_matches_policy = bool(
+            restoration is not None
+            and restoration.phase is not RestorationPhase.COMPLETED
+            and _restoration_matches_auto_healing_policy(restoration, status.get("record"))
+        )
+        if (
+            restoration is not None
+            and restoration.phase is not RestorationPhase.COMPLETED
+            and not restoration_matches_policy
+        ):
+            state = "blocked"
+        elif (
+            status["recovery_phase"]
+            in {
+                AutoHealingRecoveryPhase.ARMED.value,
+                AutoHealingRecoveryPhase.CONSUMED.value,
+            }
+            or phase == AutoHealingPolicyPhase.PREPARED.value
+            or restoration_is_active(restoration)
+        ):
+            state = "transitioning"
+        elif (
+            phase != AutoHealingPolicyPhase.COMMITTED.value
+            or desired is None
+            or (
+                not peer_agrees
+                and not (
+                    restoration_matches_policy
+                    and restoration is not None
+                    and restoration.phase is RestorationPhase.BLOCKED
+                    and desired == StandbyAutoHealing.ENABLED.value
+                )
+            )
+        ):
+            state = "blocked"
+        else:
+            state = desired
+        projected["auto_healing"] = {
+            "state": state,
+            "peer_agrees": bool(peer_agrees),
+            "accepted_start": bool(status["accepted_start"]),
+        }
+    except (AutoHealingPolicyError, StandbyRestorationError, OSError, ValueError):
+        projected["auto_healing"] = {
+            "state": "blocked",
+            "peer_agrees": False,
+            "accepted_start": (state_dir / "rearm-cloud-operation.json").exists(),
+        }
+    return projected
+
+
 def vm_ha_status(
     *,
     state_dir: Path = VM_HA_STATE_DIR,
@@ -2579,7 +4030,14 @@ def vm_ha_status(
     if vm_ha_runtime_blockers():
         blocked = _blocked_vm_ha_status(state_dir=state_dir)
         blocked["mtls"] = _managed_mtls_status(state_dir)
-        return blocked
+        return _project_auto_healing_status(
+            _project_runtime_identity_status(
+                blocked,
+                state_dir=state_dir,
+                current_boot_id=boot_id(),
+            ),
+            state_dir=state_dir,
+        )
 
     status_path = state_dir / VM_HA_STATUS_PATH.name
     if status_path.exists():
@@ -2589,12 +4047,24 @@ def vm_ha_status(
         current_boot_id = boot_id()
         guard_path = state_dir / VM_HA_GUARD_PATH.name
         guard = json.loads(guard_path.read_text(encoding="utf-8")) if guard_path.exists() else {}
-        return _project_current_vm_ha_status(
+        current = _project_current_vm_ha_status(
             payload,
             state_dir=state_dir,
             guard=guard if isinstance(guard, Mapping) else {},
             current_boot_id=current_boot_id,
             clock=clock,
+        )
+        return _project_auto_healing_status(
+            _project_transfer_progress(
+                _project_runtime_identity_status(
+                    current,
+                    state_dir=state_dir,
+                    current_boot_id=current_boot_id,
+                ),
+                state_dir=state_dir,
+                current_boot_id=current_boot_id,
+            ),
+            state_dir=state_dir,
         )
 
     guard_path = state_dir / VM_HA_GUARD_PATH.name
@@ -2619,6 +4089,7 @@ def vm_ha_status(
         "generation_id": None,
         "digests": None,
         "promotion_ready": False,
+        "promotion_committed": False,
         "standby_ready": False,
         "standby_tunnel_state": "not-standby",
         "standby_readiness_reasons": ["authoritative-cloud-observation-not-yet-recorded"],
@@ -2636,7 +4107,14 @@ def vm_ha_status(
         ),
     }
     payload["mtls"] = _managed_mtls_status(state_dir)
-    return payload
+    return _project_auto_healing_status(
+        _project_runtime_identity_status(
+            payload,
+            state_dir=state_dir,
+            current_boot_id=boot_id(),
+        ),
+        state_dir=state_dir,
+    )
 
 
 def install_vm_ha_removal_inhibition(
@@ -2676,6 +4154,7 @@ def install_vm_ha_removal_inhibition(
     if descriptor is None:
         raise RuntimeError("VM-HA rearm writer did not quiesce for removal inhibition")
     try:
+        require_auto_healing_writer_quiescent(state_dir)
         path = state_dir / VM_HA_APPLY_LOCK_PATH.name
         existing_operation = _strict_apply_lock_record(
             path,
@@ -2752,46 +4231,600 @@ def verify_vm_ha_removal_quiescent(
     }
 
 
-def request_manual_failback(*, state_dir: Path = VM_HA_STATE_DIR) -> dict[str, Any]:
+def _vm_ha_standby_replacement_identity(
+    *,
+    config_path: Path,
+) -> tuple[str, str, str]:
+    config = _read_vm_ha_config(config_path)
+    if config is None:
+        raise RuntimeError("VM HA is not enabled on this node")
+    node = config.get("node") or {}
+    generation = config.get("generation") or {}
+    identity = (
+        str(config.get("cluster_id") or ""),
+        str(node.get("node_id") or ""),
+        str(generation.get("generation_id") or ""),
+    )
+    if (
+        not identity[0]
+        or not identity[1]
+        or len(identity[2]) != 64
+        or any(character not in "0123456789abcdef" for character in identity[2])
+    ):
+        raise ValueError("VM-HA standby replacement cannot bind the installed generation")
+    return identity
+
+
+def install_vm_ha_standby_replacement_inhibition(
+    operation_id: str,
+    *,
+    config_path: Path = CONFIG_PATH,
+    state_dir: Path = VM_HA_STATE_DIR,
+) -> dict[str, Any]:
+    """Install an owner-preserving transfer gate for one replacement operation."""
+
+    if len(operation_id) != 64 or any(
+        character not in "0123456789abcdef" for character in operation_id
+    ):
+        raise ValueError("VM-HA standby replacement operation identity is invalid")
+    cluster_id, node_id, generation_id = _vm_ha_standby_replacement_identity(
+        config_path=config_path
+    )
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    descriptor = _acquire_rearm_lock(
+        state_dir / REARM_LOCK_PATH.name,
+        timeout_seconds=30.0,
+    )
+    if descriptor is None:
+        raise RuntimeError("VM-HA rearm writer did not quiesce for standby replacement")
+    try:
+        StandbyRestorationStore(state_dir).retire_terminal_for_apply_owner_adoption()
+        require_auto_healing_writer_quiescent(state_dir)
+        if (
+            _vm_ha_apply_lock_operation_id(
+                state_dir=state_dir,
+                cluster_id=cluster_id,
+                node_id=node_id,
+                generation_id=generation_id,
+            )
+            is not None
+        ):
+            raise RuntimeError("VM-HA standby replacement conflicts with an apply lock")
+        if (
+            ManagedMTLSStore(state_dir / "mtls", create=False).inhibition_operation_id(
+                cluster_id=cluster_id,
+                node_id=node_id,
+                generation_id=generation_id,
+            )
+            is not None
+        ):
+            raise RuntimeError("VM-HA standby replacement conflicts with mTLS rotation")
+        released_operation = standby_replacement_release_operation_id(
+            state_dir,
+            cluster_id=cluster_id,
+            node_id=node_id,
+            generation_id=generation_id,
+        )
+        if released_operation == operation_id:
+            raise RuntimeError("VM-HA standby replacement inhibition was already released")
+        if released_operation is not None:
+            _durably_unlink(state_dir / STANDBY_REPLACEMENT_RELEASE_FILENAME)
+        existing = standby_replacement_inhibition_operation_id(
+            state_dir,
+            cluster_id=cluster_id,
+            node_id=node_id,
+            generation_id=generation_id,
+        )
+        if existing is not None and existing != operation_id:
+            raise RuntimeError("VM-HA standby replacement inhibition is owned elsewhere")
+        if existing is None:
+            _atomic_write_json(
+                state_dir / STANDBY_REPLACEMENT_INHIBITION_FILENAME,
+                {
+                    "schema": STANDBY_REPLACEMENT_INHIBITION_SCHEMA,
+                    "cluster_id": cluster_id,
+                    "node_id": node_id,
+                    "generation_id": generation_id,
+                    "operation_id": operation_id,
+                },
+            )
+    finally:
+        os.close(descriptor)
+    return {
+        "schema": STANDBY_REPLACEMENT_INHIBITION_SCHEMA,
+        "cluster_id": cluster_id,
+        "node_id": node_id,
+        "generation_id": generation_id,
+        "operation_id": operation_id,
+    }
+
+
+class StandbyReplacementNotReady(RuntimeError):
+    """The controller has not yet acknowledged an exact replacement inhibition."""
+
+
+def verify_vm_ha_standby_replacement_quiescent(
+    operation_id: str,
+    *,
+    config_path: Path = CONFIG_PATH,
+    state_dir: Path = VM_HA_STATE_DIR,
+    boot_id: Callable[[], str] = _boot_id,
+) -> dict[str, Any]:
+    """Prove transfer writers are quiescent while the serving owner stays active."""
+
+    cluster_id, node_id, generation_id = _vm_ha_standby_replacement_identity(
+        config_path=config_path
+    )
+    observed = standby_replacement_inhibition_operation_id(
+        state_dir,
+        cluster_id=cluster_id,
+        node_id=node_id,
+        generation_id=generation_id,
+    )
+    status = vm_ha_status(state_dir=state_dir, boot_id=boot_id)
+    capabilities = status.get("controller_capabilities")
+    status_state = status.get("state")
+    status_reasons = status.get("reasons")
+    owner_state_safe = status_state == "active" or (
+        status_state == "degraded" and status_reasons == ["peer-generation-unavailable"]
+    )
+    if not (
+        observed == operation_id
+        and isinstance(capabilities, list)
+        and STANDBY_REPLACEMENT_INHIBITION_CAPABILITY in capabilities
+        and LIVE_PEER_REPLACEMENT_CAPABILITY in capabilities
+        and status.get("cluster_id") == cluster_id
+        and status.get("node_id") == node_id
+        and status.get("generation_id") == generation_id
+        and owner_state_safe
+        and status.get("data_plane_mode") == "active"
+        and status.get("promotion_ready") is True
+        and status.get("observed_owner_node_id") == node_id
+        and status.get("apply_locked") is False
+        and status.get("apply_operation_id") is None
+        and status.get("transfer_inhibition_operation_id") == operation_id
+        and status.get("transfer_inhibition_quiescent") is True
+        and status.get("pending_operation_id") is None
+        and not (state_dir / "accepted-cloud-operation.json").exists()
+        and not (state_dir / "rearm-cloud-operation.json").exists()
+    ):
+        raise StandbyReplacementNotReady(
+            "VM-HA standby replacement inhibition has not reached an active quiescent owner"
+        )
+    return {
+        "schema": "nebius-vpngw/vm-ha-standby-replacement-quiescent-v1",
+        "cluster_id": cluster_id,
+        "node_id": node_id,
+        "generation_id": generation_id,
+        "operation_id": operation_id,
+    }
+
+
+def commit_vm_ha_standby_replacement_peer_binding(
+    operation_id: str,
+    *,
+    config_path: Path = CONFIG_PATH,
+    state_dir: Path = VM_HA_STATE_DIR,
+    staged_dir: Path = Path("/etc/nebius-vpngw/vm-ha-staged"),
+) -> dict[str, Any]:
+    """Publish only the replacement peer Compute identity without reloading services."""
+
+    cluster_id, node_id, generation_id = _vm_ha_standby_replacement_identity(
+        config_path=config_path
+    )
+    if (
+        standby_replacement_inhibition_operation_id(
+            state_dir,
+            cluster_id=cluster_id,
+            node_id=node_id,
+            generation_id=generation_id,
+        )
+        != operation_id
+    ):
+        raise RuntimeError("VM-HA standby replacement peer binding is not inhibited")
+    staged_path = staged_dir / f"{generation_id}.yaml"
+    try:
+        staged_stat = staged_path.lstat()
+        if (
+            staged_path.is_symlink()
+            or not staged_path.is_file()
+            or stat.S_IMODE(staged_stat.st_mode) != 0o600
+            or staged_stat.st_uid != os.geteuid()
+        ):
+            raise RuntimeError
+        staged_bytes = staged_path.read_bytes()
+        current_bytes = config_path.read_bytes()
+        staged_payload = yaml.safe_load(staged_bytes)
+        current_payload = yaml.safe_load(current_bytes)
+    except (OSError, UnicodeError, yaml.YAMLError, RuntimeError):
+        raise RuntimeError("VM-HA staged replacement peer binding is unavailable") from None
+    if not isinstance(staged_payload, dict) or not isinstance(current_payload, dict):
+        raise RuntimeError("VM-HA staged replacement peer binding is malformed")
+    staged_vm_ha = staged_payload.get("vm_ha")
+    current_vm_ha = current_payload.get("vm_ha")
+    if not isinstance(staged_vm_ha, dict) or not isinstance(current_vm_ha, dict):
+        raise RuntimeError("VM-HA staged replacement peer binding is malformed")
+    try:
+        staged_binding = VMHARuntimeBinding.model_validate(staged_vm_ha.get("runtime_binding"))
+        current_binding = VMHARuntimeBinding.model_validate(current_vm_ha.get("runtime_binding"))
+    except ValueError:
+        raise RuntimeError("VM-HA staged replacement peer binding is invalid") from None
+    if not (
+        staged_binding.cluster_id == cluster_id == current_binding.cluster_id
+        and staged_binding.generation_id == generation_id == current_binding.generation_id
+        and len(staged_binding.nodes) == len(current_binding.nodes) == 2
+    ):
+        raise RuntimeError("VM-HA staged replacement peer binding changed generation identity")
+    staged_nodes = {item.node_id: item for item in staged_binding.nodes}
+    current_nodes = {item.node_id: item for item in current_binding.nodes}
+    if set(staged_nodes) != set(current_nodes) or node_id not in staged_nodes:
+        raise RuntimeError("VM-HA staged replacement peer binding changed node identity")
+    peer_node_id = next(item for item in staged_nodes if item != node_id)
+    local_unchanged = staged_nodes[node_id] == current_nodes[node_id]
+    staged_peer = staged_nodes[peer_node_id]
+    current_peer = current_nodes[peer_node_id]
+    peer_shape_unchanged = staged_peer.model_dump(exclude={"compute_id"}) == (
+        current_peer.model_dump(exclude={"compute_id"})
+    )
+    binding_shape_unchanged = staged_binding.model_dump(exclude={"nodes"}) == (
+        current_binding.model_dump(exclude={"nodes"})
+    )
+    if not (
+        local_unchanged
+        and peer_shape_unchanged
+        and binding_shape_unchanged
+        and staged_peer.compute_id
+    ):
+        raise RuntimeError("VM-HA staged replacement peer binding changed unauthorized fields")
+    mtls_snapshot = ManagedMTLSStore(state_dir / "mtls", create=False).snapshot()
+    peer_leaves = [item for item in mtls_snapshot.peers if item.node_id == peer_node_id]
+    if not peer_leaves:
+        raise RuntimeError("VM-HA replacement peer mTLS identity is unavailable")
+    latest_epoch = max(item.epoch for item in peer_leaves)
+    latest_compute_ids = {item.compute_id for item in peer_leaves if item.epoch == latest_epoch}
+    if latest_compute_ids != {staged_peer.compute_id}:
+        raise RuntimeError("VM-HA replacement peer binding does not match managed mTLS")
+    if {key: value for key, value in staged_payload.items() if key != "vm_ha"} != {
+        key: value for key, value in current_payload.items() if key != "vm_ha"
+    } or {key: value for key, value in staged_vm_ha.items() if key != "runtime_binding"} != {
+        key: value for key, value in current_vm_ha.items() if key != "runtime_binding"
+    }:
+        raise RuntimeError("VM-HA staged replacement config changed outside peer identity")
+    if staged_bytes != current_bytes:
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{config_path.name}.",
+            dir=config_path.parent,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(temporary_fd, "wb") as stream:
+                stream.write(staged_bytes)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, config_path)
+            directory_fd = os.open(config_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+    return {
+        "schema": LIVE_PEER_REPLACEMENT_CAPABILITY,
+        "cluster_id": cluster_id,
+        "node_id": node_id,
+        "generation_id": generation_id,
+        "operation_id": operation_id,
+    }
+
+
+def release_vm_ha_standby_replacement_inhibition(
+    operation_id: str,
+    *,
+    config_path: Path = CONFIG_PATH,
+    state_dir: Path = VM_HA_STATE_DIR,
+    boot_id: Callable[[], str] = _boot_id,
+) -> dict[str, Any]:
+    """Release only the exact quiescent owner-preserving replacement gate."""
+
+    cluster_id, node_id, generation_id = _vm_ha_standby_replacement_identity(
+        config_path=config_path
+    )
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    descriptor = _acquire_rearm_lock(
+        state_dir / REARM_LOCK_PATH.name,
+        timeout_seconds=30.0,
+    )
+    if descriptor is None:
+        raise RuntimeError("VM-HA rearm writer did not quiesce for inhibition release")
+    try:
+        require_auto_healing_writer_quiescent(state_dir)
+        released_operation = standby_replacement_release_operation_id(
+            state_dir,
+            cluster_id=cluster_id,
+            node_id=node_id,
+            generation_id=generation_id,
+        )
+        if released_operation is not None and released_operation != operation_id:
+            raise RuntimeError("VM-HA standby replacement release is owned elsewhere")
+        if released_operation is None:
+            verify_vm_ha_standby_replacement_quiescent(
+                operation_id,
+                config_path=config_path,
+                state_dir=state_dir,
+                boot_id=boot_id,
+            )
+            _atomic_write_json(
+                state_dir / STANDBY_REPLACEMENT_RELEASE_FILENAME,
+                {
+                    "schema": STANDBY_REPLACEMENT_RELEASE_SCHEMA,
+                    "cluster_id": cluster_id,
+                    "node_id": node_id,
+                    "generation_id": generation_id,
+                    "operation_id": operation_id,
+                },
+            )
+        observed_inhibition = standby_replacement_inhibition_operation_id(
+            state_dir,
+            cluster_id=cluster_id,
+            node_id=node_id,
+            generation_id=generation_id,
+        )
+        if observed_inhibition not in {None, operation_id}:
+            raise RuntimeError("VM-HA standby replacement inhibition changed before release")
+        _durably_unlink(state_dir / STANDBY_REPLACEMENT_INHIBITION_FILENAME)
+    finally:
+        os.close(descriptor)
+    return {
+        "schema": STANDBY_REPLACEMENT_RELEASE_SCHEMA,
+        "cluster_id": cluster_id,
+        "node_id": node_id,
+        "generation_id": generation_id,
+        "operation_id": operation_id,
+    }
+
+
+def _require_planned_transfer_auto_healing_enabled(
+    *,
+    config: Mapping[str, Any],
+    state_dir: Path,
+    clock: Callable[[], float] = time.time,
+) -> PolicyAgreementCertificate:
+    binding, local, peer = _auto_healing_context(config)
+    record = AutoHealingPolicyStore(state_dir).require_bound(
+        cluster_id=binding.cluster_id,
+        node_id=local.node_id,
+        peer_node_id=peer.node_id,
+        generation_id=binding.generation_id,
+    )
+    if not (
+        record.phase is AutoHealingPolicyPhase.COMMITTED
+        and record.desired is StandbyAutoHealing.ENABLED
+        and peer_policy_agrees(
+            record,
+            load_peer_policy_heartbeat(state_dir, peer_node_id=peer.node_id),
+            now=clock(),
+        )
+    ):
+        raise RuntimeError(
+            "planned VM-HA ownership transfer requires enabled two-member standby auto-healing"
+        )
+    heartbeat = load_peer_policy_heartbeat(state_dir, peer_node_id=peer.node_id)
+    if heartbeat is None:
+        raise RuntimeError(
+            "planned VM-HA ownership transfer requires enabled two-member standby auto-healing"
+        )
+    try:
+        return PolicyAgreementStore(state_dir).capture(
+            policy=record,
+            heartbeat=heartbeat,
+            captured_at=clock(),
+        )
+    except StandbyRestorationError as error:
+        raise RuntimeError(
+            "planned VM-HA ownership transfer requires enabled two-member standby auto-healing"
+        ) from error
+
+
+def _refresh_standby_restoration_agreement(
+    *,
+    config: Mapping[str, Any],
+    state_dir: Path,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Retain the latest authenticated enabled-policy agreement for cutover."""
+
+    try:
+        binding, local, peer = _auto_healing_context(config)
+        policy = AutoHealingPolicyStore(state_dir).require_bound(
+            cluster_id=binding.cluster_id,
+            node_id=local.node_id,
+            peer_node_id=peer.node_id,
+            generation_id=binding.generation_id,
+        )
+        heartbeat = load_peer_policy_heartbeat(state_dir, peer_node_id=peer.node_id)
+        now = clock()
+        if heartbeat is not None and peer_policy_agrees(policy, heartbeat, now=now):
+            PolicyAgreementStore(state_dir).capture(
+                policy=policy,
+                heartbeat=heartbeat,
+                captured_at=now,
+            )
+    except (AutoHealingPolicyError, StandbyRestorationError):
+        # Failure to refresh never manufactures authority. A previously
+        # captured exact agreement remains usable only for the same committed
+        # policy and generation when an automatic promotion begins.
+        return
+
+
+def _matching_manual_transfer_request(
+    *,
+    state_dir: Path,
+    config: Mapping[str, Any],
+    operation: str,
+    configured_role: str,
+    intent: TransferIntent,
+    request_path: Path,
+    request_schema: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Return the exact initiating request for one already-started lineage."""
+
+    lineage = _read_transfer_lineage(
+        state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name,
+        config=config,
+    )
+    if lineage is None:
+        return None, False
+    request = _read_manual_transfer_request(
+        path=request_path,
+        config=config,
+        schema=request_schema,
+        operation=operation,
+        configured_role=configured_role,
+    )
+    if (
+        lineage.get("intent") == intent.value
+        and request is not None
+        and float(request["requested_at"]) <= float(lineage["started_at"])
+    ):
+        return request, True
+    return None, True
+
+
+def _request_manual_transfer(
+    *,
+    state_dir: Path,
+    operation: str,
+    configured_role: str,
+    intent: TransferIntent,
+    request_path_name: str,
+    request_schema: str,
+    conflicting_path_name: str,
+    conflicting_operation: str,
+) -> dict[str, Any]:
     config = _read_vm_ha_config()
     if config is None:
         raise RuntimeError("VM HA is not enabled on this node")
     node = config.get("node") or {}
-    if node.get("role") != "active":
-        raise RuntimeError("manual VM-HA failback may be requested only on the configured active")
+    if node.get("role") != configured_role:
+        raise RuntimeError(
+            f"manual VM-HA {operation} may be requested only on the configured {configured_role}"
+        )
     require_vm_ha_runtime_prerequisites(state_dir=state_dir)
-    if (state_dir / VM_HA_FAILOVER_PATH.name).exists():
-        raise RuntimeError("conflicting manual VM-HA failover request exists")
-    request = {
-        "schema": "nebius-vpngw/vm-ha-manual-failback-v1",
-        "cluster_id": config.get("cluster_id"),
-        "node_id": node.get("node_id"),
-        "generation_id": (config.get("generation") or {}).get("generation_id"),
-        "requested_at": time.time(),
-    }
-    _atomic_write_json(state_dir / VM_HA_FAILBACK_PATH.name, request)
-    return request
+    request_path = state_dir / request_path_name
+    matching, started = _matching_manual_transfer_request(
+        state_dir=state_dir,
+        config=config,
+        operation=operation,
+        configured_role=configured_role,
+        intent=intent,
+        request_path=request_path,
+        request_schema=request_schema,
+    )
+    if matching is not None:
+        return matching
+    if started:
+        raise RuntimeError(
+            f"manual VM-HA {operation} cannot be requested while a durable transfer is in progress"
+        )
+
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    descriptor = _acquire_rearm_lock(
+        state_dir / REARM_LOCK_PATH.name,
+        timeout_seconds=30.0,
+    )
+    if descriptor is None:
+        raise RuntimeError(f"manual VM-HA {operation} request writer did not quiesce")
+    try:
+        matching, started = _matching_manual_transfer_request(
+            state_dir=state_dir,
+            config=config,
+            operation=operation,
+            configured_role=configured_role,
+            intent=intent,
+            request_path=request_path,
+            request_schema=request_schema,
+        )
+        if matching is not None:
+            return matching
+        if started:
+            raise RuntimeError(
+                f"manual VM-HA {operation} cannot be requested while a durable transfer is in progress"
+            )
+        if (state_dir / conflicting_path_name).exists():
+            raise RuntimeError(f"conflicting manual VM-HA {conflicting_operation} request exists")
+        existing = _read_manual_transfer_request(
+            path=request_path,
+            config=config,
+            schema=request_schema,
+            operation=operation,
+            configured_role=configured_role,
+        )
+        certificate = _require_planned_transfer_auto_healing_enabled(
+            config=config,
+            state_dir=state_dir,
+        )
+        request = existing
+        if request is None:
+            request = {
+                "schema": request_schema,
+                "cluster_id": config.get("cluster_id"),
+                "node_id": node.get("node_id"),
+                "generation_id": (config.get("generation") or {}).get("generation_id"),
+                "requested_at": time.time(),
+            }
+            _atomic_write_json(request_path, request)
+        try:
+            binding, local, peer = _auto_healing_context(config)
+            StandbyRestorationStore(state_dir).arm(
+                source=RestorationSource(intent.value),
+                certificate=certificate,
+                owner_node_id=local.node_id,
+                former_owner_node_id=peer.node_id,
+                allocation_id=binding.shared_allocation_id,
+                generation_id=binding.generation_id,
+                digests=certificate.digests,
+                request_fingerprint=planned_request_fingerprint(request),
+                first_operation_id=None,
+                updated_at=time.time(),
+            )
+        except Exception:
+            _durably_unlink(request_path)
+            raise
+        return request
+    finally:
+        os.close(descriptor)
+
+
+def request_manual_failback(*, state_dir: Path = VM_HA_STATE_DIR) -> dict[str, Any]:
+    return _request_manual_transfer(
+        state_dir=state_dir,
+        operation="failback",
+        configured_role="active",
+        intent=TransferIntent.PLANNED_FAILBACK,
+        request_path_name=VM_HA_FAILBACK_PATH.name,
+        request_schema="nebius-vpngw/vm-ha-manual-failback-v1",
+        conflicting_path_name=VM_HA_FAILOVER_PATH.name,
+        conflicting_operation="failover",
+    )
 
 
 def request_manual_failover(*, state_dir: Path = VM_HA_STATE_DIR) -> dict[str, Any]:
-    config = _read_vm_ha_config()
-    if config is None:
-        raise RuntimeError("VM HA is not enabled on this node")
-    node = config.get("node") or {}
-    if node.get("role") != "passive":
-        raise RuntimeError("manual VM-HA failover may be requested only on the configured passive")
-    require_vm_ha_runtime_prerequisites(state_dir=state_dir)
-    if (state_dir / VM_HA_FAILBACK_PATH.name).exists():
-        raise RuntimeError("conflicting manual VM-HA failback request exists")
-    request = {
-        "schema": "nebius-vpngw/vm-ha-manual-failover-v1",
-        "cluster_id": config.get("cluster_id"),
-        "node_id": node.get("node_id"),
-        "generation_id": (config.get("generation") or {}).get("generation_id"),
-        "requested_at": time.time(),
-    }
-    _atomic_write_json(state_dir / VM_HA_FAILOVER_PATH.name, request)
-    return request
+    return _request_manual_transfer(
+        state_dir=state_dir,
+        operation="failover",
+        configured_role="passive",
+        intent=TransferIntent.PLANNED_FAILOVER,
+        request_path_name=VM_HA_FAILOVER_PATH.name,
+        request_schema="nebius-vpngw/vm-ha-manual-failover-v1",
+        conflicting_path_name=VM_HA_FAILBACK_PATH.name,
+        conflicting_operation="failback",
+    )
 
 
 def _run_vm_ha_controller(
@@ -2799,6 +4832,7 @@ def _run_vm_ha_controller(
     *,
     once: bool = False,
     config_path: Path = CONFIG_PATH,
+    state_dir: Path = VM_HA_STATE_DIR,
 ) -> None:
     """Execute the complete verified controller with deterministic cleanup."""
 
@@ -2807,7 +4841,12 @@ def _run_vm_ha_controller(
         raise RuntimeError("VM HA controller started without an enabled node manifest")
     if runtime is None:
         require_vm_ha_runtime_prerequisites()
-        runtime = build_default_vm_ha_controller_runtime(config_path=config_path)
+        runtime = build_default_vm_ha_controller_runtime(
+            config_path=config_path,
+            state_dir=state_dir,
+            identity_proof_mode="systemd-controller",
+            systemd_invocation_id=os.environ.get("INVOCATION_ID"),
+        )
     previous_handlers: dict[signal.Signals, Any] = {}
     ready_notified = False
     if isinstance(runtime, DefaultVMHAControllerRuntime):
@@ -2912,12 +4951,8 @@ class Agent:
         if force_reconcile and CONFIG_PATH.exists():
             preflight_vm_ha = _read_vm_ha_config(CONFIG_PATH)
             if preflight_vm_ha is not None:
-                if not all(
-                    isinstance(value, str) and value for value in expected_authority
-                ):
-                    raise RuntimeError(
-                        "VM-HA force-reconcile requires complete authority"
-                    )
+                if not all(isinstance(value, str) and value for value in expected_authority):
+                    raise RuntimeError("VM-HA force-reconcile requires complete authority")
                 from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
 
                 rearm_lock_fd = _acquire_rearm_lock(
@@ -2925,9 +4960,7 @@ class Agent:
                     timeout_seconds=0.0,
                 )
                 if rearm_lock_fd is None:
-                    raise RuntimeError(
-                        "VM-HA force-reconcile requires the rearm writer lock"
-                    )
+                    raise RuntimeError("VM-HA force-reconcile requires the rearm writer lock")
                 try:
                     mtls_lock_fd = ManagedMTLSStore(
                         VM_HA_STATE_DIR / "mtls", create=False
@@ -2941,9 +4974,7 @@ class Agent:
                 if mtls_lock_fd is None:
                     os.close(rearm_lock_fd)
                     rearm_lock_fd = None
-                    raise RuntimeError(
-                        "VM-HA force-reconcile requires the mTLS writer lock"
-                    )
+                    raise RuntimeError("VM-HA force-reconcile requires the mTLS writer lock")
 
         lock_fd = None
         try:
@@ -3117,9 +5148,31 @@ def main() -> None:
     group.add_argument("--vm-ha-manual-failover", action="store_true")
     group.add_argument("--vm-ha-rearm-service", action="store_true")
     group.add_argument("--vm-ha-rearm-request", action="store_true")
+    group.add_argument(
+        "--vm-ha-auto-healing-action",
+        choices=(
+            "status",
+            "initialize",
+            "adopt-replacement",
+            "prepare",
+            "commit",
+            "arm-recovery",
+            "cancel-recovery",
+            "clear-recovery",
+        ),
+    )
     group.add_argument("--vm-ha-removal-inhibit", metavar="OPERATION_ID")
     group.add_argument("--vm-ha-removal-ready", metavar="OPERATION_ID")
+    group.add_argument("--vm-ha-standby-replacement-inhibit", metavar="OPERATION_ID")
+    group.add_argument("--vm-ha-standby-replacement-ready", metavar="OPERATION_ID")
+    group.add_argument("--vm-ha-standby-replacement-peer-binding", metavar="OPERATION_ID")
+    group.add_argument("--vm-ha-standby-replacement-release", metavar="OPERATION_ID")
     group.add_argument("--vm-ha-mtls-action", choices=ACTION_NAMES)
+    group.add_argument(
+        "--vm-ha-auto-healing-quiescent",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     group.add_argument(
         "--agent-capabilities",
         action="store_true",
@@ -3135,6 +5188,7 @@ def main() -> None:
     parser.add_argument("--expected-vm-ha-epoch", help=argparse.SUPPRESS)
     parser.add_argument("--expected-vm-ha-allocation", help=argparse.SUPPRESS)
     parser.add_argument("--vm-ha-mtls-request", metavar="BASE64_JSON")
+    parser.add_argument("--vm-ha-auto-healing-request", metavar="BASE64_JSON")
     args = parser.parse_args()
 
     force_authority_args = (
@@ -3157,6 +5211,12 @@ def main() -> None:
                     "features": [
                         "force-reconcile-v1",
                         "vm-ha-authority-bound-force-reconcile-v1",
+                        "vm-ha-controller-route-reconcile-v1",
+                        _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
+                        AUTO_HEALING_CAPABILITY,
+                        LIVE_PEER_REPLACEMENT_CAPABILITY,
+                        STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
+                        STANDBY_RESTORATION_CAPABILITY,
                     ],
                     "schema": "nebius-vpngw.agent-capabilities.v1",
                 },
@@ -3164,6 +5224,13 @@ def main() -> None:
                 separators=(",", ":"),
             )
         )
+        return
+
+    if args.vm_ha_auto_healing_quiescent:
+        try:
+            require_auto_healing_writer_quiescent(VM_HA_STATE_DIR)
+        except AutoHealingPolicyError as error:
+            parser.exit(2, f"standby auto-healing writer is active: {error}\n")
         return
 
     if args.vm_ha_mtls_action:
@@ -3184,6 +5251,17 @@ def main() -> None:
         print(json.dumps(response, sort_keys=True, separators=(",", ":")))
         return
 
+    if args.vm_ha_auto_healing_action:
+        try:
+            response = vm_ha_auto_healing_policy(
+                args.vm_ha_auto_healing_action,
+                args.vm_ha_auto_healing_request,
+            )
+        except AutoHealingPolicyError as error:
+            parser.exit(2, f"standby auto-healing policy action failed: {error}\n")
+        print(json.dumps(response, sort_keys=True, separators=(",", ":")))
+        return
+
     if args.vm_ha_guard:
         print(json.dumps(install_vm_ha_cold_start_guard(), sort_keys=True))
         return
@@ -3192,7 +5270,10 @@ def main() -> None:
         return
     if args.vm_ha_preflight:
         require_vm_ha_runtime_prerequisites()
-        runtime = build_default_vm_ha_controller_runtime()
+        runtime = build_default_vm_ha_controller_runtime(
+            identity_proof_mode="systemd-preflight",
+            systemd_invocation_id=os.environ.get("INVOCATION_ID"),
+        )
         runtime.close(restore_guard=False)
         return
     if args.vm_ha_status:
@@ -3241,6 +5322,45 @@ def main() -> None:
         print(
             json.dumps(
                 verify_vm_ha_removal_quiescent(args.vm_ha_removal_ready),
+                sort_keys=True,
+            )
+        )
+        return
+    if args.vm_ha_standby_replacement_inhibit:
+        print(
+            json.dumps(
+                install_vm_ha_standby_replacement_inhibition(
+                    args.vm_ha_standby_replacement_inhibit
+                ),
+                sort_keys=True,
+            )
+        )
+        return
+    if args.vm_ha_standby_replacement_ready:
+        try:
+            response = verify_vm_ha_standby_replacement_quiescent(
+                args.vm_ha_standby_replacement_ready
+            )
+        except StandbyReplacementNotReady as error:
+            parser.exit(75, f"{error}\n")
+        print(json.dumps(response, sort_keys=True))
+        return
+    if args.vm_ha_standby_replacement_peer_binding:
+        print(
+            json.dumps(
+                commit_vm_ha_standby_replacement_peer_binding(
+                    args.vm_ha_standby_replacement_peer_binding
+                ),
+                sort_keys=True,
+            )
+        )
+        return
+    if args.vm_ha_standby_replacement_release:
+        print(
+            json.dumps(
+                release_vm_ha_standby_replacement_inhibition(
+                    args.vm_ha_standby_replacement_release
+                ),
                 sort_keys=True,
             )
         )

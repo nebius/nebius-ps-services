@@ -156,18 +156,12 @@ remotes.
    python3 sdlc-workflow-test/scripts/verify_agentic_sdlc.py
    ```
 
-   This script checks source-installed parity for all required SDLC skills and
-   the `maintain-project-specs`, `worktree`, `nebius-grafana-query`,
-   `project-agent-instructions`, and conditional `troubleshoot` runtime
-   support, explicit-only invocation policy, canonical shared spec ownership,
-   prompt workspace/history/
-   rename/lifecycle regressions, execution scope/recovery/replan/secret gates,
-   sequential fallback, Task Implementer interoperability, the composed
-   managed outer-worktree lease lifecycle, bounded observability contract,
-   normalized failure/diagnosis/repair-control and corrective-plan contracts,
-   exact-SHA PR handoff and canonical single-action merge modes, verifier
-   self-tests, and hook fixtures. The disposable fixture is a nested selected
-   folder in a local
+   This script checks source-installed parity, explicit-only invocation,
+   canonical spec ownership, advisory project-lifecycle independence, prompt
+   workspace regressions, execution and secret gates, Task Implementer and
+   managed-worktree interoperability, bounded observability, repair control,
+   exact-SHA publication modes, verifier self-tests, and hook fixtures. The
+   disposable fixture is a nested selected folder in a local
    monorepo-shaped Git repository. A clean canonical flat fixture with the
    exact expected tracked tree and no remote is migrated once. Unknown,
    unowned, dirty, remote-backed, or non-canonical directories and repositories
@@ -181,11 +175,11 @@ remotes.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
    `sdlc-create-requirements`, `sdlc-start`, `sdlc-gather-context`,
-   `sdlc-create-design`, `project-agent-instructions`, `sdlc-auto-steering`,
+   `sdlc-create-design`, `sdlc-auto-steering`,
    `sdlc-create-plan`,
    `sdlc-prepare-execution`, `sdlc-tdd`,
    `sdlc-implement-plan`, `sdlc-validate-codes`, `sdlc-unit-tests`,
-   `sdlc-evaluate`, `sdlc-update-documents`, `sdlc-align-specs`,
+   `sdlc-evaluate`, `sdlc-update-documents`, `align`,
    `sdlc-commit`, and `sdlc-uat-tests`. Run `sdlc-update-documents` again
    after UAT when final docs changed. Do not use `sdlc-merge-pr`, and do not
    create a real PR.

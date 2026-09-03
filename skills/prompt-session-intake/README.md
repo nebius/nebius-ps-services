@@ -35,9 +35,10 @@ that session follow this split:
    reference. Writer-session identity remains diagnostic provenance only.
 
 Explicit bound workflow runs register the authoritative active prompt result,
-and verified terminal results close that registry entry. This lets a fresh
-session attach only when one active objective is unambiguous, without treating
-a stale writer, queued prompt, or file save as active work.
+and verified terminal results close that registry entry. The registry records
+objective identity and writer provenance only; it never binds a fresh session.
+Each Codex session must invoke an exact init or run command before its later
+direct turns become capture-eligible.
 
 For Task Implementer, a bound project may be the primary checkout or its
 managed-lane project only after the workspace manifest canonically proves the
@@ -51,11 +52,12 @@ auto-rebases. The prompt-session Stop delegate never blocks completion or
 requests a continuation for incomplete capture. Only an explicit
 `$task-implementer run` or `$sdlc-start run` executes a workflow.
 
-Metadata-only event-v2 transition state and accepted project-intent projections live under
-`${CODEX_HOME:-$HOME/.codex}/prompt-session-intake/`, outside Git, using private
-POSIX modes. Event-v1 records and raw journals remain inert in their old
-namespace and have no compatibility reader. Manual prompt edits and file saves never trigger work; users still
-run `$task-implementer run <prompt-ref-or-file>` or
+Metadata-only event-v2 transition state and accepted project-intent projections
+live under `${CODEX_HOME:-$HOME/.codex}/prompt-session-intake/`, outside Git,
+using private POSIX modes. Event-v1 records and raw journals remain inert in
+their old namespace and have no compatibility reader. Manual prompt edits and
+file saves never trigger work; users still run
+`$task-implementer run <prompt-ref-or-file>` or
 `$sdlc-start run <prompt-ref-or-file>` explicitly.
 
 Source presence does not prove activation. Installing the hook files,

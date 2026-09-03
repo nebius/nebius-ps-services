@@ -631,9 +631,7 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
     monkeypatch.setattr(
         agent_main,
         "acquire_routing_lock",
-        lambda **_kwargs: os.open(
-            tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600
-        ),
+        lambda **_kwargs: os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
     )
     agent = agent_main.Agent()
     agent.ss = StrongSwan()
@@ -642,9 +640,7 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
     with pytest.raises(RuntimeError, match="FRR configuration reload failed"):
         agent.reload()
 
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {
-        "config_hash": "previous"
-    }
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"config_hash": "previous"}
     assert agent.state.is_changed({"version": 1, "connections": []})
 
 

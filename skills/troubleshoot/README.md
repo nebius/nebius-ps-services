@@ -114,9 +114,16 @@ Every counted attempt records the exact marker blocker key. A missing, mixed,
 or carried binding makes the marker invalid and enters repair instead of
 exhausting the new blocker. Marker validation and repair consume no attempt.
 Pending authorization feedback retains the precise marker or transition error
-and gives complete canonical repair guidance. Fresh-state guidance calls its
-source the prior terminal marker because it can follow either resolved or
-exhausted state. Invalid active-resize markers
+and gives complete canonical repair guidance. While a budget transition is
+pending, the only admitted tool is one exact `apply_patch` targeting the
+advertised `current.md`: use `*** Update File` when it exists or `*** Add File`
+only when it is absent. `*** Delete File`, delete/add replacement, shell
+rewrites, and other tools remain denied. A resolved marker is completed evidence, not an
+exhaustion lock: a later bare invocation keeps the saved profile and admits
+discovery without pending marker replacement. Explicit profile flags preserve
+the resolved marker core through the profile-only handshake. Fresh-state
+guidance calls its source the prior terminal marker only after exhaustion.
+Invalid active-resize markers
 must restore their exact pre-resize non-profile state; deleted resize markers
 fail closed and require the exact prior marker or a fresh user-authorized
 session rather than a budget reset.

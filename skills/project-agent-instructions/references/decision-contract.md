@@ -14,7 +14,7 @@
 
 The `maintain-project-specs` owner validates both complete spec files before inspection. The
 mode-`0600` receipt uses schema
-`project-agent-instructions.spec-validation.v3` and binds:
+`maintain-project-specs.spec-validation.v4` and binds:
 
 - owner, validator, and validator version;
 - exact selected project, Git root, and project scope;
@@ -130,9 +130,13 @@ locator present in the UTF-8 file. Git-ignored or untracked evidence is
 rejected. Each generated rule references at least one evidence path.
 
 `ownership_approval` is normally null. It is exactly
-`{"action":"adopt","target_sha256":"..."}` for explicit adoption or
+`{"action":"adopt","target_sha256":"..."}` for explicit adoption of an
+unproven intact v3 region or
 `{"action":"retire","target_sha256":"..."}` for explicit retirement.
-Approvals are applicable only to the exact inspected digest.
+Approvals are applicable only to the exact inspected digest. An exact active
+receipt imported by inspection from the workspace-private registry, including
+an entry bootstrapped from unanimous sealed history, is already proven
+ownership and does not use an adoption approval.
 
 ## Deterministic rendering
 
@@ -200,6 +204,35 @@ retain runtime bindings. A separate private
 `project-agent-instructions.ownership.v3` receipt binds the exact region
 marker fields and project path. Marker-only ownership is insufficient.
 
+Inspection reads one exact-schema registry under a dedicated owner-only shared
+root in the same private workspace bucket. The registry is serialized by an
+advisory lock held across authority preflight, target mutation, final state,
+conditional publication, and recovery release. It maps a canonical project,
+Git-root, scope, and target-path subject digest to a monotonic generation,
+active, pending, blocked, or retired status, whole-target digest, optional exact
+receipt, and optional source-state digest. First use atomically publishes a
+complete generation-zero registry root. An existing entry is authoritative:
+initialized-but-missing, unsafe, or malformed registry bytes fail closed, an
+active entry must match the exact current whole target, pending binds one
+interrupted apply to its exact receipt and state digest without granting
+observer authority, blocked carries no rewrite authority, and a retired entry
+is a durable tombstone.
+
+When the subject has no entry, inspection may scan sibling lifecycle sessions
+once as an unordered legacy evidence set. It bootstraps only when every relevant
+safe sealed event agrees on the same exact active receipt and target digest.
+Any retirement, incompatible active generation, malformed or unsafe relevant
+evidence, ambiguity, or absence of proof publishes a receipt-free blocked
+subject generation and preserves the adoption gate. Later evidence removal
+does not rescan that subject; exact-digest adoption may publish a superseding
+active generation. One exact completed apply awaiting registry publication
+instead publishes a pending generation; only its matching receipt and state
+writer can advance it to active. Session IDs, timestamps, directory order, and
+filesystem metadata never establish causal order. The current bundle remains
+the only
+input to render, apply, and verify; callers never copy a prior receipt
+themselves.
+
 Transitions are:
 
 - missing plus `needed` -> exclusive `created` and active ownership receipt;
@@ -213,9 +246,13 @@ Transitions are:
   receipt;
 - unreceipted intact v3 region plus exact `adopt` approval -> `adopted`, or guarded
   `refreshed` when rules changed;
-- active receipt with marker-only drift plus exact `adopt` approval for the
-  current target -> guarded `adopted` or `refreshed`, but only when project,
-  Git root, scope, target path, and managed-body digest remain identical;
+- exact active workspace-registry entry, including unanimous sealed-history
+  bootstrap -> imported into the current private bundle, then
+  `existing-sufficient` or guarded `refreshed` without a second adoption
+  approval;
+- a receipt already established in the current session plus marker-only drift
+  -> guarded `refreshed` without adoption approval, but only when project, Git
+  root, scope, target path, and managed-body digest remain identical;
 - intact v3 region plus `not-needed` and exact `retire` approval -> guarded
   `retired`, restoring the exact human prefix or removing the file when no
   prefix exists, and recording a retired receipt;
@@ -234,14 +271,16 @@ mutation boundary. Attach, refresh, and retirement compare the exact inspected
 whole-file bytes under a mode-`0600` lock while preserving the human prefix.
 Mutations are anchored to the inspected project-root directory identity so a
 parent-directory swap cannot redirect them. These transitions retain and fsync
-a same-directory backup until ownership and final state are durable; only then
-is the backup removed and the directory fsynced again. A surviving lock or
-backup blocks all later actions until a human inspects the exact files and
-resolves the artifact; automation never removes it speculatively.
+a same-directory backup until ownership, final state, and the matching
+workspace-registry generation are durable; only then is the backup removed and
+the directory fsynced again. A surviving lock or backup blocks all later
+actions until a human inspects the exact files and resolves the artifact;
+automation never removes it speculatively.
 
 Final state uses `project-agent-instructions.state.v3` and binds the manifest,
 decision, ownership receipt, current target, active instruction, and outcome.
-`verify` replays discovery and all final postconditions.
+`verify` replays discovery, requires the matching current registry generation,
+and checks all final postconditions.
 
 `created`, `attached`, `refreshed`, and `retired` report
 `reload_required: true`. Because
@@ -249,6 +288,16 @@ Codex discovers project instructions once per run, the coordinator must stop
 that execution boundary, start a fresh session, rerun/verify the decision, and
 read the active instruction file before continuing. Adoption changes private
 ownership only and does not require reload.
+
+The ownership registry is also the sole authority for historical private-state
+retention. Its internal classifier returns a closed disposition while holding
+the ownership lock: pending publication, missing legacy continuity, missing
+final manifest/decision evidence, malformed state, or a generation/canonical-
+registry-digest mismatch is protected. Matching active, retired, or blocked
+registry state may
+release the historical session bundle. The
+classifier is not a public workflow command and never authorizes repository
+mutation.
 
 ## Helper commands
 
@@ -294,7 +343,10 @@ python3 INSTALLED_SKILLS_ROOT/project-agent-instructions/scripts/project_agent_i
 The lifecycle hook requires this exact inspect shape: explicit `--codex-home`,
 the current session's canonical private members, and no shell composition.
 Relative private paths and environment fallback are not canonical coordinator
-inputs and fail at the CLI or lifecycle-hook boundary.
+inputs and fail at the CLI or lifecycle-hook boundary. The helper may populate
+the current session's `ownership.json` from exact workspace-registry authority
+or unanimous sealed-history bootstrap; the command never accepts a
+prior-session ownership path from the caller.
 
 Both Task Implementer and Agentic SDLC use the same spec owner. The runtime declaration
 is always required so that the active profile and discovery-sensitive CLI

@@ -24,7 +24,7 @@ REQUIRED_SDLC_PHASES = (
     "sdlc-unit-tests",
     "sdlc-evaluate",
     "sdlc-update-documents",
-    "sdlc-align-specs",
+    "align",
     "sdlc-commit",
     "local-ship",
     "sdlc-uat-tests",

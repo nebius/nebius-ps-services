@@ -10,8 +10,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shlex
-import shutil
 import stat
 import subprocess
 import sys
@@ -19,6 +17,7 @@ import sys
 from prompt_workspace_core import (
     PromptWorkspaceError,
     RUN_ID_RE,
+    contains_secret,
     ensure_private_dir,
     iso_seconds,
     load_json_object,
@@ -28,21 +27,6 @@ from prompt_workspace_core import (
     verify_workspace,
     write_atomic,
     write_exclusive,
-)
-from prompt_workspace_contract_delta import (
-    active_contract_delta_head,
-    complete_terminal_lifecycle_promotion,
-    complete_contract_delta_promotion,
-    contract_delta_active,
-    prepare_contract_delta_promotion,
-    prepare_terminal_lifecycle_promotion,
-    recover_contract_delta_promotion,
-    recover_terminal_lifecycle_promotion,
-    restore_contract_delta_after_failed_promotion,
-    restore_terminal_lifecycle_after_failed_promotion,
-    terminal_lifecycle_seal,
-    terminal_lifecycle_seal_active,
-    terminal_lifecycle_seal_promoted,
 )
 from prompt_workspace_execution import (
     ASSIGNMENT_SCHEMA,
@@ -101,7 +85,6 @@ from prompt_workspace_reporting import (
 from prompt_workspace_lanes import (
     bind_integration_review_correction,
     claim_generation,
-    integration_review_correction_matches,
 )
 from prompt_workspace_runs import (
     _activate_next_queued_prompt_unlocked,
@@ -116,7 +99,6 @@ from prompt_workspace_specs import (
     save_requirements_refinement,
     settle_prompt_impact_plan,
     verify_prompt_impact_plan,
-    verify_project_agent_contract,
     verify_requirements_refinement_contract,
 )
 
@@ -134,6 +116,42 @@ BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,180}")
 WAVE_ID_RE = re.compile(r"wave-(?:[0-9]{3}|r[0-9a-f]{8}-[0-9]{3})")
 EXCLUSIVE_DOMAIN_CLAIM_PREFIX = "task-implementer/exclusive-class:"
 PENDING_PLAN_SCHEMA = "task-implementer/pending-plan-v1"
+SPEC_GAP_KINDS = {"requirement", "design", "traceability"}
+
+
+def _valid_spec_gaps(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    for gap in value:
+        if (
+            not isinstance(gap, dict)
+            or set(gap)
+            != {"kind", "summary", "evidence", "requirement_ids", "design_ids"}
+            or gap.get("kind") not in SPEC_GAP_KINDS
+            or not isinstance(gap.get("summary"), str)
+            or not str(gap["summary"]).strip()
+            or contains_secret(str(gap["summary"]))
+            or not isinstance(gap.get("evidence"), list)
+            or not gap["evidence"]
+            or any(
+                not isinstance(item, str)
+                or not item.strip()
+                or contains_secret(item)
+                for item in gap["evidence"]
+            )
+            or not isinstance(gap.get("requirement_ids"), list)
+            or any(
+                re.fullmatch(r"(?:REQ|TI-REQ)-[0-9]{3,}", str(item)) is None
+                for item in gap["requirement_ids"]
+            )
+            or not isinstance(gap.get("design_ids"), list)
+            or any(
+                re.fullmatch(r"(?:FEAT|TI-DES)-[0-9]{3,}", str(item)) is None
+                for item in gap["design_ids"]
+            )
+        ):
+            return False
+    return True
 
 
 def _utc(clock: Callable[[], datetime]) -> str:
@@ -902,21 +920,12 @@ def _existing_run_interop(
 ) -> dict[str, object]:
     state = load_interop(run_dir, required=False)
     if state is not None:
-        active_wave = coordinator.get("active_wave")
-        wave = (
-            _load_wave(run_dir, str(active_wave))
-            if isinstance(active_wave, str)
-            else None
-        )
-        allow_outer_dirty = wave is not None and contract_delta_active(
-            workspace, run_dir, coordinator, wave
-        )
         return acquire_interop(
             workspace,
             run_dir,
             manifest_path,
             str(coordinator["initial_head"]),
-            allow_outer_dirty=allow_outer_dirty,
+            allow_outer_dirty=False,
         )
     raise PromptWorkspaceError(
         "WORKFLOW_UPGRADE_REQUIRED",
@@ -961,6 +970,8 @@ def _validated_assignment(path: Path) -> dict[str, object]:
         "dependencies",
         "incoming_handoff_path",
         "incoming_handoff_sha256",
+        "root_intent_sha256",
+        "project_spec_receipt",
         "plan_sha256",
         "created_at",
         "assignment_sha256",
@@ -968,6 +979,22 @@ def _validated_assignment(path: Path) -> dict[str, object]:
     if set(assignment) != required or assignment.get("schema") != ASSIGNMENT_SCHEMA:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "worker assignment fields are invalid"
+        )
+    receipt = assignment.get("project_spec_receipt")
+    if (
+        not isinstance(assignment.get("root_intent_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", str(assignment["root_intent_sha256"]))
+        is None
+        or not isinstance(receipt, dict)
+        or set(receipt) != {"schema", "requirements_sha256", "design_sha256"}
+        or receipt.get("schema") != "maintain-project-specs.worker-receipt.v1"
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(receipt.get(field))) is None
+            for field in ("requirements_sha256", "design_sha256")
+        )
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "worker project-spec context is invalid"
         )
     recorded = assignment.get("assignment_sha256")
     unsigned = {
@@ -1313,10 +1340,8 @@ def _append_promotion_review_corrections(
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "correction wave integrated head is invalid"
         )
-    adopted_contract_head = active_contract_delta_head(
-        workspace, run_dir, coordinator, wave
-    )
-    adopted_contract = adopted_contract_head is not None
+    adopted_contract_head = None
+    adopted_contract = False
     correction_base = _head(integration)
     blocked_worker_frontier = (
         integrated_head is None
@@ -2405,77 +2430,13 @@ def _coordinator_and_wave(
             error.message == "canonical project specs drifted after impact settlement"
             and _promotion_already_at_target(workspace, coordinator, wave)
         )
-        promoted_lifecycle_reconciliation = error.message in {
-            "canonical project specs drifted after impact settlement",
-            "prompt impact plan basis is stale",
-        } and terminal_lifecycle_seal_promoted(workspace, run_dir, coordinator, wave)
         if not (
             allow_interrupted_promotion
             and error.code == "REPLAN_REQUIRED"
-            and (interrupted_promotion or promoted_lifecycle_reconciliation)
+            and interrupted_promotion
         ):
             raise
     return run_dir, coordinator, wave
-
-
-def _exact_command_flags(
-    tokens: list[str], *, boolean_flags: set[str]
-) -> dict[str, str | bool] | None:
-    values: dict[str, str | bool] = {}
-    index = 3
-    while index < len(tokens):
-        flag = tokens[index]
-        if not flag.startswith("--") or flag in values:
-            return None
-        if flag in boolean_flags:
-            values[flag] = True
-            index += 1
-            continue
-        if index + 1 >= len(tokens):
-            return None
-        values[flag] = tokens[index + 1]
-        index += 2
-    return values
-
-
-def _exact_absolute_path(value: object, expected: Path) -> bool:
-    if not isinstance(value, str):
-        return False
-    candidate = Path(value).expanduser()
-    return candidate.is_absolute() and Path(os.path.abspath(candidate)) == Path(
-        os.path.abspath(expected)
-    )
-
-
-def _exact_resolved_path(value: object, expected: Path) -> bool:
-    if not isinstance(value, str):
-        return False
-    candidate = Path(value).expanduser()
-    return candidate.is_absolute() and candidate.resolve(
-        strict=False
-    ) == expected.resolve(strict=False)
-
-
-def _trusted_python_command(tokens: list[str], helper: Path) -> bool:
-    if len(tokens) < 3 or "$" in " ".join(tokens):
-        return False
-    name = Path(tokens[0]).name
-    if re.fullmatch(r"python3(?:\.[0-9]+)?", name) is None:
-        return False
-    candidate = tokens[0] if Path(tokens[0]).is_absolute() else shutil.which(tokens[0])
-    if candidate is None:
-        return False
-    try:
-        executable = Path(candidate).resolve(strict=True)
-        if not executable.is_file() or not os.access(executable, os.X_OK):
-            return False
-        expected = shutil.which(name)
-        trusted = executable == Path(sys.executable).resolve(strict=True) or (
-            expected is not None and executable == Path(expected).resolve(strict=True)
-        )
-    except OSError:
-        return False
-    return trusted and _exact_absolute_path(tokens[1], helper)
 
 
 def _nul_git_paths(repo: Path, arguments: list[str], label: str) -> set[str]:
@@ -2687,250 +2648,6 @@ def _promotion_coordinator_commit_is_safe(
     )
 
 
-def _active_integration_project(
-    manifest_path: Path,
-    workspace: dict[str, object],
-    run_id: str,
-    *,
-    allow_unstaged_contract: bool = False,
-) -> tuple[Path, Path, dict[str, object]]:
-    run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
-    _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
-    wave_status = wave["status"]
-    if wave_status not in {"preparing", "promotion_pending"}:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID",
-            "project-agent lifecycle requires a prepared or promotion-pending wave",
-        )
-    integration = Path(str(wave["integration_worktree"]))
-    if integration.is_symlink() or not integration.is_dir():
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "integration worktree is missing or unsafe"
-        )
-    repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
-    scope = required_string(workspace, "scope", "workspace manifest")
-    project = integration if scope == "." else integration / scope
-    integrated_head = wave.get("integrated_head")
-    if wave_status == "promotion_pending":
-        if not isinstance(integrated_head, str):
-            raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID",
-                "promotion-pending integration has no sealed head",
-            )
-        current_head = _head(integration)
-        expected_head = current_head
-        delta_is_safe = (
-            _promotion_coordinator_delta_is_safe(integration, project)
-            if current_head == integrated_head
-            else _promotion_coordinator_commit_is_safe(
-                integration, project, integrated_head, current_head
-            )
-        )
-    elif integrated_head is None:
-        prepared_contract = wave.get("contract_commit")
-        if isinstance(prepared_contract, str):
-            expected_head = prepared_contract
-            delta_is_safe = _prepared_contract_commit_is_safe(
-                integration,
-                project,
-                str(wave["base_commit"]),
-                prepared_contract,
-            )
-        else:
-            expected_head = wave["base_commit"]
-            delta_is_safe = (
-                _prepared_contract_stage_delta_is_safe(integration, project)
-                if allow_unstaged_contract
-                else _prepared_contract_delta_is_safe(integration, project)
-            )
-    else:
-        adopted_contract_head = active_contract_delta_head(
-            workspace, run_dir, coordinator, wave
-        )
-        contract_commit = wave.get("contract_commit")
-        if contract_commit not in {integrated_head, adopted_contract_head}:
-            raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID",
-                "integration worktree identity is stale",
-            )
-        expected_head = contract_commit
-        delta_is_safe = _prepared_contract_delta_is_safe(integration, project)
-    if (
-        Path(
-            _git_text(
-                integration,
-                ["rev-parse", "--path-format=absolute", "--show-toplevel"],
-                "inspect integration root",
-            )
-        ).resolve()
-        != integration.resolve()
-        or _common_dir(integration) != _common_dir(repo)
-        or _branch(integration) != wave["integration_branch"]
-        or _head(integration) != expected_head
-        or not delta_is_safe
-    ):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "integration worktree identity is stale"
-        )
-    if project.is_symlink() or not project.is_dir():
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "integration project is missing or unsafe"
-        )
-    return run_dir, project, wave
-
-
-def authorize_project_agent_lifecycle(
-    manifest_path: Path, run_id: str, command: str
-) -> dict[str, object]:
-    """Attest one exact run-owned project-instructions command to the hook."""
-
-    if not command or any(character in command for character in ";|<>`\n"):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "project-agent command is not canonical"
-        )
-    workspace = verify_workspace(manifest_path)
-    try:
-        tokens = shlex.split(command)
-    except ValueError as error:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "project-agent command is malformed"
-        ) from error
-    task_helper = Path(__file__).resolve().with_name("prompt_workspace.py")
-    coordinator_stage = (
-        _trusted_python_command(tokens, task_helper)
-        and tokens[2] == "coordinator-stage"
-    )
-    run_dir, project, _wave = _active_integration_project(
-        manifest_path,
-        workspace,
-        run_id,
-        allow_unstaged_contract=coordinator_stage,
-    )
-    if _trusted_python_command(tokens, task_helper) and tokens[2] in {
-        "coordinator-stage",
-        "coordinator-commit",
-    }:
-        flags = _exact_command_flags(tokens, boolean_flags={"--json"})
-        if (
-            flags is None
-            or set(flags)
-            not in (
-                {"--workspace", "--run-id"},
-                {"--workspace", "--run-id", "--json"},
-            )
-            or not _exact_absolute_path(flags.get("--workspace"), manifest_path)
-            or flags.get("--run-id") != run_id
-        ):
-            raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID",
-                "coordinator contract command flags are invalid",
-            )
-        outer_project = Path(
-            required_string(workspace, "source_root", "workspace manifest")
-        ).resolve()
-        return {
-            "status": "authorized",
-            "action": tokens[2],
-            "outer_project_root": str(outer_project),
-            "project_root": str(project.resolve()),
-            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
-        }
-    instruction_helper = (
-        Path(__file__).resolve().parents[2]
-        / "project-agent-instructions"
-        / "scripts"
-        / "project_agent_instructions.py"
-    )
-    spec_helper = (
-        Path(__file__).resolve().parents[2]
-        / "maintain-project-specs"
-        / "scripts"
-        / "project_specs.py"
-    )
-    action = tokens[2]
-    instruction_action = action in {"inspect", "render"} and _trusted_python_command(
-        tokens, instruction_helper
-    )
-    validation_action = action == "validate" and _trusted_python_command(
-        tokens, spec_helper
-    )
-    if not instruction_action and not validation_action:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "project-agent command owner is invalid"
-        )
-    flags = _exact_command_flags(tokens, boolean_flags=set())
-    orchestration = run_dir / "orchestration"
-    private_root = orchestration / "project-agent-instructions"
-    manifest = private_root / "manifest.json"
-    decision = private_root / "decision.json"
-    state = private_root / "state.json"
-    expected: dict[str, dict[str, object]] = {
-        "validate": {
-            "--project-root": project,
-            "--output": orchestration / "project-agent-spec-receipt.json",
-            "--task-implementer-workspace": manifest_path,
-            "--task-implementer-run-id": run_id,
-        },
-        "inspect": {
-            "--project-root": project,
-            "--spec-owner": "maintain-project-specs",
-            "--requirements": "docs/requirements.md",
-            "--design": "docs/design.md",
-            "--spec-receipt": orchestration / "project-agent-spec-receipt.json",
-            "--runtime-config": orchestration / "project-agent-runtime.json",
-            "--codex-home": _state_root(manifest_path).parent,
-            "--private-root": private_root,
-            "--output": manifest,
-        },
-        "render": {
-            "--private-root": private_root,
-            "--manifest": manifest,
-            "--decision": decision,
-            "--output": private_root / "rules.md",
-            "--state": state,
-        },
-    }
-    bindings = expected[action]
-    if (
-        flags is None
-        or set(flags)
-        != set(bindings) | ({"--session-id"} if action == "validate" else set())
-        or (
-            action == "validate"
-            and re.fullmatch(
-                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-                str(flags.get("--session-id", "")),
-            )
-            is None
-        )
-    ):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "project-agent command flags are invalid"
-        )
-    for flag, value in bindings.items():
-        observed = flags.get(flag)
-        if flag == "--codex-home" and isinstance(value, Path):
-            matches = _exact_resolved_path(observed, value)
-        elif isinstance(value, Path):
-            matches = _exact_absolute_path(observed, value)
-        else:
-            matches = observed == value
-        if not matches:
-            raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", f"project-agent {flag} binding is invalid"
-            )
-    outer_project = Path(
-        required_string(workspace, "source_root", "workspace manifest")
-    ).resolve()
-    return {
-        "status": "authorized",
-        "action": action,
-        "outer_project_root": str(outer_project),
-        "project_root": str(project.resolve()),
-        "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
-    }
-
-
 def stage_coordinator_contract(
     manifest_path: Path,
     run_id: str,
@@ -3033,7 +2750,6 @@ def _commit_prepared_coordinator_contract(
             raise PromptWorkspaceError(
                 "WORKTREE_CONFLICT", "prepared coordinator contract commit changed"
             )
-        verify_project_agent_contract(workspace, run_dir, project, recorded)
         return {
             "status": "reused",
             "commit": recorded,
@@ -3077,7 +2793,6 @@ def _commit_prepared_coordinator_contract(
     wave["contract_commit"] = contract
     wave["updated_at"] = _utc(clock)
     _save_wave(run_dir, wave)
-    verify_project_agent_contract(workspace, run_dir, project, contract)
     return {
         "status": "committed",
         "commit": contract,
@@ -3217,303 +2932,6 @@ def commit_coordinator_delta(
             "commit": commit,
             "changed_paths": sorted(final_paths),
         }
-
-
-def authorize_lifecycle_impact(
-    manifest_path: Path, run_id: str, command: str
-) -> dict[str, object]:
-    """Attest the canonical first wave-plan command for lifecycle accounting."""
-
-    workspace = verify_workspace(manifest_path)
-    run_dir = _run_dir(workspace, run_id)
-    verify_run(workspace, run_id, None)
-    try:
-        tokens = shlex.split(command)
-    except ValueError as error:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "wave-plan command is malformed"
-        ) from error
-    helper = Path(__file__).resolve().with_name("prompt_workspace.py")
-    if not _trusted_python_command(tokens, helper) or tokens[2] != "wave-plan":
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "wave-plan command owner is invalid"
-        )
-    flags = _exact_command_flags(tokens, boolean_flags={"--json"})
-    if flags is None or set(flags) not in (
-        {"--workspace", "--run-id", "--capacity"},
-        {"--workspace", "--run-id", "--capacity", "--json"},
-        {"--workspace", "--run-id", "--capacity", "--resume-token"},
-        {
-            "--workspace",
-            "--run-id",
-            "--capacity",
-            "--resume-token",
-            "--json",
-        },
-    ):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "wave-plan command flags are invalid"
-        )
-    try:
-        capacity = int(str(flags["--capacity"]))
-    except (KeyError, ValueError) as error:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "wave-plan capacity is invalid"
-        ) from error
-    if (
-        not _exact_absolute_path(flags.get("--workspace"), manifest_path)
-        or flags.get("--run-id") != run_id
-        or capacity < 1
-    ):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "wave-plan binding is invalid"
-        )
-    resume_token = flags.get("--resume-token")
-    if resume_token is not None:
-        control_path = orchestration_dir(run_dir) / "resume-control.json"
-        try:
-            metadata = control_path.lstat()
-            control = load_json_object(control_path, "resume control")
-        except (OSError, PromptWorkspaceError) as error:
-            raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID",
-                "resume-controlled wave-plan binding is unavailable",
-            ) from error
-        expected_arguments = {"capacity": capacity}
-        common_invalid = (
-            control_path.is_symlink()
-            or not stat.S_ISREG(metadata.st_mode)
-            or stat.S_IMODE(metadata.st_mode) != 0o600
-            or control.get("schema") != "task-implementer/resume-control-v1"
-            or control.get("run_id") != run_id
-            or re.fullmatch(r"[0-9a-f]{64}", str(resume_token)) is None
-        )
-        active_invalid = control.get("phase") == "intent" and (
-            control.get("transition") != "wave-plan"
-            or control.get("resume_token") != resume_token
-            or control.get("arguments") != expected_arguments
-            or control.get("arguments_sha256")
-            != hashlib.sha256(stable_json(expected_arguments)).hexdigest()
-        )
-        idle_invalid = control.get("phase") == "idle" and any(
-            control.get(key) is not None
-            for key in (
-                "transition",
-                "arguments",
-                "arguments_sha256",
-                "resume_token",
-            )
-        )
-        if (
-            common_invalid
-            or control.get("phase") not in {"idle", "intent"}
-            or active_invalid
-            or idle_invalid
-        ):
-            raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID",
-                "resume-controlled wave-plan binding is invalid",
-            )
-    checkpoint = load_checkpoint_receipt(run_dir, required=False)
-    _base, _tasks, claims = _run_checkpoint_inputs(workspace, run_dir)
-    preparation = load_checkpoint_preparation(run_dir, claims=claims, required=False)
-    lane_head = (
-        str(checkpoint["initial_head"])
-        if checkpoint is not None
-        else (str(preparation["before_head"]) if preparation is not None else "")
-    )
-    primary = Path(required_string(workspace, "primary_root", "workspace manifest"))
-    source_head = _git_text(
-        primary,
-        [
-            "rev-parse",
-            "--verify",
-            required_string(workspace, "source_ref", "workspace manifest"),
-        ],
-        "read the integration source ref",
-    )
-    return {
-        "status": "authorized",
-        "action": "wave-plan",
-        "outer_project_root": str(
-            Path(
-                required_string(workspace, "source_root", "workspace manifest")
-            ).resolve()
-        ),
-        "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
-        "checkpoint_head": (
-            str(checkpoint["initial_head"]) if checkpoint is not None else None
-        ),
-        "review_correction": bool(lane_head)
-        and integration_review_correction_matches(
-            workspace,
-            run_id=run_id,
-            run_dir=run_dir,
-            lane_head=lane_head,
-            source_head=source_head,
-        ),
-    }
-
-
-def authorize_task_commit_lifecycle(
-    manifest_path: Path, run_id: str, command: str
-) -> dict[str, object]:
-    """Attest one exact delegated worker commit command to the lifecycle hook."""
-
-    if not command or any(character in command for character in ";|<>`\n"):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit command is not canonical"
-        )
-    workspace = verify_workspace(manifest_path)
-    run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
-    _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
-    if wave["status"] != "running":
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit requires an active running wave"
-        )
-    try:
-        tokens = shlex.split(command)
-    except ValueError as error:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit command is malformed"
-        ) from error
-    helper = (
-        Path(__file__).resolve().parents[2]
-        / "commit"
-        / "scripts"
-        / "commit_transaction.py"
-    )
-    if not _trusted_python_command(tokens, helper) or tokens[2] not in {
-        "prepare",
-        "execute",
-        "review",
-    }:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit command owner is invalid"
-        )
-    action = tokens[2]
-    flags = _exact_command_flags(
-        tokens,
-        boolean_flags={"--allow-default-branch"} if action == "prepare" else set(),
-    )
-    required = {
-        "prepare": {"--repo-root", "--session-id", "--authorization", "--claim"},
-        "execute": {
-            "--repo-root",
-            "--session-id",
-            "--claim",
-            "--token",
-            "--reviewed-tree",
-            "--message",
-        },
-        "review": {
-            "--repo-root",
-            "--session-id",
-            "--claim",
-            "--token",
-            "--reviewed-commit",
-            "--reviewed-tree",
-        },
-    }[action]
-    allowed = required | ({"--allow-default-branch"} if action == "prepare" else set())
-    if flags is None or not required.issubset(flags) or set(flags) - allowed:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit command flags are invalid"
-        )
-    repo_value = flags.get("--repo-root")
-    raw_session = flags.get("--session-id")
-    if not isinstance(repo_value, str) or not isinstance(raw_session, str):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit identity is incomplete"
-        )
-    worker_root = Path(repo_value).expanduser()
-    if not worker_root.is_absolute():
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit root must be absolute"
-        )
-    session_sha256 = hashlib.sha256(raw_session.encode()).hexdigest()
-    active_batch_index = wave.get("active_batch_index")
-    if not isinstance(active_batch_index, int):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "wave has no active capacity batch"
-        )
-    active_task_ids = wave["batches"][active_batch_index]
-    matches: list[tuple[dict[str, object], Path]] = []
-    for task_id in active_task_ids:
-        assignment = _validated_assignment(
-            _assignment_path(run_dir, str(wave["wave_id"]), str(task_id))
-        )
-        _validate_assignment_context(
-            assignment, workspace, coordinator, run_dir, wave, str(task_id)
-        )
-        plane_path = _task_plane_path(run_dir, str(wave["wave_id"]), str(task_id))
-        plane = _load_task_plane(run_dir, str(wave["wave_id"]), str(task_id))
-        if (
-            Path(str(assignment["worktree"])).resolve(strict=False)
-            == worker_root.resolve(strict=False)
-            and plane["state"] == "running"
-            and plane["worker_session_sha256"] == session_sha256
-            and plane["assignment_sha256"] == assignment["assignment_sha256"]
-        ):
-            matches.append((assignment, plane_path))
-    if len(matches) != 1:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID",
-            "worker commit does not belong to one active assigned task",
-        )
-    assignment, plane_path = matches[0]
-    base = required_string(assignment, "base_commit", "worker assignment")
-    observed_paths = set(_dirty_paths(worker_root))
-    observed_head = _head(worker_root)
-    if observed_head != base:
-        observed_paths.update(_changed_paths(worker_root, base, observed_head))
-    coordinator_owned = _worker_scope_violation_paths(assignment, observed_paths)
-    if coordinator_owned:
-        raise PromptWorkspaceError(
-            "WORKER_SCOPE_VIOLATION",
-            "worker commit includes unassigned or coordinator-owned shared paths",
-        )
-    _verify_linked_worktree(
-        Path(required_string(workspace, "repo_root", "workspace manifest")),
-        worker_root,
-        required_string(assignment, "branch", "worker assignment"),
-    )
-    authorization_path, claim_path = _task_commit_paths(worker_root, raw_session)
-    expected_path = authorization_path if action == "prepare" else claim_path
-    evidence_flag = "--authorization" if action == "prepare" else "--claim"
-    if (
-        not _exact_absolute_path(flags.get(evidence_flag), expected_path)
-        or not _exact_absolute_path(flags.get("--claim"), claim_path)
-        or (action == "prepare" and bool(flags.get("--allow-default-branch", False)))
-    ):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit evidence paths are invalid"
-        )
-    evidence = load_json_object(expected_path, "worker commit evidence")
-    owner_field = "owner" if action == "prepare" else "authorization_owner"
-    if (
-        evidence.get(owner_field) != "task-implementer"
-        or evidence.get("repo_root") != str(worker_root.resolve())
-        or evidence.get("worktree") != str(worker_root.resolve())
-        or evidence.get("session_sha256") != session_sha256
-        or evidence.get("turn_sha256") != assignment["assignment_sha256"]
-        or evidence.get("owner_evidence_path") != str(plane_path.resolve())
-        or evidence.get("owner_evidence_sha256") != assignment["assignment_sha256"]
-    ):
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "worker commit evidence identity is stale"
-        )
-    outer_project = Path(
-        required_string(workspace, "source_root", "workspace manifest")
-    ).resolve()
-    return {
-        "status": "authorized",
-        "action": action,
-        "outer_project_root": str(outer_project),
-        "worker_root": str(worker_root.resolve()),
-        "worker_session_id": raw_session,
-        "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
-    }
 
 
 def _expected_primary_head(
@@ -4011,10 +3429,8 @@ def prepare_wave(
         if wave["status"] not in {"planned", "preparing"}:
             return wave
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
-        adopted_contract_head = active_contract_delta_head(
-            workspace, run_dir, coordinator, wave
-        )
-        adopted_contract = adopted_contract_head is not None
+        adopted_contract_head = None
+        adopted_contract = False
         if wave["status"] == "preparing" and wave.get("integrated_head") is not None:
             if wave.get("contract_commit") not in {
                 wave.get("integrated_head"),
@@ -4158,10 +3574,6 @@ def dispatch_wave(
                 "integration contract commit is not clean and exact",
             )
         scope = required_string(workspace, "scope", "workspace manifest")
-        contract_project = integration if scope == "." else integration / scope
-        verify_project_agent_contract(
-            workspace, run_dir, contract_project, contract_commit
-        )
         if wave["status"] == "running":
             if wave["contract_commit"] != contract_commit:
                 raise PromptWorkspaceError(
@@ -4195,9 +3607,7 @@ def dispatch_wave(
                 )
                 assignments.append(str(target))
             return {"wave": wave, "assignments": assignments}
-        adopted_contract_head = active_contract_delta_head(
-            workspace, run_dir, coordinator, wave
-        )
+        adopted_contract_head = None
         if wave.get("integrated_head") is not None:
             if wave.get(
                 "contract_commit"
@@ -4305,6 +3715,12 @@ def dispatch_wave(
                     "superseded worker resource could not be cleaned",
                 )
         wave_root = Path(str(wave["integration_worktree"])).parent
+        contract_specs = inspect_spec_documents(workspace, commit=contract_commit)
+        project_spec_receipt = {
+            "schema": "maintain-project-specs.worker-receipt.v1",
+            "requirements_sha256": contract_specs["requirements"]["file_sha256"],
+            "design_sha256": contract_specs["design"]["file_sha256"],
+        }
         for task in tasks:
             _reject_special_claims(repo, task)
             task_id = str(task["task_id"])
@@ -4413,6 +3829,8 @@ def dispatch_wave(
                 "dependencies": task["dependencies"],
                 "incoming_handoff_path": str(handoff_path),
                 "incoming_handoff_sha256": incoming_handoff["handoff_sha256"],
+                "root_intent_sha256": coordinator["prompt_intent_sha256"],
+                "project_spec_receipt": project_spec_receipt,
                 "plan_sha256": coordinator["plan_sha256"],
                 "created_at": created_at,
             }
@@ -4642,7 +4060,7 @@ def _task_commit_context(
         / "commit_transaction.py"
     ).resolve(strict=True)
     repo_root = worktree.resolve(strict=True)
-    lifecycle_cwd = Path(
+    scope_cwd = Path(
         required_string(workspace, "source_root", "workspace manifest")
     ).resolve(strict=True)
     prepare_argv = [
@@ -4659,11 +4077,11 @@ def _task_commit_context(
         str(claim),
     ]
     return {
-        "schema": "task-implementer/worker-commit-context-v1",
+        "schema": "task-implementer/worker-commit-context-v2",
         "python_executable": str(executable),
         "helper_path": str(helper),
         "repo_root": str(repo_root),
-        "lifecycle_cwd": str(lifecycle_cwd),
+        "scope_cwd": str(scope_cwd),
         "session_id": session_id,
         "session_id_source": "CODEX_THREAD_ID",
         "authorization": str(authorization),
@@ -4757,6 +4175,7 @@ def publish_task_result(
         "summary",
         "decisions",
         "open_risks",
+        "spec_gaps",
         "validation",
         "end_to_end_validation",
         "code_review",
@@ -4770,10 +4189,12 @@ def publish_task_result(
         or draft.get("task_id") != assignment.get("task_id")
         or draft.get("assignment_sha256") != assignment.get("assignment_sha256")
         or draft.get("status") not in {"committed", "REPLAN_REQUIRED"}
+        or (bool(draft.get("spec_gaps")) and draft.get("status") != "REPLAN_REQUIRED")
         or not isinstance(draft.get("changed_paths"), list)
         or not all(isinstance(path, str) and path for path in draft["changed_paths"])
         or not isinstance(draft.get("decisions"), list)
         or not isinstance(draft.get("open_risks"), list)
+        or not _valid_spec_gaps(draft.get("spec_gaps"))
         or any(
             not isinstance(item, str) or not item.strip()
             for item in [*draft["decisions"], *draft["open_risks"]]
@@ -5221,8 +4642,8 @@ def start_task(
 def _dirty_paths(repo: Path) -> list[str]:
     paths: set[str] = set()
     commands = (
-        ["diff", "--name-only", "-z"],
-        ["diff", "--cached", "--name-only", "-z"],
+        ["diff", "--no-renames", "--name-only", "-z"],
+        ["diff", "--cached", "--no-renames", "--name-only", "-z"],
         ["ls-files", "--others", "--exclude-standard", "-z"],
     )
     for arguments in commands:
@@ -5530,11 +4951,7 @@ def recover_task(
             )
         changed = _changed_paths(worktree, base, observed) if observed != base else []
         changed = sorted(set(changed) | set(_dirty_paths(worktree)))
-        scope_violation_paths = sorted(
-            path
-            for path in changed
-            if not _path_allowed(path, assignment["write_claims"])
-        )
+        scope_violation_paths = _worker_scope_violation_paths(assignment, changed)
         raw_session = (
             session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
         )
@@ -5623,7 +5040,9 @@ def recover_task(
 
 def _changed_paths(repo: Path, base: str, commit: str) -> list[str]:
     raw = _git(
-        repo, ["diff", "--name-only", "-z", f"{base}..{commit}"], "inspect task paths"
+        repo,
+        ["diff", "--no-renames", "--name-only", "-z", f"{base}..{commit}"],
+        "inspect task paths",
     ).stdout
     return sorted(
         item for item in raw.decode("utf-8", errors="strict").split("\0") if item
@@ -5682,6 +5101,7 @@ def accept_task_result(
             "summary",
             "decisions",
             "open_risks",
+            "spec_gaps",
             "validation",
             "end_to_end_validation",
             "code_review",
@@ -5695,11 +5115,16 @@ def accept_task_result(
             or result.get("wave_id") != wave["wave_id"]
             or result.get("task_id") != task_id
             or result.get("assignment_sha256") != assignment.get("assignment_sha256")
+            or (
+                bool(result.get("spec_gaps"))
+                and result.get("status") != "REPLAN_REQUIRED"
+            )
             or not isinstance(result.get("summary"), str)
             or not result["summary"].strip()
             or not isinstance(result.get("decisions"), list)
             or not isinstance(result.get("open_risks"), list)
             or not isinstance(result.get("changed_paths"), list)
+            or not _valid_spec_gaps(result.get("spec_gaps"))
             or not all(
                 isinstance(path, str) and path
                 for path in result.get("changed_paths", [])
@@ -6167,20 +5592,6 @@ def promote_wave(
     workspace = verify_workspace(manifest_path)
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     with scope_lock(runs_root.parent):
-        preliminary_run_dir = _run_dir(workspace, run_id)
-        preliminary_coordinator = load_coordinator_state(preliminary_run_dir)
-        if preliminary_coordinator is not None and isinstance(
-            preliminary_coordinator.get("active_wave"), str
-        ):
-            preliminary_wave = _load_wave(
-                preliminary_run_dir, str(preliminary_coordinator["active_wave"])
-            )
-            recover_contract_delta_promotion(
-                workspace,
-                preliminary_run_dir,
-                preliminary_coordinator,
-                preliminary_wave,
-            )
         run_dir, coordinator, wave = _coordinator_and_wave(
             workspace, run_id, allow_interrupted_promotion=True
         )
@@ -6296,11 +5707,10 @@ def promote_wave(
                 "REPLAN_REQUIRED",
                 "coordinator final commit changed files outside shared documentation ownership",
             )
-        adopted_contract = contract_delta_active(workspace, run_dir, coordinator, wave)
         if (
             _branch(repo) != coordinator["base_branch"]
             or _head(repo) not in {wave["base_commit"], target}
-            or (not _clean(repo) and not adopted_contract)
+            or not _clean(repo)
         ):
             raise PromptWorkspaceError(
                 "PROMOTION_BLOCKED",
@@ -6344,9 +5754,6 @@ def promote_wave(
                 "CLEANUP_BLOCKED",
                 "worker worktrees or branches could not be removed after combined validation",
             )
-        prepared_contract_delta = prepare_contract_delta_promotion(
-            workspace, run_dir, coordinator, wave, target
-        )
         try:
             promotion = promote_ff_only(
                 repo,
@@ -6355,16 +5762,9 @@ def promote_wave(
                 target=target,
             )
         except GitPromotionError as error:
-            if prepared_contract_delta:
-                restore_contract_delta_after_failed_promotion(
-                    workspace, run_dir, coordinator, wave
-                )
             code = "PROMOTION_FAILED" if _head(repo) == target else "PROMOTION_BLOCKED"
             raise PromptWorkspaceError(code, str(error)) from error
         observed = str(promotion["head"])
-        complete_contract_delta_promotion(
-            workspace, run_dir, coordinator, wave, observed
-        )
         record_promotion(workspace, run_dir, observed)
         handoff = read_handoff_text(run_dir)
         if handoff is None:
@@ -6430,17 +5830,11 @@ def _reconcile_promoted_spec_impact(
     integration = Path(str(wave.get("integration_worktree")))
     scope = required_string(workspace, "scope", "workspace manifest")
     integration_project = integration if scope == "." else integration / scope
-    terminal_reconciliation = terminal_lifecycle_seal_promoted(
-        workspace, run_dir, coordinator, wave
-    )
     exact_promoted_reconciliation = (
         isinstance(promoted, str)
         and isinstance(integrated_head, str)
-        and (
-            _promotion_coordinator_commit_is_safe(
-                integration, integration_project, integrated_head, promoted
-            )
-            or terminal_reconciliation
+        and _promotion_coordinator_commit_is_safe(
+            integration, integration_project, integrated_head, promoted
         )
     )
     if (
@@ -6484,9 +5878,7 @@ def _reconcile_promoted_spec_impact(
     settled = verify_requirements_refinement_contract(workspace, run_dir, run_state)
     impact = dict(settled["impact"])
     if impact.get("plan_action") != "retain_plan":
-        if terminal_reconciliation and _final_wave(coordinator, wave):
-            pass
-        elif not _final_wave(coordinator, wave):
+        if not _final_wave(coordinator, wave):
             # Keep the prior plan basis stale until cleanup advances to the
             # resource-free planned tail. Resume will then route that tail
             # through wave-replan instead of either deleting retained
@@ -6511,78 +5903,6 @@ def _final_wave(coordinator: dict[str, object], wave: dict[str, object]) -> bool
         if isinstance(item, dict)
     ]
     return bool(indexed) and indexed[-1] == wave.get("wave_id")
-
-
-def _promote_terminal_lifecycle_seal(
-    workspace: dict[str, object],
-    run_dir: Path,
-    coordinator: dict[str, object],
-    wave: dict[str, object],
-    clock: Callable[[], datetime],
-) -> None:
-    """Promote an exact lifecycle seal before its retained integration is removed."""
-
-    if wave.get("status") != "promoted":
-        return
-    recover_terminal_lifecycle_promotion(workspace, run_dir, coordinator, wave)
-    receipt = terminal_lifecycle_seal(run_dir, str(wave["wave_id"]))
-    if receipt is not None and receipt.get("phase") == "promoted":
-        target = str(receipt["contract_head"])
-        repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
-        if _head(repo) != target or not _clean(repo):
-            raise PromptWorkspaceError(
-                "WORKTREE_CONFLICT",
-                "terminal lifecycle promotion receipt disagrees with the lane",
-            )
-        record_promotion(workspace, run_dir, target)
-        if wave.get("promoted_head") != target:
-            wave["promoted_head"] = target
-            wave["updated_at"] = _utc(clock)
-            _save_wave(run_dir, wave)
-    if terminal_lifecycle_seal_promoted(workspace, run_dir, coordinator, wave):
-        return
-    if not terminal_lifecycle_seal_active(workspace, run_dir, coordinator, wave):
-        # An intermediate wave may carry an exact zero/provenance-only seal,
-        # but it does not require one merely to advance the planned tail. The
-        # final wave remains fail-closed until its lifecycle is sealed.
-        if not _final_wave(coordinator, wave):
-            return
-        raise PromptWorkspaceError(
-            "LIFECYCLE_SEAL_REQUIRED",
-            "seal the selected-project lifecycle before promoted-wave cleanup",
-        )
-    promotion = prepare_terminal_lifecycle_promotion(
-        workspace, run_dir, coordinator, wave
-    )
-    if promotion is not None:
-        repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
-        try:
-            result = promote_ff_only(
-                repo,
-                expected_branch=str(coordinator["base_branch"]),
-                expected_base=promotion["base"],
-                target=promotion["target"],
-            )
-        except GitPromotionError as error:
-            restore_terminal_lifecycle_after_failed_promotion(
-                workspace, run_dir, coordinator, wave
-            )
-            code = (
-                "PROMOTION_FAILED"
-                if _head(repo) == promotion["target"]
-                else "PROMOTION_BLOCKED"
-            )
-            raise PromptWorkspaceError(code, str(error)) from error
-        observed = str(result["head"])
-        complete_terminal_lifecycle_promotion(run_dir, wave, observed)
-        record_promotion(workspace, run_dir, observed)
-        wave["promoted_head"] = observed
-        wave["updated_at"] = _utc(clock)
-        _save_wave(run_dir, wave)
-    if not terminal_lifecycle_seal_promoted(workspace, run_dir, coordinator, wave):
-        raise PromptWorkspaceError(
-            "WORKTREE_CONFLICT", "terminal lifecycle seal did not reach the lane"
-        )
 
 
 def _cleanup_failed_worker_archives(
@@ -6644,13 +5964,6 @@ def cleanup_wave(
             preliminary_wave = _load_wave(
                 preliminary_run_dir, str(preliminary_coordinator["active_wave"])
             )
-            _promote_terminal_lifecycle_seal(
-                workspace,
-                preliminary_run_dir,
-                preliminary_coordinator,
-                preliminary_wave,
-                clock,
-            )
             _reconcile_promoted_spec_impact(
                 workspace,
                 preliminary_run_dir,
@@ -6668,13 +5981,6 @@ def cleanup_wave(
         if wave["status"] not in {"promoted", "cleanup"}:
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "cleanup requires verified promotion"
-            )
-        if _final_wave(coordinator, wave) and not terminal_lifecycle_seal_promoted(
-            workspace, run_dir, coordinator, wave
-        ):
-            raise PromptWorkspaceError(
-                "LIFECYCLE_SEAL_REQUIRED",
-                "the final wave cannot clean up before its lifecycle seal is promoted",
             )
         if wave.get("workers_cleaned") is not True:
             raise PromptWorkspaceError(
@@ -6773,13 +6079,6 @@ def finalize_run(
         ):
             raise PromptWorkspaceError(
                 "CLEANUP_BLOCKED", "internal task resources are not fully cleaned"
-            )
-        if not terminal_lifecycle_seal_promoted(
-            workspace, run_dir, coordinator, waves[-1]
-        ):
-            raise PromptWorkspaceError(
-                "LIFECYCLE_SEAL_REQUIRED",
-                "terminal lifecycle evidence is required before generation release",
             )
         promoted_head = waves[-1].get("promoted_head")
         if (

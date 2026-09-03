@@ -380,9 +380,7 @@ class PeerStateExchange:
         replay_state = candidate.accept(
             message.heartbeat,
             authenticated_node_id=message.authenticated_node_id,
-            authenticated_certificate_fingerprint=(
-                message.authenticated_certificate_fingerprint
-            ),
+            authenticated_certificate_fingerprint=(message.authenticated_certificate_fingerprint),
             authenticated_mtls_epoch=message.authenticated_mtls_epoch,
             expected_cluster_id=self.cluster_id,
             expected_node_id=self.peer_node_id,

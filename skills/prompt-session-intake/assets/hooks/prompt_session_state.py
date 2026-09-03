@@ -214,28 +214,6 @@ def _objective_identities(entries: list[dict[str, Any]]) -> set[tuple[object, ..
     }
 
 
-def _attach_unique_active(
-    root: Path, session_id: object, project: Path
-) -> dict[str, Any] | None:
-    registry = _load_registry(root)
-    candidates = [
-        entry
-        for entry in registry["entries"]
-        if isinstance(entry, dict)
-        and entry.get("active") is True
-        and _entry_matches_project(root, entry, project)
-        and entry.get("workflow") in WORKFLOWS
-    ]
-    if len(_objective_identities(candidates)) > 1:
-        raise PromptSessionError(
-            "OBJECTIVE_AMBIGUOUS",
-            "multiple active objectives require an explicit workflow selection",
-        )
-    if not candidates:
-        return None
-    return bind_session(root, session_id, str(candidates[0]["workflow"]), project)
-
-
 def _excluded_payload(payload: dict[str, Any]) -> bool:
     if payload.get("stop_hook_active") or payload.get("is_subagent"):
         return True
@@ -254,6 +232,14 @@ def _context(message: str) -> dict[str, Any]:
             "additionalContext": message,
         },
     }
+
+
+def _secret_context() -> dict[str, Any]:
+    return _context(
+        "Prompt-session capture was skipped because the direct input matched "
+        "secret detection. Continue handling the user request normally, but do "
+        "not persist, quote, or repeat sensitive content."
+    )
 
 
 def _stage_turn(
@@ -445,12 +431,6 @@ def evaluate_submit(
     prompt = payload.get("prompt")
     if session_id in {None, ""} or not isinstance(prompt, str):
         return {}
-    if contains_secret(prompt):
-        return _context(
-            "Prompt-session capture was skipped because the direct input matched "
-            "secret detection. Continue handling the user request normally, but do "
-            "not persist, quote, or repeat sensitive content."
-        )
     project = _canonical_project(payload.get("cwd"))
     selected_home = (home or codex_home(payload)).resolve()
     root = _ensure_root(selected_home)
@@ -478,6 +458,8 @@ def evaluate_submit(
                 )
         explicit = _explicit_binding(prompt, project)
         if explicit is not None:
+            if contains_secret(prompt):
+                return _secret_context()
             workflow, bound_project = explicit
             binding = bind_session(root, session_id, workflow, bound_project)
             _claim_bound_writer(root, binding, session_id)
@@ -487,8 +469,10 @@ def evaluate_submit(
             )
         binding = load_binding(root, session_id)
         if binding is None:
-            binding = _attach_unique_active(root, session_id, project)
-        if binding is None or turn_id in {None, ""}:
+            return {}
+        if contains_secret(prompt):
+            return _secret_context()
+        if turn_id in {None, ""}:
             return {}
         if not _binding_matches_project(root, binding, project):
             raise PromptSessionError(

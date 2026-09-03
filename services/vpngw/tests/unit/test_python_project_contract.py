@@ -43,17 +43,16 @@ def test_makefile_retains_canonical_check_and_build_workflow() -> None:
     assert "check: lint typecheck test-unit" in makefile
     for target in ("test-unit:", "test-integration:", "coverage:", "build:"):
         assert target in makefile
-    for helper in (
-        "misc/gcp_vpngw_vm_ha.py",
-        "misc/gcp_vpngw_classic_vm_ha.py",
-    ):
-        assert makefile.count(helper) == 2
 
 
 def test_standard_local_python_tool_outputs_are_ignored() -> None:
     ignored = set((PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines())
 
     assert {"htmlcov/", ".tox/", ".nox/"} <= ignored
+    assert {
+        "*.destroy-lifecycle.json",
+        ".*.destroy-lifecycle.json.write.lock",
+    } <= ignored
 
 
 def test_operator_docs_use_resource_scoped_transfer_commands() -> None:
@@ -71,3 +70,20 @@ def test_operator_docs_use_resource_scoped_transfer_commands() -> None:
     assert "nebius-vpngw failover tunnel" in design
     assert "nebius-vpngw failback tunnel" in design
     assert "Migrate `vm-ha-failover` to `failover vm`" in changelog
+
+
+def test_operator_docs_do_not_restore_removed_vm_ha_credential_inputs() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    for removed_guidance in (
+        "prepare one absolute operator-local Nebius credential JSON path per member",
+        "Each member supplies operator-local source paths",
+        "asks only for the new HA credential",
+        "preflights both mode-`0600` Nebius credential JSON files",
+    ):
+        assert removed_guidance not in readme
+        assert removed_guidance not in changelog
+    assert (
+        "~/.config/nebius-vpngw/credentials/<project>/<gateway>/nebius-credentials.json"
+    ) in readme

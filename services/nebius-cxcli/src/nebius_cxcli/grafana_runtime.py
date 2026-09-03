@@ -28,14 +28,32 @@ from .component_sources import (
     GrafanaDatasourceSpec,
     load_component_sources,
 )
+from .credential_compensation import (
+    CallbackCredentialDeliveryAdapter,
+    CredentialDeliveryAdapter,
+    CredentialDeliveryDisposition,
+    CredentialDeliveryIntent,
+)
 from .deploy_targets import app_chart_target_ref
-from .iam_bootstrap import issue_observability_static_key
+from .iam_bootstrap import (
+    StaticKeyIssueResult,
+    delete_observability_static_key,
+    issue_observability_static_key,
+)
 from .observability import observability_endpoint_summary
 from .runtime_config import to_plain_data
 
 GRAFANA_STATUS_FILENAME = "grafana-status.json"
 GRAFANA_TARGET_CLUSTER_ID_ENV = "NEBIUS_CXCLI_TARGET_CLUSTER_ID"
 GRAFANA_TARGET_KUBE_CONTEXT_ENV = "NEBIUS_CXCLI_TARGET_KUBE_CONTEXT"
+_OBSERVABILITY_READ_HOSTS = {
+    "read.logging.api.nebius.cloud",
+    "read.monitoring.api.nebius.cloud",
+    "read.tracing.api.nebius.cloud",
+}
+_OBSERVABILITY_STATIC_KEY_ID_ANNOTATION = (
+    "nebius.ai/cxcli-observability-static-key-id"
+)
 
 
 @dataclass(frozen=True)
@@ -360,13 +378,24 @@ def _apply_secret(
     name: str,
     string_data: Mapping[str, str],
     extra_env: Mapping[str, str] | None,
+    delivery_marker_sha256: str | None = None,
+    observability_static_key_id: str | None = None,
 ) -> None:
+    annotations: dict[str, str] = {}
+    if delivery_marker_sha256:
+        annotations["nebius.ai/cxcli-credential-delivery"] = delivery_marker_sha256
+    if observability_static_key_id:
+        annotations[_OBSERVABILITY_STATIC_KEY_ID_ANNOTATION] = observability_static_key_id
     _apply_manifest(
         {
             "apiVersion": "v1",
             "kind": "Secret",
             "type": "Opaque",
-            "metadata": {"name": name, "namespace": namespace},
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+                "annotations": annotations,
+            },
             "stringData": dict(string_data),
         },
         extra_env=extra_env,
@@ -394,32 +423,103 @@ def _client_name(payload_or_config: Any) -> str:
     return str(_mapping(payload.get("client_info")).get("client_name") or "cxcli").strip()
 
 
-def _issue_read_token(payload_or_config: Any, *, target_ref: str) -> str:
+def _issue_read_token(
+    payload_or_config: Any,
+    *,
+    target_ref: str,
+    purpose: str,
+    delivery: CredentialDeliveryAdapter[StaticKeyIssueResult],
+) -> str:
     project_id = _project_id(payload_or_config)
     if not project_id:
-        raise RuntimeError("client_info.nebius.project_id is required to issue Grafana read token")
+        raise RuntimeError(
+            "client_info.nebius.project_id is required to issue an Observability read token"
+        )
     client_name = _safe_name_segment(_client_name(payload_or_config), fallback="cxcli")
     target_segment = _safe_name_segment(target_ref or "cluster", fallback="cluster")
-    service_account_name = f"{client_name}-grafana-observability-read"
+    purpose_segment = _safe_name_segment(purpose, fallback="observability")
+    service_account_name = f"{client_name}-{purpose_segment}-observability-read"
     if len(service_account_name) > 63:
-        service_account_name = f"{client_name[:38].rstrip('-')}-grafana-read"
+        service_account_name = (
+            f"{client_name[:32].rstrip('-')}-{purpose_segment[:12]}-observability-read"
+        )
     issued_at = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-    key_name = f"{client_name}-{target_segment}-grafana-read-{issued_at}"
+    key_name = f"{client_name}-{target_segment}-{purpose_segment}-read-{issued_at}"
     if len(key_name) > 63:
-        key_name = f"{client_name[:26].rstrip('-')}-{target_segment[:12]}-grafana-{issued_at}"
+        key_name = (
+            f"{client_name[:20].rstrip('-')}-{target_segment[:10]}-"
+            f"{purpose_segment[:8]}-{issued_at}"
+        )
     result = issue_observability_static_key(
         project_id=project_id,
         service_account_name=service_account_name,
         service_account_description=(
-            "nebius-cxcli Grafana read-only access to Observability public read endpoints"
+            f"nebius-cxcli {purpose_segment} read-only access to Observability public "
+            "read endpoints"
         ),
         key_name=key_name,
         role_ids=["viewer"],
         profile=None,
         endpoint=str(os.environ.get("NEBIUS_ENDPOINT") or "").strip() or None,
         config_file=None,
+        compensation_scope=f"{purpose_segment}-read-token:{target_ref}",
+        delivery=delivery,
     )
     return result.token
+
+
+def _grafana_secret_delivery_adapter(
+    *,
+    namespace: str,
+    name: str,
+    key: str,
+    extra_env: Mapping[str, str] | None,
+) -> CallbackCredentialDeliveryAdapter[StaticKeyIssueResult]:
+    def _deliver(issued: StaticKeyIssueResult, intent: CredentialDeliveryIntent) -> None:
+        _apply_secret(
+            namespace=namespace,
+            name=name,
+            string_data={key: issued.token},
+            extra_env=extra_env,
+            delivery_marker_sha256=intent.marker_sha256,
+            observability_static_key_id=issued.static_key_id,
+        )
+
+    def _probe(intent: CredentialDeliveryIntent) -> CredentialDeliveryDisposition:
+        command = _kubectl_command(
+            ["-n", namespace, "get", "secret", name, "-o", "json"],
+            extra_env=extra_env,
+        )
+        completed = subprocess.run(
+            command,
+            env=_kubectl_env(extra_env),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if completed.returncode != 0:
+            return CredentialDeliveryDisposition.AMBIGUOUS
+        try:
+            payload = json.loads(completed.stdout or "{}")
+        except json.JSONDecodeError:
+            return CredentialDeliveryDisposition.AMBIGUOUS
+        metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
+        annotations = metadata.get("annotations") if isinstance(metadata, Mapping) else None
+        marker = (
+            str(annotations.get("nebius.ai/cxcli-credential-delivery") or "")
+            if isinstance(annotations, Mapping)
+            else ""
+        )
+        if marker == intent.marker_sha256:
+            return CredentialDeliveryDisposition.DELIVERED
+        return CredentialDeliveryDisposition.AMBIGUOUS
+
+    return CallbackCredentialDeliveryAdapter(
+        kind="kubernetes-secret",
+        target=f"{namespace}/{name}:{key}",
+        deliver_callback=_deliver,
+        probe_callback=_probe,
+    )
 
 
 def _read_token_probe_url(payload_or_config: Any) -> str:
@@ -437,15 +537,20 @@ def _observability_read_token_status(
     payload_or_config: Any,
     token: str,
     *,
+    probe_url: str = "",
     timeout: int = 10,
 ) -> bool | None:
-    probe_url = _read_token_probe_url(payload_or_config)
-    if not probe_url or not token:
+    resolved_probe_url = probe_url.strip() or _read_token_probe_url(payload_or_config)
+    if not resolved_probe_url or not token:
         return None
-    if urlparse(probe_url).scheme != "https":
+    parsed_probe_url = urlparse(resolved_probe_url)
+    if (
+        parsed_probe_url.scheme != "https"
+        or parsed_probe_url.hostname not in _OBSERVABILITY_READ_HOSTS
+    ):
         return None
     request = Request(
-        probe_url,
+        resolved_probe_url,
         headers={"Authorization": f"Bearer {token}"},
         method="GET",
     )
@@ -468,42 +573,172 @@ def _ensure_grafana_read_token_secret(
     target_ref: str,
     emit: Any | None,
 ) -> None:
-    if not _secret_has_keys(
+    ensure_observability_read_token_secret(
+        payload_or_config,
         namespace=spec.namespace,
         name=spec.token_secret_name,
-        keys=(spec.token_key,),
+        key=spec.token_key,
+        purpose="grafana",
+        extra_env=extra_env,
+        target_ref=spec.target_ref or target_ref,
+        emit=emit,
+    )
+
+
+def read_observability_read_token_secret(
+    *,
+    namespace: str,
+    name: str,
+    key: str,
+    extra_env: Mapping[str, str] | None,
+) -> str:
+    """Read one existing runtime-only Observability credential without creating it."""
+
+    if not _secret_has_keys(
+        namespace=namespace,
+        name=name,
+        keys=(key,),
         extra_env=extra_env,
     ):
-        token = _issue_read_token(payload_or_config, target_ref=spec.target_ref or target_ref)
-        _apply_secret(
-            namespace=spec.namespace,
-            name=spec.token_secret_name,
-            string_data={spec.token_key: token},
-            extra_env=extra_env,
-        )
-        if callable(emit):
-            emit(f"Created Grafana Observability read-token secret `{spec.token_secret_name}`.")
-        return
+        return ""
+    return _secret_data_values(
+        namespace=namespace,
+        name=name,
+        keys=(key,),
+        extra_env=extra_env,
+    ).get(key, "")
 
-    token_values = _secret_data_values(
-        namespace=spec.namespace,
-        name=spec.token_secret_name,
-        keys=(spec.token_key,),
+
+def cleanup_observability_read_token_secret(
+    *,
+    namespace: str,
+    name: str,
+    key: str,
+    extra_env: Mapping[str, str] | None,
+    emit: Any | None = None,
+) -> bool:
+    """Delete one delivered Observability key and its target-cluster Secret."""
+
+    command = _kubectl_command(
+        ["-n", namespace, "get", "secret", name, "-o", "json"],
         extra_env=extra_env,
     )
-    token = token_values.get(spec.token_key, "")
-    token_status = _observability_read_token_status(payload_or_config, token)
-    if token_status is not False:
-        return
-    replacement = _issue_read_token(payload_or_config, target_ref=spec.target_ref or target_ref)
-    _apply_secret(
-        namespace=spec.namespace,
-        name=spec.token_secret_name,
-        string_data={spec.token_key: replacement},
+    completed = subprocess.run(
+        command,
+        env=_kubectl_env(extra_env),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        if _kubectl_not_found_error(completed):
+            return False
+        detail = _first_non_empty_line(completed.stderr or "")
+        raise RuntimeError(f"{' '.join(command)} failed: {detail or completed.returncode}")
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"{' '.join(command)} returned invalid Secret JSON"
+        ) from exc
+    metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
+    annotations = metadata.get("annotations") if isinstance(metadata, Mapping) else None
+    static_key_id = (
+        str(annotations.get(_OBSERVABILITY_STATIC_KEY_ID_ANNOTATION) or "").strip()
+        if isinstance(annotations, Mapping)
+        else ""
+    )
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    if not static_key_id or not isinstance(data, Mapping) or not data.get(key):
+        raise RuntimeError(
+            f"Observability read-token secret `{name}` has no complete cxcli-owned "
+            "credential lifecycle identity"
+        )
+    delete_observability_static_key(
+        static_key_id=static_key_id,
+        profile=None,
+        endpoint=str(os.environ.get("NEBIUS_ENDPOINT") or "").strip() or None,
+        config_file=None,
+    )
+    _run_kubectl(
+        ["-n", namespace, "delete", "secret", name, "--ignore-not-found=true"],
         extra_env=extra_env,
+        timeout=60,
     )
     if callable(emit):
-        emit(f"Refreshed Grafana Observability read-token secret `{spec.token_secret_name}`.")
+        emit(f"Removed operation-scoped Observability read credential `{name}`.")
+    return True
+
+
+def ensure_observability_read_token_secret(
+    payload_or_config: Any,
+    *,
+    namespace: str,
+    name: str,
+    key: str,
+    purpose: str,
+    extra_env: Mapping[str, str] | None,
+    target_ref: str,
+    emit: Any | None,
+    probe_url: str = "",
+    refresh_rejected: bool = True,
+) -> str:
+    """Create, reuse, or refresh one runtime-only Observability read credential."""
+
+    _ensure_namespace(namespace, extra_env=extra_env)
+    if not _secret_has_keys(
+        namespace=namespace,
+        name=name,
+        keys=(key,),
+        extra_env=extra_env,
+    ):
+        token = _issue_read_token(
+            payload_or_config,
+            target_ref=target_ref,
+            purpose=purpose,
+            delivery=_grafana_secret_delivery_adapter(
+                namespace=namespace,
+                name=name,
+                key=key,
+                extra_env=extra_env,
+            ),
+        )
+        if callable(emit):
+            emit(f"Created Observability read-token secret `{name}`.")
+        return token
+
+    token = read_observability_read_token_secret(
+        namespace=namespace,
+        name=name,
+        key=key,
+        extra_env=extra_env,
+    )
+    token_status = _observability_read_token_status(
+        payload_or_config,
+        token,
+        probe_url=probe_url,
+    )
+    if token and token_status is not False:
+        return token
+    if token_status is False and not refresh_rejected:
+        raise RuntimeError(
+            f"Existing Observability read-token secret `{name}` was rejected; refusing "
+            "automatic credential rotation"
+        )
+    token = _issue_read_token(
+        payload_or_config,
+        target_ref=target_ref,
+        purpose=purpose,
+        delivery=_grafana_secret_delivery_adapter(
+            namespace=namespace,
+            name=name,
+            key=key,
+            extra_env=extra_env,
+        ),
+    )
+    if callable(emit):
+        emit(f"Refreshed Observability read-token secret `{name}`.")
+    return token
 
 
 def ensure_grafana_runtime_secrets(
@@ -744,10 +979,14 @@ def _get_grafana_json(
     *,
     username: str,
     password: str,
+    params: Mapping[str, str] | None = None,
 ) -> Any:
     credentials = b64encode(f"{username}:{password}".encode()).decode("ascii")
+    url = urljoin(base_url, path)
+    if params:
+        url = f"{url}?{urlencode(params)}"
     request = Request(
-        urljoin(base_url, path),
+        url,
         headers={
             "Accept": "application/json",
             "Authorization": f"Basic {credentials}",
@@ -767,6 +1006,59 @@ def _get_grafana_json(
         raise RuntimeError(
             f"Grafana API returned invalid JSON: {_json_error_snippet(body)}"
         ) from exc
+
+
+def grafana_prometheus_has_fresh_series(
+    payload_or_config: Any,
+    *,
+    target_ref: str,
+    query: str,
+    not_before: float,
+    extra_env: Mapping[str, str] | None,
+) -> bool:
+    """Run one exact PromQL query through the configured Grafana datasource proxy."""
+
+    if not str(query or "").strip() or not_before <= 0:
+        raise ValueError("Grafana Soperator parity requires a query and positive start time")
+    specs = grafana_release_specs(payload_or_config, target_ref=target_ref)
+    if not specs:
+        return False
+    datasource_uids = tuple(
+        item.uid
+        for item in _grafana_cli_settings().datasources
+        if item.datasource_type == "prometheus" and item.uid
+    )
+    if not datasource_uids:
+        raise RuntimeError("Grafana has no configured Prometheus datasource for parity proof")
+    for spec in specs:
+        base_url = _grafana_base_url(spec, extra_env=extra_env)
+        credentials = _grafana_admin_credentials(spec, extra_env=extra_env)
+        if not base_url or not credentials:
+            raise RuntimeError("Grafana URL or admin credentials could not be resolved")
+        username, password = credentials
+        for datasource_uid in datasource_uids:
+            payload = _get_grafana_json(
+                base_url,
+                f"api/datasources/proxy/uid/{quote(datasource_uid, safe='')}/api/v1/query",
+                username=username,
+                password=password,
+                params={"query": query, "time": str(int(time.time()))},
+            )
+            data = _mapping(_mapping(payload).get("data"))
+            result = data.get("result")
+            if not isinstance(result, list):
+                continue
+            for item in result:
+                sample = _mapping(item).get("value")
+                if not isinstance(sample, list) or len(sample) < 2:
+                    continue
+                try:
+                    observed_at = float(sample[0])
+                except (TypeError, ValueError):
+                    continue
+                if observed_at >= not_before:
+                    return True
+    return False
 
 
 def _public_grafana_url(base_url: str, grafana_url: str) -> str:
@@ -1326,9 +1618,12 @@ __all__ = [
     "GRAFANA_TARGET_CLUSTER_ID_ENV",
     "GRAFANA_TARGET_KUBE_CONTEXT_ENV",
     "collect_grafana_runtime_status",
+    "ensure_observability_read_token_secret",
+    "cleanup_observability_read_token_secret",
     "ensure_grafana_runtime_secrets",
     "grafana_enabled_for_target",
     "grafana_release_specs",
+    "read_observability_read_token_secret",
     "read_grafana_status",
     "write_grafana_status",
 ]

@@ -31,6 +31,11 @@ if str(SCRIPT_DIR) not in sys.path:
 WORKTREE_SCRIPTS = Path(__file__).resolve().parents[2] / "worktree" / "scripts"
 if str(WORKTREE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(WORKTREE_SCRIPTS))
+PROJECT_SPEC_SCRIPTS = (
+    Path(__file__).resolve().parents[2] / "maintain-project-specs" / "scripts"
+)
+if str(PROJECT_SPEC_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(PROJECT_SPEC_SCRIPTS))
 from git_promotion import (  # noqa: E402
     GitPromotionError,
     common_git_dir,
@@ -46,6 +51,10 @@ from prompt_impact import (  # noqa: E402
     public_execution_bases,
     public_impact_status,
     verify_current as verify_current_prompt_impact,
+)
+from project_specs_lib.contracts import (  # noqa: E402
+    ProjectSpecError,
+    inspect_document_bytes,
 )
 
 
@@ -2208,6 +2217,17 @@ def verify_requirements_refinement_contract(
         raise PromptWorkspaceError(
             "REQUIREMENTS_REFINEMENT_REQUIRED",
             "docs/requirements.md exceeds the supported size",
+        )
+    try:
+        inspected_requirements = inspect_document_bytes(
+            "requirements", raw, path="docs/requirements.md"
+        )
+    except ProjectSpecError as error:
+        raise PromptWorkspaceError(error.code, error.message) from error
+    if not inspected_requirements["managed"]:
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            "docs/requirements.md is not owned by maintain-project-specs",
         )
     digest = hashlib.sha256(raw).hexdigest()
     if digest != refinement["compiled_requirements_sha256"]:

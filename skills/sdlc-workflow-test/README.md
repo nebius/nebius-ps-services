@@ -67,13 +67,11 @@ current meaning when no lifecycle action is selected.
 - Statically verifies the exact-SHA Agentic SDLC PR publication/review/merge
   modes and includes bounded observability plus explicit-PR, canonical
   single-action publication and merge authorization in capability regressions.
-- Requires installed `maintain-project-specs`, `worktree`,
-  `nebius-grafana-query`, `project-agent-instructions`, and conditional
-  `troubleshoot` support and includes them in source-installed parity and
-  verification-identity checks.
-  `project-agent-instructions` is a golden-path step after design;
-  `troubleshoot` is exercised only in controlled failure-routing scenarios and
-  remains absent from the golden path.
+- Requires installed `align`, `worktree`, `nebius-grafana-query`, and
+  conditional `troubleshoot` support and includes them in source-installed
+  parity and verification-identity checks. Project lifecycle and project-
+  instruction evidence is advisory and absent from the golden path;
+  `troubleshoot` is exercised only in controlled failure-routing scenarios.
 - Verifies that `maintain-project-specs` remains the sole semantic, schema,
   template, validation, and receipt owner of canonical requirements and design
   while the two Agentic authoring phases remain routed adapters.

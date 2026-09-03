@@ -9,6 +9,7 @@ from typing import Any
 
 from .deploy_targets import normalize_generated_deploy_target
 from .paths import ProjectPaths
+from .project_bundle_transaction import recover_project_bundle
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 
 GENERATED_MANIFEST_FILENAME = "nebius-cxcli-manifest.json"
@@ -161,6 +162,7 @@ def write_generated_manifest(
 
 
 def load_generated_manifest(generated_dir: Path) -> dict[str, Any]:
+    recover_project_bundle(generated_dir.parent)
     path = manifest_path_for_generated_dir(generated_dir)
     if not path.exists():
         raise ValueError(

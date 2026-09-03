@@ -21,6 +21,57 @@ from nebius_cxcli.soperator_validation import (
 )
 
 
+def _without_jail_chroot(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Keep scenario fakes focused on the command that runs inside the jail."""
+
+    marker = ("--", "chroot", "/mnt/jail")
+    for index in range(len(command) - len(marker) + 1):
+        if command[index : index + len(marker)] == marker:
+            return command[: index + 1] + command[index + len(marker) :]
+    return command
+
+
+def test_exec_login_runs_commands_inside_the_mounted_jail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        soperator_validation,
+        "_login_pod_name",
+        lambda *_args, **_kwargs: "login-0",
+    )
+
+    def _runner(args, **_kwargs) -> SoperatorValidationCommandResult:
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+
+    result = soperator_validation._exec_login(
+        _runner,
+        {"namespace": "soperator"},
+        ("sinfo", "-h", "-o", "%t"),
+    )
+
+    assert result.returncode == 0
+    assert calls == [
+        (
+            "kubectl",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+            "chroot",
+            "/mnt/jail",
+            "sinfo",
+            "-h",
+            "-o",
+            "%t",
+        )
+    ]
+
+
 def _gpu_driver_jail_result(
     command: tuple[str, ...],
     script: str,
@@ -67,11 +118,6 @@ def _standard_gpu_nodeset_payload() -> dict[str, object]:
                             ]
                         },
                     },
-                    "customInitContainers": [
-                        {
-                            "name": "cxcli-gpu-driver-jail",
-                        }
-                    ],
                 },
                 "status": {"phase": "Ready"},
             }
@@ -89,7 +135,7 @@ def _standard_soperator_snapshot_result(
         return None
     resource = parts[get_index + 1] if len(parts) > get_index + 1 else ""
     name = parts[get_index + 2] if len(parts) > get_index + 2 else ""
-    if resource == "deployment" and name == "soperator-manager":
+    if resource == "deployment" and name == "sconfigcontroller":
         return SoperatorValidationCommandResult(
             command,
             0,
@@ -163,7 +209,7 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         return SoperatorValidationCommandResult(
             command,
             0,
@@ -186,7 +232,7 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
 
     soperator_validation._check_gpu_driver_jail_nodeset_contract(
         _runner,
-        {"namespace": "soperator", "target_version": "4.0.2-ps.3"},
+        {"namespace": "soperator", "target_version": "4.1.7"},
         checks,
     )
 
@@ -196,8 +242,8 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
             "status": "failed",
             "passed": False,
             "summary": (
-                "GPU worker NodeSet(s) are missing the chart-owned "
-                "nvidia-driver-root mount or cxcli-gpu-driver-jail init guard: "
+                "GPU worker NodeSet(s) are missing the adapter-owned read-only "
+                "nvidia-driver-root host driver root mount: "
                 "worker-gpu."
             ),
             "command": "kubectl -n soperator get nodesets -o json",
@@ -205,54 +251,13 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
                 {
                     "name": "worker-gpu",
                     "driver_root_mount": False,
-                    "driver_jail_init": False,
                 }
             ],
         }
     ]
 
 
-def test_manager_validation_accepts_exact_checkpointed_bridge_pause() -> None:
-    checks: list[dict[str, object]] = []
-
-    def _runner(args, **_kwargs):
-        command = tuple(str(item) for item in args)
-        return SoperatorValidationCommandResult(
-            command,
-            0,
-            json.dumps(
-                {
-                    "metadata": {
-                        "uid": "manager-uid",
-                        "generation": 7,
-                    },
-                    "spec": {"replicas": 0},
-                    "status": {"observedGeneration": 7},
-                }
-            ),
-            "",
-        )
-
-    soperator_validation._check_soperator_manager_deployment(
-        _runner,
-        {
-            "namespace": "soperator",
-            "checkpointed_manager_pause": {
-                "schema": "nebius-cxcli/checkpointed-manager-pause-v1",
-                "status": "verified",
-                "deployment_uid": "manager-uid",
-                "original_replicas": 1,
-                "bridge_stage": "source-ha-active",
-            },
-        },
-        checks,
-    )
-
-    assert checks[0]["status"] == "passed"
-    assert checks[0]["checkpointed_pause"] is True
-
-
-def test_soperator_validation_skips_gpu_driver_jail_nodeset_contract_for_old_chart() -> None:
+def test_soperator_validation_checks_gpu_driver_mount_without_release_gate() -> None:
     checks: list[dict[str, object]] = []
     calls: list[tuple[str, ...]] = []
 
@@ -264,7 +269,7 @@ def test_soperator_validation_skips_gpu_driver_jail_nodeset_contract_for_old_cha
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         calls.append(command)
         return SoperatorValidationCommandResult(command, 0, '{"items": []}', "")
 
@@ -274,18 +279,15 @@ def test_soperator_validation_skips_gpu_driver_jail_nodeset_contract_for_old_cha
         checks,
     )
 
-    assert calls == []
+    assert calls == [("kubectl", "-n", "soperator", "get", "nodesets", "-o", "json")]
     assert checks == [
         {
             "name": "GPU driver jail NodeSet contract",
             "status": "skipped",
             "passed": False,
-            "summary": (
-                "Soperator chart version 4.0.1-ps.2 predates the chart-owned "
-                "GPU driver jail NodeSet contract."
-            ),
-            "target_version": "4.0.1-ps.2",
-            "minimum_contract_version": "4.0.2-ps.3",
+            "summary": "No GPU worker NodeSets were visible.",
+            "command": "kubectl -n soperator get nodesets -o json",
+            "gpu_driver_jail_nodesets": [],
         }
     ]
 
@@ -301,7 +303,7 @@ def test_soperator_validation_reports_zero_byte_gpu_driver_jail_library() -> Non
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -577,7 +579,7 @@ def test_run_soperator_cluster_validation_writes_smoke_report(tmp_path: Path) ->
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         commands.append(command)
         timeouts.append(timeout_seconds)
         if command[:7] == (
@@ -670,7 +672,7 @@ def test_run_soperator_cluster_validation_writes_smoke_report(tmp_path: Path) ->
     assert report["passed"] is True
     assert report["summary"] == "7/7 Soperator/Slurm checks passed."
     assert [check["name"] for check in report["checks"]] == [
-        "Soperator manager deployment",
+        "Soperator SConfigController deployment",
         "Soperator storage snapshot",
         "Soperator pod scheduling snapshot",
         "Soperator pod health snapshot",
@@ -703,7 +705,7 @@ def test_soperator_acceptance_rejects_deploy_report_filename(tmp_path: Path) -> 
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         commands.append(command)
         return _standard_or_ok(command)
 
@@ -758,7 +760,7 @@ def test_run_soperator_cluster_validation_reports_slurmcluster_phase_without_wai
     ) -> SoperatorValidationCommandResult:
         nonlocal slurmcluster_gets
         del input_text, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -847,7 +849,7 @@ def test_soperator_cluster_validation_fails_on_active_old_source_flux(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:4] == ("kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io", "-A"):
             return SoperatorValidationCommandResult(
                 command,
@@ -973,7 +975,7 @@ def test_soperator_cluster_validation_reports_pending_soperator_pods(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -1099,7 +1101,7 @@ def test_soperator_cluster_validation_recovers_stuck_populate_jail_job(
     ) -> SoperatorValidationCommandResult:
         nonlocal job_completed
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "-n",
@@ -1219,7 +1221,7 @@ def test_soperator_cluster_validation_fails_on_crash_looping_soperator_pod(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -1392,7 +1394,7 @@ def test_soperator_cluster_validation_waits_for_jail_mount_pending_pods(
     ) -> SoperatorValidationCommandResult:
         nonlocal pod_gets, daemonset_gets
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             pod_gets += 1
             return SoperatorValidationCommandResult(
@@ -1523,7 +1525,7 @@ def test_soperator_cluster_validation_reports_failed_mount_event_for_pending_pod
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -1676,7 +1678,7 @@ def test_soperator_cluster_validation_fails_when_jail_storage_resources_are_miss
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -1791,7 +1793,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -1963,8 +1965,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         check for check in report["checks"] if check["name"] == "GPU driver jail NodeSet contract"
     )
     assert contract_check["summary"] == (
-        "GPU worker NodeSets include the chart-owned read-only host driver root mount "
-        "and GPU driver jail init guard."
+        "GPU worker NodeSets include the adapter-owned read-only host driver root mount."
     )
     partition_check = next(
         check for check in report["checks"] if check["name"] == "Slurm all-node hostname acceptance"
@@ -2138,7 +2139,7 @@ def test_soperator_acceptance_benchmark_fails_without_gpu_partition(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         commands.append(command)
         if command[:4] == ("kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io", "-A"):
             return SoperatorValidationCommandResult(command, 0, '{"items":[]}\n', "")
@@ -2268,7 +2269,7 @@ def test_soperator_cluster_validation_prefers_8_gpu_partition_for_slurm_nccl(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -2449,7 +2450,7 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -2638,7 +2639,7 @@ def test_soperator_cluster_validation_fails_multi_gpu_slurm_nccl_below_threshold
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -2826,7 +2827,7 @@ def test_soperator_cluster_validation_fails_reported_multi_gpu_slurm_nccl_below_
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -3061,7 +3062,7 @@ def test_soperator_cluster_validation_fails_slurm_nccl_when_no_gpu_allocation_su
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -3223,7 +3224,7 @@ def test_soperator_cluster_validation_reports_slurm_nccl_cuda_driver_runtime_mis
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -3365,7 +3366,7 @@ def test_soperator_cluster_validation_runs_slurm_nccl_smoke_on_one_total_gpu(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -3542,7 +3543,7 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_two_one_gpu_n
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -3715,7 +3716,7 @@ def test_soperator_cluster_validation_skips_busy_slurm_gpu_allocation(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -3883,7 +3884,7 @@ def test_soperator_cluster_validation_prefers_idle_cpu_partition_for_smoke(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -4000,7 +4001,7 @@ def test_soperator_cluster_validation_allows_cloud_node_resume_for_smoke(
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -4124,7 +4125,7 @@ def test_soperator_cluster_validation_marks_inval_nodes_unhealthy(tmp_path: Path
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -4245,7 +4246,7 @@ def test_soperator_cluster_validation_retries_all_partition_hostname_scale_up(
     ) -> SoperatorValidationCommandResult:
         nonlocal hostname_attempts
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:7] == (
             "kubectl",
             "--context",
@@ -4380,7 +4381,7 @@ def test_soperator_partition_hostname_report_samples_large_partitions() -> None:
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -4457,7 +4458,7 @@ def test_soperator_gpu_allocation_is_acceptance_only() -> None:
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         commands.append(command)
         return _standard_or_ok(command)
 
@@ -4486,7 +4487,7 @@ def test_soperator_acceptance_hostname_batches_all_large_partition_nodes() -> No
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -4582,7 +4583,7 @@ def test_soperator_acceptance_hostname_fail_fast_stops_scheduling_batches() -> N
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -4656,7 +4657,7 @@ def test_soperator_acceptance_gpu_allocation_batches_all_large_partition_nodes()
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -4754,7 +4755,7 @@ def test_soperator_acceptance_gpu_allocation_accepts_proc_driver_device_evidence
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -4833,7 +4834,7 @@ def test_soperator_acceptance_gpu_allocation_rejects_marker_without_evidence() -
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -4906,7 +4907,7 @@ def test_soperator_acceptance_gpu_fail_fast_stops_scheduling_batches() -> None:
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,
@@ -4982,7 +4983,7 @@ def test_soperator_partition_hostname_retry_budget_still_fails(
     ) -> SoperatorValidationCommandResult:
         nonlocal hostname_attempts
         del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
+        command = _without_jail_chroot(tuple(str(item) for item in args))
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
                 command,

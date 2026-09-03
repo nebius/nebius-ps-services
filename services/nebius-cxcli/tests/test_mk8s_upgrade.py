@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +12,11 @@ def _cluster(*, version: str = "1.32") -> SimpleNamespace:
     return SimpleNamespace(
         metadata=SimpleNamespace(id="cluster-1", name="mk8s", resource_version=1),
         spec=SimpleNamespace(control_plane=SimpleNamespace(version=version)),
+        status=SimpleNamespace(
+            state="RUNNING",
+            control_plane=SimpleNamespace(version=version),
+            reconciling=False,
+        ),
     )
 
 
@@ -207,6 +212,32 @@ def test_update_source_k8s_versions_can_pin_node_groups_for_control_plane_stage(
     assert component["inputs"]["cluster"]["k8s_version"] == "1.33"
     assert component["inputs"]["node_groups"]["system"]["version"] == "1.32"
     assert component["inputs"]["node_groups"]["gpu"]["version"] == "1.32"
+
+
+def test_live_node_group_uses_actual_version_when_spec_inherits_control_plane() -> None:
+    raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="",
+    )
+    raw.status = SimpleNamespace(version="v1.33.7-nebius-node.72")
+
+    observed = upgrade.live_node_group_from_sdk(raw)
+
+    assert observed.version == "1.33"
+
+
+def test_live_node_group_preserves_explicit_desired_version_during_rollout() -> None:
+    raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="1.34",
+    )
+    raw.status = SimpleNamespace(version="v1.33.7-nebius-node.72")
+
+    observed = upgrade.live_node_group_from_sdk(raw)
+
+    assert observed.version == "1.34"
 
 
 def test_verify_mk8s_upgrade_plan_ready_confirms_live_k8s_os_and_gpu_stack() -> None:
@@ -606,6 +637,160 @@ def test_terraform_node_group_strategy_for_policy_matches_nebius_provider_schema
         "max_unavailable": {"count": 1},
         "drain_timeout": "10m",
     }
+
+
+def test_provider_node_group_strategy_match_requires_exact_rollout_policy() -> None:
+    from nebius.api.nebius.mk8s.v1 import (
+        NodeGroupDeploymentStrategy,
+        PercentOrCount,
+    )
+
+    strategy = NodeGroupDeploymentStrategy(
+        max_surge=PercentOrCount(count=2),
+        max_unavailable=PercentOrCount(count=0),
+        drain_timeout=timedelta(minutes=30),
+    )
+
+    assert upgrade._provider_node_group_strategy_matches(
+        strategy,
+        max_surge_count=2,
+        max_unavailable_count=0,
+        drain_timeout_seconds=1800,
+    )
+    assert not upgrade._provider_node_group_strategy_matches(
+        strategy,
+        max_surge_count=1,
+        max_unavailable_count=0,
+        drain_timeout_seconds=1800,
+    )
+    assert not upgrade._provider_node_group_strategy_matches(
+        strategy,
+        max_surge_count=2,
+        max_unavailable_count=0,
+        drain_timeout_seconds=None,
+    )
+
+
+def test_provider_node_group_update_accepts_inherited_version_and_resolved_zero_surge() -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.mk8s.v1 import (
+        GpuSettings,
+        NodeGroupDeploymentStrategy,
+        NodeGroupSpec,
+        NodeTemplate,
+    )
+
+    raw = SimpleNamespace(
+        metadata=ResourceMetadata(id="ng-system", name="system", resource_version=1),
+        spec=NodeGroupSpec(
+            version="",
+            template=NodeTemplate(
+                os="ubuntu24.04",
+                gpu_settings=GpuSettings(drivers_preset=""),
+            ),
+            strategy=NodeGroupDeploymentStrategy(),
+        ),
+        status=SimpleNamespace(version="v1.33.7-nebius-node.72"),
+    )
+    requests: list[object] = []
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    executor.list_node_groups = lambda _cluster_id: (raw,)
+    executor._node_group_client = SimpleNamespace(  # noqa: SLF001
+        update=lambda request: (
+            requests.append(request),
+            SimpleNamespace(wait=lambda: request),
+        )[1]
+    )
+
+    observed = executor.update_node_group_template(
+        cluster_id="cluster-1",
+        node_group_id="ng-system",
+        version="1.34",
+        os="ubuntu24.04",
+        drivers_preset=None,
+        strategy_policy="zero-surge",
+        strategy_max_surge_count=0,
+        drain_timeout=upgrade.resolve_drain_timeout("zero-surge", "auto"),
+    )
+
+    assert observed is requests[0]
+    assert getattr(observed.spec, "version", None) == "1.34"
+    assert "gpu_settings:" not in repr(observed.spec.template)
+
+
+def test_provider_node_group_update_omits_explicit_empty_gpu_settings() -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.mk8s.v1 import GpuSettings, NodeGroupSpec, NodeTemplate
+
+    raw = SimpleNamespace(
+        metadata=ResourceMetadata(id="ng-operator", name="operator", resource_version=1),
+        spec=NodeGroupSpec(
+            version="1.33",
+            template=NodeTemplate(
+                os="ubuntu22.04",
+                gpu_settings=GpuSettings(drivers_preset="cuda12.8"),
+            ),
+        ),
+        status=SimpleNamespace(version="v1.33.7-nebius-node.72"),
+    )
+    requests: list[object] = []
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    executor.list_node_groups = lambda _cluster_id: (raw,)
+    executor._node_group_client = SimpleNamespace(  # noqa: SLF001
+        update=lambda request: (
+            requests.append(request),
+            SimpleNamespace(wait=lambda: request),
+        )[1]
+    )
+
+    observed = executor.update_node_group_template(
+        cluster_id="cluster-1",
+        node_group_id="ng-operator",
+        version="1.34",
+        os="ubuntu24.04",
+        drivers_preset="",
+    )
+
+    assert observed is requests[0]
+    assert "gpu_settings:" not in repr(observed.spec.template)
+
+
+def test_provider_wait_accepts_patch_version_for_requested_minor() -> None:
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    executor.get_cluster = lambda _cluster_id: _cluster(version="1.34.7")
+
+    observed = executor.wait_cluster_version(
+        cluster_id="cluster-1",
+        version="1.34",
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+
+    assert observed.spec.control_plane.version == "1.34.7"
+
+
+def test_provider_wait_requires_stable_actual_control_plane_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reconciling = _cluster(version="1.34")
+    reconciling.status.reconciling = True
+    stale_actual = _cluster(version="1.34")
+    stale_actual.status.control_plane.version = "1.33.9-nebius-cp.4"
+    ready_once = _cluster(version="1.34")
+    stable_ready = _cluster(version="1.34")
+    observations = [reconciling, stale_actual, ready_once, stable_ready]
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    monkeypatch.setattr(executor, "get_cluster", lambda _cluster_id: observations.pop(0))
+    monkeypatch.setattr(upgrade.time, "sleep", lambda _seconds: None)
+
+    observed = executor.wait_cluster_version(
+        cluster_id="cluster-1",
+        version="1.34",
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+
+    assert observed is stable_ready
 
 
 def test_source_node_groups_by_name_matches_terraform_default_names() -> None:
@@ -1371,6 +1556,160 @@ def test_wait_node_group_node_template_requires_stable_ready_observation(
     assert result is stable_ready
     assert len(calls) == 4
     assert sleeps == [15, 15, 15]
+
+
+def test_zero_sized_node_group_wait_verifies_stable_desired_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrong_os = _node_group(
+        id="ng-zero",
+        name="zero",
+        version="1.33",
+        os="ubuntu22.04",
+    )
+    desired_once = _node_group(
+        id="ng-zero",
+        name="zero",
+        version="1.33",
+        os="ubuntu24.04",
+    )
+    desired_once.status = SimpleNamespace(
+        ready_node_count=0,
+        target_node_count=0,
+        node_count=0,
+        outdated_node_count=0,
+        reconciling=False,
+    )
+    stable_desired = _node_group(
+        id="ng-zero",
+        name="zero",
+        version="1.33",
+        os="ubuntu24.04",
+    )
+    stable_desired.status = desired_once.status
+    observations = [wrong_os, desired_once, stable_desired]
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    monkeypatch.setattr(
+        executor,
+        "list_node_groups",
+        lambda _cluster_id: (observations.pop(0),),
+    )
+    monkeypatch.setattr(upgrade.time, "sleep", lambda _seconds: None)
+
+    observed = executor.wait_node_group_node_template_desired_state(
+        cluster_id="cluster-1",
+        node_group_id="ng-zero",
+        version="1.33",
+        os="ubuntu24.04",
+        drivers_preset=None,
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+
+    assert observed is stable_desired
+
+
+def test_adaptive_node_group_wait_resets_when_capacity_changes_to_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    zero_once = _node_group(id="ng-gpu", name="gpu", version="1.33", os="ubuntu24.04")
+    zero_once.status = SimpleNamespace(
+        ready_node_count=0,
+        target_node_count=0,
+        node_count=0,
+        outdated_node_count=0,
+        reconciling=False,
+    )
+    ready_once = _node_group(id="ng-gpu", name="gpu", version="1.33", os="ubuntu24.04")
+    ready_once.status = _ready_status()
+    stable_ready = _node_group(id="ng-gpu", name="gpu", version="1.33", os="ubuntu24.04")
+    stable_ready.status = _ready_status()
+    observations = [zero_once, ready_once, stable_ready]
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    monkeypatch.setattr(
+        executor,
+        "list_node_groups",
+        lambda _cluster_id: (observations.pop(0),),
+    )
+    monkeypatch.setattr(upgrade.time, "sleep", lambda _seconds: None)
+
+    observed = executor.wait_node_group_node_template_adaptive(
+        cluster_id="cluster-1",
+        node_group_id="ng-gpu",
+        version="1.33",
+        os="ubuntu24.04",
+        drivers_preset=None,
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+
+    assert observed.node_group is stable_ready
+    assert observed.capacity_mode == "ready-capacity"
+    assert observed.target_node_count == 1
+
+
+def test_adaptive_node_group_wait_accepts_stable_zero_after_capacity_drop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready_once = _node_group(id="ng-gpu", name="gpu", version="1.33", os="ubuntu24.04")
+    ready_once.status = _ready_status()
+    zero_once = _node_group(id="ng-gpu", name="gpu", version="1.33", os="ubuntu24.04")
+    zero_once.status = SimpleNamespace(
+        ready_node_count=0,
+        target_node_count=0,
+        node_count=0,
+        outdated_node_count=0,
+        reconciling=False,
+    )
+    stable_zero = _node_group(id="ng-gpu", name="gpu", version="1.33", os="ubuntu24.04")
+    stable_zero.status = zero_once.status
+    observations = [ready_once, zero_once, stable_zero]
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    monkeypatch.setattr(
+        executor,
+        "list_node_groups",
+        lambda _cluster_id: (observations.pop(0),),
+    )
+    monkeypatch.setattr(upgrade.time, "sleep", lambda _seconds: None)
+
+    observed = executor.wait_node_group_node_template_adaptive(
+        cluster_id="cluster-1",
+        node_group_id="ng-gpu",
+        version="1.33",
+        os="ubuntu24.04",
+        drivers_preset=None,
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+
+    assert observed.node_group is stable_zero
+    assert observed.capacity_mode == "zero-capacity"
+
+
+def test_adaptive_node_group_wait_rejects_desired_positive_without_ready_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unavailable = _node_group(id="ng-gpu", name="gpu", version="1.33", os="ubuntu24.04")
+    unavailable.status = SimpleNamespace(
+        ready_node_count=0,
+        target_node_count=1,
+        node_count=1,
+        outdated_node_count=0,
+        reconciling=False,
+    )
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+    monkeypatch.setattr(executor, "list_node_groups", lambda _cluster_id: (unavailable,))
+
+    with pytest.raises(TimeoutError, match="stable node-template state"):
+        executor.wait_node_group_node_template_adaptive(
+            cluster_id="cluster-1",
+            node_group_id="ng-gpu",
+            version="1.33",
+            os="ubuntu24.04",
+            drivers_preset=None,
+            timeout_seconds=0,
+            poll_seconds=0,
+        )
 
 
 def test_force_delete_drain_timeout_does_not_shorten_rollout_wait() -> None:

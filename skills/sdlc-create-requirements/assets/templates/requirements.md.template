@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD003 MD022 MD033 MD041 -->
-<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
 ---
-schema: maintain-project-specs/requirements-v1
+schema: maintain-project-specs/requirements-v2
 project: "<project-name>"
 owner: "<owner-or-team>"
 status: "draft"

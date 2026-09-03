@@ -35,8 +35,8 @@ leading directive before it), or `$commit on the default branch
 - Uses a provided commit message or generates a concise imperative one.
 - Creates a local commit with normal hooks enabled.
 - Reports the final branch status and whether anything remains dirty.
-- Uses a hidden one-shot authorization and claim so the lifecycle hook can
-  admit exactly this whole-repository commit without allowing raw Git mutation.
+- Uses a hidden one-shot authorization and claim so the helper can execute
+  exactly this whole-repository commit without allowing raw Git mutation.
 - Shares that local transaction owner with a fresh explicit `$commit-push`;
   the publication skill still owns and bounds the later remote effect.
 
@@ -73,16 +73,16 @@ Final status report
 - Repository-shaping Git environment is rejected before discovery or
   mutation; only the transaction-owned temporary preview may override
   `GIT_INDEX_FILE`.
-- Direct execution requires the current selected-project lifecycle to be
-  sealed, or a bounded waiver for a fresh commit-only turn with no project
-  writes. It never asks every changed sibling project for an attestation.
+- Project lifecycle status is advisory and never gates direct execution.
+  Explicit current-turn authorization plus the transaction's Git, branch,
+  Worktree, secret, and workflow-conflict checks remain authoritative.
 - The skill never pushes, opens PRs, repairs branches, or writes Agentic SDLC
   run state.
 - Commit hooks should run normally.
 - Delegated worktree commits remain local, require the exact preflight branch
   and head, bind the reviewed staged tree to the resulting commit tree, and
   return a clean direct-descendant commit to the integration workflow. A
-  durable source-scoped preparation claim blocks competing lifecycle owners
+  durable source-scoped preparation claim blocks competing Git/Worktree owners
   while the commit runs. Delegation is never permitted for nested/coordinated
   children or active integration attempts.
 - Direct transactions move through `PREPARED`, `STAGED`, and `COMMITTED`;
@@ -105,7 +105,7 @@ Final status report
   commit. This is delegated worker authorization, not an implicit root-user
   `$commit`.
   The transition returns a transient canonical `commit_context`: exact
-  PATH-canonical Python, helper, outer lifecycle cwd, worker repository, raw
+  PATH-canonical Python, helper, exact scope cwd, worker repository, raw
   `CODEX_THREAD_ID`, evidence paths, and prepare argv. The separately returned
   session fingerprint is persisted evidence only and is never a `--session-id`
   value. This keeps mixed hook/worker Python versions usable while rejecting

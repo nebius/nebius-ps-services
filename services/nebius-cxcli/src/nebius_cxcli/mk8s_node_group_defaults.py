@@ -8,11 +8,23 @@ from typing import Any
 
 from .component_instances import component_instance_id, component_type_id
 from .components import ComponentEntry, component_entries
-from .deploy_targets import app_chart_target_ref
+from .deploy_targets import app_chart_target_ref, deploy_target_is_external_mk8s
 from .runtime_introspection import module_variables
+from .soperator_wizard import soperator_wizard_settings
 
-_SOPERATOR_INSTALL_MODE_PRODUCTION = "production-cluster"
 _LOGGER = logging.getLogger(__name__)
+
+
+def _external_target_refs(payload: Mapping[str, Any]) -> set[str]:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return set()
+    return {
+        component_instance_id(row)
+        for row in targets
+        if isinstance(row, Mapping) and deploy_target_is_external_mk8s(row)
+    }
 
 
 def _normalize_leaf_name(value: str) -> str:
@@ -71,28 +83,23 @@ def _soperator_production_target_refs(payload: dict[str, Any]) -> set[str]:
     charts = apps.get("charts") if isinstance(apps, dict) else None
     if not isinstance(charts, list):
         return set()
+    external_targets = _external_target_refs(payload)
     targets: set[str] = set()
     for row in charts:
         if not isinstance(row, dict):
             continue
         if component_type_id(row) != "soperator" or row.get("enabled") is False:
             continue
-        install_mode = str(row.get("install_mode") or _SOPERATOR_INSTALL_MODE_PRODUCTION)
-        if install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
-            continue
         target_ref = app_chart_target_ref(row) or component_instance_id(row)
-        if target_ref:
+        if target_ref and target_ref not in external_targets:
             targets.add(target_ref)
     return targets
 
 
 def _soperator_nodesets_profiles() -> tuple[str, Mapping[str, Mapping[str, Any]]]:
-    from .component_sources import helm_chart_source_by_id
-
-    chart = helm_chart_source_by_id("soperator")
-    settings = getattr(chart, "soperator_nodesets", None)
-    default = _non_empty_text(getattr(settings, "default", "")) if settings is not None else ""
-    profiles = getattr(settings, "profiles", {}) if settings is not None else {}
+    settings = soperator_wizard_settings().nodesets
+    default = _non_empty_text(settings.default)
+    profiles = settings.profiles
     if not isinstance(profiles, Mapping):
         profiles = {}
     return default, profiles
@@ -123,17 +130,15 @@ def _soperator_production_profile_by_target(
         return {}
 
     default_profile, profiles = _soperator_nodesets_profiles()
+    external_targets = _external_target_refs(payload)
     selected: dict[str, Mapping[str, Any]] = {}
     for row in charts:
         if not isinstance(row, Mapping):
             continue
         if component_type_id(row) != "soperator" or row.get("enabled") is False:
             continue
-        install_mode = str(row.get("install_mode") or _SOPERATOR_INSTALL_MODE_PRODUCTION)
-        if install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
-            continue
         target_ref = app_chart_target_ref(row) or component_instance_id(row)
-        if not target_ref:
+        if not target_ref or target_ref in external_targets:
             continue
         profile_name = _non_empty_text(row.get("profile")) or default_profile
         if not profile_name:

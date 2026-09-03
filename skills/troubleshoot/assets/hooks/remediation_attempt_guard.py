@@ -1361,12 +1361,17 @@ def _patch_updates_only_state(payload: dict[str, Any], state_file: Path | None) 
     patch = tool_input["command"]
     if "*** Move to:" in patch or "*** Delete File:" in patch:
         return False
-    targets = re.findall(r"^\*\*\* (?:Update|Add) File: (.+)$", patch, re.MULTILINE)
+    targets = re.findall(
+        r"^\*\*\* (Update|Add) File: (.+)$", patch, re.MULTILINE
+    )
     if not targets:
         return False
     cwd = str(payload.get("cwd") or ".")
     expected = state_file.resolve(strict=False)
-    for target in targets:
+    expected_operation = "Update" if state_file.exists() else "Add"
+    for operation, target in targets:
+        if operation != expected_operation:
+            return False
         candidate = Path(target.strip())
         if not candidate.is_absolute():
             candidate = Path(cwd) / candidate
@@ -2665,6 +2670,11 @@ def _pending_context(
         if issue
         else ""
     )
+    patch_contract = (
+        "Use one exact apply_patch targeting only the advertised current.md: "
+        "*** Update File when it exists, or *** Add File only when it is absent. "
+        "Delete File and Delete/Add replacement are denied. "
+    )
     if pending["mode"] == "resize_active":
         if issue and state_kind == "missing":
             action = (
@@ -2696,7 +2706,7 @@ def _pending_context(
             "new key, tranche=1, override_summary=null."
         )
     return (
-        f"{issue_context}{action} schema={SCHEMA}; "
+        f"{issue_context}{patch_contract}{action} schema={SCHEMA}; "
         f"attempt_limit={pending['attempt_limit']}; "
         f"time_limit_minutes={pending['time_limit_minutes']}; "
         f"budget_authorization_id={pending['authorization_id']}."
@@ -2886,7 +2896,7 @@ def evaluate_user_prompt(
     if (
         state.kind == "valid"
         and state.data is not None
-        and state.data["status"] == "active"
+        and state.data["status"] in {"active", "resolved"}
     ):
         if not supplied_fields:
             return prompt_context(
@@ -2918,24 +2928,6 @@ def evaluate_user_prompt(
                 requested_attempts,
                 requested_minutes,
                 "resize_active",
-            )
-        except GuardStateError as exc:
-            return {"decision": "block", "reason": _public_reason(str(exc))}
-        return prompt_context(_pending_prompt_context((updated.data or {})["pending"]))
-
-    if (
-        state.kind == "valid"
-        and state.data is not None
-        and state.data["status"] == "resolved"
-    ):
-        try:
-            updated = _save_pending_profile(
-                payload,
-                authorization,
-                state,
-                requested_attempts,
-                requested_minutes,
-                "next_tranche",
             )
         except GuardStateError as exc:
             return {"decision": "block", "reason": _public_reason(str(exc))}

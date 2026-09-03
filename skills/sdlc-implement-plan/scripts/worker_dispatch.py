@@ -8,10 +8,19 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import subprocess
 import sys
+
+
+SDLC_EXECUTION_SCRIPTS = (
+    Path(__file__).resolve().parents[2] / "sdlc-prepare-execution" / "scripts"
+)
+if str(SDLC_EXECUTION_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SDLC_EXECUTION_SCRIPTS))
+from sdlc_evidence_security import contains_sensitive  # noqa: E402
 
 
 class DispatchError(RuntimeError):
@@ -30,6 +39,45 @@ TERMINAL_WORKER_STATUSES = frozenset(
         "WORKER_TIMEOUT",
     }
 )
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+REQUIREMENT_ID_RE = re.compile(r"REQ-[0-9]{3,}\Z")
+DESIGN_ID_RE = re.compile(r"FEAT-[0-9]{3,}\Z")
+SPEC_GAP_KINDS = {"requirement", "design", "traceability"}
+
+
+def _valid_spec_gaps(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    for gap in value:
+        if (
+            not isinstance(gap, dict)
+            or set(gap)
+            != {"kind", "summary", "evidence", "requirement_ids", "design_ids"}
+            or gap.get("kind") not in SPEC_GAP_KINDS
+            or not isinstance(gap.get("summary"), str)
+            or not str(gap["summary"]).strip()
+            or contains_sensitive(str(gap["summary"]))
+            or not isinstance(gap.get("evidence"), list)
+            or not gap["evidence"]
+            or any(
+                not isinstance(item, str)
+                or not item.strip()
+                or contains_sensitive(item)
+                for item in gap["evidence"]
+            )
+            or not isinstance(gap.get("requirement_ids"), list)
+            or any(
+                REQUIREMENT_ID_RE.fullmatch(str(item)) is None
+                for item in gap["requirement_ids"]
+            )
+            or not isinstance(gap.get("design_ids"), list)
+            or any(
+                DESIGN_ID_RE.fullmatch(str(item)) is None
+                for item in gap["design_ids"]
+            )
+        ):
+            return False
+    return True
 
 
 def stable_digest(value: dict[str, object]) -> str:
@@ -57,12 +105,13 @@ def load_assignment(path: Path) -> dict[str, object]:
     if isinstance(value, dict) and value.get("schema") in {
         "agentic-sdlc/worker-assignment-v1",
         "agentic-sdlc/worker-assignment-v2",
+        "agentic-sdlc/worker-assignment-v3",
     }:
         raise DispatchError(
             "WORKFLOW_UPGRADE_REQUIRED", "legacy worker assignment is unsupported"
         )
     if not isinstance(value, dict) or value.get("schema") != (
-        "agentic-sdlc/worker-assignment-v3"
+        "agentic-sdlc/worker-assignment-v4"
     ):
         raise DispatchError(
             "EXECUTION_STATE_INVALID", "worker assignment schema is invalid"
@@ -82,6 +131,7 @@ def load_assignment(path: Path) -> dict[str, object]:
     run_dir = Path(str(value.get("run_dir") or ""))
     profile = value.get("worker_profile")
     expected_read_only = (240, 300) if profile == "standard" else (360, 420)
+    spec_receipt = value.get("project_spec_receipt")
     if (
         not helper.is_absolute()
         or helper.is_symlink()
@@ -99,6 +149,16 @@ def load_assignment(path: Path) -> dict[str, object]:
         or value.get("read_only_seconds") != expected_read_only[1]
         or value.get("worker_phases")
         != ["preflight", "implementing", "validating", "reviewing", "reporting"]
+        or SHA256_RE.fullmatch(str(value.get("root_intent_sha256") or "")) is None
+        or not isinstance(spec_receipt, dict)
+        or set(spec_receipt)
+        != {"schema", "requirements_sha256", "design_sha256"}
+        or spec_receipt.get("schema")
+        != "maintain-project-specs.worker-receipt.v1"
+        or any(
+            SHA256_RE.fullmatch(str(spec_receipt.get(field) or "")) is None
+            for field in ("requirements_sha256", "design_sha256")
+        )
     ):
         raise DispatchError(
             "EXECUTION_STATE_INVALID", "worker assignment liveness is invalid"
@@ -185,6 +245,10 @@ def worker_prompt(assignment_path: Path, assignment: dict[str, object]) -> str:
         "Read the assignment JSON at:",
         str(assignment_path.resolve()),
         "Work only from its scope_cwd and write claims.",
+        "Inherit root_intent_sha256 and project_spec_receipt exactly. Do not "
+        "reclassify user intent or edit canonical project specs.",
+        "Report any requirement, design, or traceability discovery through the "
+        "typed spec_gaps result field for root-coordinator reconciliation.",
         "Do not commit, merge, replan, edit coordinator state, or start another task.",
     ]
     if assignment.get("diagnosis_id") is not None:
@@ -373,12 +437,21 @@ def dispatch_sequential(
                 or result.get("task_id") != assignment["task_id"]
                 or result.get("assignment_digest")
                 != assignment["assignment_digest"]
-                or result.get("status") != "implemented"
+                or result.get("status") not in {"implemented", "replan_required"}
                 or not isinstance(result.get("validation"), str)
                 or not isinstance(result.get("review"), str)
                 or not isinstance(result.get("summary"), str)
                 or not isinstance(result.get("decisions"), list)
                 or not isinstance(result.get("open_risks"), list)
+                or not _valid_spec_gaps(result.get("spec_gaps"))
+                or (
+                    result.get("status") == "implemented"
+                    and bool(result.get("spec_gaps"))
+                )
+                or (
+                    result.get("status") == "replan_required"
+                    and not bool(result.get("spec_gaps"))
+                )
             ):
                 raise DispatchError(
                     "WORKER_FAILED", "sequential worker result is invalid"

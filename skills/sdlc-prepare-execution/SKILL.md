@@ -61,9 +61,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Private execution state under
   `~/.codex/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
 - A persistent feature integration branch/worktree under the private run root.
-- A scoped contract commit on the named project branch only when committed
-  requirements, design, and an ownership-receipted v3 selected-project
-  `AGENTS.md` are the complete repo-root staged diff.
+- A scoped contract commit on the named project branch only when requirements
+  and design are the complete repo-root staged diff.
 - State transition to `execution_prepared` and checkpoint evidence.
 
 ## Process
@@ -74,12 +73,14 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
    managed child, keep the exact local branch and `HEAD` without fetching or
    resolving a remote default. Reject unrelated dirt or private state inside
    the repository.
-2. If current requirements/design changes and an optional
-   `project-agent-instructions`-owned project-root `AGENTS.md` are the only
-   tracked changes, stage from the repository root with `git add -A`, create
-   one authorized contract commit, then require a clean checkout. Reject an
-   unverified, reload-pending, edited, or human-owned `AGENTS.md`; never make a
-   partial mixed commit.
+2. If current requirements/design changes are the only tracked changes, stage
+   from the repository root with `git add -A`, create one authorized contract
+   commit, then require a clean checkout. Read the already-effective
+   instruction chain, but never create, refresh, retire, or reload project
+   instructions here. Historical lifecycle or project-instruction status is
+   advisory and cannot prevent preparation; the canonical v2 spec pair itself
+   must validate before a spec-dependent plan proceeds. Never make a partial
+   mixed commit.
 3. Invoke the private execution helper `prepare`. It parses stable `TASK-*`
    records, validates dependencies/claims/domains, builds deterministic logical
    waves, records intent, and creates the integration branch/worktree from the
@@ -142,7 +143,12 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   execution is sealed, promoted, or done.
 - Treat capacity batches as authoritative: `wave-prepare` creates only the
   active batch, and private `batch-advance` opens the next batch only after all
-  current tasks are committed. `task-start` derives worker identity from
+  current tasks are committed. Each assignment binds the accepted root-intent
+  digest and exact canonical project-spec receipt; workers inherit that
+  context, never reclassify intent or edit specs, and report typed `spec_gaps`
+  to the root coordinator. Disable Git rename folding for every worker path
+  inventory and reject sensitive text in all gap fields before output or
+  persistence. `task-start` derives worker identity from
   `CODEX_THREAD_ID`; never accept a caller-invented session token.
 - Retain every observed partial resource in recovery state; never force-delete it.
 - For managed-outer promotion, persist the Git fast-forward, exact lease CAS,
@@ -174,7 +180,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- `maintain-project-specs` is the sole semantic, schema, and validation owner
+- `maintain-project-specs` is the sole semantic, schema, paired-publication,
+  and validation owner
   of both canonical specs. Inside Agentic SDLC, only its routed
   `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
   write their respective managed records; all other phase skills route changes

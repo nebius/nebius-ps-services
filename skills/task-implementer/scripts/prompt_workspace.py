@@ -36,7 +36,6 @@ from prompt_workspace_core import (  # noqa: E402
     verify_workspace,
     verify_workspace_for_removal,
 )
-from prompt_workspace_contract_delta import adopt_contract_delta  # noqa: E402
 from prompt_workspace_lanes import (  # noqa: E402
     integrate_lane,
     record_integration_review_correction,
@@ -64,9 +63,6 @@ from prompt_workspace_resume import (  # noqa: E402
 from prompt_workspace_waves import (  # noqa: E402
     accept_task_result,
     advance_batch,
-    authorize_lifecycle_impact,
-    authorize_project_agent_lifecycle,
-    authorize_task_commit_lifecycle,
     arm_task,
     cleanup_wave,
     commit_coordinator_delta,
@@ -118,9 +114,6 @@ __all__ = [
     "activate_next_queued_prompt",
     "advance_batch",
     "arm_task",
-    "authorize_lifecycle_impact",
-    "authorize_project_agent_lifecycle",
-    "authorize_task_commit_lifecycle",
     "cleanup_wave",
     "commit_coordinator_delta",
     "cancel_queued_prompt",
@@ -421,21 +414,6 @@ def _launch_codex_recovery_worker(result: dict[str, object]) -> dict[str, object
     )
 
 
-def parse_lifecycle_authorization(argv: list[str]) -> argparse.Namespace:
-    """Parse the hook-only adapter without adding it to discoverable CLI help."""
-
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.set_defaults(command="lifecycle-authorize")
-    add_common_workspace(parser)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument(
-        "--kind",
-        required=True,
-        choices=("project-instructions", "impact", "commit"),
-    )
-    return parser.parse_args(argv)
-
-
 def parse_plan_digest_recovery(argv: list[str]) -> argparse.Namespace:
     """Parse the owner-only repair without adding it to discoverable CLI help."""
 
@@ -445,17 +423,6 @@ def parse_plan_digest_recovery(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--expected-plan-sha256", required=True)
     parser.add_argument("--expected-index-sha256", required=True)
-    return parser.parse_args(argv)
-
-
-def parse_contract_delta_adoption(argv: list[str]) -> argparse.Namespace:
-    """Parse the owner-only adoption without adding it to discoverable help."""
-
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.set_defaults(command="contract-delta-adopt")
-    add_common_workspace(parser)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--lifecycle-state", required=True, type=Path)
     return parser.parse_args(argv)
 
 
@@ -471,12 +438,8 @@ def parse_handoff_projection_recovery(argv: list[str]) -> argparse.Namespace:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    if argv[:1] == ["lifecycle-authorize"]:
-        return parse_lifecycle_authorization(argv[1:])
     if argv[:1] == ["plan-digest-recover"]:
         return parse_plan_digest_recovery(argv[1:])
-    if argv[:1] == ["contract-delta-adopt"]:
-        return parse_contract_delta_adoption(argv[1:])
     if argv[:1] == ["handoff-projection-recover"]:
         return parse_handoff_projection_recovery(argv[1:])
 
@@ -1059,25 +1022,6 @@ def main(argv: list[str]) -> int:
             result = prepare_run_checkpoint(args.workspace, args.run_id)
         elif args.command == "wave-plan":
             result = plan_waves(args.workspace, args.run_id, args.capacity)
-        elif args.command == "lifecycle-authorize":
-            command = sys.stdin.read(MAX_PROMPT_BYTES + 1)
-            if len(command.encode("utf-8")) > MAX_PROMPT_BYTES:
-                raise PromptWorkspaceError(
-                    "EXECUTION_STATE_INVALID", "lifecycle command is too large"
-                )
-            command = command.rstrip("\n")
-            if args.kind == "project-instructions":
-                result = authorize_project_agent_lifecycle(
-                    args.workspace, args.run_id, command
-                )
-            elif args.kind == "impact":
-                result = authorize_lifecycle_impact(
-                    args.workspace, args.run_id, command
-                )
-            else:
-                result = authorize_task_commit_lifecycle(
-                    args.workspace, args.run_id, command
-                )
         elif args.command == "wave-replan":
             result = replan_waves(args.workspace, args.run_id, args.capacity)
         elif args.command == "wave-prepare":
@@ -1156,12 +1100,6 @@ def main(argv: list[str]) -> int:
                 args.run_id,
                 args.expected_plan_sha256,
                 args.expected_index_sha256,
-            )
-        elif args.command == "contract-delta-adopt":
-            result = adopt_contract_delta(
-                args.workspace,
-                args.run_id,
-                args.lifecycle_state,
             )
         elif args.command == "handoff-projection-recover":
             result = recover_handoff_projection(

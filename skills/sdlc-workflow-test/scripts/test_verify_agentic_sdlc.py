@@ -149,6 +149,7 @@ class VerifierContractTests(unittest.TestCase):
             Path("sdlc-start/scripts/validate_project_specs.py"),
             Path("sdlc-workflow-test/SKILL.md"),
             Path("maintain-project-specs/SKILL.md"),
+            Path("align/SKILL.md"),
             Path("align-skill/scripts/validate-skill-structure.py"),
         }
         for skill in verifier.REQUIRED_SDLC_SKILLS:
@@ -629,7 +630,7 @@ class VerifierContractTests(unittest.TestCase):
             set(verifier.SKILL_EVIDENCE_BASES),
             {
                 *verifier.REQUIRED_SDLC_SKILLS,
-                "project-agent-instructions",
+                "align",
             },
         )
         self.assertEqual(verifier.SKILL_EVIDENCE_BASES["sdlc-merge-pr"], "safety-only")
@@ -637,17 +638,17 @@ class VerifierContractTests(unittest.TestCase):
             set(verifier.SKILL_REQUIRED_ASSERTIONS),
             {
                 *verifier.REQUIRED_SDLC_SKILLS,
-                "project-agent-instructions",
+                "align",
             },
         )
 
     def test_runtime_support_skills_are_parity_dependencies(self) -> None:
         self.assertIn(
-            "maintain-project-specs",
+            "align",
             verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
         )
         self.assertIn(
-            "maintain-project-specs",
+            "align",
             verifier.SOURCE_PARITY_SKILLS,
         )
         self.assertIn(
@@ -683,19 +684,17 @@ class VerifierContractTests(unittest.TestCase):
             for check in self.ctx.checks
             if check.capability_id
             in {
-                "runtime.project-spec-owner-dependency",
+                "runtime.align-dependency",
                 "runtime.worktree-dependency",
                 "runtime.observability-dependency",
-                "runtime.project-agent-instructions-dependency",
             }
         }
         self.assertEqual(
             support_checks,
             {
-                "runtime.project-spec-owner-dependency": "PASS",
+                "runtime.align-dependency": "PASS",
                 "runtime.worktree-dependency": "PASS",
                 "runtime.observability-dependency": "PASS",
-                "runtime.project-agent-instructions-dependency": "PASS",
             },
         )
 
@@ -809,26 +808,18 @@ class VerifierContractTests(unittest.TestCase):
             )
         self.assertEqual(sorted(required - declared), [])
 
-    def test_project_agent_instructions_is_runtime_support_and_golden_phase(
-        self,
-    ) -> None:
-        self.assertIn(
-            "project-agent-instructions",
-            verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
+    def test_project_lifecycle_is_not_runtime_support_or_golden_phase(self) -> None:
+        self.assertNotIn(
+            "project-agent-instructions", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS
         )
-        self.assertIn(
-            "project-agent-instructions",
-            verifier.SOURCE_PARITY_SKILLS,
-        )
+        self.assertNotIn("maintain-project-specs", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS)
         design_index = verifier.GOLDEN_PHASE_SEQUENCE.index("sdlc-create-design")
         self.assertEqual(
             verifier.GOLDEN_PHASE_SEQUENCE[design_index + 1],
-            "project-agent-instructions",
-        )
-        self.assertEqual(
-            verifier.GOLDEN_PHASE_SEQUENCE[design_index + 2],
             "sdlc-auto-steering",
         )
+        self.assertNotIn("sdlc-align-specs", verifier.GOLDEN_PHASE_SEQUENCE)
+        self.assertIn("align", verifier.GOLDEN_PHASE_SEQUENCE)
 
     def test_troubleshoot_is_conditional_runtime_support_not_golden_phase(self) -> None:
         self.assertIn("troubleshoot", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS)

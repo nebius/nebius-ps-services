@@ -60,4 +60,9 @@ For a corrective assignment, `task-finish --oracle-evidence-json` must name
 the assignment's exact regression oracle, a `passed` outcome, and an evidence
 reference. The helper binds that proof to the diagnosis and the
 coordinator-created task commit in
-`worker-result-v4`; missing or mismatched proof fails closed.
+`worker-result-v5`; missing or mismatched proof fails closed. Assignment v4
+also binds the accepted root-intent digest and canonical project-spec receipt;
+worker results carry typed `spec_gaps` for root-coordinator reconciliation.
+Worker path inventories disable Git rename folding so protected source paths
+cannot disappear behind an allowed destination, and all gap text uses the same
+sensitive-evidence scanner as validation and commit metadata.

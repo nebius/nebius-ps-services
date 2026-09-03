@@ -38,7 +38,7 @@
   - [`sdlc-gui-test`](#sdlc-gui-test)
   - [`sdlc-tui-test`](#sdlc-tui-test)
   - [`sdlc-classify-failure`](#sdlc-classify-failure)
-  - [`sdlc-align-specs`](#sdlc-align-specs)
+  - [Alignment](#alignment)
   - [`sdlc-commit`](#sdlc-commit)
   - [`sdlc-uat-tests`](#sdlc-uat-tests)
   - [`create-pr`](#create-pr)
@@ -98,9 +98,10 @@ single semantic, schema, template, validation, and receipt owner for
 `docs/requirements.md` and `docs/design.md`. Inside Agentic SDLC,
 `sdlc-create-requirements` and `sdlc-create-design` are routed authoring
 adapters that may update their respective managed records, then return
-validation to that shared owner. `project-agent-instructions` owns the
-conditional v3-managed selected-project `AGENTS.md` tail,
-`sdlc-create-plan` owns a locked private task graph, and
+validation to that shared owner. Project-spec lifecycle observations are
+advisory and never become workflow phases or completion gates. A separately
+invoked `project-agent-instructions` workflow owns any explicit selected-project
+`AGENTS.md` mutation. `sdlc-create-plan` owns a locked private task graph, and
 `sdlc-prepare-execution` owns the persistent integration resource.
 `sdlc-implement-plan` owns task waves and ordered integration, while
 `sdlc-commit` owns final sealing and exact local promotion after evidence passes.
@@ -112,13 +113,12 @@ The always-present committed SDLC truth inside a target project is:
 - `<project>/docs/requirements.md`
 - `<project>/docs/design.md`
 
-After both tracked documents pass the shared owner validator with total
-status-aware feature traceability and receive a private full-file and
-traceability receipt, `project-agent-instructions` decides whether
-durable project-specific operating rules add to ancestor project instructions.
-Personal global instructions are conflict context only and never change the
-portable repository bytes. Only when the evidence gate passes does committed
-project truth also include:
+The workflow may inspect shared-owner validation or project-instruction status
+as advisory context, but missing, stale, contended, or invalid lifecycle
+evidence never blocks an SDLC phase. Personal global instructions are conflict
+context only and never change portable repository bytes. A separately
+authorized project-instruction workflow may make committed project truth also
+include:
 
 - `<project>/AGENTS.md`
 
@@ -448,8 +448,10 @@ Project instructions intentionally have no fill-every-section template.
 managed blocks, ready-feature completeness, marker/body agreement, and total
 status-aware REQ-to-FEAT traceability before emitting the private v3
 prerequisite receipt. The `sdlc-start/scripts/validate_project_specs.py`
-adapter invokes that shared validator; it does not define a second spec schema
-or receipt authority.
+adapter invokes that shared validator without defining a second spec schema or
+receipt authority. The canonical result is required before spec-dependent
+planning and dispatch; historical private lifecycle-phase evidence remains
+advisory and never becomes an independent SDLC gate.
 `project-agent-instructions/references/decision-contract.md` defines layered
 discovery, structured evidence-backed rules, deterministic rendering, the 2 KiB
 preferred and 4 KiB hard body budgets, provenance plus private ownership,
@@ -475,22 +477,21 @@ The implementation state schema uses this phase order:
 1. requirements
 2. context
 3. design
-4. project-agent-instructions
-5. sdlc-auto-steering
-6. plan
-7. execution preparation
-8. sdlc-tdd in the integration worktree
-9. implementation dependency waves
-10. validation at the recorded integration HEAD
-11. test at the recorded integration HEAD
-12. evaluation at the recorded integration HEAD
-13. sdlc-update-documents in the integration worktree
-14. sdlc-align-specs in the integration worktree
-15. sdlc-commit final seal, ff-only promotion, and cleanup
-16. uat from the promoted project checkout
-17. create-pr
-18. review-pr
-19. sdlc-merge-pr, only after explicit user request
+4. sdlc-auto-steering
+5. plan
+6. execution preparation
+7. sdlc-tdd in the integration worktree
+8. implementation dependency waves
+9. validation at the recorded integration HEAD
+10. test at the recorded integration HEAD
+11. evaluation at the recorded integration HEAD
+12. sdlc-update-documents in the integration worktree
+13. general `align` in the integration worktree
+14. sdlc-commit final seal, ff-only promotion, and cleanup
+15. uat from the promoted project checkout
+16. create-pr
+17. review-pr
+18. sdlc-merge-pr, only after explicit user request
 
 `sdlc-auto-steering` also runs at the start of each feature loop, or whenever
 `sdlc-start` sees new steering input, stale steering fingerprints, or
@@ -577,10 +578,10 @@ The preflight must verify and record:
   placement in the workflow contract
 - `sdlc-prepare-execution` discovery, task-graph/state-schema contract, and
   deterministic scheduler plus real-Git lifecycle tests
-- installed `maintain-project-specs`, installed `worktree`, installed
-  `nebius-grafana-query`, installed `project-agent-instructions`, and
-  conditional `troubleshoot` availability plus source-installed parity for
-  every required SDLC skill, all five runtime support skills, and
+- installed `align`, installed `worktree`, installed
+  `nebius-grafana-query`, and conditional `troubleshoot` availability plus
+  source-installed parity for every required SDLC skill, all four runtime
+  support skills, and
   `sdlc-workflow-test`
 - named regression capabilities for prompt workspace/history/exact manual
   rename/lifecycle, owner-issued full-spec validation receipts; execution
@@ -664,9 +665,6 @@ Required happy-path evidence:
   boundary facts when the feature may span a vertical slice.
 - `sdlc-create-design`, routed as the shared owner's design authoring adapter,
   creates committed design with stable `FEAT-*` IDs.
-- `project-agent-instructions` records verified spec, config, decision, and
-  ownership state and conditionally maintains a selected-project `AGENTS.md`
-  only when tracked evidence requires durable project rules.
 - `sdlc-auto-steering` records active-run steering, classifies mid-run prompts,
   and derives compact reminders without changing product-truth docs.
 - `sdlc-create-plan` writes a private locked task graph with dependencies,
@@ -686,7 +684,7 @@ Required happy-path evidence:
 - `sdlc-update-documents` updates README, changelog, examples, or usage docs
   when implemented behavior requires it and records documentation evidence.
   Multi-layer behavior docs are backed by evaluated slice evidence.
-- `sdlc-align-specs` confirms requirements, design, plan, implementation,
+- general `align` confirms requirements, design, plan, implementation,
   documentation, slice evidence, and other evidence agree.
 - `sdlc-commit` seals final integration changes, verifies all evidence and the
   recorded remote-default identity, removes clean reachable worker resources,
@@ -926,8 +924,11 @@ vN+1.
 
 ### `project-agent-instructions`
 
-Runs after receipt-validated requirements and design and before auto-steering
-or planning. It inspects the exact selected project, layered effective Codex
+This is a separate, explicitly invoked mutation workflow, not an Agentic SDLC
+phase or prerequisite. Agentic SDLC may read its already-effective output and
+advisory status, but never waits for it, runs it automatically, or treats a
+reload as a completion gate. When explicitly invoked, it inspects the exact
+selected project, layered effective Codex
 config, global conflict context, ancestor project instructions, active source,
 ownership receipt, recovery artifacts, and relevant tracked evidence. A new
 file is justified only by durable, project-specific, actionable rules.
@@ -1157,16 +1158,13 @@ stopped as missing evidence/unresolved. Failure to find an implementation bug
 never proves design. Probable or incomplete diagnoses cannot authorize repair
 or redesign.
 
-### `sdlc-align-specs`
+### Alignment
 
-Checks that requirements, design, locked plans, tests, implementation,
-documentation, end-to-end slice evidence, and other evidence tell one
-consistent story. For vertical features, it verifies that the design's feature
-flow and layer map, the locked plan's End-To-End Slice, tests, implementation
-boundaries, validation evidence, evaluation evidence, documentation, and UAT
-all describe the same slice or explicitly record why no slice applies. It is
-SDLC-specific and does not replace the general `align` skill. Drift is routed
-to the responsible SDLC skill.
+The general `align` skill checks that requirements, design, locked plans,
+tests, implementation, documentation, end-to-end slice evidence, and other
+evidence tell one consistent story. Drift is routed to the responsible SDLC
+skill. The legacy `sdlc-align-specs` helper may report advisory context but is
+not a workflow phase or prerequisite.
 
 ### `sdlc-commit`
 
@@ -1290,7 +1288,7 @@ Typical routes are:
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
-- documentation drift -> `sdlc-update-documents`, then `sdlc-align-specs`
+- documentation drift -> `sdlc-update-documents`, then `align`
 - local/remote/promoted/reviewed PR head drift -> `PR_HEAD_DRIFT` and human
   ownership input without push, overwrite, or merge
 - environment defects -> stop or request the minimum missing setup

@@ -35,9 +35,6 @@ def observation(
     dispatched_at: str | None = None,
     heartbeat_at: str | None = None,
     released: bool = False,
-    terminal_seal_active: bool = False,
-    terminal_seal_promoted: bool = False,
-    terminal_recovery_promoted: bool = False,
 ) -> dict[str, object]:
     active_wave = None if coordinator_status == "done" else "wave-001"
     coordinator = {
@@ -68,11 +65,6 @@ def observation(
         "interop": {"released": released},
         "lease": None,
         "interop_repairs": {},
-        "terminal_lifecycle_seal": None,
-        "terminal_lifecycle_seal_active": terminal_seal_active,
-        "terminal_lifecycle_seal_promoted": terminal_seal_promoted,
-        "terminal_lifecycle_recovery": None,
-        "terminal_lifecycle_recovery_promoted": terminal_recovery_promoted,
         "git": {
             "lane": {"present": True},
             "resources": [
@@ -461,11 +453,7 @@ class ResumeDecisionTest(unittest.TestCase):
             ],
             "blocked",
         )
-        complete = observation(
-            coordinator_status="done",
-            released=True,
-            terminal_seal_promoted=True,
-        )
+        complete = observation(coordinator_status="done", released=True)
         with mock.patch.object(
             resume, "read_handoff_text", return_value="- Overall status: done\n"
         ):
@@ -473,29 +461,6 @@ class ResumeDecisionTest(unittest.TestCase):
                 Path("/tmp/run"), complete, clock=lambda: NOW
             )
         self.assertEqual(decision["outcome"], "complete")
-
-        missing_seal = observation(coordinator_status="done", released=True)
-        with mock.patch.object(
-            resume, "read_handoff_text", return_value="- Overall status: done\n"
-        ):
-            blocked_release = resume._choose_transition(
-                Path("/tmp/run"), missing_seal, clock=lambda: NOW
-            )
-        self.assertEqual(blocked_release["outcome"], "blocked")
-        self.assertIn("terminal lifecycle seal", blocked_release["reason"])
-
-        recovered = observation(
-            coordinator_status="done",
-            released=True,
-            terminal_recovery_promoted=True,
-        )
-        with mock.patch.object(
-            resume, "read_handoff_text", return_value="- Overall status: done\n"
-        ):
-            recovered_decision = resume._choose_transition(
-                Path("/tmp/run"), recovered, clock=lambda: NOW
-            )
-        self.assertEqual(recovered_decision["outcome"], "complete")
 
     def test_blocked_prefixed_completed_result_routes_to_strict_finish(self) -> None:
         value = observation(wave_status="blocked", task_state="failed")
@@ -505,14 +470,10 @@ class ResumeDecisionTest(unittest.TestCase):
         self.assertEqual(decision["next_transition"], "task-finish")
         self.assertEqual(decision["arguments"], {"task_id": "task-1"})
 
-    def test_final_promoted_wave_waits_for_terminal_lifecycle_seal(self) -> None:
+    def test_final_promoted_wave_routes_directly_to_cleanup(self) -> None:
         value = observation(wave_status="promoted", task_state="merged")
-        blocked = resume._choose_transition(Path("/tmp/run"), value, clock=lambda: NOW)
-        self.assertEqual(blocked["outcome"], "blocked")
-        self.assertIn("terminal lifecycle seal", blocked["reason"])
-
-        value["terminal_lifecycle_seal_promoted"] = True
         cleanup = resume._choose_transition(Path("/tmp/run"), value, clock=lambda: NOW)
+        self.assertEqual(cleanup["outcome"], "execute")
         self.assertEqual(cleanup["next_transition"], "wave-cleanup")
 
     def test_finalization_requires_alignment_before_token_issue(self) -> None:

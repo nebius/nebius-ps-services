@@ -38,14 +38,14 @@ REVALIDATION_ROUTES = {
     "tests": "sdlc-unit-tests",
     "evaluation": "sdlc-evaluate",
     "documentation": "sdlc-update-documents",
-    "alignment": "sdlc-align-specs",
+    "alignment": "align",
     "commit": "sdlc-commit",
 }
 
 
 def _normalize_skill_name(value: str) -> str:
     aliases = {
-        "align-specs": "sdlc-align-specs",
+        "align-specs": "align",
         "auto-steering": "sdlc-auto-steering",
         "classify-failure": "sdlc-classify-failure",
         "commit": "sdlc-commit",

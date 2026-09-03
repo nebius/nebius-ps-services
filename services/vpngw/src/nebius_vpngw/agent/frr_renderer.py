@@ -24,9 +24,7 @@ class FRRRenderer:
             os.chown(FRR_CONF, -1, group_id)
             os.chmod(FRR_CONF, VM_HA_FRR_MODE)
         except (KeyError, OSError) as error:
-            raise RuntimeError(
-                "failed to establish VM-HA FRR configuration access"
-            ) from error
+            raise RuntimeError("failed to establish VM-HA FRR configuration access") from error
 
     def _ensure_bgpd_enabled(self, enable_bfd: bool = False) -> bool:
         """Ensure bgpd daemon is enabled and listening on all interfaces."""

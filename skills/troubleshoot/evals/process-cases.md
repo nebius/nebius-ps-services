@@ -282,10 +282,13 @@ With active state at 4/5 and 119:59/120, and separately 9/10 and 179:59/180,
 expect the exact selected profile to be admitted. A requested limit at or below
 the completed-attempt or active-seconds counter must be rejected without
 changing the saved profile, attempt ledger, counters, or exhaustion state.
-During an admitted resize, only the exact `current.md` marker patch is allowed;
-promotion requires the same blocker, tranche, ledger, counters, lifecycle, and
-timestamps. Free-text prose, `override_summary`, a forged ID, or mismatched
-values must not authorize the marker.
+During an admitted active or resolved-state profile change, only one exact
+`apply_patch` targeting the advertised `current.md` is allowed: `*** Update
+File` when it exists or `*** Add File` only when it is absent. `*** Delete
+File`, delete/add replacement, shell rewrites, and other tools remain denied.
+Promotion requires the same blocker, tranche, ledger, counters, lifecycle, and timestamps.
+Free-text prose, `override_summary`, a forged ID, or mismatched values must not
+authorize the marker.
 
 While that resize is pending, omit `blocker_summary` and separately delete the
 marker. Expect all three hook events to retain the exact validation reason. The
@@ -346,13 +349,15 @@ time, an empty attempt ledger, and no inherited stop trigger. Expect exact
 marker repair to restore the still-active budget without consuming an attempt
 or forcing an exhaustion report.
 
-Separately begin from a valid resolved marker, invoke a fresh troubleshoot turn,
-and transition to a causally independent blocker. Expect pending feedback to
-refer to the prior terminal marker without calling it exhausted, admit only the
-exact canonical current.md patch, and promote the independent tranche-1 marker.
+Separately begin from a valid resolved marker and invoke a fresh bare
+`$troubleshoot` turn. Expect the saved profile context, no pending authorization,
+no fresh-marker instruction, and ordinary read-only inspection to remain
+admitted. Repeat with explicit profile flags; expect a profile-only pending
+handshake that preserves the resolved blocker, tranche, ledger, counters,
+lifecycle, and timestamps before promotion.
 
-While that next-tranche authorization is pending, first omit the required
-`blocker_summary`, then provide a structurally valid marker that changes the
+While a post-exhaustion next-tranche authorization is pending, first omit the
+required `blocker_summary`, then provide a structurally valid marker that changes the
 blocker key while retaining tranche 2 and a continuation summary. Expect
 UserPromptSubmit, PreToolUse, and Stop to report the exact bounded validation or
 transition reason before the complete fresh-marker action. The first Stop may

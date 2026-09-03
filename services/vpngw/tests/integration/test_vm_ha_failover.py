@@ -298,6 +298,13 @@ class TwoNodeScenario:
     def peer(self, local: str) -> str:
         return "node-b" if local == "node-a" else "node-a"
 
+    def inject_restored_standby(self, owner: str) -> None:
+        standby = self.peer(owner)
+        self.cloud.compute[standby] = ComputeState.RUNNING
+        self.nodes[standby].mode = DataPlaneMode.PASSIVE
+        self.nodes[standby].peer_received_at = self.clock.now
+        self.nodes[owner].peer_received_at = self.clock.now
+
     def heartbeat(self, local: str) -> PeerHeartbeat:
         peer_id = self.peer(local)
         peer = self.nodes[peer_id]
@@ -320,6 +327,8 @@ class TwoNodeScenario:
             service_healthy=True,
             route_ready=True,
             promotion_ready=True,
+            auto_healing_policy_state="enabled",
+            auto_healing_policy_digest="e" * 64,
         )
 
     def snapshot(self, local: str) -> ControllerSnapshot:
@@ -498,7 +507,7 @@ def test_checkpoint_filesystem_failure_happens_before_fencing_effect() -> None:
     assert scenario.trace == [ActionKind.STOP_FORMER_OWNER]
 
 
-def test_takeover_resynchronization_and_manual_failback_restore_configured_owner() -> None:
+def test_healthy_promoted_owner_waits_for_explicit_preference_failback() -> None:
     scenario = TwoNodeScenario()
     scenario.nodes["node-b"].peer_received_at = 0
     scenario.run_until_active("node-b")
@@ -509,7 +518,7 @@ def test_takeover_resynchronization_and_manual_failback_restore_configured_owner
     scenario.trace.clear()
     waiting = scenario.runtimes["node-a"].step()
     assert waiting.action is None
-    assert waiting.reasons == ("manual-failback-required",)
+    assert waiting.reasons == ("authoritative-owner-peer-is-healthy",)
 
     scenario.nodes["node-a"].manual_failback = True
     scenario.run_until_active("node-a")
@@ -520,6 +529,61 @@ def test_takeover_resynchronization_and_manual_failback_restore_configured_owner
     assert scenario.cloud.confirmed_owner == "node-a"
     assert scenario.nodes["node-a"].mode is DataPlaneMode.ACTIVE
     assert scenario.nodes["node-b"].mode is DataPlaneMode.BLOCKED
+
+
+def test_stopped_promoted_owner_with_retained_attachment_fails_over_to_survivor() -> None:
+    scenario = TwoNodeScenario()
+    scenario.nodes["node-b"].peer_received_at = 0
+    scenario.run_until_active("node-b")
+
+    scenario.cloud.compute["node-a"] = ComputeState.RUNNING
+    scenario.nodes["node-a"].mode = DataPlaneMode.PASSIVE
+    scenario.nodes["node-a"].peer_received_at = 0
+    scenario.cloud.compute["node-b"] = ComputeState.STOPPED
+    scenario.nodes["node-b"].mode = DataPlaneMode.BLOCKED
+    scenario.trace.clear()
+    scenario.attempts.clear()
+
+    scenario.run_until_active("node-a")
+
+    assert scenario.trace == list(TAKEOVER_EFFECTS[1:])
+    assert scenario.cloud.compute["node-b"] is ComputeState.STOPPED
+    assert scenario.cloud.attachment == "node-a"
+    assert scenario.cloud.confirmed_owner == "node-a"
+    assert scenario.nodes["node-a"].mode is DataPlaneMode.ACTIVE
+    assert scenario.nodes["node-b"].mode is DataPlaneMode.BLOCKED
+
+
+@pytest.mark.parametrize("crash_after", TAKEOVER_EFFECTS)
+def test_reverse_automatic_takeover_replays_each_effect_exactly_once(
+    crash_after: ActionKind,
+) -> None:
+    scenario = TwoNodeScenario()
+    scenario.nodes["node-b"].peer_received_at = 0
+    scenario.run_until_active("node-b")
+
+    scenario.cloud.compute["node-a"] = ComputeState.RUNNING
+    scenario.nodes["node-a"].mode = DataPlaneMode.PASSIVE
+    scenario.nodes["node-a"].peer_received_at = 0
+    scenario.trace.clear()
+    scenario.attempts.clear()
+    scenario.effects["node-a"].crash_after = crash_after
+
+    scenario.run_until_active("node-a")
+
+    assert scenario.trace == list(TAKEOVER_EFFECTS)
+    effect = scenario.effects["node-a"]
+    crash_attempts = [
+        operation_id
+        for kind, operation_id in effect.attempted_operations
+        if kind is crash_after
+    ]
+    assert crash_attempts == list(effect.crashed_operation_ids)
+    assert len(crash_attempts) == 1
+    assert scenario.cloud.compute["node-b"] is ComputeState.STOPPED
+    assert scenario.cloud.attachment == "node-a"
+    assert scenario.cloud.confirmed_owner == "node-a"
+    assert scenario.nodes["node-a"].mode is DataPlaneMode.ACTIVE
 
 
 def test_planned_failover_uses_the_canonical_transfer_chain_with_healthy_peer() -> None:
@@ -534,6 +598,44 @@ def test_planned_failover_uses_the_canonical_transfer_chain_with_healthy_peer() 
     assert scenario.cloud.confirmed_owner == "node-b"
     assert scenario.nodes["node-b"].mode is DataPlaneMode.ACTIVE
     assert scenario.nodes["node-a"].mode is DataPlaneMode.BLOCKED
+
+
+def test_controller_accepts_fixture_restoration_after_each_planned_transfer() -> None:
+    scenario = TwoNodeScenario()
+    scenario.nodes["node-b"].manual_failover = True
+
+    scenario.run_until_active("node-b")
+    scenario.nodes["node-b"].manual_failover = False
+    scenario.inject_restored_standby("node-b")
+
+    promoted = scenario.runtimes["node-b"].step()
+    standby = scenario.runtimes["node-a"].step()
+    assert promoted.state is HAState.ACTIVE
+    assert standby.state is HAState.NORMAL
+    assert scenario.cloud.compute == {
+        "node-a": ComputeState.RUNNING,
+        "node-b": ComputeState.RUNNING,
+    }
+
+    scenario.trace.clear()
+    scenario.attempts.clear()
+    scenario.nodes["node-a"].manual_failback = True
+    scenario.run_until_active("node-a")
+    assert scenario.trace == list(TAKEOVER_EFFECTS)
+
+    scenario.nodes["node-a"].manual_failback = False
+    scenario.inject_restored_standby("node-a")
+    preferred = scenario.runtimes["node-a"].step()
+    restored = scenario.runtimes["node-b"].step()
+
+    assert preferred.state is HAState.ACTIVE
+    assert restored.state is HAState.NORMAL
+    assert scenario.cloud.compute == {
+        "node-a": ComputeState.RUNNING,
+        "node-b": ComputeState.RUNNING,
+    }
+    assert scenario.cloud.attachment == "node-a"
+    assert scenario.cloud.confirmed_owner == "node-a"
 
 
 def test_takeover_hold_down_preserves_routes_until_stable_absence() -> None:

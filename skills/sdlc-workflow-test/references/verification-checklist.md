@@ -4,7 +4,7 @@ Use this checklist as the durable test plan for `sdlc-workflow-test`.
 
 ## Required SDLC Skills
 
-- `sdlc-align-specs`
+- `align`
 - `sdlc-auto-steering`
 - `sdlc-classify-failure`
 - `sdlc-commit`
@@ -117,10 +117,10 @@ Verify:
   `policy.allow_implicit_invocation: false`.
 - No project-local `.agents/skills` directory is required by the disposable
   project.
-- The installed `maintain-project-specs`, `worktree`,
-  `nebius-grafana-query`, `project-agent-instructions`, and conditional
-  `troubleshoot` support skills exist.
-- Every required SDLC skill, all five runtime support skills, and
+- The installed `align`, `worktree`, `nebius-grafana-query`, and conditional
+  `troubleshoot` support skills exist. Project lifecycle observations are
+  advisory and are not runtime dependencies.
+- Every required SDLC skill, all four runtime support skills, and
   `sdlc-workflow-test` match their source copies, excluding installer
   provenance and bytecode artifacts.
 

@@ -92,15 +92,21 @@ Coordinate isolated task agents to implement one locked feature safely.
    confirm that group is stopped and invoke private `task-requeue` with the
    exact recorded dispatch timestamp before allocating a fresh slot.
 4. Give each worker only its task record, assignment digest, digest-bound
-   incoming handoff from all earlier completed waves and batches, requirements,
+   incoming handoff from all earlier completed waves and batches, inherited
+   root-intent digest, canonical project-spec receipt, requirements,
    design/context reminders, test target, write claims, and stop conditions.
    The worker calls `task-start` before editing, emits direct bounded
    `task-heartbeat` calls at least every 30 seconds without a background loop,
    implements the smallest coherent change, including its part of the vertical
    end-to-end slice without widening feature scope,
    validates it, runs a task-scoped `code-review`, fixes blocking findings, and
-   returns an explicit summary, decisions, open risks, validation, and review
-   evidence; a commit subject is never substituted for handoff evidence. The
+   returns an explicit summary, decisions, open risks, typed `spec_gaps`,
+   validation, and review evidence; a commit subject is never substituted for
+   handoff evidence. Workers never reclassify user intent or edit canonical
+   specs. A non-empty gap list returns `replan_required` for root-coordinator
+   reconciliation and does not enter `task-finish`; every gap text field is
+   sensitive-screened before dispatcher output. Worker path validation keeps
+   rename folding disabled so both sides of a move remain enforceable. The
    coordinator calls `task-finish` with that structured evidence to recheck
    liveness, scan staged paths/content, create exactly one direct-child commit
    with normal Git hooks, and persist the result. The helper journals an exact
@@ -170,6 +176,7 @@ Coordinate isolated task agents to implement one locked feature safely.
 - Hide failures.
 - Remove tests to pass.
 - Expand scope without design update.
+- Reclassify direct user intent or let a worker edit canonical specs.
 - Reopen sealed, promoted, or completed execution. A post-promotion defect
   starts a corrective run from the exact promoted commit.
 - Weaken acceptance criteria or change the regression oracle to make a repair
@@ -186,7 +193,7 @@ Coordinate isolated task agents to implement one locked feature safely.
 - Focused tests are runnable or blocker is recorded.
 - Changed files match implementation boundaries.
 - Each task has validation and review evidence plus one verified
-  coordinator-created task commit.
+  coordinator-created task commit and an empty accepted `spec_gaps` list.
 - Every logical wave has ordered merge evidence and no unsafe retained worker
   resource.
 - Corrective workers are bound to a complete localized implementation handoff,

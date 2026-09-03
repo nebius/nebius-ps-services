@@ -1,6 +1,6 @@
 [Unit]
 Description=Nebius VPNGW VM-HA controller
-After=network-online.target nebius-vpngw-vm-ha-guard.service
+After=nebius-vpngw-vm-ha-guard.service
 Requires=nebius-vpngw-vm-ha-guard.service
 Before=strongswan-starter.service strongswan.service frr.service nebius-vpngw-agent.service
 ConditionPathExists=/etc/nebius-vpngw/vm-ha-enabled
@@ -21,6 +21,9 @@ NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
 PrivateTmp=true
+RuntimeDirectory=nebius-vpngw
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 SupplementaryGroups=frr frrvty
 ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw /run/ufw.lock /proc/sys/net/ipv4/ip_forward /etc/vpngw_peer_ips /etc/vpngw_mgmt_cidrs /etc/vpngw_local_prefixes /etc/ufw /etc/default/ufw /etc/frr
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW

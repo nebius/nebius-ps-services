@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
 import importlib.util
 import json
 import os
@@ -45,26 +44,41 @@ def git(*args: str, cwd: Path) -> str:
 def requirement_body(identifier: str = "TI-REQ-001") -> str:
     return f"""## Task Implementer Requirements
 
+<!-- REQUIREMENT: {identifier} status=active priority=P1 type=feature -->
 ### {identifier}: Safe steering
 
-- Status: active
-- Requirement: Apply steering at a safe boundary.
-- Constraints: Preserve completed work.
-- Non-goals: Live interruption.
+#### User Story
 
-#### Acceptance criteria
+Apply steering at a safe boundary while preserving completed work and without
+live interruption.
 
-- Queued steering is applied once.
+#### Acceptance Criteria
 
-#### Verification
+- AC-001: Queued steering is applied once.
 
-- Run focused tests.
+#### Negative Criteria
 
-## Task Implementer Open Questions
+- NC-001: Completed work is not discarded.
+
+#### Validation Method
+
+Run focused validation.
+
+#### Test Method
+
+Run focused tests.
+
+#### Evaluation Method
+
+Inspect the steering outcome.
+
+<!-- /REQUIREMENT: {identifier} -->
+
+## Open Questions
 
 - None.
 
-## Task Implementer Requirements Change Log
+## Change Log
 
 - 2026-07-13: Added {identifier}.
 """
@@ -76,24 +90,68 @@ def design_body(
 ) -> str:
     return f"""## Task Implementer Designs
 
+<!-- FEATURE: {identifier} reqs={requirement} status=ready delivery=not-started priority=P1 version=1 -->
 ### {identifier}: Boundary steering
 
-- Status: planned
-- Requirements: {requirement}
-- Selected approach: Queue edits during implementation.
-- Boundaries and interfaces: Private intake state only.
-- Validation: Focused tests.
-- Rollback: Revert the task commit.
+#### Requirements Covered
 
-#### Alternatives considered
+- {requirement}: Apply steering at a safe boundary.
+
+#### Context Evidence
+
+Focused Task Implementer contract tests.
+
+#### Design Details
+
+Queue edits during implementation at the private intake boundary.
+
+#### Selected Option
+
+Queue edits during implementation.
+
+#### Alternatives Considered
 
 - Live interruption was rejected.
 
-#### Implementation evidence
+#### Implementation Boundaries
+
+Private intake state only.
+
+#### Test-First Success Criteria
+
+- TDD-001: Queued steering is applied exactly once.
+
+#### Validation Plan
+
+Run focused tests.
+
+#### Test Plan
+
+Run focused Task Implementer tests.
+
+#### Evaluation Plan
+
+Inspect the steering outcome.
+
+#### Rollout And Rollback
+
+Revert the task commit.
+
+#### Done Definition
+
+The mapped requirement and focused checks pass.
+
+#### Implementation Evidence
 
 - Pending checkpoint.
 
-## Task Implementer Design Change Log
+#### Verification Evidence
+
+- Independent verification is pending.
+
+<!-- /FEATURE: {identifier} -->
+
+## Change Log
 
 - 2026-07-13: Added {identifier}.
 """
@@ -177,23 +235,23 @@ class TaskSpecificationTest(unittest.TestCase):
             function(*args, **kwargs)
         self.assertEqual(context.exception.code, code)
 
+    def test_managed_region_assets_follow_the_canonical_v2_record_shape(self) -> None:
+        assets = Path(__file__).resolve().parents[1] / "assets"
+
+        inspected = specs.owner_inspect_pair_bytes(
+            (assets / "requirements-managed-region.md").read_bytes(),
+            (assets / "design-managed-region.md").read_bytes(),
+        )
+
+        self.assertEqual(inspected["status"], "pending")
+        self.assertEqual(inspected["requirements"]["ids"], ["TI-REQ-001"])
+        self.assertEqual(inspected["design"]["ids"], ["TI-DES-001"])
+
     def test_missing_and_created_specs_have_stable_ids(self) -> None:
         missing = pw.inspect_spec_documents(self.workspace_value)
-        self.assertEqual(missing["next_requirement_id"], "TI-REQ-001")
-        self.assertEqual(missing["next_design_id"], "TI-DES-001")
-        self.assertIsNone(missing["project_agent_spec_receipt"])
-        with self.assertRaises(pw.PromptWorkspaceError) as caught:
-            specs.verify_project_agent_contract(
-                self.workspace_value,
-                self.root / "missing-run",
-                self.scope,
-                git(
-                    "rev-parse",
-                    "HEAD",
-                    cwd=Path(str(self.workspace_value["repo_root"])),
-                ),
-            )
-        self.assertEqual(caught.exception.code, "SPEC_CONFLICT")
+        self.assertEqual(missing["next_requirement_id"], "REQ-001")
+        self.assertEqual(missing["next_design_id"], "FEAT-001")
+        self.assertNotIn("project_agent_spec_receipt", missing)
         requirements, design = self.write_specs()
 
         inspected = pw.inspect_spec_documents(self.workspace_value)
@@ -204,19 +262,9 @@ class TaskSpecificationTest(unittest.TestCase):
             inspected["design"]["requirements"]["TI-DES-001"],
             ["TI-REQ-001"],
         )
-        self.assertEqual(inspected["next_requirement_id"], "TI-REQ-002")
-        self.assertEqual(inspected["next_design_id"], "TI-DES-002")
-        receipt = inspected["project_agent_spec_receipt"]
-        self.assertEqual(
-            receipt["schema"], "project-agent-instructions.spec-validation.v3"
-        )
-        self.assertEqual(receipt["owner"], "maintain-project-specs")
-        self.assertEqual(receipt["project_scope"], "services/example")
-        self.assertEqual(
-            receipt["requirements"]["sha256"],
-            inspected["requirements"]["file_sha256"],
-        )
-        self.assertRegex(receipt["traceability_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(inspected["next_requirement_id"], "REQ-002")
+        self.assertEqual(inspected["next_design_id"], "FEAT-002")
+        self.assertNotIn("project_agent_spec_receipt", inspected)
         before = (requirements.read_bytes(), design.read_bytes())
         repeated = pw.inspect_spec_documents(self.workspace_value)
         self.assertEqual(repeated, inspected)
@@ -227,7 +275,7 @@ class TaskSpecificationTest(unittest.TestCase):
 
         inspected = pw.inspect_spec_documents(self.workspace_value)
 
-        self.assertIsNone(inspected["project_agent_spec_receipt"])
+        self.assertNotIn("project_agent_spec_receipt", inspected)
 
     def test_commit_snapshot_does_not_fabricate_authoritative_receipt(self) -> None:
         self.write_specs()
@@ -246,40 +294,53 @@ class TaskSpecificationTest(unittest.TestCase):
 
         inspected = pw.inspect_spec_documents(self.workspace_value, commit=commit)
 
-        self.assertIsNone(inspected["project_agent_spec_receipt"])
+        self.assertNotIn("project_agent_spec_receipt", inspected)
 
     def test_every_applicable_requirement_must_be_mapped(self) -> None:
         requirements, design = self.write_specs()
-        second_record = """### TI-REQ-002: Preserve traceability
+        second_record = """<!-- REQUIREMENT: TI-REQ-002 status=active priority=P1 type=feature -->
+### TI-REQ-002: Preserve traceability
 
-- Status: active
-- Requirement: Map every applicable requirement.
-- Constraints: Ignore superseded requirements.
-- Non-goals: Duplicate mappings.
+#### User Story
 
-#### Acceptance criteria
+Map every applicable requirement while ignoring superseded requirements and
+without duplicate mappings.
 
-- Every applicable requirement is covered.
+#### Acceptance Criteria
 
-#### Verification
+- AC-001: Every applicable requirement is covered.
 
-- Run focused tests.
+#### Negative Criteria
+
+- NC-001: A mapping is not duplicated.
+
+#### Validation Method
+
+Run focused validation.
+
+#### Test Method
+
+Run focused tests.
+
+#### Evaluation Method
+
+Inspect total traceability.
+
+<!-- /REQUIREMENT: TI-REQ-002 -->
 
 """
         requirements.write_bytes(
             specs.new_spec_document(
                 "requirements",
                 requirement_body().replace(
-                    "## Task Implementer Open Questions",
-                    second_record + "## Task Implementer Open Questions",
+                    "## Open Questions",
+                    second_record + "## Open Questions",
                 ),
             )
         )
 
         self.assert_error(
-            "SPEC_CONFLICT",
-            pw.inspect_spec_documents,
-            self.workspace_value,
+            "SPEC_CONFLICT", pw.inspect_spec_documents, self.workspace_value
         )
 
     def test_superseded_requirement_and_design_are_not_current_coverage(self) -> None:
@@ -287,189 +348,35 @@ class TaskSpecificationTest(unittest.TestCase):
         requirements.write_bytes(
             specs.new_spec_document(
                 "requirements",
-                requirement_body().replace("- Status: active", "- Status: superseded"),
+                requirement_body().replace("status=active", "status=superseded"),
             )
         )
         design.write_bytes(
             specs.new_spec_document(
                 "design",
-                design_body().replace("- Status: planned", "- Status: superseded"),
+                design_body().replace(
+                    "status=ready delivery=not-started",
+                    "status=superseded delivery=unassessed",
+                ),
             )
         )
 
         inspected = pw.inspect_spec_documents(self.workspace_value)
 
-        self.assertIsInstance(inspected["project_agent_spec_receipt"], dict)
+        self.assertNotIn("project_agent_spec_receipt", inspected)
 
-    def test_project_agent_contract_gate_verifies_owner_receipt_and_state(self) -> None:
+    def test_project_agent_state_is_not_part_of_spec_inspection(self) -> None:
         self.write_specs()
         (self.scope / "AGENTS.md").write_text(
             "# Human project instructions\n\n- Preserve the validated contract.\n",
             encoding="utf-8",
         )
-        repo_root = Path(str(self.workspace_value["repo_root"]))
-        git("add", "services/example/docs", "services/example/AGENTS.md", cwd=repo_root)
-        git(
-            "-c",
-            "user.name=Spec Test",
-            "-c",
-            "user.email=spec@example.invalid",
-            "commit",
-            "-qm",
-            "lock project contract",
-            cwd=repo_root,
-        )
-        contract_commit = git("rev-parse", "HEAD", cwd=repo_root)
+
         inspected = pw.inspect_spec_documents(self.workspace_value)
-        run_dir = self.root / "private-run"
-        orchestration = run_dir / "orchestration"
-        private_root = orchestration / "project-agent-instructions"
-        private_root.mkdir(parents=True)
-        private_root.chmod(0o700)
-        receipt_path = orchestration / "project-agent-spec-receipt.json"
-        receipt_path.write_text(
-            json.dumps(
-                inspected["project_agent_spec_receipt"], indent=2, sort_keys=True
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        receipt_path.chmod(0o600)
-        runtime_path = orchestration / "project-agent-runtime.json"
-        runtime_path.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.runtime-config.v1",
-                    "profile": None,
-                    "overrides": {"project_root_markers": ["scope.txt"]},
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        runtime_path.chmod(0o600)
-        helper = (
-            Path(__file__).resolve().parents[2]
-            / "project-agent-instructions"
-            / "scripts"
-            / "project_agent_instructions.py"
-        )
-        inspect_result = subprocess.run(
-            [
-                sys.executable,
-                str(helper),
-                "inspect",
-                "--project-root",
-                str(self.scope),
-                "--spec-owner",
-                "maintain-project-specs",
-                "--spec-receipt",
-                str(receipt_path),
-                "--runtime-config",
-                str(runtime_path),
-                "--codex-home",
-                str(self.codex_home),
-                "--private-root",
-                str(private_root),
-                "--output",
-                "manifest.json",
-            ],
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self.assertEqual(inspect_result.returncode, 0, inspect_result.stdout)
-        manifest = json.loads((private_root / "manifest.json").read_text())
-        design = self.scope / "docs/design.md"
-        decision = {
-            "schema": "project-agent-instructions.decision.v3",
-            "manifest_sha256": manifest["manifest_sha256"],
-            "disposition": "existing-sufficient",
-            "rationale": "The tracked human project instructions are sufficient.",
-            "evidence": [
-                {
-                    "path": "docs/design.md",
-                    "sha256": hashlib.sha256(design.read_bytes()).hexdigest(),
-                    "locator": "Task Implementer Design Change Log",
-                }
-            ],
-            "rules": [],
-            "budget_exception": None,
-            "ownership_approval": None,
-        }
-        decision_path = private_root / "decision.json"
-        decision_path.write_text(
-            json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        decision_path.chmod(0o600)
-        render_result = subprocess.run(
-            [
-                sys.executable,
-                str(helper),
-                "render",
-                "--private-root",
-                str(private_root),
-                "--manifest",
-                "manifest.json",
-                "--decision",
-                "decision.json",
-                "--output",
-                "rules.md",
-                "--state",
-                "state.json",
-            ],
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self.assertEqual(render_result.returncode, 0, render_result.stdout)
-        verified = specs.verify_project_agent_contract(
-            self.workspace_value, run_dir, self.scope, contract_commit
-        )
-        self.assertEqual(verified["disposition"], "existing-sufficient")
-        self.assertFalse(verified["repository_mutated"])
 
-        (repo_root / "tracked.txt").write_text(
-            "descendant product change\n", encoding="utf-8"
-        )
-        git("add", "tracked.txt", cwd=repo_root)
-        git(
-            "-c",
-            "user.name=Spec Test",
-            "-c",
-            "user.email=spec@example.invalid",
-            "commit",
-            "-qm",
-            "advance unchanged project contract",
-            cwd=repo_root,
-        )
-        descendant = git("rev-parse", "HEAD", cwd=repo_root)
-        carried = specs.verify_project_agent_contract(
-            self.workspace_value, run_dir, self.scope, descendant
-        )
-        self.assertEqual(carried["disposition"], "existing-sufficient")
-        self.assertFalse(carried["repository_mutated"])
-
-        rules_path = private_root / "rules.md"
-        rendered_rules = rules_path.read_bytes()
-        rules_path.write_bytes(rendered_rules + b"tampered\n")
-        with self.assertRaises(pw.PromptWorkspaceError) as caught:
-            specs.verify_project_agent_contract(
-                self.workspace_value, run_dir, self.scope, descendant
-            )
-        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
-        rules_path.write_bytes(rendered_rules)
-
-        receipt_path.write_text("{}\n", encoding="utf-8")
-        with self.assertRaises(pw.PromptWorkspaceError) as caught:
-            specs.verify_project_agent_contract(
-                self.workspace_value, run_dir, self.scope, contract_commit
-            )
-        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
+        self.assertNotIn("project_agent_spec_receipt", inspected)
+        self.assertEqual(inspected["requirements"]["ids"], ["TI-REQ-001"])
+        self.assertEqual(inspected["design"]["ids"], ["TI-DES-001"])
 
     def test_generic_unicode_crlf_envelope_is_byte_preserved(self) -> None:
         self.docs.mkdir()
@@ -505,7 +412,7 @@ class TaskSpecificationTest(unittest.TestCase):
         )
         requirements.chmod(0o644)
         self.assert_error(
-            "SPEC_OWNER_CONFLICT",
+            "SPEC_MIGRATION_REQUIRED",
             pw.inspect_spec_documents,
             self.workspace_value,
         )
@@ -514,7 +421,7 @@ class TaskSpecificationTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.assert_error(
-            "SPEC_OWNER_CONFLICT",
+            "SPEC_MIGRATION_REQUIRED",
             pw.inspect_spec_documents,
             self.workspace_value,
         )
@@ -525,7 +432,7 @@ class TaskSpecificationTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.assert_error(
-            "SPEC_CONFLICT",
+            "SPEC_MIGRATION_REQUIRED",
             pw.inspect_spec_documents,
             self.workspace_value,
         )
@@ -570,8 +477,8 @@ class TaskSpecificationTest(unittest.TestCase):
             specs.new_spec_document(
                 "requirements",
                 requirement_body().replace(
-                    "#### Acceptance criteria",
-                    "#### Missing acceptance criteria",
+                    "#### Acceptance Criteria",
+                    "#### Missing Acceptance Criteria",
                 ),
             )
         )
@@ -587,10 +494,7 @@ class TaskSpecificationTest(unittest.TestCase):
         design.write_bytes(
             specs.new_spec_document(
                 "design",
-                design_body().replace(
-                    "- Requirements: TI-REQ-001",
-                    "- Related requirement: TI-REQ-001",
-                ),
+                design_body().replace(" reqs=TI-REQ-001 ", " reqs=TI-REQ-999 "),
             )
         )
         self.assert_error(
@@ -833,8 +737,9 @@ class TaskSpecificationTest(unittest.TestCase):
         design.write_bytes(design_bytes)
         requirements.write_text(
             requirements.read_text(encoding="utf-8").replace(
-                "Apply steering at a safe boundary.",
-                "Apply revised steering at a safe boundary.",
+                "<!-- /REQUIREMENT: TI-REQ-001 -->",
+                "Requirement semantics changed after refinement.\n\n"
+                "<!-- /REQUIREMENT: TI-REQ-001 -->",
             ),
             encoding="utf-8",
         )

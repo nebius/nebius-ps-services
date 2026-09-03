@@ -18,8 +18,8 @@ from prompt_workspace_runs import markdown_section
 
 COORDINATOR_SCHEMA = "task-implementer/coordinator-v7"
 WAVE_SCHEMA = "task-implementer/wave-v4"
-ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v7"
-RESULT_SCHEMA = "task-implementer/worker-result-v3"
+ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v8"
+RESULT_SCHEMA = "task-implementer/worker-result-v4"
 TASK_PLANE_SCHEMA = "task-implementer/task-plane-v5"
 WORKER_HEARTBEAT_SECONDS = 30
 WORKER_START_SECONDS = 60
@@ -58,7 +58,10 @@ WORKER_GUARDRAILS = (
     "docs/design.md, project AGENTS.md, README.md, or CHANGELOG.md path changed; "
     "those shared paths remain coordinator-owned even when a broad task write "
     "claim lexically contains them. Route required documentation or contract "
-    "updates through the result evidence for post-integration reconciliation. Publish the "
+    "updates through typed spec_gaps in the result for root-coordinator "
+    "reconciliation. Inherit root_intent_sha256 and project_spec_receipt exactly; "
+    "never independently reclassify user intent, edit project specs, or claim a "
+    "gap was accepted. Publish the "
     "worker result only through the exact transient result_context returned by "
     "task-start or task-recover, using its publication_cwd as the explicit external "
     "working directory and its exact draft_path and publish_argv for canonical "

@@ -89,25 +89,32 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
         *,
         project: Path | None = None,
         workspace_name: str = "project",
+        workflow: str = "task-implementer",
     ) -> Path:
         selected_project = project or self.project
-        workspace = self.home / "task-implementer" / workspace_name
+        owner = "task-implementer" if workflow == "task-implementer" else "sdlc-runs"
+        workspace = self.home / owner / workspace_name
         prompts = workspace / "prompts"
         prompts.mkdir(parents=True, exist_ok=True, mode=0o700)
         prompts.chmod(0o700)
+        manifest = (
+            {
+                "schema": "task-implementer/workspace-v2",
+                "primary_root": str(selected_project.resolve()),
+                "repo_root": str(selected_project.resolve()),
+                "scope": ".",
+                "source_root": str(selected_project.resolve()),
+                "prompt_root": str(prompts.resolve()),
+            }
+            if workflow == "task-implementer"
+            else {
+                "schema": "agentic-sdlc/prompt-workspace-v1",
+                "project_root": str(selected_project.resolve()),
+            }
+        )
         self.write_private(
             workspace / "workspace.json",
-            json.dumps(
-                {
-                    "schema": "task-implementer/workspace-v2",
-                    "primary_root": str(selected_project.resolve()),
-                    "repo_root": str(selected_project.resolve()),
-                    "scope": ".",
-                    "source_root": str(selected_project.resolve()),
-                    "prompt_root": str(prompts.resolve()),
-                }
-            )
-            + "\n",
+            json.dumps(manifest) + "\n",
         )
         return prompts / name
 
@@ -174,6 +181,7 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
         operation_id: str | None = None,
         projection_sha256: str | None = None,
         ask: str = "Canonical objective",
+        workflow: str = "task-implementer",
     ) -> str:
         operation = (
             "\n\n<!-- prompt-session-operation:v2:"
@@ -183,7 +191,7 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
         )
         return (
             "---\n"
-            "schema: task-implementer/prompt-v3\n"
+            f"schema: {workflow}/prompt-v3\n"
             f"prompt_id: {prompt_id}\n"
             f"prompt_ref: {prompt_ref}\n"
             'title: "Canonical objective"\n'
@@ -921,7 +929,7 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
             {"continue": True},
         )
 
-    def test_explicit_objective_registration_attach_and_terminal_replacement(
+    def test_explicit_objective_registration_terminal_and_replacement(
         self,
     ) -> None:
         prompt = self.write_private(
@@ -943,59 +951,6 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
         self.assertEqual(active["status"], "active")
         state.evaluate_stop(
             {"hook_event_name": "Stop", "session_id": "session-1"}, self.home
-        )
-
-        attached = state.evaluate_submit(
-            {
-                **self.payload,
-                "session_id": "session-2",
-                "turn_id": "fresh-direct",
-                "prompt": "Add a new acceptance constraint.",
-            },
-            self.home,
-        )
-        self.assertIn("staged", attached["hookSpecificOutput"]["additionalContext"])
-        binding = state.load_binding(state.state_root(self.home), "session-2")
-        self.assertEqual(binding["workflow"], "task-implementer")
-        first_terminal = state.register_objective(
-            self.home,
-            "session-1",
-            "task-implementer",
-            self.project,
-            prompt_id="prompt-" + "a" * 32,
-            prompt_ref="aaaaa",
-            prompt_path=prompt,
-            prompt_sha256=digest,
-            terminal=True,
-        )
-        self.assertEqual(first_terminal["status"], "terminal")
-
-        attached_event = state._event_path(
-            state.state_root(self.home), "session-2", "fresh-direct"
-        )
-        attached_token = state._load_json(attached_event)["accept_token"]
-        state.accept_event(
-            self.home,
-            attached_event,
-            attached_token,
-            "noop",
-            session_id="session-2",
-            reason="conversation",
-        )
-        state.consume_event(
-            self.home,
-            attached_event,
-            attached_token,
-            session_id="session-2",
-            workflow="task-implementer",
-        )
-        state.evaluate_stop(
-            {
-                "hook_event_name": "Stop",
-                "session_id": "session-2",
-                "turn_id": "fresh-direct",
-            },
-            self.home,
         )
 
         terminal = state.register_objective(
@@ -1031,7 +986,97 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
         )
         self.assertEqual(next_objective["prompt_ref"], "bbbbb")
 
-    def test_stale_writer_provenance_does_not_block_fresh_session_capture(
+    def test_unique_active_objective_does_not_bind_fresh_direct_session(
+        self,
+    ) -> None:
+        prompt = self.write_private(
+            self.managed_prompt(),
+            self.canonical_text("prompt-" + "a" * 32, "aaaaa"),
+        )
+        state.register_objective(
+            self.home,
+            "session-1",
+            "task-implementer",
+            self.project,
+            prompt_id="prompt-" + "a" * 32,
+            prompt_ref="aaaaa",
+            prompt_path=prompt,
+            prompt_sha256=state.sha256_bytes(prompt.read_bytes()),
+            terminal=False,
+        )
+        state.evaluate_stop(
+            {"hook_event_name": "Stop", "session_id": "session-1"}, self.home
+        )
+
+        result = state.evaluate_submit(
+            {
+                **self.payload,
+                "session_id": "fresh-session",
+                "turn_id": "fresh-direct",
+                "prompt": "Handle this direct request without workflow intake.",
+            },
+            self.home,
+        )
+
+        root = state.state_root(self.home)
+        self.assertEqual(result, {})
+        self.assertIsNone(state.load_binding(root, "fresh-session"))
+        self.assertFalse(
+            state._event_path(root, "fresh-session", "fresh-direct").exists()
+        )
+        self.assertFalse(state._current_event_path(root, "fresh-session").exists())
+
+    def test_unique_active_sdlc_objective_does_not_bind_fresh_direct_session(
+        self,
+    ) -> None:
+        owner_payload = {
+            **self.payload,
+            "session_id": "sdlc-owner",
+            "turn_id": "bind-sdlc",
+            "prompt": "$sdlc-start workspace init",
+        }
+        state.evaluate_submit(owner_payload, self.home)
+        prompt = self.write_private(
+            self.managed_prompt(workflow="agentic-sdlc"),
+            self.canonical_text(
+                "prompt-" + "a" * 32,
+                "aaaaa",
+                workflow="agentic-sdlc",
+            ),
+        )
+        state.register_objective(
+            self.home,
+            "sdlc-owner",
+            "agentic-sdlc",
+            self.project,
+            prompt_id="prompt-" + "a" * 32,
+            prompt_ref="aaaaa",
+            prompt_path=prompt,
+            prompt_sha256=state.sha256_bytes(prompt.read_bytes()),
+            terminal=False,
+        )
+
+        result = state.evaluate_submit(
+            {
+                **self.payload,
+                "session_id": "fresh-sdlc-session",
+                "turn_id": "fresh-direct",
+                "prompt": "Handle this direct request without workflow intake.",
+            },
+            self.home,
+        )
+
+        root = state.state_root(self.home)
+        self.assertEqual(result, {})
+        self.assertIsNone(state.load_binding(root, "fresh-sdlc-session"))
+        self.assertFalse(
+            state._event_path(root, "fresh-sdlc-session", "fresh-direct").exists()
+        )
+        self.assertFalse(
+            state._current_event_path(root, "fresh-sdlc-session").exists()
+        )
+
+    def test_stale_writer_provenance_allows_explicit_fresh_session_capture(
         self,
     ) -> None:
         prompt = self.write_private(
@@ -1050,6 +1095,18 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
             terminal=False,
         )
 
+        bound = state.evaluate_submit(
+            {
+                **self.payload,
+                "session_id": "fresh-session",
+                "turn_id": "bind-fresh",
+                "prompt": "$task-implementer workspace init",
+            },
+            self.home,
+        )
+        self.assertIn(
+            "bound this session", bound["hookSpecificOutput"]["additionalContext"]
+        )
         result = state.evaluate_submit(
             {
                 **self.payload,
@@ -1073,7 +1130,7 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
             state.identity_sha256("fresh-session"),
         )
 
-    def test_concurrent_sessions_both_stage_against_one_active_objective(
+    def test_concurrent_explicit_sessions_stage_against_one_active_objective(
         self,
     ) -> None:
         prompt = self.write_private(
@@ -1100,6 +1157,20 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
             }
             for index in range(2)
         ]
+        for index in range(2):
+            bound = state.evaluate_submit(
+                {
+                    **self.payload,
+                    "session_id": f"racing-session-{index}",
+                    "turn_id": f"bind-racing-{index}",
+                    "prompt": "$task-implementer workspace init",
+                },
+                self.home,
+            )
+            self.assertIn(
+                "bound this session",
+                bound["hookSpecificOutput"]["additionalContext"],
+            )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(
@@ -1153,6 +1224,17 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
             terminal=False,
         )
 
+        state.evaluate_submit(
+            {
+                **primary_payload,
+                "session_id": "lane-writer",
+                "turn_id": "bind-lane",
+                "cwd": str(lane_project),
+                "prompt": "$task-implementer workspace init",
+            },
+            self.home,
+        )
+
         lane_result = state.evaluate_submit(
             {
                 **primary_payload,
@@ -1168,6 +1250,16 @@ class PromptSessionCoordinatorTests(unittest.TestCase):
         registry = state._load_registry(state.state_root(self.home))
         self.assertEqual(len(registry["entries"]), 1)
         self.assertEqual(registry["entries"][0]["project_root"], str(lane_project))
+
+        state.evaluate_submit(
+            {
+                **primary_payload,
+                "session_id": "next-primary-writer",
+                "turn_id": "bind-next-primary",
+                "prompt": "$task-implementer workspace init",
+            },
+            self.home,
+        )
 
         primary_result = state.evaluate_submit(
             {

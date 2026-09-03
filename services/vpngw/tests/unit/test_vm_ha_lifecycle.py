@@ -17,6 +17,10 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
     VMHALifecycleStore,
     normalize_vm_ha_observation,
     vm_ha_effective_resource_bindings,
+    vm_ha_missing_standby_disk_name,
+    vm_ha_missing_standby_disk_name_binding_key,
+    vm_ha_missing_standby_replacement_effect,
+    vm_ha_missing_standby_ssh_binding_key,
     vm_ha_passive_replacement_binding_key,
     vm_ha_passive_replacement_effect,
     vm_ha_resource_binding_matches_observation,
@@ -66,6 +70,39 @@ def _member(index: int, role: str) -> VMHALifecycleMember:
         public_allocation_id=f"public-{index}",
         alias_allocation_ids=("allocation-1",) if role == "active" else (),
     )
+
+
+def test_hardened_lifecycle_snapshot_detects_post_read_change(tmp_path: Path) -> None:
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    store = VMHALifecycleStore(config_path)
+    state = _provisioning_state()
+    store.write_verified(state)
+
+    snapshot = store.read_hardened(
+        expected_project_id=state.project_id,
+        expected_gateway_name=state.gateway_name,
+    )
+    assert snapshot is not None
+    store.path.write_bytes(store.path.read_bytes() + b" ")
+
+    with pytest.raises(RuntimeError, match="changed after preflight"):
+        snapshot.assert_current()
+
+
+def test_hardened_lifecycle_snapshot_rejects_hard_link(tmp_path: Path) -> None:
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    store = VMHALifecycleStore(config_path)
+    state = _provisioning_state()
+    store.write_verified(state)
+    (tmp_path / "lifecycle-copy.json").hardlink_to(store.path)
+
+    with pytest.raises(ValueError, match="unsafe local metadata"):
+        store.read_hardened(
+            expected_project_id=state.project_id,
+            expected_gateway_name=state.gateway_name,
+        )
 
 
 def _provisioning_state() -> VMHALifecycleState:
@@ -145,6 +182,300 @@ def _replacement_state() -> VMHALifecycleState:
         completed_effect="provision-gateway-1-compute",
     )
     return replace(state, transaction=transaction)
+
+
+def _missing_standby_state() -> VMHALifecycleState:
+    members = (_member(0, "active"), _member(1, "passive"))
+    observation = {
+        "members": [
+            {
+                "aliases": ["allocation-1"],
+                "boot_disk_id": "disk-0",
+                "compute_id": "vm-0",
+                "compute_revision": "7",
+                "instance_name": "gateway-0",
+                "network_interface_name": "eth0",
+                "primary_allocation_id": "private-0",
+                "public_allocation_id": "public-0",
+                "public_ip": "198.51.100.10",
+                "present": True,
+                "state": "running",
+            },
+            {"instance_name": "gateway-1", "present": False},
+        ],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "allocation-1",
+            "owner": {"compute_id": "vm-0", "network_interface_name": "eth0"},
+            "present": True,
+        },
+    }
+    initial = VMHALifecycleState.start_provisioning(
+        project_id="project-1",
+        gateway_name="gateway",
+        cluster_id="cluster",
+        allocation_name="gateway-cluster-shared-private-ip",
+        members=members,
+        operation_id="initial-operation",
+        approval_kind="migration",
+        approval_digest=_digest("a"),
+        desired_state_digest=_digest("b"),
+        current_state_digest=_digest("c"),
+        initial_resource_bindings={
+            "compute:gateway-0": "vm-0",
+            "compute:gateway-1": "vm-1",
+            "disk:gateway-0": "disk-0",
+            "disk:gateway-1": "disk-1",
+            "primary-allocation:gateway-0:eth0": "private-0",
+            "primary-allocation:gateway-1:eth0": "private-1",
+            "public-allocation:gateway-0:eth0": "public-0",
+            "public-allocation:gateway-1:eth0": "public-1",
+            "shared-allocation-id": "allocation-1",
+            "shared-allocation-owner-compute": "vm-0",
+            "shared-allocation-owner-nic": "eth0",
+        },
+    )
+    active = replace(
+        initial,
+        status=VMHALifecycleStatus.ACTIVE,
+        allocation_id="allocation-1",
+        route_runtime_id="route-runtime-1",
+        route_targets=("route-table-1:10.0.0.0/8",),
+    )
+    disk_name = vm_ha_missing_standby_disk_name(
+        gateway_name="gateway",
+        instance_name="gateway-1",
+        predecessor_sha256=active.record_sha256,
+        cycle=1,
+    )
+    return VMHALifecycleState.start_missing_standby_replacement(
+        active,
+        target_instance_name="gateway-1",
+        replacement_cycle=1,
+        replacement_disk_name=disk_name,
+        operation_id=_digest("d"),
+        approval_digest=_digest("e"),
+        desired_state_digest=_digest("b"),
+        current_state_digest=_digest("f"),
+        current_observation=observation,
+    )
+
+
+def test_active_missing_non_owner_starts_creation_only_replacement() -> None:
+    members = (_member(0, "passive"), _member(1, "active"))
+    observation = {
+        "members": [
+            {
+                "aliases": ["allocation-1"],
+                "boot_disk_id": "disk-0",
+                "compute_id": "vm-0",
+                "compute_revision": "7",
+                "instance_name": "gateway-0",
+                "network_interface_name": "eth0",
+                "present": True,
+                "state": "running",
+            },
+            {"instance_name": "gateway-1", "present": False},
+        ],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "allocation-1",
+            "owner": {"compute_id": "vm-0", "network_interface_name": "eth0"},
+            "present": True,
+        },
+    }
+    initial = VMHALifecycleState.start_provisioning(
+        project_id="project-1",
+        gateway_name="gateway",
+        cluster_id="cluster",
+        allocation_name="gateway-cluster-shared-private-ip",
+        members=members,
+        operation_id="initial-operation",
+        approval_kind="migration",
+        approval_digest=_digest("a"),
+        desired_state_digest=_digest("b"),
+        current_state_digest=_digest("c"),
+        initial_resource_bindings={
+            "compute:gateway-0": "vm-0",
+            "compute:gateway-1": "vm-1",
+            "disk:gateway-0": "disk-0",
+            "disk:gateway-1": "disk-1",
+            "primary-allocation:gateway-0:eth0": "private-0",
+            "primary-allocation:gateway-1:eth0": "private-1",
+            "public-allocation:gateway-0:eth0": "public-0",
+            "public-allocation:gateway-1:eth0": "public-1",
+            "shared-allocation-id": "allocation-1",
+            "shared-allocation-owner-compute": "vm-1",
+            "shared-allocation-owner-nic": "eth0",
+        },
+    )
+    active = replace(
+        initial,
+        status=VMHALifecycleStatus.ACTIVE,
+        allocation_id="allocation-1",
+        route_runtime_id="route-runtime-1",
+        route_targets=("route-table-1:10.0.0.0/8",),
+    )
+    disk_name = vm_ha_missing_standby_disk_name(
+        gateway_name="gateway",
+        instance_name="gateway-1",
+        predecessor_sha256=active.record_sha256,
+        cycle=1,
+    )
+
+    successor = VMHALifecycleState.start_missing_standby_replacement(
+        active,
+        target_instance_name="gateway-1",
+        replacement_cycle=1,
+        replacement_disk_name=disk_name,
+        operation_id=_digest("d"),
+        approval_digest=_digest("e"),
+        desired_state_digest=_digest("b"),
+        current_state_digest=_digest("f"),
+        current_observation=observation,
+    )
+
+    assert successor.status is VMHALifecycleStatus.PROVISIONING
+    assert successor.members[0] == members[0]
+    assert successor.members[1] == replace(
+        members[1],
+        compute_id="",
+        compute_revision="",
+        disk_id="",
+    )
+    assert successor.transaction is not None
+    bindings = dict(successor.transaction.resource_bindings)
+    assert bindings["retired-compute:gateway-1"] == "vm-1"
+    assert bindings["retired-disk:gateway-1"] == "disk-1"
+    assert bindings[vm_ha_missing_standby_disk_name_binding_key("gateway-1", 1)] == disk_name
+    effective = vm_ha_effective_resource_bindings(bindings)
+    assert "compute:gateway-1" not in effective
+    assert "disk:gateway-1" not in effective
+    assert effective["compute:gateway-0"] == "vm-0"
+    assert effective["shared-allocation-owner-compute"] == "vm-0"
+
+
+def test_missing_non_owner_ssh_rotation_is_bound_before_cloud_creation(
+    tmp_path: Path,
+) -> None:
+    members = (_member(0, "passive"), _member(1, "active"))
+    observation = {
+        "members": [
+            {
+                "aliases": ["allocation-1"],
+                "boot_disk_id": "disk-0",
+                "compute_id": "vm-0",
+                "compute_revision": "7",
+                "instance_name": "gateway-0",
+                "network_interface_name": "eth0",
+                "present": True,
+                "state": "running",
+            },
+            {"instance_name": "gateway-1", "present": False},
+        ],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "allocation-1",
+            "owner": {"compute_id": "vm-0", "network_interface_name": "eth0"},
+            "present": True,
+        },
+    }
+    initial = VMHALifecycleState.start_provisioning(
+        project_id="project-1",
+        gateway_name="gateway",
+        cluster_id="cluster",
+        allocation_name="gateway-cluster-shared-private-ip",
+        members=members,
+        operation_id="initial-operation",
+        approval_kind="migration",
+        approval_digest=_digest("a"),
+        desired_state_digest=_digest("b"),
+        current_state_digest=_digest("c"),
+        initial_resource_bindings={
+            "compute:gateway-0": "vm-0",
+            "compute:gateway-1": "vm-1",
+            "disk:gateway-0": "disk-0",
+            "disk:gateway-1": "disk-1",
+            "primary-allocation:gateway-0:eth0": "private-0",
+            "primary-allocation:gateway-1:eth0": "private-1",
+            "public-allocation:gateway-0:eth0": "public-0",
+            "public-allocation:gateway-1:eth0": "public-1",
+            "shared-allocation-id": "allocation-1",
+            "shared-allocation-owner-compute": "vm-1",
+            "shared-allocation-owner-nic": "eth0",
+        },
+    )
+    active = replace(
+        initial,
+        status=VMHALifecycleStatus.ACTIVE,
+        allocation_id="allocation-1",
+        route_runtime_id="route-runtime-1",
+        route_targets=("route-table-1:10.0.0.0/8",),
+    )
+    disk_name = vm_ha_missing_standby_disk_name(
+        gateway_name="gateway",
+        instance_name="gateway-1",
+        predecessor_sha256=active.record_sha256,
+        cycle=1,
+    )
+    successor = VMHALifecycleState.start_missing_standby_replacement(
+        active,
+        target_instance_name="gateway-1",
+        replacement_cycle=1,
+        replacement_disk_name=disk_name,
+        operation_id=_digest("d"),
+        approval_digest=_digest("e"),
+        desired_state_digest=_digest("b"),
+        current_state_digest=_digest("f"),
+        current_observation=observation,
+        ssh_identity_rotation={
+            "action": "generate-and-rotate-missing-non-owner-ssh-identity",
+            "hostname": "gateway-1",
+            "old_fingerprint": "SHA256:old",
+            "predecessor_projection_sha256": _digest("1"),
+            "predecessor_receipt_sha256": _digest("2"),
+            "storage_owner": "product-managed-default",
+            "trust_scope_sha256": _digest("3"),
+        },
+    )
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    store = VMHALifecycleStore(config_path)
+    store.write_verified(active)
+    store.write_verified(successor, predecessor_sha256=active.record_sha256)
+    journal = VMHALifecycleJournal(store, successor)
+    stage_effect = vm_ha_missing_standby_replacement_effect("gateway-1", 1, "stage-ssh-identity")
+    publish_effect = vm_ha_missing_standby_replacement_effect("gateway-1", 1, "publish-ssh-trust")
+    create_effect = vm_ha_missing_standby_replacement_effect("gateway-1", 1, "create-boot-disk")
+
+    with pytest.raises(ValueError, match="preceded SSH trust publication"):
+        journal.begin(create_effect)
+    with pytest.raises(ValueError, match="published before identity staging"):
+        journal.begin(publish_effect)
+
+    journal.begin(stage_effect)
+    journal.complete(
+        stage_effect,
+        resource_updates={
+            vm_ha_missing_standby_ssh_binding_key("stage-token", "gateway-1", 1): _digest("4"),
+            vm_ha_missing_standby_ssh_binding_key("new-fingerprint", "gateway-1", 1): "SHA256:new",
+            vm_ha_missing_standby_ssh_binding_key("successor-receipt", "gateway-1", 1): _digest(
+                "5"
+            ),
+            vm_ha_missing_standby_ssh_binding_key("successor-projection", "gateway-1", 1): _digest(
+                "6"
+            ),
+        },
+    )
+    journal.begin(publish_effect)
+    journal.complete(publish_effect)
+
+    journal.begin(create_effect)
+    assert journal.state.transaction is not None
+    assert journal.state.transaction.pending_effect == create_effect
 
 
 def _interrupted_passive_owner_activation() -> VMHALifecycleState:
@@ -542,6 +873,25 @@ def test_legacy_shared_allocation_guard_allows_only_scalar_unattached_owner() ->
     )
 
 
+def test_existing_compute_create_guard_allows_only_exact_target_provider_state() -> None:
+    before = {
+        "members": [
+            {"instance_name": "gateway-0", "present": True, "state": "running"},
+            {"instance_name": "gateway-1", "present": False},
+        ]
+    }
+    guard = VMHAEffectObservationGuard(
+        effect="replace-missing-gateway-1-create-compute",
+        permitted_paths=("/members/1/present",),
+        pre_observation=normalize_vm_ha_observation(before),
+    )
+
+    assert guard.unpermitted(frozenset({"/members/1/present", "/members/1/state"})) == ()
+    assert guard.unpermitted(frozenset({"/members/0/state", "/members/1/state"})) == (
+        "/members/0/state",
+    )
+
+
 def test_lifecycle_compare_and_swap_rejects_stale_writer(tmp_path: Path) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -664,8 +1014,79 @@ def test_owner_adoption_does_not_rewind_a_pending_cloud_effect() -> None:
     )
 
     with pytest.raises(ValueError, match="cannot rewind"):
-        interrupted.rewind_host_activation_for_owner_adoption(
-            "install-owner-adoption-node-1"
+        interrupted.rewind_host_activation_for_owner_adoption("install-owner-adoption-node-1")
+
+
+def test_owner_refresh_rewinds_only_interrupted_standby_replacement_inhibition(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    store = VMHALifecycleStore(config_path)
+    state = _missing_standby_state()
+    assert state.transaction is not None
+    state = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            completed_effects=tuple(
+                sorted(
+                    (
+                        *state.transaction.completed_effects,
+                        "prepare-live-peer-replacement-owner-v2-node-0",
+                    )
+                )
+            ),
+        ),
+    )
+    store.write_verified(state)
+    owner_refresh = "prepare-live-peer-replacement-owner-v5-node-0"
+    inhibition = "install-standby-replacement-inhibition-node-0"
+    journal = VMHALifecycleJournal(store, state)
+    journal.begin(inhibition)
+
+    journal.rewind_standby_replacement_inhibition_for_owner_refresh(
+        owner_refresh_effect=owner_refresh,
+        inhibition_effect=inhibition,
+    )
+
+    rewound = journal.state
+    assert rewound.transaction is not None
+    assert rewound.transaction.pending_effect is None
+    assert rewound.transaction.checkpoint == f"rewind-before-{owner_refresh}"
+    assert rewound.transaction.completed_effects == state.transaction.completed_effects
+    journal.begin(owner_refresh)
+    journal.complete(owner_refresh)
+    journal.begin(inhibition)
+    assert journal.state.transaction is not None
+    assert journal.state.transaction.pending_effect == inhibition
+
+    unrelated = state.begin_effect("unrelated-host-effect")
+    with pytest.raises(ValueError, match="cannot be rewound"):
+        unrelated.rewind_standby_replacement_inhibition_for_owner_refresh(
+            owner_refresh_effect=owner_refresh,
+            inhibition_effect=inhibition,
+        )
+
+    create_effect = vm_ha_missing_standby_replacement_effect(
+        "gateway-1",
+        1,
+        "create-boot-disk",
+    )
+    assert state.transaction is not None
+    cloud_started = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            checkpoint=f"before-{inhibition}",
+            pending_effect=inhibition,
+            completed_effects=tuple(sorted((*state.transaction.completed_effects, create_effect))),
+        ),
+    )
+    with pytest.raises(ValueError, match="cannot be rewound"):
+        cloud_started.rewind_standby_replacement_inhibition_for_owner_refresh(
+            owner_refresh_effect=owner_refresh,
+            inhibition_effect=inhibition,
         )
 
 
@@ -1044,7 +1465,7 @@ def test_apply_lock_key_ignores_config_filename_and_rejects_second_writer(
     first = VMHAApplyLock(project_id="project-1", gateway_name="gateway", runtime_dir=tmp_path)
     second = VMHAApplyLock(project_id="project-1", gateway_name="gateway", runtime_dir=tmp_path)
     assert first.path == second.path
-    with first, pytest.raises(RuntimeError, match="another VM-HA apply"), second:
+    with first, pytest.raises(RuntimeError, match="another gateway apply"), second:
         raise AssertionError("unreachable")
 
 

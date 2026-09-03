@@ -56,6 +56,14 @@ The repository uses Dependabot for dependency update pull requests.
 - Dependabot pull requests that touch source code or other non-dependency files
   remain ineligible for repo-level auto-merge.
 
+## Reusable Skill CI
+
+Changes to the canonical project-spec owner and its ordinary-session, Task
+Implementer, Agentic SDLC, hook-installer, and project-instruction adapters run
+the focused `skills-project-specs-ci.yml` contract suite. The workflow validates
+the single v2 parser/publisher contract, nonblocking intake hooks, worker
+intent/spec inheritance, typed spec-gap reporting, and safe hook retirement.
+
 ## License
 
 Copyright 2025 Nebius B.V.

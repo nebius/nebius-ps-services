@@ -121,16 +121,20 @@ agent application or shared agent platform.
 
 ## AI Behavior Decision
 
-Apply this per capability before choosing an SDK or framework:
+Consume the `ai-agent-design` decision per capability before choosing an SDK or
+framework. For a direct stack-only request, treat this tree as a provisional
+lower-bound check and route disputed behavior or policy to `ai-agent-design`:
 
 ```text
-Can one model request solve the task?
-  yes -> direct model call
-  no  -> Does application code know the exact steps?
-           yes -> deterministic workflow containing model calls where needed
-           no  -> Must the model choose actions or next steps from results?
-                    yes -> agent
-                    no  -> deterministic workflow
+Is model judgment needed?
+  no  -> deterministic code
+  yes -> Can one model request solve the task?
+           yes -> direct model call
+           no  -> Does application code know the exact steps?
+                    yes -> deterministic workflow with model calls where needed
+                    no  -> Must the model choose actions or next steps?
+                             yes -> agent
+                             no  -> deterministic workflow
 ```
 
 Choose an agent only when the model must select tools or actions, determine

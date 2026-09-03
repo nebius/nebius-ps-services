@@ -6,6 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from nebius_vpngw.agent.vm_ha.auto_healing import (
+    AutoHealingRecoveryPhase,
+    AutoHealingRecoveryRecord,
+    AutoHealingRecoveryStore,
+    StandbyAutoHealing,
+)
 from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSError
 from nebius_vpngw.agent.vm_ha.mtls_actions import (
     ACTION_SCHEMA,
@@ -159,3 +165,88 @@ def test_action_rejects_unknown_fields_before_mutation(tmp_path: Path) -> None:
             require_root=False,
         )
     assert not (tmp_path / "mtls" / "active.json").exists()
+
+
+def test_inhibition_refuses_a_concurrent_apply_lock(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "vm_ha": {
+                    "cluster_id": "cluster-a",
+                    "node": {"node_id": "node-a"},
+                    "generation": {"generation_id": "a" * 64},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "apply.lock").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ManagedMTLSError, match="conflicts with an apply lock"):
+        execute_mtls_action(
+            "inhibit",
+            {
+                "operation_id": _operation("rotation"),
+                "cluster_id": "cluster-a",
+                "node_id": "node-a",
+                "generation_id": "a" * 64,
+            },
+            state_dir=tmp_path,
+            config_path=config_path,
+            require_root=False,
+        )
+
+    assert not (tmp_path / "mtls" / "inhibition.json").exists()
+
+
+def test_inhibition_refuses_an_active_standby_recovery(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "vm_ha": {
+                    "cluster_id": "cluster-a",
+                    "node": {"node_id": "node-a"},
+                    "generation": {"generation_id": "a" * 64},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    AutoHealingRecoveryStore(tmp_path).arm(
+        AutoHealingRecoveryRecord(
+            cluster_id="cluster-a",
+            node_id="node-a",
+            target_node_id="node-b",
+            generation_id="a" * 64,
+            desired=StandbyAutoHealing.ENABLED,
+            operation_id="b" * 64,
+            approval_digest="c" * 64,
+            policy_digest="d" * 64,
+            predecessor_digest="d" * 64,
+            promotion_receipt_id="receipt-a",
+            allocation_id="allocation-a",
+            ownership_epoch="7",
+            stopped_revision="8",
+            phase=AutoHealingRecoveryPhase.ARMED,
+            rearm_operation_id=None,
+            updated_at=1.0,
+        )
+    )
+
+    with pytest.raises(ManagedMTLSError, match="conflicts with standby auto-healing"):
+        execute_mtls_action(
+            "inhibit",
+            {
+                "operation_id": _operation("rotation"),
+                "cluster_id": "cluster-a",
+                "node_id": "node-a",
+                "generation_id": "a" * 64,
+            },
+            state_dir=tmp_path,
+            config_path=config_path,
+            require_root=False,
+        )
+
+    assert not (tmp_path / "mtls" / "inhibition.json").exists()

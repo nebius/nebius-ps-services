@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Optional
 import unittest
 from unittest import mock
@@ -29,9 +30,9 @@ SCRIPT = Path(__file__).resolve().with_name("project_agent_instructions.py")
 AGENTIC_VALIDATOR = (
     SCRIPT.parents[2] / "sdlc-start" / "scripts" / "validate_project_specs.py"
 )
-REQUIREMENTS = """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+REQUIREMENTS = """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
 ---
-schema: maintain-project-specs/requirements-v1
+schema: maintain-project-specs/requirements-v2
 project: Example
 status: ready
 created_by_skill: maintain-project-specs
@@ -70,9 +71,9 @@ Manual review.
 <!-- /REQUIREMENT: REQ-001 -->
 <!-- maintain-project-specs:requirements:end -->
 """
-DESIGN = """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+DESIGN = """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 ---
-schema: maintain-project-specs/design-v1
+schema: maintain-project-specs/design-v2
 project: Example
 status: ready
 created_by_skill: maintain-project-specs
@@ -82,7 +83,7 @@ source_requirements: docs/requirements.md
 
 # Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-001: Project instructions
 
 #### Requirements Covered
@@ -133,12 +134,24 @@ Adopt and retire only with exact-digest approval.
 
 Requirements mapped and checks passing.
 
+#### Implementation Evidence
+
+The implementation predates schema v2 evidence tracking.
+
+#### Verification Evidence
+
+Independent verification predates schema v2 evidence tracking.
+
 <!-- /FEATURE: FEAT-001 -->
 <!-- maintain-project-specs:design:end -->
 """
 
 
 class ProjectAgentInstructionsTests(unittest.TestCase):
+    PRIOR_SESSION = "01900000-0000-7fff-bfff-ffffffffffff"
+    RETIRED_SESSION = "01900000-0000-7000-8000-000000000001"
+    CURRENT_SESSION = "018fffff-ffff-7fff-bfff-ffffffffffff"
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
             prefix="project-agent-instructions-v3-"
@@ -200,11 +213,132 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
 
     def write_json(self, name: str, value: object) -> Path:
         path = self.private / name
+        return self.write_json_at(path, value)
+
+    def write_json_at(self, path: Path, value: object) -> Path:
         path.write_text(
             json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         os.chmod(path, 0o600)
         return path
+
+    def sealed_session(
+        self, workspace: Path, name: str
+    ) -> tuple[Path, dict[str, object]]:
+        session_root = workspace / name
+        session_root.mkdir(mode=0o700)
+        private_root = session_root / "project-instructions"
+        private_state._ensure_private_root(private_root, self.repo)
+        manifest = self.inspect()
+        workflow.carry_forward_ownership(manifest, private_root)
+        state = workflow.apply_decision(
+            self.write_json_at(private_root / "manifest.json", manifest),
+            self.write_json_at(
+                private_root / "decision.json",
+                self.decision(manifest, "needed"),
+            ),
+            private_root / "ownership.json",
+            private_root / "state.json",
+            private_root,
+        )
+        self.seal_session(private_root, state, manifest)
+        return private_root, state
+
+    def seal_session(
+        self,
+        private_root: Path,
+        state: dict[str, object],
+        manifest: dict[str, object],
+    ) -> None:
+        state_raw = (private_root / "state.json").read_bytes()
+        self.write_json_at(
+            private_root.parent / "lifecycle.json",
+            {
+                "schema": workflow.SEALED_LIFECYCLE_SCHEMA,
+                "git_head_at_prompt": subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=self.repo,
+                    check=True,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                ).stdout.strip(),
+                "turn_sha256": "1" * 64,
+                "phase": "sealed",
+                "project_scope": manifest["project_scope"],
+                "receipt_sha256": "2" * 64,
+                "requirements_sha256": dict(state["requirements"])["sha256"],
+                "design_sha256": dict(state["design"])["sha256"],
+                "rules_path": workflow.SEALED_LIFECYCLE_RULES_PATH,
+                "rules_sha256": "3" * 64,
+                "project_instructions_state_sha256": contracts._sha256_bytes(
+                    state_raw
+                ),
+                "project_instructions_reload_required": state["reload_required"],
+                "write_epoch": 1,
+                "planned_write_epoch": 1,
+                "waiver": None,
+            },
+        )
+
+    def retired_session(
+        self, workspace: Path, name: str
+    ) -> tuple[Path, dict[str, object]]:
+        session_root = workspace / name
+        session_root.mkdir(mode=0o700)
+        private_root = session_root / "project-instructions"
+        private_state._ensure_private_root(private_root, self.repo)
+        manifest = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(manifest, private_root),
+            "carried-forward",
+        )
+        decision = self.decision(
+            manifest,
+            "not-needed",
+            approval={
+                "action": "retire",
+                "target_sha256": str(dict(manifest["target"])["sha256"]),
+            },
+        )
+        state = workflow.apply_decision(
+            self.write_json_at(private_root / "manifest.json", manifest),
+            self.write_json_at(private_root / "decision.json", decision),
+            private_root / "ownership.json",
+            private_root / "state.json",
+            private_root,
+        )
+        self.seal_session(private_root, state, manifest)
+        return private_root, state
+
+    def reseal_session(self, private_root: Path) -> None:
+        ownership_path = private_root / "ownership.json"
+        state_path = private_root / "state.json"
+        lifecycle_path = private_root.parent / "lifecycle.json"
+        state = json.loads(state_path.read_text())
+        state["ownership_file_sha256"] = contracts._sha256_bytes(
+            ownership_path.read_bytes()
+        )
+        self.write_json_at(state_path, state)
+        lifecycle = json.loads(lifecycle_path.read_text())
+        lifecycle["project_instructions_state_sha256"] = contracts._sha256_bytes(
+            state_path.read_bytes()
+        )
+        lifecycle["project_instructions_reload_required"] = state["reload_required"]
+        self.write_json_at(lifecycle_path, lifecycle)
+
+    def drop_workspace_registry(self, private_root: Path) -> None:
+        _, registry_root = workflow._workspace_ownership_root(
+            private_root, self.repo
+        )
+        for child in registry_root.iterdir():
+            child.unlink()
+        registry_root.rmdir()
+
+    def workspace_registry_path(self, private_root: Path) -> Path:
+        _, registry_root = workflow._workspace_ownership_root(
+            private_root, self.repo
+        )
+        return registry_root / workflow.WORKSPACE_OWNERSHIP_REGISTRY
 
     def inspect(
         self,
@@ -340,6 +474,41 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(verified["outcome"], "not-needed")
         self.assertIsNone(verified["target_sha256"])
         self.assertFalse(verified["reload_required"])
+
+    def test_cli_inherited_lock_failure_is_structured(self) -> None:
+        manifest = self.inspect()
+        manifest_path = self.write_json("manifest.json", manifest)
+        decision_path = self.write_json(
+            "decision.json", self.decision(manifest, "not-needed")
+        )
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "render",
+                "--private-root",
+                str(self.private),
+                "--manifest",
+                str(manifest_path),
+                "--decision",
+                str(decision_path),
+                "--output",
+                str(self.private / "rules.md"),
+                "--state",
+                str(self.private / "render-state.json"),
+                "--workspace-lock-fd",
+                "1",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(json.loads(completed.stdout)["code"], "ENVIRONMENT_BLOCKER")
 
     def test_render_is_deterministic_and_does_not_copy_global_instructions(
         self,
@@ -959,6 +1128,811 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         state = self.apply(current, approved)
         self.assertEqual(state["outcome"], "adopted")
 
+    def test_sealed_sibling_session_carries_exact_ownership(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(workspace, self.PRIOR_SESSION)
+        self.drop_workspace_registry(prior_private)
+        target = self.repo / "AGENTS.md"
+        before = target.read_bytes()
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+        current = self.inspect()
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(current, current_private),
+            "carried-forward",
+        )
+        state = workflow.apply_decision(
+            self.write_json_at(current_private / "manifest.json", current),
+            self.write_json_at(
+                current_private / "decision.json",
+                self.decision(current, "needed"),
+            ),
+            current_private / "ownership.json",
+            current_private / "state.json",
+            current_private,
+        )
+        self.assertEqual(state["outcome"], "existing-sufficient")
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_unanimous_sealed_history_bootstraps_one_registry_entry(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        first_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        _second_private, _state = self.sealed_session(
+            workspace, "legacy-second-session"
+        )
+        self.drop_workspace_registry(first_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+        manifest = self.inspect()
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(manifest, current_private),
+            "carried-forward",
+        )
+        registry = json.loads(
+            self.workspace_registry_path(current_private).read_text()
+        )
+        self.assertEqual(registry["schema"], workflow.WORKSPACE_OWNERSHIP_SCHEMA)
+        self.assertEqual(registry["generation"], 1)
+        self.assertEqual(len(registry["entries"]), 1)
+
+    def test_legacy_bootstrap_ignores_regular_workspace_files(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        self.drop_workspace_registry(prior_private)
+        (workspace / ".DS_Store").write_bytes(b"fixture metadata")
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "carried-forward",
+        )
+
+    def test_legacy_bootstrap_rejects_conflicting_active_generations(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        first_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        target = self.repo / "AGENTS.md"
+        first_bytes = target.read_bytes()
+        second_session = workspace / "conflicting-active-session"
+        second_session.mkdir(mode=0o700)
+        second_private = second_session / "project-instructions"
+        private_state._ensure_private_root(second_private, self.repo)
+        second_manifest = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(second_manifest, second_private),
+            "carried-forward",
+        )
+        second_decision = self.decision(second_manifest, "needed")
+        second_decision["rules"][0]["instruction"] = (
+            "Run focused contract tests and inspect exact failures."
+        )
+        second_state = workflow.apply_decision(
+            self.write_json_at(second_private / "manifest.json", second_manifest),
+            self.write_json_at(second_private / "decision.json", second_decision),
+            second_private / "ownership.json",
+            second_private / "state.json",
+            second_private,
+        )
+        self.seal_session(second_private, second_state, second_manifest)
+        target.write_bytes(first_bytes)
+        self.drop_workspace_registry(first_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+        registry_path = self.workspace_registry_path(current_private)
+        blocked = json.loads(registry_path.read_text())
+        self.assertEqual(blocked["generation"], 1)
+        self.assertEqual(
+            next(iter(blocked["entries"].values()))["status"], "blocked"
+        )
+
+        for path in sorted(
+            second_session.rglob("*"),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            if path.is_dir():
+                path.rmdir()
+            else:
+                path.unlink()
+        second_session.rmdir()
+        retry_session = workspace / "retry-after-conflict-removed"
+        retry_session.mkdir(mode=0o700)
+        retry_private = retry_session / "project-instructions"
+        private_state._ensure_private_root(retry_private, self.repo)
+        retry_manifest = self.inspect()
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(retry_manifest, retry_private),
+            "unproven",
+        )
+        self.assertEqual(json.loads(registry_path.read_text()), blocked)
+        approval = {
+            "action": "adopt",
+            "target_sha256": str(dict(retry_manifest["target"])["sha256"]),
+        }
+        state = workflow.apply_decision(
+            self.write_json_at(retry_private / "manifest.json", retry_manifest),
+            self.write_json_at(
+                retry_private / "decision.json",
+                self.decision(retry_manifest, "needed", approval=approval),
+            ),
+            retry_private / "ownership.json",
+            retry_private / "state.json",
+            retry_private,
+        )
+        self.assertEqual(state["outcome"], "adopted")
+        adopted = json.loads(registry_path.read_text())
+        self.assertEqual(adopted["generation"], 2)
+        self.assertEqual(
+            next(iter(adopted["entries"].values()))["status"], "active"
+        )
+
+    def test_workspace_registry_is_monotonic_and_retirement_is_a_tombstone(
+        self,
+    ) -> None:
+        initial = self.inspect()
+        self.apply(initial, self.decision(initial, "needed"))
+        registry_path = self.workspace_registry_path(self.private)
+        active = json.loads(registry_path.read_text())
+        self.assertEqual(active["generation"], 1)
+        entry = next(iter(active["entries"].values()))
+        self.assertEqual(entry["status"], "active")
+
+        current = self.inspect()
+        decision = self.decision(
+            current,
+            "not-needed",
+            approval={
+                "action": "retire",
+                "target_sha256": str(dict(current["target"])["sha256"]),
+            },
+        )
+        self.apply(current, decision)
+        retired = json.loads(registry_path.read_text())
+        self.assertEqual(retired["generation"], 2)
+        entry = next(iter(retired["entries"].values()))
+        self.assertEqual(entry["status"], "retired")
+        self.assertIsNone(entry["target_sha256"])
+
+    def test_verify_requires_matching_workspace_publication(self) -> None:
+        initial = self.inspect()
+        self.apply(initial, self.decision(initial, "needed"))
+        registry_path = self.workspace_registry_path(self.private)
+        registry = json.loads(registry_path.read_text())
+        entry = next(iter(registry["entries"].values()))
+        entry["status"] = "retired"
+        entry["target_sha256"] = None
+        entry["ownership"]["status"] = "retired"
+        self.write_json_at(registry_path, registry)
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            workflow.verify_state(self.private / "state.json", self.private)
+        self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+
+    def test_registry_tombstone_blocks_restored_active_bytes_without_ordering(
+        self,
+    ) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        self.sealed_session(workspace, self.PRIOR_SESSION)
+        target = self.repo / "AGENTS.md"
+        active_bytes = target.read_bytes()
+        self.retired_session(workspace, self.RETIRED_SESSION)
+        target.write_bytes(active_bytes)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_missing_registry_does_not_trust_current_receipt_past_retirement(
+        self,
+    ) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        active_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        target = self.repo / "AGENTS.md"
+        active_bytes = target.read_bytes()
+        retired_private, _state = self.retired_session(
+            workspace, self.RETIRED_SESSION
+        )
+        target.write_bytes(active_bytes)
+        self.drop_workspace_registry(retired_private)
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            workflow.carry_forward_ownership(self.inspect(), active_private)
+        self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+
+    def test_deleted_registry_file_fails_closed_without_retirement_history(
+        self,
+    ) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        active_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        target = self.repo / "AGENTS.md"
+        active_bytes = target.read_bytes()
+        retired_private, _state = self.retired_session(
+            workspace, self.RETIRED_SESSION
+        )
+        target.write_bytes(active_bytes)
+        self.workspace_registry_path(retired_private).unlink()
+        retired_session = retired_private.parent
+        for path in sorted(
+            retired_session.rglob("*"),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            if path.is_dir():
+                path.rmdir()
+            else:
+                path.unlink()
+        retired_session.rmdir()
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            workflow.carry_forward_ownership(self.inspect(), active_private)
+        self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+
+    def test_malformed_registry_never_falls_back_to_exact_sealed_history(
+        self,
+    ) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        registry_path = self.workspace_registry_path(prior_private)
+        original = registry_path.read_bytes()
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        cases = ("malformed", "mode", "hardlink")
+        for case in cases:
+            with self.subTest(case=case):
+                link_path = registry_path.with_name("registry-link.json")
+                link_path.unlink(missing_ok=True)
+                registry_path.write_bytes(original)
+                os.chmod(registry_path, 0o600)
+                if case == "malformed":
+                    registry = json.loads(original)
+                    registry["generation"] = "1"
+                    self.write_json_at(registry_path, registry)
+                elif case == "mode":
+                    os.chmod(registry_path, 0o640)
+                else:
+                    os.link(registry_path, link_path)
+                with self.assertRaises(
+                    contracts.ProjectInstructionsError
+                ) as caught:
+                    workflow.carry_forward_ownership(
+                        self.inspect(), current_private
+                    )
+                self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+                self.assertFalse((current_private / "ownership.json").exists())
+        link_path.unlink(missing_ok=True)
+
+    def test_malformed_registry_blocks_creation_before_project_mutation(
+        self,
+    ) -> None:
+        manifest = self.inspect()
+        registry_path = self.workspace_registry_path(self.private)
+        self.write_json_at(
+            registry_path,
+            {
+                "schema": workflow.WORKSPACE_OWNERSHIP_SCHEMA,
+                "generation": "invalid",
+                "entries": {},
+            },
+        )
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(manifest, self.decision(manifest, "needed"))
+        self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_retirement_lock_blocks_stale_active_writer_from_resurrection(
+        self,
+    ) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        self.sealed_session(workspace, self.PRIOR_SESSION)
+
+        writer_session = workspace / "stale-active-writer"
+        writer_session.mkdir(mode=0o700)
+        writer_private = writer_session / "project-instructions"
+        private_state._ensure_private_root(writer_private, self.repo)
+        writer_manifest = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(writer_manifest, writer_private),
+            "carried-forward",
+        )
+        writer_manifest_path = self.write_json_at(
+            writer_private / "manifest.json", writer_manifest
+        )
+        writer_decision_path = self.write_json_at(
+            writer_private / "decision.json",
+            self.decision(writer_manifest, "needed"),
+        )
+
+        retire_session = workspace / "retirement-writer"
+        retire_session.mkdir(mode=0o700)
+        retire_private = retire_session / "project-instructions"
+        private_state._ensure_private_root(retire_private, self.repo)
+        retire_manifest = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(retire_manifest, retire_private),
+            "carried-forward",
+        )
+        retire_manifest_path = self.write_json_at(
+            retire_private / "manifest.json", retire_manifest
+        )
+        retire_decision_path = self.write_json_at(
+            retire_private / "decision.json",
+            self.decision(
+                retire_manifest,
+                "not-needed",
+                approval={
+                    "action": "retire",
+                    "target_sha256": str(
+                        dict(retire_manifest["target"])["sha256"]
+                    ),
+                },
+            ),
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        retirement_errors: list[BaseException] = []
+        actual_delete = workflow._guarded_delete
+
+        def paused_delete(*args: object, **kwargs: object) -> None:
+            entered.set()
+            if not release.wait(timeout=10):
+                raise AssertionError("timed out waiting to release retirement")
+            actual_delete(*args, **kwargs)
+
+        def run_retirement() -> None:
+            try:
+                workflow.apply_decision(
+                    retire_manifest_path,
+                    retire_decision_path,
+                    retire_private / "ownership.json",
+                    retire_private / "state.json",
+                    retire_private,
+                )
+            except BaseException as error:  # pragma: no cover - asserted below
+                retirement_errors.append(error)
+
+        with mock.patch.object(
+            workflow, "_guarded_delete", side_effect=paused_delete
+        ):
+            thread = threading.Thread(target=run_retirement)
+            thread.start()
+            self.assertTrue(entered.wait(timeout=10))
+            with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+                workflow.apply_decision(
+                    writer_manifest_path,
+                    writer_decision_path,
+                    writer_private / "ownership.json",
+                    writer_private / "state.json",
+                    writer_private,
+                )
+            self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
+            release.set()
+            thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(retirement_errors, [])
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+        registry = json.loads(
+            self.workspace_registry_path(retire_private).read_text()
+        )
+        self.assertEqual(next(iter(registry["entries"].values()))["status"], "retired")
+
+    def test_registry_lock_contention_fails_as_concurrent_modification(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        registry_root = self.workspace_registry_path(prior_private).parent
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+        descriptor = os.open(registry_root / ".ownership.lock", os.O_RDWR)
+        try:
+            render_state.fcntl.flock(descriptor, render_state.fcntl.LOCK_EX)
+            with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+                workflow.carry_forward_ownership(
+                    self.inspect(), current_private
+                )
+            self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
+        finally:
+            render_state.fcntl.flock(descriptor, render_state.fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    def test_first_use_registry_root_has_only_one_initializer(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        first_session = workspace / "first"
+        second_session = workspace / "second"
+        first_session.mkdir(mode=0o700)
+        second_session.mkdir(mode=0o700)
+        first_private = first_session / "project-instructions"
+        second_private = second_session / "project-instructions"
+        private_state._ensure_private_root(first_private, self.repo)
+        private_state._ensure_private_root(second_private, self.repo)
+        entered = threading.Event()
+        release = threading.Event()
+        results: list[tuple[Path, Path]] = []
+        errors: list[BaseException] = []
+        actual_rename = workflow.os.rename
+
+        def paused_rename(source: Path, destination: Path) -> None:
+            if (
+                threading.current_thread().name == "registry-creator"
+                and Path(destination).name == workflow.WORKSPACE_OWNERSHIP_ROOT
+            ):
+                entered.set()
+                if not release.wait(timeout=10):
+                    raise AssertionError("timed out waiting for first initializer")
+            actual_rename(source, destination)
+
+        def create_first() -> None:
+            try:
+                results.append(
+                    workflow._workspace_ownership_root(first_private, self.repo)
+                )
+            except BaseException as error:  # pragma: no cover - asserted below
+                errors.append(error)
+
+        with mock.patch.object(
+            workflow.os, "rename", side_effect=paused_rename
+        ):
+            thread = threading.Thread(
+                target=create_first,
+                name="registry-creator",
+            )
+            thread.start()
+            self.assertTrue(entered.wait(timeout=10))
+            second_result = workflow._workspace_ownership_root(
+                second_private, self.repo
+            )
+            release.set()
+            thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][1], second_result[1])
+        registry = workflow._load_workspace_registry(second_result[1])
+        self.assertEqual(registry["generation"], 0)
+        manifest = self.inspect()
+        state = workflow.apply_decision(
+            self.write_json_at(second_private / "manifest.json", manifest),
+            self.write_json_at(
+                second_private / "decision.json",
+                self.decision(manifest, "needed"),
+            ),
+            second_private / "ownership.json",
+            second_private / "state.json",
+            second_private,
+        )
+        self.assertEqual(state["outcome"], "created")
+        self.assertEqual(
+            workflow._load_workspace_registry(second_result[1])["generation"],
+            1,
+        )
+
+    def test_unsealed_sibling_session_does_not_confer_ownership(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(workspace, self.PRIOR_SESSION)
+        lifecycle_path = prior_private.parent / "lifecycle.json"
+        lifecycle = json.loads(lifecycle_path.read_text())
+        lifecycle["phase"] = "planned"
+        self.write_json_at(lifecycle_path, lifecycle)
+        self.drop_workspace_registry(prior_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+        current = self.inspect()
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(current, current_private),
+            "unproven",
+        )
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            workflow.apply_decision(
+                self.write_json_at(current_private / "manifest.json", current),
+                self.write_json_at(
+                    current_private / "decision.json",
+                    self.decision(current, "needed"),
+                ),
+                current_private / "ownership.json",
+                current_private / "state.json",
+                current_private,
+            )
+        self.assertEqual(caught.exception.code, "ADOPTION_APPROVAL_REQUIRED")
+
+    def test_tampered_sealed_state_digest_does_not_confer_ownership(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(workspace, self.PRIOR_SESSION)
+        lifecycle_path = prior_private.parent / "lifecycle.json"
+        lifecycle = json.loads(lifecycle_path.read_text())
+        lifecycle["project_instructions_state_sha256"] = "0" * 64
+        self.write_json_at(lifecycle_path, lifecycle)
+        self.drop_workspace_registry(prior_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_permission_unsafe_prior_evidence_does_not_confer_ownership(
+        self,
+    ) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(workspace, self.PRIOR_SESSION)
+        os.chmod(prior_private.parent / "lifecycle.json", 0o640)
+        self.drop_workspace_registry(prior_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_linked_prior_ownership_does_not_confer_ownership(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(workspace, self.PRIOR_SESSION)
+        ownership_path = prior_private / "ownership.json"
+        os.link(ownership_path, prior_private / "ownership-link.json")
+        self.drop_workspace_registry(prior_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_mismatched_prior_evidence_does_not_confer_ownership(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(workspace, self.PRIOR_SESSION)
+        ownership_path = prior_private / "ownership.json"
+        state_path = prior_private / "state.json"
+        lifecycle_path = prior_private.parent / "lifecycle.json"
+        original_ownership = json.loads(ownership_path.read_text())
+        original_state = json.loads(state_path.read_text())
+        original_lifecycle = json.loads(lifecycle_path.read_text())
+        self.drop_workspace_registry(prior_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        cases = {
+            "retired": ("ownership", "status", "retired"),
+            "subject": ("ownership", "project_scope", "other"),
+            "body": ("ownership", "body_sha256", "0" * 64),
+            "state-target": ("state", "target_sha256", "0" * 64),
+            "lifecycle-scope": ("lifecycle", "project_scope", "other"),
+        }
+        for name, (document, field, value) in cases.items():
+            with self.subTest(name=name):
+                (current_private / "ownership.json").unlink(missing_ok=True)
+                self.write_json_at(ownership_path, original_ownership)
+                self.write_json_at(state_path, original_state)
+                self.write_json_at(lifecycle_path, original_lifecycle)
+                paths = {
+                    "ownership": ownership_path,
+                    "state": state_path,
+                    "lifecycle": lifecycle_path,
+                }
+                changed = json.loads(paths[document].read_text())
+                changed[field] = value
+                self.write_json_at(paths[document], changed)
+                self.reseal_session(prior_private)
+                self.drop_workspace_registry(current_private)
+
+                self.assertEqual(
+                    workflow.carry_forward_ownership(
+                        self.inspect(), current_private
+                    ),
+                    "unproven",
+                )
+                self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_malformed_prior_state_is_ignored_as_unproven(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        prior_private, _state = self.sealed_session(
+            workspace, self.PRIOR_SESSION
+        )
+        state_path = prior_private / "state.json"
+        state = json.loads(state_path.read_text())
+        state["requirements"] = 1
+        self.write_json_at(state_path, state)
+        lifecycle_path = prior_private.parent / "lifecycle.json"
+        lifecycle = json.loads(lifecycle_path.read_text())
+        lifecycle["project_instructions_state_sha256"] = contracts._sha256_bytes(
+            state_path.read_bytes()
+        )
+        self.write_json_at(lifecycle_path, lifecycle)
+        self.drop_workspace_registry(prior_private)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_later_sealed_retirement_supersedes_older_active_receipt(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        self.sealed_session(workspace, self.PRIOR_SESSION)
+        target = self.repo / "AGENTS.md"
+        retired_bytes = target.read_bytes()
+        self.retired_session(workspace, self.RETIRED_SESSION)
+        self.assertFalse(target.exists())
+        target.write_bytes(retired_bytes)
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_legacy_bootstrap_blocks_damaged_retirement_evidence(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        self.sealed_session(workspace, self.PRIOR_SESSION)
+        target = self.repo / "AGENTS.md"
+        active_bytes = target.read_bytes()
+        retired_private, _state = self.retired_session(
+            workspace, self.RETIRED_SESSION
+        )
+        target.write_bytes(active_bytes)
+        self.drop_workspace_registry(retired_private)
+        state_path = retired_private / "state.json"
+        lifecycle_path = retired_private.parent / "lifecycle.json"
+        original_state = state_path.read_bytes()
+        original_lifecycle = lifecycle_path.read_bytes()
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        for case in ("digest", "malformed", "mode", "phase"):
+            with self.subTest(case=case):
+                state_path.write_bytes(original_state)
+                lifecycle_path.write_bytes(original_lifecycle)
+                os.chmod(state_path, 0o600)
+                os.chmod(lifecycle_path, 0o600)
+                if case == "digest":
+                    lifecycle = json.loads(original_lifecycle)
+                    lifecycle["project_instructions_state_sha256"] = "0" * 64
+                    self.write_json_at(lifecycle_path, lifecycle)
+                elif case == "malformed":
+                    state = json.loads(original_state)
+                    state["requirements"] = 1
+                    self.write_json_at(state_path, state)
+                    lifecycle = json.loads(original_lifecycle)
+                    lifecycle["project_instructions_state_sha256"] = (
+                        contracts._sha256_bytes(state_path.read_bytes())
+                    )
+                    self.write_json_at(lifecycle_path, lifecycle)
+                else:
+                    if case == "mode":
+                        os.chmod(state_path, 0o640)
+                    else:
+                        lifecycle = json.loads(original_lifecycle)
+                        lifecycle["phase"] = "planned"
+                        self.write_json_at(lifecycle_path, lifecycle)
+                self.assertEqual(
+                    workflow.carry_forward_ownership(
+                        self.inspect(), current_private
+                    ),
+                    "unproven",
+                )
+                self.assertFalse((current_private / "ownership.json").exists())
+
+    def test_marker_only_drift_does_not_import_a_sibling_receipt(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        self.sealed_session(workspace, self.PRIOR_SESSION)
+        target = self.repo / "AGENTS.md"
+        content = target.read_bytes()
+        marker = contracts.GENERATED_MARKER_RE.match(content)
+        assert marker is not None
+        target.write_bytes(
+            target_io._generated_content(
+                content[marker.end() :], "1" * 64, "2" * 64
+            )
+        )
+
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), current_private),
+            "unproven",
+        )
+        self.assertFalse((current_private / "ownership.json").exists())
+
     def test_retirement_requires_exact_approval_and_is_verified(self) -> None:
         first = self.inspect()
         self.apply(first, self.decision(first, "needed"))
@@ -980,6 +1954,25 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(
             workflow.verify_state(self.private / "state.json", self.private)["outcome"],
             "retired",
+        )
+
+    def test_same_session_inspect_after_retirement_is_not_applicable(self) -> None:
+        initial = self.inspect()
+        self.apply(initial, self.decision(initial, "needed"))
+        current = self.inspect()
+        decision = self.decision(
+            current,
+            "not-needed",
+            approval={
+                "action": "retire",
+                "target_sha256": str(dict(current["target"])["sha256"]),
+            },
+        )
+        self.apply(current, decision)
+
+        self.assertEqual(
+            workflow.carry_forward_ownership(self.inspect(), self.private),
+            "not-applicable",
         )
 
     def test_retirement_preserves_a_concurrent_replacement(self) -> None:
@@ -1053,6 +2046,226 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
             self.inspect()
         self.assertEqual(caught.exception.code, "RECOVERY_REQUIRED")
+
+    def test_registry_publication_failure_keeps_refresh_recovery_backup(
+        self,
+    ) -> None:
+        initial = self.inspect()
+        self.apply(initial, self.decision(initial, "needed"))
+        target = self.repo / "AGENTS.md"
+        before = target.read_bytes()
+        current = self.inspect()
+        decision = self.decision(current, "needed")
+        decision["rules"][0]["instruction"] = (
+            "Run focused contract tests and inspect exact failures."
+        )
+        with (
+            mock.patch.object(
+                workflow,
+                "_publish_workspace_registry_locked",
+                side_effect=contracts.ProjectInstructionsError(
+                    "OWNERSHIP_CONFLICT",
+                    "simulated registry publication failure",
+                ),
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError) as caught,
+        ):
+            self.apply(current, decision)
+        self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+        backup = self.repo / ".AGENTS.md.project-agent-instructions.backup"
+        self.assertEqual(backup.read_bytes(), before)
+        self.assertNotEqual(target.read_bytes(), before)
+        with self.assertRaises(contracts.ProjectInstructionsError) as recovery:
+            self.inspect()
+        self.assertEqual(recovery.exception.code, "RECOVERY_REQUIRED")
+
+    def test_attached_publication_failure_keeps_original_human_backup(self) -> None:
+        target = self.repo / "AGENTS.md"
+        original = b"# Human instructions\n\nKeep this prefix.\n"
+        target.write_bytes(original)
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+        manifest = self.inspect()
+        with (
+            mock.patch.object(
+                workflow,
+                "_publish_workspace_registry_locked",
+                side_effect=contracts.ProjectInstructionsError(
+                    "OWNERSHIP_CONFLICT",
+                    "simulated registry publication failure",
+                ),
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError),
+        ):
+            self.apply(manifest, self.decision(manifest, "needed"))
+        backup = self.repo / ".AGENTS.md.project-agent-instructions.backup"
+        self.assertEqual(backup.read_bytes(), original)
+        self.assertNotEqual(target.read_bytes(), original)
+        with self.assertRaises(contracts.ProjectInstructionsError) as recovery:
+            self.inspect()
+        self.assertEqual(recovery.exception.code, "RECOVERY_REQUIRED")
+
+    def test_created_publication_failure_is_retryable_from_durable_state(
+        self,
+    ) -> None:
+        initial = self.inspect()
+        with (
+            mock.patch.object(
+                workflow,
+                "_publish_workspace_registry_locked",
+                side_effect=contracts.ProjectInstructionsError(
+                    "OWNERSHIP_CONFLICT",
+                    "simulated registry publication failure",
+                ),
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError) as caught,
+        ):
+            self.apply(initial, self.decision(initial, "needed"))
+        self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+        self.assertTrue((self.repo / "AGENTS.md").exists())
+        self.assertFalse(
+            (self.repo / ".AGENTS.md.project-agent-instructions.backup").exists()
+        )
+        registry = json.loads(
+            self.workspace_registry_path(self.private).read_text()
+        )
+        self.assertEqual(registry["generation"], 0)
+
+        current = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(current, self.private),
+            "current",
+        )
+        state = self.apply(current, self.decision(current, "needed"))
+        self.assertEqual(state["outcome"], "existing-sufficient")
+        self.assertEqual(
+            workflow.verify_state(self.private / "state.json", self.private)[
+                "outcome"
+            ],
+            "existing-sufficient",
+        )
+
+    def test_competing_inspect_preserves_created_publication_recovery(
+        self,
+    ) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        writer_session = workspace / "writer"
+        observer_session = workspace / "observer"
+        writer_session.mkdir(mode=0o700)
+        observer_session.mkdir(mode=0o700)
+        writer_private = writer_session / "project-instructions"
+        observer_private = observer_session / "project-instructions"
+        private_state._ensure_private_root(writer_private, self.repo)
+        private_state._ensure_private_root(observer_private, self.repo)
+        initial = self.inspect()
+
+        with (
+            mock.patch.object(
+                workflow,
+                "_publish_workspace_registry_locked",
+                side_effect=contracts.ProjectInstructionsError(
+                    "OWNERSHIP_CONFLICT",
+                    "simulated registry publication failure",
+                ),
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError),
+        ):
+            workflow.apply_decision(
+                self.write_json_at(writer_private / "manifest.json", initial),
+                self.write_json_at(
+                    writer_private / "decision.json",
+                    self.decision(initial, "needed"),
+                ),
+                writer_private / "ownership.json",
+                writer_private / "state.json",
+                writer_private,
+            )
+
+        observed = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(observed, observer_private),
+            "unproven",
+        )
+        registry_path = self.workspace_registry_path(observer_private)
+        pending = json.loads(registry_path.read_text())
+        self.assertEqual(pending["generation"], 1)
+        self.assertEqual(
+            next(iter(pending["entries"].values()))["status"], "pending"
+        )
+
+        current = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(current, writer_private),
+            "current",
+        )
+        active = json.loads(registry_path.read_text())
+        self.assertEqual(active["generation"], 2)
+        self.assertEqual(
+            next(iter(active["entries"].values()))["status"], "active"
+        )
+        state = workflow.apply_decision(
+            self.write_json_at(writer_private / "manifest.json", current),
+            self.write_json_at(
+                writer_private / "decision.json",
+                self.decision(current, "needed"),
+            ),
+            writer_private / "ownership.json",
+            writer_private / "state.json",
+            writer_private,
+        )
+        self.assertEqual(state["outcome"], "existing-sufficient")
+
+    def test_adoption_publication_failure_is_retryable_without_readoption(
+        self,
+    ) -> None:
+        initial = self.inspect()
+        decision = self.decision(initial, "needed")
+        _, body, _, _ = workflow._validate_decision(decision, initial)
+        assert body is not None
+        target = self.repo / "AGENTS.md"
+        target.write_bytes(
+            target_io._generated_content(
+                body,
+                contracts._generation_manifest_sha256(initial),
+                contracts._generation_decision_sha256(
+                    "needed", body, self.evidence()
+                ),
+            )
+        )
+        current = self.inspect()
+        approved = self.decision(
+            current,
+            "needed",
+            approval={
+                "action": "adopt",
+                "target_sha256": str(dict(current["target"])["sha256"]),
+            },
+        )
+        before = target.read_bytes()
+        with (
+            mock.patch.object(
+                workflow,
+                "_publish_workspace_registry_locked",
+                side_effect=contracts.ProjectInstructionsError(
+                    "OWNERSHIP_CONFLICT",
+                    "simulated registry publication failure",
+                ),
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError),
+        ):
+            self.apply(current, approved)
+        self.assertEqual(target.read_bytes(), before)
+
+        retry_manifest = self.inspect()
+        self.assertEqual(
+            workflow.carry_forward_ownership(retry_manifest, self.private),
+            "current",
+        )
+        state = self.apply(
+            retry_manifest,
+            self.decision(retry_manifest, "needed"),
+        )
+        self.assertEqual(state["outcome"], "existing-sufficient")
 
     def test_parent_directory_swap_cannot_redirect_creation(self) -> None:
         identity = (self.repo.stat().st_dev, self.repo.stat().st_ino)
@@ -1412,7 +2625,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             self.apply(current, self.decision(current, "needed"))
         self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
 
-    def test_marker_only_receipt_drift_requires_exact_readoption(self) -> None:
+    def test_marker_only_receipt_drift_uses_existing_ownership(self) -> None:
         first = self.inspect()
         self.apply(first, self.decision(first, "needed"))
         target = self.repo / "AGENTS.md"
@@ -1425,28 +2638,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         target.write_bytes(target_io._generated_content(body, "1" * 64, "2" * 64))
 
         current = self.inspect()
-        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
-            self.apply(current, self.decision(current, "needed"))
-        self.assertEqual(caught.exception.code, "ADOPTION_APPROVAL_REQUIRED")
-
-        wrong = self.decision(
-            current,
-            "needed",
-            approval={"action": "adopt", "target_sha256": "0" * 64},
-        )
-        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
-            self.apply(current, wrong)
-        self.assertEqual(caught.exception.code, "ADOPTION_APPROVAL_REQUIRED")
-
-        approved = self.decision(
-            current,
-            "needed",
-            approval={
-                "action": "adopt",
-                "target_sha256": str(current["target"]["sha256"]),
-            },
-        )
-        state = self.apply(current, approved)
+        state = self.apply(current, self.decision(current, "needed"))
         self.assertEqual(state["outcome"], "refreshed")
         self.assertEqual(
             workflow.verify_state(self.private / "state.json", self.private)["outcome"],
@@ -1753,8 +2945,54 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)
+        self.assertEqual(output["ownership_continuity"], "not-applicable")
         manifest = json.loads((self.private / "cli-manifest.json").read_text())
         self.assertEqual(manifest["schema"], contracts.MANIFEST_SCHEMA)
+
+    def test_cli_inspect_carries_sealed_sibling_ownership(self) -> None:
+        workspace = self.root / "project-specs" / "workspace"
+        workspace.mkdir(parents=True, mode=0o700)
+        os.chmod(workspace.parent, 0o700)
+        self.sealed_session(workspace, self.PRIOR_SESSION)
+        current_session = workspace / self.CURRENT_SESSION
+        current_session.mkdir(mode=0o700)
+        current_private = current_session / "project-instructions"
+        private_state._ensure_private_root(current_private, self.repo)
+        manifest_path = current_private / "manifest.json"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "inspect",
+                "--project-root",
+                str(self.repo),
+                "--spec-owner",
+                "maintain-project-specs",
+                "--codex-home",
+                str(self.codex_home),
+                "--private-root",
+                str(current_private),
+                "--spec-receipt",
+                str(self.receipt_path),
+                "--runtime-config",
+                str(self.runtime_path),
+                "--output",
+                str(manifest_path),
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout)["ownership_continuity"],
+            "carried-forward",
+        )
+        self.assertTrue((current_private / "ownership.json").exists())
 
     def test_cli_inspect_requires_explicit_codex_home(self) -> None:
         result = subprocess.run(

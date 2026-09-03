@@ -23,9 +23,9 @@ authorization.
 
 Bridge a non-blocking `UserPromptSubmit` capture sidecar to the existing prompt
 owners. The current agent always handles the delivered request normally. When
-safe capture succeeds, only that agent can select a project-intent projection and only
-the owning Task Implementer or Agentic SDLC prompt adapter can update the
-canonical objective. Capture never selects, starts, or resumes a workflow.
+safe capture succeeds, only that agent can select a project-intent projection,
+and only the owning Task Implementer or Agentic SDLC prompt adapter can update
+the canonical objective. Capture never selects, starts, or resumes a workflow.
 
 ## Invocation Policy
 
@@ -38,6 +38,9 @@ consume, replay, or recovery command.
 
 - Use only for the exact current root-agent turn when this skill's capture hook
   supplies its private event path and acceptance token.
+- Require an exact Task Implementer or Agentic SDLC init/run invocation in the
+  same Codex session before any later direct turn can stage capture. An active
+  objective registry entry never establishes a session binding.
 
 ## When Not To Use
 
@@ -130,10 +133,11 @@ automatic execution.
   only when exact and unique; persist and compare the full prompt ID.
 - Reject stale current-event claims, mismatched current sessions, stale base
   digests, manual drift, projection substitution, cross-workflow claims,
-  reused turn identity with changed content, symlinks, unsafe file modes, and ambiguous active objectives
-  from capture. Treat writer-session identity as provenance, never an admission
-  lease. For Task Implementer, treat manifest-proven primary and managed-lane
-  project paths as one logical objective.
+  reused turn identity with changed content, symlinks, unsafe file modes, and
+  ambiguous active objectives after explicit binding. Treat
+  writer-session identity as provenance, never an admission lease. For Task Implementer,
+  treat manifest-proven primary and managed-lane project paths as one logical
+  objective.
 - Do not acquire Task Implementer or SDLC workflow locks from the hook. The
   capture hook uses only its own bounded state lock; workflow adapters acquire
   their normal locks after acceptance.

@@ -57,6 +57,13 @@ def _catalog_payload(
     return payload
 
 
+def _soperator_wizard_payload() -> dict[str, Any]:
+    path = Path(__file__).resolve().parents[1] / "src" / "nebius_cxcli" / "soperator_wizard.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
 def test_render_release_catalog_rewrites_internal_repo_refs(tmp_path: Path) -> None:
     input_path = tmp_path / "component_sources.yaml"
     output_path = tmp_path / "component_sources.yaml"
@@ -188,9 +195,8 @@ def test_verify_catalog_rejects_missing_portable_app_source(tmp_path: Path) -> N
 def test_verify_wheel_reads_bundled_sources_while_archive_is_open(tmp_path: Path) -> None:
     wheel_path = tmp_path / "nebius_cxcli-0.1.1-py3-none-any.whl"
     bundled_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_sources.yaml"
-    bundled_settings_name = (
-        "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
-    )
+    bundled_settings_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
+    bundled_wizard_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/soperator_wizard.yaml"
     payload = _catalog_payload(
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=nebius-cxcli-v0.1.1",
         local_source=None,
@@ -198,16 +204,63 @@ def test_verify_wheel_reads_bundled_sources_while_archive_is_open(tmp_path: Path
     with zipfile.ZipFile(wheel_path, "w") as zf:
         zf.writestr(bundled_name, yaml.safe_dump(payload, sort_keys=False))
         zf.writestr(bundled_settings_name, yaml.safe_dump({}, sort_keys=False))
+        zf.writestr(bundled_wizard_name, yaml.safe_dump(_soperator_wizard_payload()))
 
     verify_wheel(wheel_path=wheel_path, release_ref="nebius-cxcli-v0.1.1")
+
+
+@pytest.mark.parametrize(
+    ("catalog_name", "catalog_label"),
+    (
+        ("component_sources", "component sources"),
+        ("component_cli_settings", "component CLI settings"),
+    ),
+)
+def test_verify_wheel_bundle_rejects_soperator_in_generic_catalog(
+    tmp_path: Path,
+    catalog_name: str,
+    catalog_label: str,
+) -> None:
+    wheel_path = tmp_path / "nebius_cxcli-0.1.1-py3-none-any.whl"
+    bundled_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_sources.yaml"
+    bundled_settings_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
+    bundled_wizard_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/soperator_wizard.yaml"
+    payload = _catalog_payload(
+        "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
+        local_source=None,
+    )
+    settings: dict[str, Any] = {}
+    soperator_entry = {
+        "source": {
+            "portable": {
+                "repo": "oci://example.invalid/soperator",
+                "chart": "soperator",
+                "version": "1.0.0",
+            }
+        }
+    }
+    if catalog_name == "component_sources":
+        payload.setdefault("components", {}).setdefault("apps", {})["soperator"] = soperator_entry
+    else:
+        settings = {"components": {"apps": {"soperator": {"cli": {}}}}}
+
+    with zipfile.ZipFile(wheel_path, "w") as zf:
+        zf.writestr(bundled_name, yaml.safe_dump(payload, sort_keys=False))
+        zf.writestr(bundled_settings_name, yaml.safe_dump(settings, sort_keys=False))
+        zf.writestr(bundled_wizard_name, yaml.safe_dump(_soperator_wizard_payload()))
+
+    with pytest.raises(
+        ValueError,
+        match=rf"bundled {catalog_label} must not declare Soperator",
+    ):
+        verify_wheel_bundle(wheel_path=wheel_path)
 
 
 def test_verify_wheel_bundle_allows_app_chart_without_portable_source(tmp_path: Path) -> None:
     wheel_path = tmp_path / "nebius_cxcli-0.1.1-py3-none-any.whl"
     bundled_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_sources.yaml"
-    bundled_settings_name = (
-        "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
-    )
+    bundled_settings_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
+    bundled_wizard_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/soperator_wizard.yaml"
     payload = _catalog_payload(
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
         local_source=None,
@@ -216,6 +269,7 @@ def test_verify_wheel_bundle_allows_app_chart_without_portable_source(tmp_path: 
     with zipfile.ZipFile(wheel_path, "w") as zf:
         zf.writestr(bundled_name, yaml.safe_dump(payload, sort_keys=False))
         zf.writestr(bundled_settings_name, yaml.safe_dump({}, sort_keys=False))
+        zf.writestr(bundled_wizard_name, yaml.safe_dump(_soperator_wizard_payload()))
 
     verify_wheel_bundle(wheel_path=wheel_path)
 
@@ -223,9 +277,8 @@ def test_verify_wheel_bundle_allows_app_chart_without_portable_source(tmp_path: 
 def test_verify_wheel_bundle_rejects_bundled_local_sources(tmp_path: Path) -> None:
     wheel_path = tmp_path / "nebius_cxcli-0.1.1-py3-none-any.whl"
     bundled_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_sources.yaml"
-    bundled_settings_name = (
-        "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
-    )
+    bundled_settings_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/component_cli_settings.yaml"
+    bundled_wizard_name = "nebius_cxcli-0.1.1.data/data/nebius_cxcli/soperator_wizard.yaml"
     payload = _catalog_payload(
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
         chart_local_path="../../helm-charts/nccl-test",
@@ -233,10 +286,13 @@ def test_verify_wheel_bundle_rejects_bundled_local_sources(tmp_path: Path) -> No
     with zipfile.ZipFile(wheel_path, "w") as zf:
         zf.writestr(bundled_name, yaml.safe_dump(payload, sort_keys=False))
         zf.writestr(bundled_settings_name, yaml.safe_dump({}, sort_keys=False))
+        zf.writestr(bundled_wizard_name, yaml.safe_dump(_soperator_wizard_payload()))
 
     with pytest.raises(ValueError, match=r"local source entries"):
         verify_wheel_bundle(wheel_path=wheel_path)
 
 
 def test_release_catalog_help_mentions_settings_bundle() -> None:
-    assert "component sources and CLI settings" in _build_parser().format_help()
+    help_text = _build_parser().format_help()
+    assert "CLI settings" in help_text
+    assert "component sources" in help_text

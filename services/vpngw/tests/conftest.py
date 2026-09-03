@@ -7,10 +7,17 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def block_unit_test_network(
-    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    tmp_path,
 ) -> None:
     if request.node.get_closest_marker("integration"):
         return
+
+    # Production intentionally serializes writers by deployment identity. Unit
+    # tests reuse fixture identities, so give each test its own process-visible
+    # lock root when pytest-xdist schedules those tests concurrently.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
 
     def _blocked(*args, **kwargs):
         raise AssertionError("Network access is disabled in unit tests.")

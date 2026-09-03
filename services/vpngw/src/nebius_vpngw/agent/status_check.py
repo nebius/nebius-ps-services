@@ -40,9 +40,7 @@ def check_routing_health() -> dict[str, Any]:
         text=True,
     )
     table_routes = (
-        table_220_routes_from_all_json(all_routes.stdout)
-        if all_routes.returncode == 0
-        else None
+        table_220_routes_from_all_json(all_routes.stdout) if all_routes.returncode == 0 else None
     )
     if result.returncode != 0 or table_routes is None:
         health["overall_status"] = "error"

@@ -141,59 +141,12 @@ def _sfs_layout_filesystem_fields() -> dict[str, dict[str, Any]]:
     return fields
 
 
-_SOPERATOR_DISABLED_BOOL_WIZARD_FIELDS = (
-    "values.soperator-activechecks.enabled",
-    "values.soperator-activechecks.waitForChecks.enabled",
-    "values.soperator-checks.enabled",
-    "values.soperator-dcgm-exporter.enabled",
-    "values.soperator-notifier.enabled",
-    "values.soperator-backup-config.enabled",
-    "values.qosConfiguration.enabled",
-    "values.sssd.enabled",
-)
-
-_SOPERATOR_PLACEMENT_ROLES = (
-    "system",
-    "controller",
-    "login",
-    "accounting",
-    "worker",
-)
-
-
 def _disabled_bool_wizard_field() -> dict[str, Any]:
     return {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-
-
-def _materialized_string_wizard_field(default: str) -> dict[str, Any]:
-    return {
-        "default": default,
-        "write_default_to_config": True,
-        "type_hint": "string",
-    }
-
-
-def _soperator_placement_fields() -> dict[str, dict[str, Any]]:
-    fields: dict[str, dict[str, Any]] = {}
-    for role in _SOPERATOR_PLACEMENT_ROLES:
-        provider_spec = {
-            "from": "soperator_node_groups",
-            "args": {
-                "role": role,
-            },
-        }
-        fields[f"placements.{role}"] = {
-            "write_default_to_config": True,
-            "type_hint": "list(string)",
-            "default_from": copy.deepcopy(provider_spec),
-            "options": copy.deepcopy(provider_spec),
-        }
-    return fields
-
 
 def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
@@ -249,94 +202,6 @@ def _mk8s_soperator_worker_shape_fields() -> dict[str, dict[str, Any]]:
             "required": True,
             "type_hint": "number",
         }
-    return fields
-
-
-def _soperator_wizard_profile() -> dict[str, dict[str, Any]]:
-    fields: dict[str, dict[str, Any]] = {
-        **_suppressed_prompt_fields("namespace", "release-name", "values"),
-        "install_mode": {
-            "default": "production-cluster",
-            "write_default_to_config": True,
-            "type_hint": "string",
-            **_static_sources(
-                (
-                    "production-cluster",
-                    "Create complete production Soperator cluster (MK8s + SFS + Soperator)",
-                )
-            ),
-        },
-        "profile": {
-            "default": "nebius-gpu-v1",
-            "write_default_to_config": True,
-            "options": {
-                "from": "soperator_nodesets_profiles",
-            },
-        },
-        "values.partitionProfile": {
-            "default": "shape-default",
-            "write_default_to_config": True,
-            "options": {
-                "from": "soperator_partition_profiles",
-                "args": {
-                    "default": "shape-default",
-                },
-            },
-        },
-        "values.topologyProfile": {
-            "default": "disabled",
-            "write_default_to_config": True,
-            "options": {
-                "from": "soperator_topology_profiles",
-                "args": {
-                    "default": "disabled",
-                },
-            },
-        },
-        "values.soperator-notifier.slack.webhookSource": {
-            "default": "deploy-time",
-            "write_default_to_config": True,
-            **_static_sources(
-                ("deploy-time", "Provide webhook URL at deploy time"),
-                ("mysterybox", "Use existing Nebius MysteryBox Secret ID"),
-            ),
-        },
-        "values.soperator-notifier.slack.mysterybox.secretId": {
-            "default": "",
-            "type_hint": "string",
-        },
-        "values.soperator-notifier.slack.existingSecret": _materialized_string_wizard_field(
-            "soperator-notifier-slack-webhook"
-        ),
-        "values.soperator-notifier.slack.existingSecretKey": _materialized_string_wizard_field(
-            "url"
-        ),
-        "values.soperator-backup-config.secret.name": _materialized_string_wizard_field(
-            "jail-backup"
-        ),
-        "values.soperator-backup-config.secret.keys.accessKeyID": (
-            _materialized_string_wizard_field("aws-access-key-id")
-        ),
-        "values.soperator-backup-config.secret.keys.secretAccessKey": (
-            _materialized_string_wizard_field("aws-access-secret-key")
-        ),
-        "values.soperator-backup-config.secret.keys.backupPassword": (
-            _materialized_string_wizard_field("backup-password")
-        ),
-        "values.soperator-backup-config.backup.schedule": _materialized_string_wizard_field(
-            "@daily-random"
-        ),
-        "values.soperator-backup-config.prune.schedule": _materialized_string_wizard_field(
-            "@daily-random"
-        ),
-        **_soperator_placement_fields(),
-    }
-    fields.update(
-        {
-            field_path: _disabled_bool_wizard_field()
-            for field_path in _SOPERATOR_DISABLED_BOOL_WIZARD_FIELDS
-        }
-    )
     return fields
 
 
@@ -926,7 +791,6 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.versioning_policy": _static_sources("DISABLED", "ENABLED", "SUSPENDED"),
         "inputs.object_audit_logging": _static_sources("NONE", "MUTATE_ONLY", "ALL"),
     },
-    "soperator": _soperator_wizard_profile(),
     "mysterybox": {
         "inputs.secrets": {
             "type_hint": "list(object({}))",

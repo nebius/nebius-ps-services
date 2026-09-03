@@ -267,9 +267,7 @@ class RouteRollbackSnapshot:
         if not self.resource_version.isdecimal() or int(self.resource_version) <= 0:
             raise ValueError("VM-HA route rollback revision must be positive")
         if self.labels != tuple(sorted(set(self.labels))) or any(
-            not isinstance(key, str)
-            or not key
-            or not isinstance(value, str)
+            not isinstance(key, str) or not key or not isinstance(value, str)
             for key, value in self.labels
         ):
             raise ValueError("VM-HA route rollback labels are not canonical")
@@ -301,8 +299,7 @@ class RouteRollbackSnapshot:
             raise ValueError("VM-HA route rollback snapshot is malformed")
         labels = value.get("labels")
         if not isinstance(labels, Mapping) or any(
-            not isinstance(key, str) or not isinstance(item, str)
-            for key, item in labels.items()
+            not isinstance(key, str) or not isinstance(item, str) for key, item in labels.items()
         ):
             raise ValueError("VM-HA route rollback labels are malformed")
         string_fields = (

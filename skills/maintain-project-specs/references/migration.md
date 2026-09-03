@@ -6,7 +6,8 @@
   `task-implementer/{requirements,design}-v1` and stable `TI-*` IDs.
 - Agentic SDLC full documents using `agentic-sdlc.*.v1` and stable `REQ-*` /
   `FEAT-*` IDs.
-- An already-canonical pair, which is an idempotent no-op.
+- Canonical `maintain-project-specs.*.v1` pairs.
+- An already-canonical v2 pair, which is an idempotent no-op.
 
 Mixed pairs, one-file migrations, ambiguous markers, and edited ownership
 metadata fail closed.
@@ -30,10 +31,21 @@ is removed. If cleanup is interrupted, the canonical transaction name is
 already free; the next locked `migrate` or `recover` validates and removes the
 partial cleanup bundle before proceeding.
 
-Migration preserves every existing record ID. Task Implementer regions are
-retagged without changing their body or surrounding bytes. Agentic SDLC
-documents retain their content while ownership metadata changes and the full
-content becomes the canonical managed region.
+Migration preserves every existing record ID and human-owned byte outside the
+managed regions. Compact Task Implementer records and heading-only canonical
+v1 records are expanded into the rich v2 requirement/design structure while
+preserving both core and `TI-*` IDs. Additional canonical v1 metadata fields
+are retained as labelled design or requirement details; genuinely absent
+legacy fields receive explicit migration disclosures instead of invented
+project facts. Canonical v1 and Agentic SDLC v1 records gain independent design
+readiness/delivery markers and separate implementation/verification evidence
+sections. Historical requirement status `accepted` maps to `active`;
+historical design status `planned` maps to `ready` plus `not-started`;
+historical `implemented` maps to `ready` plus `implemented`; historical
+`active` design work maps to `ready` plus `unassessed`. Migration never infers
+verified delivery.
 
-After migration, only the shared validator may issue an authoritative receipt.
-Former validator entrypoints are adapters to it.
+The converted pair is validated in memory before publication. After migration,
+only the shared v2 validator may issue a receipt. Former validator entrypoints
+are adapters to it; normal inspection does not accept v1 as a compatibility
+path.

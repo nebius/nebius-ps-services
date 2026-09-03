@@ -60,7 +60,9 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Writes
 
-- `docs/requirements.md`.
+- The requirements managed region through the `maintain-project-specs` paired
+  publisher. The existing design bytes participate in validation and
+  compare-and-set even when this adapter does not change them.
 - A local run-history change summary when an SDLC run is active.
 
 ## Process
@@ -91,9 +93,11 @@ Convert user intent into durable, testable product requirements in `docs/require
 - Preserve accepted product truth on omission. Remove or supersede it only from
   explicit user intent. Treat an edited completed prompt as a fresh full
   objective evaluated against current truth, not as a textual patch.
-- After writing and validating `docs/requirements.md`, bind its digest in the
-  private refinement ledger and set `ready` only when no material question is
-  open or reopened.
+- Before publication, ensure every active requirement has a covering design or
+  remains explicitly pending for `sdlc-create-design`. Publish no unilateral
+  one-file transaction. After paired validation/publication, bind the exact v2
+  receipt in the private refinement ledger and set `ready` only when no
+  material question is open or reopened.
 - Invoke the private `refinement-verify` action owned by `sdlc-start` with the
   exact workspace and run after saving `ready` and a complete private impact
   claim. Route to design only when the shared owner proves that the latest
@@ -119,7 +123,8 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Must Not
 
-- Edit `docs/design.md`.
+- Change the design managed region. Passing its exact existing bytes to the
+  paired publisher is required and is not a design edit.
 - Create execution plans.
 - Implement code or tests.
 - Rename existing requirement IDs.
@@ -143,8 +148,9 @@ Convert user intent into durable, testable product requirements in `docs/require
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- `maintain-project-specs` owns both canonical documents. This skill may write
-  requirements only while routed as its Agentic SDLC authoring adapter;
+- `maintain-project-specs` owns both canonical documents and their paired
+  transaction. This skill may change requirements only while routed as its
+  Agentic SDLC authoring adapter;
   `sdlc-create-design` has the corresponding design adapter boundary.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest

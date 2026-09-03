@@ -10,6 +10,9 @@ workflow.
   registry key.
 - One binding joins that session to one canonical project directory and one of
   `task-implementer` or `agentic-sdlc`.
+- Only an exact Task Implementer or Agentic SDLC init/run invocation in that
+  Codex session creates the binding. An active objective registry entry never
+  binds another session, even when it is the only compatible entry.
 - The full workflow prompt ID remains canonical objective identity. A short
   prompt reference is presentation and resolution metadata only.
 - One registry entry may be active for one logical project. Writer-session
@@ -47,12 +50,13 @@ direct prompt proceeds + optional safe capture -> staged
 - `sensitive` atomically becomes terminal `discarded` and removes the submitted
   digest, operation ID, acceptance token, and projection authority.
 - A consumed merge records the exact resulting full prompt identity,
-  reference, duplicate outcome, and canonical path/digest. The canonical prompt must
-  contain either the exact operation-and-projection marker once or, for an
-  exact duplicate outcome, one prior marker bound to the same byte projection,
-  so an interrupted coordinator retry recognizes the already-applied merge
-  without creating or appending again. Consumption retries must match every
-  recorded result field; the state is then idempotent and terminal.
+  reference, duplicate outcome, and canonical path/digest. The canonical
+  prompt must contain either the exact operation-and-projection marker once or,
+  for an exact duplicate outcome, one prior marker bound to the same byte
+  projection, so an interrupted coordinator retry recognizes the
+  already-applied merge without creating or appending again. Consumption
+  retries must match every recorded result field; the state is then idempotent
+  and terminal.
 
 Only `intent`, `steering`, `constraint`, `clarification-answer`, and
 `acceptance-change` are merge classifications. Durable objectives, scope,
@@ -69,8 +73,8 @@ examples, or verification requirements.
 - Every `UserPromptSubmit` result is non-blocking. Structured state errors and
   unexpected failures may skip capture with bounded context but cannot prevent
   the current agent from handling the direct prompt.
-- Scan for recognized secrets before creating the event. A
-  match skips persistence while the direct prompt continues.
+- Scan for recognized secrets before creating the event. A match skips
+  persistence while the direct prompt continues.
 - Never infer an older pending event. Accept only the exact event path, token,
   current Codex session, and current-event receipt supplied for the turn.
 - Stop-generated continuation, compaction, system, and subagent prompts are

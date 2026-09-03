@@ -531,7 +531,7 @@ class HookTestCase(unittest.TestCase):
             / "WAVE-001"
             / "TASK-001.json",
             {
-                "schema": "agentic-sdlc/worker-assignment-v3",
+                "schema": "agentic-sdlc/worker-assignment-v4",
                 "feature_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",

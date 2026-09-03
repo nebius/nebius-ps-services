@@ -1,6 +1,6 @@
 id,should_trigger,prompt
 sdlc-align-positive-01,true,"Within the active Agentic SDLC run verify that requirements design plans tests code and docs agree."
-sdlc-align-positive-02,true,"Use sdlc-align-specs before finalizing this feature's evidence chain."
+sdlc-align-positive-02,true,"Use sdlc-align-specs to report advisory consistency for this feature's evidence chain."
 sdlc-align-positive-03,true,"Check the locked end-to-end slice against every SDLC artifact and implementation result."
 sdlc-align-negative-01,false,"Align the whole project after these ordinary code changes."
 sdlc-align-negative-02,false,"Create the canonical requirements for a new SDLC prompt."

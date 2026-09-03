@@ -15,7 +15,7 @@ import unicodedata
 MANIFEST_SCHEMA = "project-agent-instructions.manifest.v3"
 DECISION_SCHEMA = "project-agent-instructions.decision.v3"
 STATE_SCHEMA = "project-agent-instructions.state.v3"
-SPEC_RECEIPT_SCHEMA = "project-agent-instructions.spec-validation.v3"
+SPEC_RECEIPT_SCHEMA = "maintain-project-specs.spec-validation.v4"
 OWNERSHIP_SCHEMA = "project-agent-instructions.ownership.v3"
 RUNTIME_CONFIG_SCHEMA = "project-agent-instructions.runtime-config.v1"
 PRIVATE_ROOT_SCHEMA = "project-agent-instructions.private-root.v1"
@@ -69,13 +69,13 @@ RULE_SECTIONS = (
 )
 TASK_REQUIREMENTS_MARKER = (
     "maintain-project-specs:requirements:start "
-    "schema=maintain-project-specs/requirements-v1"
+    "schema=maintain-project-specs/requirements-v2"
 )
 TASK_DESIGN_MARKER = (
-    "maintain-project-specs:design:start schema=maintain-project-specs/design-v1"
+    "maintain-project-specs:design:start schema=maintain-project-specs/design-v2"
 )
-AGENTIC_REQUIREMENTS_SCHEMA = "schema: maintain-project-specs/requirements-v1"
-AGENTIC_DESIGN_SCHEMA = "schema: maintain-project-specs/design-v1"
+AGENTIC_REQUIREMENTS_SCHEMA = "schema: maintain-project-specs/requirements-v2"
+AGENTIC_DESIGN_SCHEMA = "schema: maintain-project-specs/design-v2"
 URL_RE = re.compile(r"(?i)\bhttps?://")
 IPV4_RE = re.compile(
     r"(?<![0-9])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"

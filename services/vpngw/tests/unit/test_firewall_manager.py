@@ -55,8 +55,7 @@ def test_required_firewall_reload_failure_is_fail_closed(
 
 def test_vm_ha_controller_has_a_private_writable_temporary_directory() -> None:
     unit = (
-        Path(__file__).parents[2]
-        / "src/nebius_vpngw/systemd/nebius-vpngw-vm-ha.service"
+        Path(__file__).parents[2] / "src/nebius_vpngw/systemd/nebius-vpngw-vm-ha.service"
     ).read_text(encoding="utf-8")
 
     assert "ProtectSystem=strict" in unit
@@ -65,8 +64,7 @@ def test_vm_ha_controller_has_a_private_writable_temporary_directory() -> None:
 
 def test_firewall_forward_policy_update_respects_exact_file_sandbox() -> None:
     script = (
-        Path(__file__).parents[2]
-        / "src/nebius_vpngw/systemd/setup-vpngw-firewall.sh"
+        Path(__file__).parents[2] / "src/nebius_vpngw/systemd/setup-vpngw-firewall.sh"
     ).read_text(encoding="utf-8")
 
     assert "/etc/default/ufw" in script

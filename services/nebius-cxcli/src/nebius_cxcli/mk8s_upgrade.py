@@ -10,7 +10,7 @@ import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .component_instances import component_instance_id, component_type_id
@@ -107,6 +107,18 @@ class CompatibilityChoice:
     platform: str
     os: str
     drivers_preset: str
+
+
+@dataclass(frozen=True)
+class NodeGroupTemplateReadinessObservation:
+    """Stable provider readback for one desired node-template and live capacity mode."""
+
+    node_group: Any
+    capacity_mode: str
+    target_node_count: int
+    ready_node_count: int
+    node_count: int
+    outdated_node_count: int
 
 
 @dataclass(frozen=True)
@@ -690,16 +702,37 @@ def _node_group_name(raw: Any) -> str:
     return _text(getattr(metadata, "name", None)) or _text(getattr(metadata, "id", None))
 
 
+def _effective_node_group_kubernetes_version(*, spec: Any, status: Any) -> str:
+    desired = _text(getattr(spec, "version", None))
+    if desired:
+        return desired
+    actual = _text(getattr(status, "version", None))
+    if not actual:
+        return ""
+    match = re.fullmatch(
+        r"v?(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:\.[0-9]+)?"
+        r"(?:-nebius-node\.[0-9]+)?",
+        actual,
+    )
+    if match is None:
+        raise ValueError(f"Invalid Nebius node-group status version {actual!r}.")
+    return f"{match.group('major')}.{match.group('minor')}"
+
+
 def live_node_group_from_sdk(raw: Any, *, source: Mk8sNodeGroup | None = None) -> LiveNodeGroup:
     metadata = getattr(raw, "metadata", None)
     spec = getattr(raw, "spec", None)
+    status = getattr(raw, "status", None)
     template = getattr(spec, "template", None)
     resources = getattr(template, "resources", None)
     gpu_settings = getattr(template, "gpu_settings", None)
     return LiveNodeGroup(
         id=_text(getattr(metadata, "id", None)),
         name=_node_group_name(raw),
-        version=_text(getattr(spec, "version", None)),
+        # Nebius permits an empty desired version, which inherits the control-plane
+        # major/minor. Preserve an explicit desired version; otherwise use the
+        # provider-reported actual node version as the effective planning source.
+        version=_effective_node_group_kubernetes_version(spec=spec, status=status),
         resource_version=_resource_version(metadata),
         platform=_text(getattr(resources, "platform", None)),
         preset=_text(getattr(resources, "preset", None)),
@@ -1592,6 +1625,38 @@ def _version_prefix_matches(raw: str, version: str) -> bool:
     return current == target or current.startswith(f"{target}.")
 
 
+def cluster_control_plane_rollout_complete(cluster: Any, *, version: str) -> bool:
+    """Require desired and actual control-plane versions plus idle RUNNING state."""
+
+    spec = getattr(cluster, "spec", None)
+    desired = getattr(spec, "control_plane", None)
+    if not _version_prefix_matches(_text(getattr(desired, "version", None)), version):
+        return False
+    status = getattr(cluster, "status", None)
+    actual = getattr(status, "control_plane", None)
+    if not _version_prefix_matches(_text(getattr(actual, "version", None)), version):
+        return False
+    raw_state = getattr(status, "state", None)
+    state_name = _text(getattr(raw_state, "name", None)) or _text(raw_state)
+    if state_name.strip().upper() not in {"RUNNING", "2"}:
+        return False
+    return not bool(getattr(status, "reconciling", False))
+
+
+def cluster_control_plane_rollout_summary(cluster: Any) -> str:
+    spec = getattr(cluster, "spec", None)
+    desired = getattr(spec, "control_plane", None)
+    status = getattr(cluster, "status", None)
+    actual = getattr(status, "control_plane", None)
+    raw_state = getattr(status, "state", None)
+    state_name = _text(getattr(raw_state, "name", None)) or _text(raw_state) or "unknown"
+    return (
+        f"desired={_text(getattr(desired, 'version', None)) or 'unknown'}, "
+        f"actual={_text(getattr(actual, 'version', None)) or 'unknown'}, "
+        f"state={state_name}, reconciling={getattr(status, 'reconciling', None)}"
+    )
+
+
 def node_group_rollout_complete(node_group: Any, *, version: str) -> bool:
     spec = getattr(node_group, "spec", None)
     if not _version_prefix_matches(_text(getattr(spec, "version", None)), version):
@@ -1654,7 +1719,25 @@ def node_group_node_template_rollout_complete(
     os: str,
     drivers_preset: str | None,
 ) -> bool:
-    if not node_group_rollout_complete(node_group, version=version):
+    return node_group_node_template_desired_state_matches(
+        node_group,
+        version=version,
+        os=os,
+        drivers_preset=drivers_preset,
+    ) and node_group_rollout_complete(node_group, version=version)
+
+
+def node_group_node_template_desired_state_matches(
+    node_group: Any,
+    *,
+    version: str,
+    os: str,
+    drivers_preset: str | None,
+) -> bool:
+    """Verify provider desired state without requiring live node capacity."""
+
+    spec = getattr(node_group, "spec", None)
+    if not _version_prefix_matches(_text(getattr(spec, "version", None)), version):
         return False
     if _node_group_template_os(node_group) != validate_os_image_value(os):
         return False
@@ -1905,6 +1988,39 @@ def terraform_node_group_strategy_for_policy(
     return strategy
 
 
+def _provider_strategy_count(value: Any) -> int | None:
+    oneof = getattr(value, "value", None)
+    if getattr(oneof, "field", None) != "count":
+        return None
+    count = getattr(oneof, "value", None)
+    return count if isinstance(count, int) else None
+
+
+def _provider_node_group_strategy_matches(
+    strategy: Any,
+    *,
+    max_surge_count: int,
+    max_unavailable_count: int,
+    drain_timeout_seconds: int | None,
+) -> bool:
+    if strategy is None:
+        return False
+    if _provider_strategy_count(getattr(strategy, "max_surge", None)) != max_surge_count:
+        return False
+    if (
+        _provider_strategy_count(getattr(strategy, "max_unavailable", None))
+        != max_unavailable_count
+    ):
+        return False
+    observed_timeout = getattr(strategy, "drain_timeout", None)
+    if drain_timeout_seconds is None:
+        return observed_timeout is None
+    return (
+        isinstance(observed_timeout, timedelta)
+        and int(observed_timeout.total_seconds()) == drain_timeout_seconds
+    )
+
+
 class Mk8sKubernetesVersionExecutor:
     """SDK adapter for MK8s Kubernetes version upgrades."""
 
@@ -1940,6 +2056,147 @@ class Mk8sKubernetesVersionExecutor:
             if not token:
                 return tuple(items)
 
+    def update_control_plane_version(self, *, cluster_id: str, version: str) -> Any:
+        """Request one optimistic, metadata-versioned control-plane update."""
+
+        from nebius.api.nebius.mk8s.v1 import (
+            ClusterSpec,
+            ControlPlaneSpec,
+            UpdateClusterRequest,
+        )
+
+        cluster = self.get_cluster(cluster_id)
+        metadata = getattr(cluster, "metadata", None)
+        spec = getattr(cluster, "spec", None)
+        control_plane = getattr(spec, "control_plane", None)
+        if metadata is None or spec is None or control_plane is None:
+            raise RuntimeError("MK8s cluster update requires complete metadata and spec")
+        target_version = parse_k8s_version(version).minor_text
+        current_version = _text(getattr(control_plane, "version", None))
+        if parse_k8s_version(current_version).minor_text == target_version:
+            return cluster
+        request = UpdateClusterRequest(
+            metadata=metadata,
+            spec=ClusterSpec(
+                spec,
+                control_plane=ControlPlaneSpec(control_plane, version=target_version),
+            ),
+        )
+        return self._cluster_client.update(request).wait()
+
+    def update_node_group_template(
+        self,
+        *,
+        cluster_id: str,
+        node_group_id: str,
+        version: str,
+        os: str,
+        drivers_preset: str | None,
+        strategy_policy: str | None = None,
+        strategy_max_surge_count: int | None = None,
+        drain_timeout: DrainTimeout | None = None,
+    ) -> Any:
+        """Request one optimistic, metadata-versioned node-template update."""
+
+        from nebius.api.nebius.mk8s.v1 import (
+            GpuSettings,
+            NodeGroupDeploymentStrategy,
+            NodeGroupSpec,
+            NodeTemplate,
+            PercentOrCount,
+            UpdateNodeGroupRequest,
+        )
+
+        group = next(
+            (
+                candidate
+                for candidate in self.list_node_groups(cluster_id)
+                if _text(getattr(getattr(candidate, "metadata", None), "id", None)) == node_group_id
+            ),
+            None,
+        )
+        if group is None:
+            raise RuntimeError(f"MK8s node group {node_group_id!r} was not found")
+        metadata = getattr(group, "metadata", None)
+        spec = getattr(group, "spec", None)
+        template = getattr(spec, "template", None)
+        if metadata is None or spec is None or template is None:
+            raise RuntimeError("MK8s node-group update requires complete metadata and spec")
+        target_version = parse_k8s_version(version).minor_text
+        target_os = validate_os_image_value(os)
+        gpu_settings = getattr(template, "gpu_settings", None)
+        current_version = parse_k8s_version(
+            _effective_node_group_kubernetes_version(
+                spec=spec,
+                status=getattr(group, "status", None),
+            )
+        ).minor_text
+        current_os = _text(getattr(template, "os", None))
+        current_drivers_preset = _text(getattr(gpu_settings, "drivers_preset", None))
+        target_gpu_settings = gpu_settings if current_drivers_preset else None
+        target_strategy = getattr(spec, "strategy", None)
+        strategy_matches = True
+        if strategy_policy is not None:
+            policy = validate_disruption_policy(strategy_policy)
+            if (
+                policy != DISRUPTION_POLICY_SAFE
+                and strategy_max_surge_count == 0
+                and not isinstance(strategy_max_surge_count, bool)
+            ):
+                resolved_max_surge = 0
+            else:
+                resolved_max_surge = resolve_strategy_max_surge_count(
+                    policy,
+                    strategy_max_surge_count,
+                )
+            max_unavailable = 0 if policy == DISRUPTION_POLICY_SAFE else 1
+            resolved_timeout = drain_timeout or resolve_drain_timeout(policy, "auto")
+            strategy_matches = _provider_node_group_strategy_matches(
+                target_strategy,
+                max_surge_count=resolved_max_surge,
+                max_unavailable_count=max_unavailable,
+                drain_timeout_seconds=resolved_timeout.seconds,
+            )
+            strategy_kwargs: dict[str, Any] = {
+                "max_surge": PercentOrCount(count=resolved_max_surge),
+                "max_unavailable": PercentOrCount(count=max_unavailable),
+            }
+            if resolved_timeout.seconds is not None:
+                strategy_kwargs["drain_timeout"] = timedelta(seconds=resolved_timeout.seconds)
+            target_strategy = NodeGroupDeploymentStrategy(**strategy_kwargs)
+        if (
+            current_version == target_version
+            and current_os == target_os
+            and (drivers_preset is None or current_drivers_preset == drivers_preset)
+            and strategy_matches
+        ):
+            return group
+        if drivers_preset == "":
+            target_gpu_settings = None
+        elif drivers_preset is not None:
+            target_gpu_settings = GpuSettings(
+                gpu_settings,
+                drivers_preset=validate_node_template_field_value(
+                    drivers_preset,
+                    flag_name="--to-gpu-stack-preset",
+                ),
+            )
+        spec_kwargs: dict[str, Any] = {
+            "version": target_version,
+            "template": NodeTemplate(
+                template,
+                os=target_os,
+                gpu_settings=target_gpu_settings,
+            ),
+        }
+        if strategy_policy is not None:
+            spec_kwargs["strategy"] = target_strategy
+        request = UpdateNodeGroupRequest(
+            metadata=metadata,
+            spec=NodeGroupSpec(spec, **spec_kwargs),
+        )
+        return self._node_group_client.update(request).wait()
+
     def control_plane_versions(self) -> tuple[str, ...]:
         from nebius.api.nebius.mk8s.v1 import ListClusterControlPlaneVersionsRequest
 
@@ -1973,22 +2230,23 @@ class Mk8sKubernetesVersionExecutor:
         timeout_seconds: int = 3600,
         poll_seconds: float = 15.0,
     ) -> Any:
+        target_version = parse_k8s_version(version).minor_text
         deadline = time.monotonic() + timeout_seconds
         last_cluster: Any = None
+        stable_ready_observations = 0
         while True:
             last_cluster = self.get_cluster(cluster_id)
-            spec_version = _text(
-                getattr(
-                    getattr(getattr(last_cluster, "spec", None), "control_plane", None),
-                    "version",
-                    None,
-                )
-            )
-            if spec_version == version:
-                return last_cluster
+            if cluster_control_plane_rollout_complete(last_cluster, version=target_version):
+                stable_ready_observations += 1
+                if stable_ready_observations >= 2:
+                    return last_cluster
+            else:
+                stable_ready_observations = 0
             if time.monotonic() >= deadline:
                 raise TimeoutError(
-                    f"Timed out waiting for MK8s control plane {cluster_id} to report Kubernetes {version}."
+                    "Timed out waiting for MK8s control plane "
+                    f"{cluster_id} to finish Kubernetes {target_version} rollout: "
+                    f"{cluster_control_plane_rollout_summary(last_cluster)}."
                 )
             time.sleep(poll_seconds)
 
@@ -2066,6 +2324,184 @@ class Mk8sKubernetesVersionExecutor:
                     "Timed out waiting for MK8s node group "
                     f"{node_group_id} to finish node-template rollout to "
                     f"Kubernetes {target_version}, OS {target_os}, GPU stack "
+                    f"{drivers_preset if drivers_preset is not None else 'n/a'}: "
+                    f"{last_summary}."
+                )
+            time.sleep(poll_seconds)
+
+    def wait_node_group_node_template_adaptive(
+        self,
+        *,
+        cluster_id: str,
+        node_group_id: str,
+        version: str,
+        os: str,
+        drivers_preset: str | None,
+        timeout_seconds: int = 3600,
+        poll_seconds: float = 15.0,
+    ) -> NodeGroupTemplateReadinessObservation:
+        """Wait for stable readiness, adapting safely when desired capacity changes."""
+
+        target_version = parse_k8s_version(version).minor_text
+        target_os = validate_os_image_value(os)
+        deadline = time.monotonic() + timeout_seconds
+        stable_signature: tuple[str, int, int, int, int] | None = None
+        stable_observations = 0
+        last_summary = f"node group {node_group_id} was not found"
+        while True:
+            for candidate in self.list_node_groups(cluster_id):
+                metadata = getattr(candidate, "metadata", None)
+                if _text(getattr(metadata, "id", None)) != node_group_id:
+                    continue
+                status = getattr(candidate, "status", None)
+                raw_target = getattr(status, "target_node_count", None)
+                raw_ready = getattr(status, "ready_node_count", None)
+                raw_node_count = getattr(status, "node_count", None)
+                raw_outdated = getattr(status, "outdated_node_count", None)
+                target = (
+                    raw_target
+                    if isinstance(raw_target, int) and not isinstance(raw_target, bool)
+                    else -1
+                )
+                ready = (
+                    raw_ready
+                    if isinstance(raw_ready, int) and not isinstance(raw_ready, bool)
+                    else -1
+                )
+                node_count = (
+                    raw_node_count
+                    if isinstance(raw_node_count, int) and not isinstance(raw_node_count, bool)
+                    else -1
+                )
+                outdated = (
+                    raw_outdated
+                    if isinstance(raw_outdated, int) and not isinstance(raw_outdated, bool)
+                    else -1
+                )
+                counts_known = all(value >= 0 for value in (target, ready, node_count, outdated))
+                mode = "unknown"
+                complete = False
+                if counts_known and target == 0:
+                    mode = "zero-capacity"
+                    complete = bool(
+                        ready == 0
+                        and node_count == 0
+                        and outdated == 0
+                        and not bool(getattr(status, "reconciling", False))
+                        and node_group_node_template_desired_state_matches(
+                            candidate,
+                            version=target_version,
+                            os=target_os,
+                            drivers_preset=drivers_preset,
+                        )
+                    )
+                elif counts_known and target > 0:
+                    mode = "ready-capacity"
+                    complete = node_group_node_template_rollout_complete(
+                        candidate,
+                        version=target_version,
+                        os=target_os,
+                        drivers_preset=drivers_preset,
+                    )
+                signature = (
+                    mode,
+                    target if counts_known else -1,
+                    ready if counts_known else -1,
+                    node_count if counts_known else -1,
+                    outdated if counts_known else -1,
+                )
+                if complete and signature == stable_signature:
+                    stable_observations += 1
+                elif complete:
+                    stable_signature = signature
+                    stable_observations = 1
+                else:
+                    stable_signature = None
+                    stable_observations = 0
+                if complete and stable_observations >= 2:
+                    return NodeGroupTemplateReadinessObservation(
+                        node_group=candidate,
+                        capacity_mode=mode,
+                        target_node_count=target,
+                        ready_node_count=ready,
+                        node_count=node_count,
+                        outdated_node_count=outdated,
+                    )
+                last_summary = node_group_node_template_rollout_summary(candidate)
+                break
+            else:
+                stable_signature = None
+                stable_observations = 0
+                last_summary = f"node group {node_group_id} was not found"
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Timed out waiting for MK8s node group "
+                    f"{node_group_id} to reach stable node-template state at Kubernetes "
+                    f"{target_version}, OS {target_os}, Nebius drivers preset "
+                    f"{drivers_preset if drivers_preset is not None else 'n/a'}: "
+                    f"{last_summary}."
+                )
+            time.sleep(poll_seconds)
+
+    def wait_node_group_node_template_desired_state(
+        self,
+        *,
+        cluster_id: str,
+        node_group_id: str,
+        version: str,
+        os: str,
+        drivers_preset: str | None,
+        timeout_seconds: int = 3600,
+        poll_seconds: float = 15.0,
+    ) -> Any:
+        """Wait for an exact node-template readback when the group has zero nodes."""
+
+        target_version = parse_k8s_version(version).minor_text
+        target_os = validate_os_image_value(os)
+        deadline = time.monotonic() + timeout_seconds
+        stable_observations = 0
+        while True:
+            for candidate in self.list_node_groups(cluster_id):
+                metadata = getattr(candidate, "metadata", None)
+                if _text(getattr(metadata, "id", None)) != node_group_id:
+                    continue
+                status = getattr(candidate, "status", None)
+                target = getattr(status, "target_node_count", None)
+                ready = getattr(status, "ready_node_count", None)
+                node_count = getattr(status, "node_count", None)
+                outdated = getattr(status, "outdated_node_count", None)
+                if (
+                    target == 0
+                    and ready == 0
+                    and node_count == 0
+                    and outdated == 0
+                    and not bool(getattr(status, "reconciling", False))
+                    and node_group_node_template_desired_state_matches(
+                        candidate,
+                        version=target_version,
+                        os=target_os,
+                        drivers_preset=drivers_preset,
+                    )
+                ):
+                    stable_observations += 1
+                    if stable_observations >= 2:
+                        return candidate
+                    last_summary = (
+                        "node group desired state matched once; waiting for a second "
+                        f"stable observation: {node_group_node_template_rollout_summary(candidate)}"
+                    )
+                    break
+                stable_observations = 0
+                last_summary = node_group_node_template_rollout_summary(candidate)
+                break
+            else:
+                stable_observations = 0
+                last_summary = f"node group {node_group_id} was not found"
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Timed out waiting for zero-sized MK8s node group "
+                    f"{node_group_id} desired state to report Kubernetes {target_version}, "
+                    f"OS {target_os}, GPU stack "
                     f"{drivers_preset if drivers_preset is not None else 'n/a'}: "
                     f"{last_summary}."
                 )

@@ -28,6 +28,7 @@ from sdlc_execution_interop import (
     record_promotion as record_outer_promotion,
     record_resource as record_outer_resource,
 )
+from sdlc_evidence_security import contains_sensitive as _contains_sensitive
 
 
 WORKTREE_SCRIPTS = Path(__file__).resolve().parents[2] / "worktree" / "scripts"
@@ -50,12 +51,23 @@ from prompt_impact import (  # noqa: E402
     verify_execution as verify_prompt_impact_execution,
 )
 
+PROJECT_SPEC_SCRIPTS = (
+    Path(__file__).resolve().parents[2] / "maintain-project-specs" / "scripts"
+)
+if str(PROJECT_SPEC_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(PROJECT_SPEC_SCRIPTS))
+from project_specs_lib.contracts import (  # noqa: E402
+    ProjectSpecError,
+    digest as project_spec_digest,
+    inspect_pair_bytes as inspect_project_spec_pair,
+)
+
 
 COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v7"
 WAVE_SCHEMA = "agentic-sdlc/execution-wave-v2"
 TASK_SCHEMA = "agentic-sdlc/execution-task-v4"
-ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v3"
-RESULT_SCHEMA = "agentic-sdlc/worker-result-v4"
+ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v4"
+RESULT_SCHEMA = "agentic-sdlc/worker-result-v5"
 INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v1"
 TASK_FINISH_INTENT_SCHEMA = "agentic-sdlc/task-finish-intent-v1"
 WORKER_HEARTBEAT_SECONDS = 30
@@ -79,6 +91,8 @@ WAVE_ID_RE = re.compile(r"WAVE-[0-9]{3,}")
 TASK_ID_RE = re.compile(r"TASK-[0-9]{3,}")
 SAFE_ID_RE = re.compile(r"[^a-z0-9._-]+")
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+SPEC_GAP_KINDS = {"requirement", "design", "traceability"}
 SINGLETON_DOMAIN_CLASSES = {
     "database",
     "external",
@@ -87,17 +101,6 @@ SINGLETON_DOMAIN_CLASSES = {
     "publication",
     "terraform",
 }
-SENSITIVE_PATTERNS = (
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"\bAWS_ACCESS_KEY_ID\b\s*[:=]\s*[A-Z0-9]{16,}"),
-    re.compile(r"\bAWS_SECRET_ACCESS_KEY\b\s*[:=]\s*[A-Za-z0-9/+=]{30,}"),
-    re.compile(r"\bGITHUB_TOKEN\b\s*[:=]\s*[A-Za-z0-9_ghopsu-]{20,}"),
-    re.compile(r"\bOPENAI_API_KEY\b\s*[:=]\s*sk-[A-Za-z0-9_-]{16,}"),
-    re.compile(
-        r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?[A-Za-z0-9_./+=:-]{12,}"
-    ),
-    re.compile(r"(?i)https?://[^\s/]+\.(?:internal|corp|local)(?::[0-9]+)?(?:/|\b)"),
-)
 SENSITIVE_FILENAMES = (
     re.compile(r"(?:^|/)\.env(?:\..+)?$", re.IGNORECASE),
     re.compile(r"(?:^|/)(?:id_rsa|id_ed25519)(?:\.pub)?$", re.IGNORECASE),
@@ -112,6 +115,41 @@ class ExecutionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _valid_spec_gaps(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    for gap in value:
+        if (
+            not isinstance(gap, dict)
+            or set(gap)
+            != {"kind", "summary", "evidence", "requirement_ids", "design_ids"}
+            or gap.get("kind") not in SPEC_GAP_KINDS
+            or not isinstance(gap.get("summary"), str)
+            or not str(gap["summary"]).strip()
+            or _contains_sensitive(str(gap["summary"]))
+            or not isinstance(gap.get("evidence"), list)
+            or not gap["evidence"]
+            or any(
+                not isinstance(item, str)
+                or not item.strip()
+                or _contains_sensitive(item)
+                for item in gap["evidence"]
+            )
+            or not isinstance(gap.get("requirement_ids"), list)
+            or any(
+                REQUIREMENT_ID_RE.fullmatch(str(item)) is None
+                for item in gap["requirement_ids"]
+            )
+            or not isinstance(gap.get("design_ids"), list)
+            or any(
+                FEATURE_ID_RE.fullmatch(str(item)) is None
+                for item in gap["design_ids"]
+            )
+        ):
+            return False
+    return True
 
 
 def _impact(action: str, callback, *args):
@@ -261,27 +299,6 @@ def _validated_session_history(task_record: dict[str, Any]) -> list[str]:
             "EXECUTION_STATE_INVALID", "worker session history is invalid"
         )
     return history
-
-
-def _contains_sensitive(value: str) -> bool:
-    placeholders = (
-        "example",
-        "dummy",
-        "placeholder",
-        "redacted",
-        "<token>",
-        "<secret>",
-        "<password>",
-        "changeme",
-        "not-a-secret",
-    )
-    for line in value.splitlines() or [value]:
-        lowered = line.lower()
-        if any(marker in lowered for marker in placeholders):
-            continue
-        if any(pattern.search(line) for pattern in SENSITIVE_PATTERNS):
-            return True
-    return False
 
 
 def _reject_sensitive_evidence(*values: str) -> None:
@@ -597,6 +614,15 @@ def _path_in_project_scope(path: str, project_scope: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _is_project_spec_path(path: str, project_scope: str) -> bool:
+    scope = PurePosixPath() if project_scope == "." else PurePosixPath(project_scope)
+    candidate = PurePosixPath(path)
+    return candidate in {
+        scope / "docs/requirements.md",
+        scope / "docs/design.md",
+    }
 
 
 def _verify_claim_paths(
@@ -1826,6 +1852,7 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
     if assignment.get("schema") in {
         "agentic-sdlc/worker-assignment-v1",
         "agentic-sdlc/worker-assignment-v2",
+        "agentic-sdlc/worker-assignment-v3",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED",
@@ -1864,6 +1891,7 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
         "worker_phases": list(WORKER_PHASES),
     }
     expected_helper = Path(__file__).with_name("sdlc_execution.py").resolve()
+    project_spec_receipt = assignment.get("project_spec_receipt")
     if (
         not helper.is_absolute()
         or helper.is_symlink()
@@ -1871,6 +1899,17 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
         or not helper.is_file()
         or not bound_run_dir.is_absolute()
         or bound_run_dir.is_symlink()
+        or SHA256_RE.fullmatch(str(assignment.get("root_intent_sha256") or ""))
+        is None
+        or not isinstance(project_spec_receipt, dict)
+        or set(project_spec_receipt)
+        != {"schema", "requirements_sha256", "design_sha256"}
+        or project_spec_receipt.get("schema")
+        != "maintain-project-specs.worker-receipt.v1"
+        or any(
+            SHA256_RE.fullmatch(str(project_spec_receipt.get(field) or "")) is None
+            for field in ("requirements_sha256", "design_sha256")
+        )
         or any(assignment.get(key) != value for key, value in expected_liveness.items())
     ):
         raise ExecutionError(
@@ -1885,6 +1924,8 @@ def _validate_result_record(result: dict[str, Any], assignment: dict[str, Any]) 
         result.get("schema") != RESULT_SCHEMA
         or not isinstance(recorded, str)
         or recorded != sha256_json(unsigned)
+        or result.get("spec_gaps") != []
+        or not _valid_spec_gaps(result.get("spec_gaps"))
     ):
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "worker result digest is invalid"
@@ -2057,6 +2098,7 @@ def _build_incoming_handoff(
                 "summary": dependency_result.get("summary"),
                 "decisions": dependency_result.get("decisions"),
                 "open_risks": dependency_result.get("open_risks"),
+                "spec_gaps": dependency_result.get("spec_gaps"),
                 "validation": dependency_result.get("validation"),
                 "review": dependency_result.get("review"),
             }
@@ -2120,6 +2162,12 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
         str(coordinator.get("plan_digest") or ""),
         Path(str(coordinator["selected_project_root"])),
     )
+    impact_receipt, _impact_receipt_sha256 = _impact(
+        "prompt impact receipt is stale",
+        verify_current_prompt_impact,
+        run_dir,
+        Path(str(coordinator["selected_project_root"])),
+    )
     if coordinator["status"] not in {"tdd_sealed", "waves_running"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "wave preparation is not allowed"
@@ -2156,6 +2204,35 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             "WORKTREE_CONFLICT", "integration worktree is not at its recorded tip"
         )
     base_head = head(integration)
+    project_scope = str(coordinator["project_scope"])
+    integration_project = (
+        integration if project_scope == "." else integration / project_scope
+    )
+    try:
+        requirements_bytes = (integration_project / "docs/requirements.md").read_bytes()
+        design_bytes = (integration_project / "docs/design.md").read_bytes()
+        spec_pair = inspect_project_spec_pair(requirements_bytes, design_bytes)
+    except (OSError, ProjectSpecError) as error:
+        message = error.message if isinstance(error, ProjectSpecError) else str(error)
+        raise ExecutionError(
+            "REPLAN_REQUIRED", f"canonical project specs are invalid: {message}"
+        ) from error
+    requirements_sha256 = project_spec_digest(requirements_bytes)
+    design_sha256 = project_spec_digest(design_bytes)
+    if (
+        spec_pair.get("status") != "current"
+        or requirements_sha256 != impact_receipt.get("requirements_sha256")
+        or design_sha256 != impact_receipt.get("design_sha256")
+    ):
+        raise ExecutionError(
+            "REPLAN_REQUIRED",
+            "canonical project specs do not match the accepted root intent",
+        )
+    project_spec_receipt = {
+        "schema": "maintain-project-specs.worker-receipt.v1",
+        "requirements_sha256": requirements_sha256,
+        "design_sha256": design_sha256,
+    }
     wave["status"] = "preparing"
     wave["base_head"] = base_head
     if wave.get("active_batch_index") is None:
@@ -2186,6 +2263,9 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             if (
                 existing.get("plan_digest") != coordinator["plan_digest"]
                 or existing.get("base_head") != base_head
+                or existing.get("root_intent_sha256")
+                != impact_receipt.get("intent_sha256")
+                or existing.get("project_spec_receipt") != project_spec_receipt
                 or not worker.is_absolute()
                 or not worker.exists()
                 or branch(worker) != existing.get("branch")
@@ -2248,6 +2328,8 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             "write_claims": [asdict(item) for item in task.write_claims],
             "conflict_domains": list(task.conflict_domains),
             "requirements": list(task.requirements),
+            "root_intent_sha256": impact_receipt["intent_sha256"],
+            "project_spec_receipt": project_spec_receipt,
             "goal": task.goal,
             "dependencies": list(task.dependencies),
             "validation": task.validation,
@@ -2695,8 +2777,11 @@ def _start_task_locked(
 def _working_paths(worktree_path: Path) -> list[str]:
     values: set[str] = set()
     for args, action in (
-        (["diff", "--name-only", "-z"], "read worker changes"),
-        (["diff", "--cached", "--name-only", "-z"], "read staged worker changes"),
+        (["diff", "--no-renames", "--name-only", "-z"], "read worker changes"),
+        (
+            ["diff", "--cached", "--no-renames", "--name-only", "-z"],
+            "read staged worker changes",
+        ),
         (
             ["ls-files", "--others", "--exclude-standard", "-z"],
             "read untracked worker changes",
@@ -2801,6 +2886,7 @@ def _worker_scope_observation(assignment: dict[str, Any]) -> dict[str, object]:
     scope_violation = head(worker) != assignment["base_head"] or any(
         not _path_in_project_scope(path, project_scope)
         or not _path_allowed(path, claims)
+        or _is_project_spec_path(path, project_scope)
         for path in paths
     )
     if not scope_violation:
@@ -3028,7 +3114,7 @@ def _verify_staged_integration(integration: Path, project_scope: str) -> None:
     staged = _split_nul(
         git(
             integration,
-            ["diff", "--cached", "--name-only", "-z"],
+            ["diff", "--cached", "--no-renames", "--name-only", "-z"],
             "read staged integration paths",
         )
     )
@@ -3051,7 +3137,13 @@ def _verify_integration_commit(
     paths = _split_nul(
         git(
             integration,
-            ["diff", "--name-only", "-z", f"{base_head}..{current_head}"],
+            [
+                "diff",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                f"{base_head}..{current_head}",
+            ],
             "read integration commit paths",
         )
     )
@@ -3300,6 +3392,16 @@ def _verify_worker_paths(
     claims: tuple[WriteClaim, ...],
     project_scope: str = ".",
 ) -> None:
+    paths = tuple(paths)
+    protected = [
+        path for path in paths if _is_project_spec_path(path, project_scope)
+    ]
+    if protected:
+        raise ExecutionError(
+            "REPLAN_REQUIRED",
+            "task changed coordinator-owned project specs: "
+            + ", ".join(protected),
+        )
     outside = [
         path
         for path in paths
@@ -3488,7 +3590,13 @@ def _finish_task_locked(
             staged = _split_nul(
                 git(
                     worktree_path,
-                    ["diff", "--cached", "--name-only", "-z"],
+                    [
+                        "diff",
+                        "--cached",
+                        "--no-renames",
+                        "--name-only",
+                        "-z",
+                    ],
                     "read staged paths",
                 )
             )
@@ -3583,7 +3691,13 @@ def _finish_task_locked(
     changed_paths = _split_nul(
         git(
             worktree_path,
-            ["diff", "--name-only", "-z", f"{base_head}..{task_head}"],
+            [
+                "diff",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                f"{base_head}..{task_head}",
+            ],
             "read worker changed paths",
         )
     )
@@ -3622,6 +3736,7 @@ def _finish_task_locked(
         "summary": summary_value,
         "decisions": decision_values,
         "open_risks": risk_values,
+        "spec_gaps": [],
         "validation": validation,
         "review": review,
         "regression_oracle_evidence": oracle_evidence,

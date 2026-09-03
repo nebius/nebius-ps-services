@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Design non-SDLC features, architectures, ADRs, or proven contract-changing remediations before implementation. Produce a plan; route due diligence to research, stack choices to app-stack/ai-stack, unknown failures to troubleshoot, and checklist-only ADR/design review to system-design-rules."
+description: "Design non-SDLC features, architectures, ADRs, or proven contract-changing remediations before implementation. Produce a plan; route due diligence to research, agent-subsystem design to ai-agent-design, stack choices to app-stack/ai-stack, unknown failures to troubleshoot, and checklist-only ADR/design review to system-design-rules."
 ---
 
 # Design
@@ -33,8 +33,9 @@ codebase yet.
   integration before code exists.
 - Choosing components, boundaries, data flow, control flow, validation
   strategy, rollout, and operational concerns, with application-stack choices
-  delegated to `app-stack` and AI-specific stack choices delegated to
-  `ai-stack` when they are not already fixed.
+  delegated to `app-stack`, agent-subsystem behavior and policy delegated to
+  `ai-agent-design`, and AI-specific stack choices delegated to `ai-stack`
+  when they are not already fixed.
 - Designing applications whose frontend, API, service, data, or infrastructure
   layers are connected in a serial end-to-end flow.
 - Designing a durable remediation after `troubleshoot` has already proven the
@@ -59,9 +60,9 @@ codebase yet.
   `brainstorm` for chat-only exploration.
 - Do not use as a checklist-only review of an existing architecture proposal;
   use `system-design-rules` when the design exists and needs evaluation.
-- Do not use for a stack-selection-only request that does not need a complete
-  solution design and `/plan`; use `app-stack` or `ai-stack` directly according
-  to the undecided layer.
+- Do not use for a scoped agent-subsystem or stack-selection request that does
+  not need a complete solution design and `/plan`; use `ai-agent-design`,
+  `app-stack`, or `ai-stack` directly according to the undecided layer.
 - Do not create repository or component scaffolding directly. A completed
   design may emit an optional handoff for explicit `scaffold-project` use.
 - Do not use inside an active Agentic SDLC workflow unless the coordinator
@@ -106,8 +107,13 @@ When the application stack or a technology choice for any application layer is
 undecided or under review, use `app-stack` and follow its required reads. Do not
 copy its selection framework into this skill.
 
-When model access, training, inference, agents, interoperability, retrieval, or
-AI evaluation is undecided or under review, use `ai-stack` and follow its
+When an AI subsystem's behavior, topology, authority, contracts, context,
+memory, durability, effects, evaluation, or governance is undecided or under
+review, use `ai-agent-design`. Let it freeze that subsystem contract and call
+`ai-stack` for component selection; do not invoke either skill recursively.
+
+When only model access, training, inference, interoperability, retrieval, or AI
+technology selection is undecided, use `ai-stack` directly and follow its
 required reads. Do not copy its workload or compatibility framework here.
 
 ## Workflow
@@ -159,7 +165,7 @@ Record only design-relevant findings: constraints, supported patterns,
 version-specific APIs, limits, migration considerations, security implications,
 and unknowns. Mark anything unverified instead of treating it as fact.
 
-### Phase 4: Use `app-stack` And `ai-stack` For Stack Decisions
+### Phase 4: Delegate Agent Design And Stack Decisions
 
 Use `app-stack` when the design must select, review, simplify, or modernize the
 application stack, including choices for frontend or client, web server, API
@@ -179,36 +185,27 @@ Skip `app-stack` when the applicable technologies are already approved and no
 stack choice is being reconsidered. Record that fixed-stack boundary instead
 of reopening the decision.
 
-Use `ai-stack` for undecided or reconsidered model access, training and tuning,
-inference and serving, agent frameworks and durability, MCP/A2A and agent UI,
-retrieval and RAG, or AI evaluation, safety, and operations. Give it workload,
-data, model, environment, quality, safety, performance, cost, and ownership
-constraints. Bring its scoped decision back into `design` for cross-layer
-interfaces and `/plan`.
+Identify each material AI subsystem and its product constraints. When its
+behavior, topology, policy, or contracts need design, delegate that scoped
+subsystem once to `ai-agent-design`. It owns the definitive capability map—
+deterministic code, direct model calls, deterministic AI workflows, and
+agents—plus the agent-specific topology, authority, context, state, recovery,
+evaluation, and governance decisions. Bring the complete logical subsystem
+back into `design` without re-entering either workflow.
 
-Before that handoff, classify each AI-enabled capability at the architecture
-level:
+`ai-agent-design` passes its frozen workload and policy contract to `ai-stack`
+for component and technology selection. `ai-stack` owns models, providers,
+SDKs, runtimes, durability technology, interoperability, retrieval, and AI
+operations components; it must not reopen the frozen behavior, topology,
+policy, or contract decision. When the request is only an undecided AI
+technology layer and no agent-subsystem design is needed, call `ai-stack`
+directly and treat any local behavior classification as provisional.
 
-1. Direct model call when one model request can solve the task.
-2. Deterministic workflow containing model calls when application code knows
-   the operation sequence and next-step rules.
-3. Agent when the model must choose actions, continuation, or the next step
-   from prior results, including an unknown step count controlled by the
-   model, or execution needs a model-driven observe-act-observe loop.
-
-`design` owns this control-flow classification. `ai-stack` owns the SDK,
-framework, provider, model, durability, and operations choices for the selected
-level. Tool use, multiple model calls, delegation, or persistent sessions do
-not by themselves make the complete application agentic. Neither do an unknown
-iteration count with a code-owned continuation rule, a graph, checkpoints,
-timers, approvals, or compensation. Prefer direct calls and deterministic
-workflows when they satisfy the requirement, especially when latency or cost
-predictability matters.
-
-When both product and AI layers are undecided, keep the two adviser handoffs
-scoped: `app-stack` owns the surrounding application and `ai-stack` owns the AI
-layers. `design` owns their integration. Skip either skill when its technologies
-are fixed.
+When both product and AI layers are undecided, keep the adviser handoffs scoped:
+`app-stack` owns the surrounding application, `ai-agent-design` owns the AI
+subsystem behavior and policy contract, and `ai-stack` owns AI component and
+technology selection. `design` owns their integration. Skip any handoff whose
+decisions are already fixed.
 
 ### Phase 5: Design Solution
 
@@ -228,8 +225,9 @@ For an AI application, apply the principle **deterministic where possible,
 agentic where necessary** per capability rather than once for the whole
 product. Keep ordinary application logic, APIs, data stores, RBAC, approvals,
 tool authorization, and known transitions deterministic. It is normal for one
-application to contain all three levels: deterministic logic, direct model
-calls at explicit steps, and a bounded agent for genuinely dynamic work. Read
+application to contain all four behavior classes: deterministic code, direct
+model calls, deterministic workflows with model calls at explicit steps, and a
+bounded agent for genuinely dynamic work. Read
 `references/design-workflow.md` for the full decision table and tree.
 
 For applications whose layers are connected in a serial flow such as
@@ -270,9 +268,10 @@ Use the Codex `/plan` command when available. The plan handoff must include:
 - selected option and rejected alternatives
 - assumptions and unresolved questions
 - `app-stack` decision or fixed-stack/skipped rationale
+- `ai-agent-design` decision or fixed-agent-subsystem/skipped rationale
 - `ai-stack` decision or fixed-AI-stack/skipped rationale
-- AI behavior classification for each capability: direct call, deterministic
-  workflow containing model calls, or agent
+- AI behavior classification for each capability: deterministic code, direct
+  model call, deterministic workflow containing model calls, or agent
 - `system-design-rules` findings or skipped-review rationale
 - ordered implementation steps
 - vertical slice order and any prerequisite foundation steps
@@ -339,10 +338,13 @@ short answer is explicitly requested:
 - Research findings with official source links or clear unverified markers.
 - `app-stack` decision for undecided or reconsidered stack choices, or the
   fixed-stack/skipped rationale.
-- `ai-stack` decision for undecided or reconsidered AI-specific choices, or the
-  fixed-AI-stack/skipped rationale.
-- Direct-call, deterministic-workflow, or agent classification for every
-  AI-enabled capability, including the reason an agent is necessary.
+- `ai-agent-design` decision for undecided agent-subsystem behavior, topology,
+  policy, or contracts, or the fixed-agent-subsystem/skipped rationale.
+- `ai-stack` decision for undecided or reconsidered AI component choices, or
+  the fixed-AI-stack/skipped rationale.
+- Deterministic-code, direct-call, deterministic-workflow, or agent
+  classification for every AI-enabled capability, including the reason an
+  agent is necessary.
 - `system-design-rules` findings for non-trivial designs, or why that review
   was not needed.
 - Recommended design with components, technologies, boundaries, data/control
@@ -354,7 +356,7 @@ short answer is explicitly requested:
 ## References
 
 - Read `references/design-workflow.md` for the detailed phase checklist,
-  brownfield and greenfield paths, `research`, `app-stack`, and `ai-stack`
-  handoff guidance, `system-design-rules` decision review guidance, and `/plan`
-  handoff template.
+  brownfield and greenfield paths, `research`, `app-stack`,
+  `ai-agent-design`, and `ai-stack` handoff guidance, `system-design-rules`
+  decision review guidance, and `/plan` handoff template.
 - Use `evals/trigger-prompts.csv` when reviewing or tuning trigger readiness.

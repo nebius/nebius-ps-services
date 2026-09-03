@@ -99,8 +99,8 @@ classifications use only the bounded reasons `workflow_directive`, `duplicate`,
 or `clarification_context`.
 
 Private `refinement-verify` sends that claim, the ready refinement, and the
-current canonical specs to the pure validator owned by
-`maintain-project-specs`. The owner derives the aggregate effect and either
+current canonical specs to reusable pure validation logic. Task Implementer
+owns the persisted claim and receipt schemas and derives either
 `retain_plan` or `replan_required`; matching spec bytes or a caller-authored
 `no_effect` label are not sufficient. Accepted receipts are append-only under
 `prompt-impact/`, and `plan-basis.json` separately binds the coordinator plan
@@ -112,12 +112,11 @@ safe replan with a distinct plan identity. Publication is serialized per run,
 compare-checks the ledger head, and preserves then skips a conflicting orphan
 attempt after interruption. Material ambiguity produces no impact receipt.
 
-If owner-controlled lifecycle reconciliation changes only canonical spec
-receipt bytes while a retained plan awaits exact recovery, refresh the ready
-refinement's compiled digest to the current managed requirements before the
-recovery command runs. Recovery may then publish and bind a newly validated
-`retain_plan` impact. Recovery never edits the refinement, and any material
-`replan_required` result must use ordinary replanning instead.
+If canonical spec bytes change while a retained plan awaits exact recovery,
+refresh the ready refinement's compiled digest through the workflow-owned
+reconciliation path before recovery runs. Recovery may then publish and bind a
+newly validated `retain_plan` impact. It never edits the refinement implicitly,
+and any material `replan_required` result uses ordinary replanning.
 
 Impact state is private coordination evidence. Public status exposes only the
 revision, semantic edit state, impact class, mapped public record IDs, bounded

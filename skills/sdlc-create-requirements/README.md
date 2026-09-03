@@ -12,7 +12,8 @@ Environment section for later evaluation and UAT.
 
 ## Main Boundaries
 
-- Do not edit `docs/design.md`.
+- Do not change the design managed region. Its exact bytes still participate
+  in the owner-managed paired validation/publication transaction.
 - Do not create execution plans.
 - Do not implement code or tests.
 - Do not rename existing requirement IDs.
@@ -28,7 +29,8 @@ Environment section for later evaluation and UAT.
 
 ## Output
 
-- `docs/requirements.md` exists.
+- A canonical v2 requirements/design pair exists and passes the shared owner;
+  this adapter changes only the requirements managed region.
 - Every requirement has acceptance criteria, validation method, test method, and evaluation method.
 - Live Experiment Environment status is recorded.
 - Open questions and change log are explicit.

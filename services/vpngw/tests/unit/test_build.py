@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -14,26 +15,43 @@ VM_HA_COMPOSED_SUITES = (
 )
 
 VM_HA_SAFETY_NODES = (
+    "tests/unit/test_cli_helpers.py::test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key",
+    "tests/unit/test_cli_helpers.py::test_vm_ha_apply_ssh_recovery_is_shared_across_routing_modes",
     "tests/unit/test_cli_helpers.py::"
-    "test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager",
+    "test_vm_ha_apply_treats_lifecycle_bound_missing_compute_as_retained",
+    "tests/unit/test_vm_manager_allocations.py::"
+    "test_vm_ha_ssh_compute_reread_uses_bounded_request_policy",
+    "tests/unit/test_ssh_policy.py::test_required_vm_ha_trust_rejects_missing_enrollment",
+    "tests/unit/test_ssh_policy.py::test_vm_ha_policy_rejects_public_only_host_key",
     "tests/unit/test_ssh_policy.py::"
-    "test_required_vm_ha_trust_rejects_missing_enrollment",
+    "test_apply_imports_exact_retained_ed25519_pin_from_default_known_hosts",
     "tests/unit/test_ssh_policy.py::"
-    "test_vm_ha_policy_rejects_public_only_host_key",
-    "tests/unit/test_ssh_push.py::"
-    "test_vm_ha_stage_classifies_missing_pinned_host_identity",
-    "tests/unit/test_ssh_push.py::"
-    "test_vm_ha_activation_classifies_host_identity_rejection",
+    "test_apply_recovers_retained_product_host_key_only_at_publication",
+    "tests/unit/test_ssh_push.py::test_vm_ha_stage_classifies_missing_pinned_host_identity",
+    "tests/unit/test_ssh_push.py::test_vm_ha_activation_classifies_host_identity_rejection",
 )
 
-GCP_PYTHON_HELPERS = (
-    "misc/gcp_vpngw_vm_ha.py",
-    "misc/gcp_vpngw_classic_vm_ha.py",
-)
 GCP_SHELL_HELPERS = (
     "misc/gcp-vpngw-vm-ha.sh",
     "misc/gcp-vpngw-classic-vm-ha.sh",
 )
+RUFF_ROOTS = ("src", "tests", "misc")
+
+
+def _ruff_roots(command: str, action: str) -> tuple[str, ...]:
+    tokens = shlex.split(command)
+    marker = ("-m", "ruff", action)
+    marker_index = next(
+        index
+        for index in range(len(tokens) - len(marker) + 1)
+        if tuple(tokens[index : index + len(marker)]) == marker
+    )
+    roots: list[str] = []
+    for token in tokens[marker_index + len(marker) :]:
+        if token.startswith("-"):
+            break
+        roots.append(token)
+    return tuple(roots)
 
 
 def test_build_binary_exits_when_pyinstaller_is_missing(monkeypatch) -> None:
@@ -76,11 +94,7 @@ def test_pull_request_ci_selects_vm_ha_safety_regressions_exactly_once() -> None
         (repo_root / ".github/workflows/vpngw-ci.yml").read_text(encoding="utf-8")
     )
     steps = workflow["jobs"]["unit-tests"]["steps"]
-    runs = {
-        step["name"]: step["run"]
-        for step in steps
-        if "name" in step and "run" in step
-    }
+    runs = {step["name"]: step["run"] for step in steps if "name" in step and "run" in step}
 
     safety_run = runs["VM-HA safety regressions"]
     unit_run = runs["Unit tests"]
@@ -105,11 +119,7 @@ def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
         (repo_root / ".github/workflows/vpngw-ci.yml").read_text(encoding="utf-8")
     )
 
-    lint_runs = [
-        step.get("run")
-        for step in workflow["jobs"]["lint"]["steps"]
-        if step.get("run")
-    ]
+    lint_runs = [step.get("run") for step in workflow["jobs"]["lint"]["steps"] if step.get("run")]
     assert lint_runs.count("python -m mypy") == 1
     assert workflow["jobs"]["unit-tests"]["needs"] == "lint"
 
@@ -126,8 +136,17 @@ def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
         assert len(build_runs) == 1
 
 
-def test_ci_and_release_cover_both_gcp_vm_ha_helpers() -> None:
+def test_ruff_roots_match_across_makefile_ci_and_release() -> None:
     repo_root = Path(__file__).resolve().parents[4]
+    project_root = Path(__file__).resolve().parents[2]
+    makefile = (project_root / "Makefile").read_text(encoding="utf-8")
+    make_format = next(line.strip() for line in makefile.splitlines() if "-m ruff format" in line)
+    make_check = next(line.strip() for line in makefile.splitlines() if "-m ruff check" in line)
+    observed = {
+        "make-format": _ruff_roots(make_format, "format"),
+        "make-check": _ruff_roots(make_check, "check"),
+    }
+
     for workflow_name in ("vpngw-ci.yml", "vpngw-release.yml"):
         workflow = yaml.safe_load(
             (repo_root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
@@ -139,9 +158,24 @@ def test_ci_and_release_cover_both_gcp_vm_ha_helpers() -> None:
             if "run" in step
         ]
         ruff = next(command for command in runs if "python -m ruff check" in command)
+        observed[workflow_name] = _ruff_roots(ruff, "check")
+
+    assert set(observed.values()) == {RUFF_ROOTS}
+
+
+def test_ci_and_release_cover_both_gcp_vm_ha_shell_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    for workflow_name in ("vpngw-ci.yml", "vpngw-release.yml"):
+        workflow = yaml.safe_load(
+            (repo_root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+        )
+        runs = [
+            step["run"]
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", ())
+            if "run" in step
+        ]
         shell = next(command for command in runs if "bash -n misc/gcp-vpngw.sh" in command)
-        for helper in GCP_PYTHON_HELPERS:
-            assert ruff.count(helper) == 1
         for helper in GCP_SHELL_HELPERS:
             assert shell.count(f"bash -n {helper}") == 1
         assert shell.count("./misc/gcp-vpngw.sh --vm-ha-peer --help") == 1

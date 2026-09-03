@@ -1,0 +1,574 @@
+{
+  "hidden_paths": [
+    "mk8s-token"
+  ],
+  "public_paths": [
+    "",
+    "create",
+    "bootstrap-ci",
+    "validate",
+    "quota-check",
+    "quota-request",
+    "ssh-jumphost",
+    "wireguard",
+    "validate-generated",
+    "grafana",
+    "validate-dashboards",
+    "validate-sources",
+    "auth",
+    "render",
+    "deploy",
+    "destroy",
+    "discover",
+    "email",
+    "component",
+    "component list",
+    "component add",
+    "component remove",
+    "terraform",
+    "terraform plan",
+    "terraform apply",
+    "terraform destroy",
+    "terraform unlock",
+    "flux",
+    "flux destroy",
+    "flux bootstrap",
+    "flux apply",
+    "soperator",
+    "soperator install",
+    "soperator discover",
+    "soperator onboard",
+    "soperator upgrade",
+    "soperator status",
+    "soperator destroy",
+    "acceptance-test",
+    "acceptance-test smoke",
+    "acceptance-test benchmark",
+    "upgrade",
+    "upgrade node-template",
+    "upgrade helm-chart",
+    "migrate",
+    "migrate node-group"
+  ],
+  "schema": "nebius-cxcli.cli-contract.v1",
+  "soperator": {
+    "command_order": [
+      "install",
+      "discover",
+      "onboard",
+      "upgrade",
+      "status",
+      "destroy"
+    ],
+    "commands": {
+      "destroy": {
+        "argument": {
+          "help": "Path to project config.yaml under the deployments root (<tenant-folder>/<project-folder>/config.yaml).",
+          "metavar": "CONFIG_YAML",
+          "name": "config_path",
+          "required": true
+        },
+        "conditional_requirements": [
+          "--target is always parser-required; execution additionally requires a TTY and the exact cluster-ID phrase."
+        ],
+        "defaults": {
+          "--dry-run": false
+        },
+        "flags": [
+          "--dry-run"
+        ],
+        "help_clauses": [
+          "Exact cxcli Soperator target ref; always required"
+        ],
+        "option_help": {
+          "--dry-run": "Write and print the immutable destroy/preserve plan without mutation.",
+          "--target": "Exact cxcli Soperator target ref; always required."
+        },
+        "option_order": [
+          "--target",
+          "--dry-run"
+        ],
+        "options": [
+          "--dry-run",
+          "--target"
+        ],
+        "paired": {},
+        "repeatable": [],
+        "required": [
+          "--target"
+        ],
+        "short_help": "Destroy one registered Soperator cluster while preserving backing storage."
+      },
+      "discover": {
+        "argument": {
+          "help": "Directory under which the read-only soperator-discovery report is written.",
+          "metavar": "OUTPUT_ROOT",
+          "name": "output_root",
+          "required": true
+        },
+        "conditional_requirements": [
+          "--tenant-id, --project-id, and --cluster-id are always parser-required.",
+          "--region-id is optional; when supplied it must match the derived live region.",
+          "--kube-context is optional; when supplied its kube-system UID must match --cluster-id."
+        ],
+        "defaults": {
+          "--access": "external"
+        },
+        "flags": [],
+        "help_clauses": [
+          "The command derives the live region when --region-id is omitted",
+          "Discovery is information-only",
+          "it does not read or create config.yaml"
+        ],
+        "option_help": {
+          "--access": "MK8s endpoint used for provider-generated access: external or internal.",
+          "--cluster-id": "Existing Nebius MK8s cluster identifier to inspect.",
+          "--kube-context": "Optional kubectl context override. Its kube-system UID must match provider-generated access for --cluster-id.",
+          "--project-id": "Nebius project identifier that must own --cluster-id.",
+          "--region-id": "Optional expected region; when supplied it must match live cluster evidence.",
+          "--tenant-id": "Nebius tenant identifier that must own --project-id."
+        },
+        "option_order": [
+          "--tenant-id",
+          "--project-id",
+          "--cluster-id",
+          "--region-id",
+          "--kube-context",
+          "--access"
+        ],
+        "options": [
+          "--access",
+          "--cluster-id",
+          "--kube-context",
+          "--project-id",
+          "--region-id",
+          "--tenant-id"
+        ],
+        "paired": {},
+        "repeatable": [],
+        "required": [
+          "--cluster-id",
+          "--project-id",
+          "--tenant-id"
+        ],
+        "short_help": "Inspect one existing MK8s cluster and print a report, without config.yaml."
+      },
+      "install": {
+        "argument": {
+          "help": "Deployments root for a fresh install, or the exact config.yaml created by an interrupted `soperator install` when used with --resume.",
+          "metavar": "CONFIG_OR_DEPLOYMENTS_ROOT",
+          "name": "target_path",
+          "required": true
+        },
+        "conditional_requirements": [
+          "Fresh non-interactive install requires project identity, profile, release, and --dry-run.",
+          "--resume requires an existing install-owned CONFIG_YAML and rejects fresh-install identity/profile flags.",
+          "Non-interactive execution requires --resume --execute --approve --approval-fingerprint."
+        ],
+        "defaults": {
+          "--approve": false,
+          "--dry-run": false,
+          "--execute": false,
+          "--force": false,
+          "--interactive": true,
+          "--replan": false,
+          "--resume": false
+        },
+        "flags": [
+          "--approve",
+          "--dry-run",
+          "--execute",
+          "--force",
+          "--interactive",
+          "--replan",
+          "--resume"
+        ],
+        "help_clauses": [
+          "--profile gpu --release latest --no-interactive --dry-run",
+          "a fresh --no-interactive install requires this option",
+          "--resume rejects it and reuses the frozen release",
+          "fresh-install identity, profile, network, subnet, release, and overwrite options are rejected",
+          "stale, never-executed saved plan"
+        ],
+        "option_help": {
+          "--approval-fingerprint": "Exact fingerprint printed by the preceding --dry-run; required for automated resume.",
+          "--approve": "Approve mutation for non-interactive execution.",
+          "--client-name": "Client slug for the new project configuration.",
+          "--dry-run": "Create or verify the immutable plan without applying it.",
+          "--email": "Optional notifications email for the new project.",
+          "--execute": "Apply the exact saved plan and pinned release graph.",
+          "--force": "Overwrite only the resolved fresh install project.",
+          "--interactive": "Prompt for missing identity/profile inputs when running from a terminal.",
+          "--network-id": "Existing VPC network binding; repeatable.",
+          "--network-ref": "Planned VPC network ref; repeatable.",
+          "--profile": "Worker topology: cpu, gpu, or mixed.",
+          "--project-id": "Nebius project identifier for the new Soperator cluster.",
+          "--region-id": "Nebius region identifier; defaults to eu-north1 for a fresh install.",
+          "--release": "Official stable Soperator release selector: latest or exact X.Y.Z. Interactive omission prompts with latest(<resolved-version>); a fresh --no-interactive install requires this option, while --resume rejects it and reuses the frozen release.",
+          "--replan": "With --resume --dry-run, replace a stale, never-executed saved plan and approval fingerprint.",
+          "--resume": "Resume the exact previously saved config/plan/receipt; fresh-install identity, profile, network, subnet, release, and overwrite options are rejected.",
+          "--subnet-id": "Existing VPC subnet binding; repeatable.",
+          "--subnet-ref": "Planned VPC subnet ref; repeatable.",
+          "--tenant-id": "Nebius tenant identifier for the new project."
+        },
+        "option_order": [
+          "--client-name",
+          "--tenant-id",
+          "--project-id",
+          "--region-id",
+          "--email",
+          "--profile",
+          "--release",
+          "--network-id",
+          "--subnet-id",
+          "--network-ref",
+          "--subnet-ref",
+          "--execute",
+          "--dry-run",
+          "--approve",
+          "--approval-fingerprint",
+          "--resume",
+          "--replan",
+          "--interactive",
+          "--no-interactive",
+          "--force"
+        ],
+        "options": [
+          "--approval-fingerprint",
+          "--approve",
+          "--client-name",
+          "--dry-run",
+          "--email",
+          "--execute",
+          "--force",
+          "--interactive",
+          "--network-id",
+          "--network-ref",
+          "--no-interactive",
+          "--profile",
+          "--project-id",
+          "--region-id",
+          "--release",
+          "--replan",
+          "--resume",
+          "--subnet-id",
+          "--subnet-ref",
+          "--tenant-id"
+        ],
+        "paired": {
+          "--interactive": [
+            "--no-interactive"
+          ]
+        },
+        "repeatable": [
+          "--network-id",
+          "--network-ref",
+          "--subnet-id",
+          "--subnet-ref"
+        ],
+        "required": [],
+        "short_help": "Create fresh role-separated MK8s/SFS infrastructure and install official upstream Soperator."
+      },
+      "onboard": {
+        "argument": {
+          "help": "Existing project config.yaml, project directory containing config.yaml, or deployments root directory. When a deployments root is passed, onboard resolves or creates the canonical <tenant-folder>/<project-folder>/config.yaml from tenant/project identity.",
+          "metavar": "CONFIG_OR_DEPLOYMENTS_ROOT",
+          "name": "target_path",
+          "required": true
+        },
+        "conditional_requirements": [
+          "Project-creation flags apply only when CONFIG_OR_DEPLOYMENTS_ROOT is a deployments root without config.yaml.",
+          "An existing config rejects --client-name, --tenant-id, --project-id, and --email.",
+          "Non-interactive onboarding requires --cluster-id; --target-id remains optional.",
+          "--region-id is optional and must match the derived live cluster region when supplied."
+        ],
+        "defaults": {
+          "--access": "external",
+          "--interactive": true
+        },
+        "flags": [
+          "--interactive"
+        ],
+        "help_clauses": [
+          "Non-interactive onboarding uses this id to generate a temporary kubeconfig"
+        ],
+        "option_help": {
+          "--access": "MK8s API endpoint to use when generating temporary kubeconfig from --cluster-id: external or internal.",
+          "--client-name": "Client slug for new config creation from a deployments root (lowercase letters/digits/hyphens).",
+          "--cluster-id": "Nebius MK8s cluster id to adopt, for example mk8scluster-e00.... Non-interactive onboarding uses this id to generate a temporary kubeconfig through the Nebius API.",
+          "--email": "Optional notifications email for new config creation from a deployments root.",
+          "--interactive": "Prompt for project/cluster selection when running from a terminal. Non-interactive use requires --cluster-id; --target-id is optional.",
+          "--kube-context": "Optional kubectl context override for discovery. By default cxcli uses --cluster-id to generate temporary access through the Nebius API. When provided, cxcli binds the context to --cluster-id by comparing the kube-system namespace UID through both access paths, and fails closed when either identity is unknown or they differ.",
+          "--project-id": "Nebius project identifier for new config creation from a deployments root.",
+          "--region-id": "Optional Nebius region for new config creation or an expected-region assertion for an existing cluster. The live cluster region is verified.",
+          "--target-id": "Optional cxcli logical target id to save as deploy.targets[].instance_id. When omitted, cxcli derives it from the live MK8s cluster name.",
+          "--tenant-id": "Nebius tenant identifier for new config creation from a deployments root."
+        },
+        "option_order": [
+          "--client-name",
+          "--tenant-id",
+          "--project-id",
+          "--region-id",
+          "--email",
+          "--cluster-id",
+          "--target-id",
+          "--kube-context",
+          "--access",
+          "--interactive",
+          "--no-interactive"
+        ],
+        "options": [
+          "--access",
+          "--client-name",
+          "--cluster-id",
+          "--email",
+          "--interactive",
+          "--kube-context",
+          "--no-interactive",
+          "--project-id",
+          "--region-id",
+          "--target-id",
+          "--tenant-id"
+        ],
+        "paired": {
+          "--interactive": [
+            "--no-interactive"
+          ]
+        },
+        "repeatable": [],
+        "required": [],
+        "short_help": "Adopt one existing, supported Soperator cluster into cxcli config."
+      },
+      "status": {
+        "argument": {
+          "help": "Path to project config.yaml under the deployments root (<tenant-folder>/<project-folder>/config.yaml).",
+          "metavar": "CONFIG_YAML",
+          "name": "config_path",
+          "required": true
+        },
+        "conditional_requirements": [
+          "--target may be omitted only when one Soperator target is configured or interactive selection is available.",
+          "--verify-observability requires --live."
+        ],
+        "defaults": {
+          "--interactive": true,
+          "--live": true,
+          "--verify-observability": false
+        },
+        "flags": [
+          "--interactive",
+          "--live",
+          "--verify-observability"
+        ],
+        "help_clauses": [
+          "Query the cluster without mutation; use --no-live for configured status only",
+          "Explicitly verify current Soperator metrics and logs with the existing operator Nebius CLI identity"
+        ],
+        "option_help": {
+          "--interactive": "Prompt when the config has multiple Soperator targets and allow browser SSO fallback for observability verification on a TTY.",
+          "--kube-context": "kubectl context override.",
+          "--live": "Query the cluster without mutation; use --no-live for configured status only.",
+          "--target": "cxcli Soperator target ref.",
+          "--verify-observability": "Explicitly verify current Soperator metrics and logs with the existing operator Nebius CLI identity."
+        },
+        "option_order": [
+          "--target",
+          "--kube-context",
+          "--live",
+          "--no-live",
+          "--verify-observability",
+          "--interactive",
+          "--no-interactive"
+        ],
+        "options": [
+          "--interactive",
+          "--kube-context",
+          "--live",
+          "--no-interactive",
+          "--no-live",
+          "--target",
+          "--verify-observability"
+        ],
+        "paired": {
+          "--interactive": [
+            "--no-interactive"
+          ],
+          "--live": [
+            "--no-live"
+          ]
+        },
+        "repeatable": [],
+        "required": [],
+        "short_help": "Show registered ownership, active recovery, and live release status."
+      },
+      "upgrade": {
+        "argument": {
+          "help": "Path to project config.yaml under the deployments root (<tenant-folder>/<project-folder>/config.yaml).",
+          "metavar": "CONFIG_YAML",
+          "name": "config_path",
+          "required": true
+        },
+        "conditional_requirements": [
+          "Exactly one of --dry-run or --execute is required; --execute also requires --approve.",
+          "A fresh non-interactive plan requires --to-release, --to-k8s-version, --to-os, and --to-gpu-stack-preset.",
+          "The approved target ownership selects exactly one backend: managed/terraform or onboarded/provider-api."
+        ],
+        "defaults": {
+          "--approve": false,
+          "--dry-run": false,
+          "--execute": false,
+          "--interactive": true,
+          "--job-refresh-interval": "30s",
+          "--job-wait-timeout": "0s"
+        },
+        "flags": [
+          "--approve",
+          "--dry-run",
+          "--execute",
+          "--interactive"
+        ],
+        "help_clauses": [
+          "Target Kubernetes endpoint: latest or exact major.minor",
+          "ownership-selected Terraform or provider-API backend"
+        ],
+        "option_help": {
+          "--approve": "Confirm the registered-target upgrade plan and its ownership-selected Terraform or provider-API backend; required with --execute.",
+          "--cancel-job": "Slurm job id to cancel with --job-policy cancel-selected.",
+          "--drain-timeout": "Node drain timeout: auto, none, or a Go-style duration such as 30m.",
+          "--dry-run": "Explicit read-only planning mode. Resolves the requested official release and validates live cluster, release, capability, and protected-state identity without cloud or Kubernetes mutation. Mutually exclusive with --execute.",
+          "--execute": "Execute the frozen operation. Mutually exclusive with --dry-run.",
+          "--interactive": "Prompt for missing Soperator upgrade flags when running from a terminal.",
+          "--job-policy": "Slurm job policy: interactive, wait-to-finish, wait-then-cancel, cancel-selected, cancel-all, requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, The wizard first displays the required pause-all-active Partition Policy. Default: requeue-hold-all in both the wizard and non-interactive execution. That policy requeues and holds eligible active batch jobs, reports and waits for jobs that cannot be safely requeued, and never cancels implicitly. Select interactive explicitly for human per-job decisions in the TUI. Automation may pass an explicit --job-policy <policy>.",
+          "--job-refresh-interval": "Refresh interval while waiting for Slurm jobs.",
+          "--job-wait-timeout": "Maximum wait for Slurm jobs, for example 2h; 0s means unlimited for --job-policy wait-to-finish. wait-then-cancel requires a positive timeout.",
+          "--node-group-gpu-stack-preset": "Per-group Nebius GPU stack override as GROUP=PRESET; repeatable.",
+          "--node-group-os": "Per-group OS override as GROUP=OS; repeatable.",
+          "--node-group-strategy": "Node rollout strategy: zero-surge, safe-surge, or force-delete.",
+          "--requeue-job": "Slurm job id to requeue with --job-policy requeue-selected or requeue-hold-selected.",
+          "--strategy-max-surge-count": "Temporary nodes per group for safe-surge; defaults to 1.",
+          "--target": "cxcli target ref for apps:soperator@<target>. Omit only when one Soperator target is configured or interactive prompting is allowed.",
+          "--to-gpu-stack-preset": "Target Nebius-image drivers preset: auto, keep, or an exact provider value. This is not an exact NVIDIA driver build. Operator-managed/driverless groups remain driverless.",
+          "--to-k8s-version": "Target Kubernetes endpoint: latest or exact major.minor. latest is resolved dynamically from the Nebius control-plane version API and frozen with every required sequential minor hop.",
+          "--to-os": "Target node OS: auto, keep, or an exact provider-supported image.",
+          "--to-release": "Target official upstream release: latest or exact X.Y.Z. Interactive omission prompts with latest(<resolved-version>). A fresh --no-interactive upgrade requires this option. Recovery may omit it; a supplied selector must match the frozen campaign."
+        },
+        "option_order": [
+          "--target",
+          "--to-release",
+          "--to-k8s-version",
+          "--to-os",
+          "--to-gpu-stack-preset",
+          "--node-group-os",
+          "--node-group-gpu-stack-preset",
+          "--node-group-strategy",
+          "--strategy-max-surge-count",
+          "--drain-timeout",
+          "--job-policy",
+          "--cancel-job",
+          "--requeue-job",
+          "--job-wait-timeout",
+          "--job-refresh-interval",
+          "--dry-run",
+          "--execute",
+          "--approve",
+          "--no-approve",
+          "--interactive",
+          "--no-interactive"
+        ],
+        "options": [
+          "--approve",
+          "--cancel-job",
+          "--drain-timeout",
+          "--dry-run",
+          "--execute",
+          "--interactive",
+          "--job-policy",
+          "--job-refresh-interval",
+          "--job-wait-timeout",
+          "--no-approve",
+          "--no-interactive",
+          "--node-group-gpu-stack-preset",
+          "--node-group-os",
+          "--node-group-strategy",
+          "--requeue-job",
+          "--strategy-max-surge-count",
+          "--target",
+          "--to-gpu-stack-preset",
+          "--to-k8s-version",
+          "--to-os",
+          "--to-release"
+        ],
+        "paired": {
+          "--approve": [
+            "--no-approve"
+          ],
+          "--interactive": [
+            "--no-interactive"
+          ]
+        },
+        "repeatable": [
+          "--cancel-job",
+          "--node-group-gpu-stack-preset",
+          "--node-group-os",
+          "--requeue-job"
+        ],
+        "required": [],
+        "short_help": "Plan or execute an upgrade for any registered Soperator cluster."
+      }
+    },
+    "group_help": "Manage cxcli-owned and pre-existing Soperator clusters through one command surface. Fresh role-separated MK8s/SFS clusters start only with `soperator install`; inspect an existing MK8s cluster without config through `soperator discover`; existing supported products enter through adoption-only `soperator onboard`. The registered target selects the infrastructure backend. Install and upgrade freeze an exact official upstream release; upgrade also freezes the dynamic Nebius Kubernetes path, node OS/GPU driver compatibility, and Jail CUDA target into one end-to-end campaign. Destroy removes one exact cluster only after protected-storage proof.",
+    "group_help_clauses": [
+      "--profile mixed --release latest --no-interactive --dry-run"
+    ],
+    "schema": "nebius-cxcli.soperator-cli-contract.v4"
+  },
+  "surface_sha256": {
+    "": "4f3fb7012e8bb2493bd3e0fb87b39cc0cfecf57fad17f8b277b84eff13c6d80b",
+    "acceptance-test": "a0ccc4ab3719fbf0cb449cbf6b5d312c3c7ae3d6d8d6c6cf67409299c328e800",
+    "acceptance-test benchmark": "2e7589b20e59de8d04cd9589d4ab8deec1cfa69fc114418788e81f8f36e53b1e",
+    "acceptance-test smoke": "263c7ef3bac13489349086a15ec55d20be6f9261d51207879b616c1b03b94bb3",
+    "auth": "5c2916950014be3de99c2dd6969fa8a8068c4f719e7e7a0a7593e64fb053fd41",
+    "bootstrap-ci": "3265db5909759cd3730298c2241f9b54a01f2c753f0762db678dbeec6e0e7f84",
+    "component": "c3b76dbf3e438557e49d295c2eb4b1c2698872b59a6142f929821b04df80017f",
+    "component add": "52766188cd19f7ab47ae98d0f4b9620b3513fde4498eda14e44413fb728e7bf1",
+    "component list": "c0a4ea13d5b2b9b7aec32f002df479c735f831cc4f51a8ea57650b646c843032",
+    "component remove": "89542ceeaba0d6b48373318b3948f5b82382d8f4645c202ef4015144d49bd536",
+    "create": "e47f74997d6b2222578c9e96ba806ba0b622db7c68c06d16eac5ecefeb93b210",
+    "deploy": "7259c7ded40439dffd74ca55cd6693e3d788f03526409df62ec0b3de1c213b5d",
+    "destroy": "90df8eb96c4c29fa8b9f616efc628f0a5cfde2a153ea346f081ca39ae748abc7",
+    "discover": "b548e4cad18d6f95a362288d585a97234f51c6cd8b6e6b756c9424082e73a098",
+    "email": "d00ca7d645185f7b7cb48d01e9649fd98262cfb5317146fc33835745615efb8c",
+    "flux": "5c9678f4f729cdf79cdb3470d9eabb5ad225abb09648250160bdaeed8e54afe5",
+    "flux apply": "471d9c12423b6c02823dcd621365bfe186a83a5a1ac99912d62c98b8e75db34b",
+    "flux bootstrap": "76f5d57522f3e8c9f08863a35461548bad5a178649ca0d0815cc6a1bec936f6f",
+    "flux destroy": "b716466a68fcf5f5d6427ff5a33c01d19dc5c119fbd26282dcde046535d79f00",
+    "grafana": "0ff02a3df5676bde29cb010556509f97fb77e8baecc299d2e9b4a63e73b0f56e",
+    "migrate": "f0578199aae559a33fddf9b8eed901ae144babac308e869a4aea9667b20caa5e",
+    "migrate node-group": "d9b10eba66d45cd4502c4aef5d48fdc29ad2821d24d3395f23bd5e88f21e0c96",
+    "mk8s-token": "c81de4d40869095daf28c31b008ab4342cccb6177c3154d6ae23fd1723762729",
+    "quota-check": "19a2c88de13e80fa8998374506f32e26f89c703d483f7203626b85e8b9ba4ef5",
+    "quota-request": "3188cfb0f98f7cdf7b695ec59905bb5f970f20e62abb70f167f9d262879f3910",
+    "render": "a4037386888c6055caabd68b8aa48586a94dbaf48866d4e5f5c5afebfc95ea14",
+    "soperator": "9218b3ac1a03c35226976d2f8d440f42d1cced7d835d8b788e8d534c7b295c9c",
+    "soperator destroy": "74cf9589cb447ac38df707368e95af2b95123f9e2b8dba53060dd7a80f279eca",
+    "soperator discover": "81fc0b3a5c735fceb2034613b55b0a99436eaab520d071f44bbcf837222e8926",
+    "soperator install": "9b167836ff479fdd285e3414b9700bb4c9513cd88fa4c454b935f3ea7221d0ec",
+    "soperator onboard": "0c0d797c6fe887e6c1bd653d917fd40fef6e3900baa22c7b759866fb250597d7",
+    "soperator status": "ddedafe3e35a4cad77d0636065bcccaa003d0a273d0024d3598dfdd2b42e881b",
+    "soperator upgrade": "831f6ad9a8c0e8303ce9ef1d0ab8e3ece0f945ac490af0d9190603ff4f5652bf",
+    "ssh-jumphost": "d481f918fd91041b12a610708d147cac03b98c06211fa404afc93bd91c95df7b",
+    "terraform": "c047c95841d098bd90eb124f3e049e4f2465f6e15896d40c966f4b2cc8505921",
+    "terraform apply": "689f806e538a4d96ec1cb82c1cb2fd12a0c0d09c19b9dd1e8a6b9897a1483ec2",
+    "terraform destroy": "6bf33b862bf3330a691d1b61cf879b765a5532c6dd6e91345a61cbc2cc8ae32e",
+    "terraform plan": "1c909d09873ec2b80fd1d3d22edd15d103bc68c64ceac4e7a21ab2c95bdd9de6",
+    "terraform unlock": "65201e455a62c3e792baf3aa166699c3508985ff812ab4aee453f213c11b49bb",
+    "upgrade": "19493e839fbe37291221e48fd2da5551b94adfd3c6492582659ff9199be5a43f",
+    "upgrade helm-chart": "c9dd5e41ebe71b76796f320233ed827e02e7b47a8f31624cb6b1f3773a29e3f6",
+    "upgrade node-template": "7f2660111ca5bd64362b6eb1f2b0b86227754e2398579aeede19544753154a1a",
+    "validate": "c5322868270e970d3cb59caec7aacae0aa0e361846e40f3fd024d6e072d37f9f",
+    "validate-dashboards": "288887ba06a0ee7a67eae7af3dccc7b0d162dee4f52ff38578b156eccfbe7256",
+    "validate-generated": "a711bb32937adfcf43c908eb9ee16c3cd5c73d2c5b0ddc450d91dd24844aa089",
+    "validate-sources": "01d321748ca3258b0bdf5db25b64be7dd51c660fbabceb55635f09acdeac8796",
+    "wireguard": "87261e0480ad1f291ef77cbde2ae19bea9f11c8bdbf05f1c417eeac90a485939"
+  }
+}

@@ -8,11 +8,15 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 RESOURCE_NAME = re.compile(r"^[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -374,18 +378,257 @@ def _missing(resources: dict[ResourceKey, dict[str, Any] | None], kind: str, nam
     return resources[(kind, name)] is None
 
 
-def _resolve_psks(
-    plan: Plan, resources: dict[ResourceKey, dict[str, Any] | None]
-) -> dict[str, str]:
-    resolved: dict[str, str] = {}
+def _validate_private_config_topology(
+    document: dict[str, Any],
+    connection: dict[str, Any],
+    tunnels_by_name: dict[str, dict[str, Any]],
+    plan: Plan,
+    resources: dict[ResourceKey, dict[str, Any] | None],
+) -> None:
+    if str(connection.get("routing_mode") or "").strip().lower() != "static":
+        raise HelperError("PSK source config matching connection must be static")
+    if str(connection.get("vendor") or "").strip().lower() != "gcp":
+        raise HelperError("PSK source config matching connection must declare vendor gcp")
+    if _prefixes(connection.get("remote_prefixes") or (), "config remote prefix") != (
+        plan.gcp_prefixes
+    ):
+        raise HelperError(
+            "PSK source config connection remote_prefixes does not match --gcp-prefix"
+        )
+
+    gateway = document.get("gateway")
+    if not isinstance(gateway, dict):
+        raise HelperError("PSK source config does not contain a gateway mapping")
+    if _prefixes(gateway.get("local_prefixes") or (), "config local prefix") != (
+        plan.nebius_prefixes
+    ):
+        raise HelperError(
+            "PSK source config gateway.local_prefixes does not match --nebius-prefix"
+        )
+
+    gateway_group = document.get("gateway_group")
+    vm_ha = gateway_group.get("vm_ha") if isinstance(gateway_group, dict) else None
+    members = vm_ha.get("members") if isinstance(vm_ha, dict) else None
+    member_indices = {
+        member.get("instance_index")
+        for member in members or ()
+        if isinstance(member, dict)
+    }
+    member_roles = {
+        str(member.get("role") or "").strip().lower()
+        for member in members or ()
+        if isinstance(member, dict)
+    }
+    member_node_ids = {
+        str(member.get("node_id") or "").strip()
+        for member in members or ()
+        if isinstance(member, dict)
+    }
+    if not (
+        isinstance(gateway_group, dict)
+        and gateway_group.get("instance_count") == 2
+        and isinstance(vm_ha, dict)
+        and vm_ha.get("enabled") is True
+        and isinstance(members, list)
+        and len(members) == 2
+        and member_indices == {0, 1}
+        and member_roles == {"active", "passive"}
+        and len(member_node_ids) == 2
+        and "" not in member_node_ids
+    ):
+        raise HelperError(
+            "PSK source config must declare an enabled two-member VM-HA topology"
+        )
+    external_ips = gateway_group.get("external_ips") if isinstance(gateway_group, dict) else None
+    if not (
+        isinstance(external_ips, list)
+        and len(external_ips) == len(plan.paths)
+        and all(isinstance(values, list) and len(values) == 1 for values in external_ips)
+    ):
+        raise HelperError(
+            "PSK source config must contain one public endpoint for each VM-HA member"
+        )
+    configured_member_ips = tuple(
+        _public_ip(str(values[0]), "PSK source config member public endpoint")
+        for values in external_ips
+    )
+    if configured_member_ips != tuple(path.peer_public_ip for path in plan.paths):
+        raise HelperError(
+            "PSK source config member public endpoints do not match the helper arguments"
+        )
+
     for path in plan.paths:
-        if not _missing(resources, "vpn-tunnels", path.tunnel):
-            continue
-        value = os.environ.get(path.psk_env_name, "")
+        tunnel = tunnels_by_name[path.tunnel]
+        if (
+            tunnel.get("gateway_instance_index") != path.vm_index
+            or tunnel.get("local_public_ip_index") != 0
+            or tunnel.get("inner_cidr") != path.inner_cidr
+            or tunnel.get("inner_local_ip") != path.inner_local_ip
+            or tunnel.get("inner_remote_ip") != path.inner_remote_ip
+        ):
+            raise HelperError(
+                f"PSK source config tunnel {path.tunnel} does not match its planned member and inner link"
+            )
+        address = resources.get(("addresses", path.address))
+        observed_peer_ip = address.get("address") if isinstance(address, dict) else None
+        if observed_peer_ip is not None and tunnel.get("remote_public_ip") != observed_peer_ip:
+            raise HelperError(
+                f"PSK source config tunnel {path.tunnel} does not match its observed GCP peer address"
+            )
+
+
+def _psks_from_private_config(
+    path_value: str,
+    plan: Plan,
+    resources: dict[ResourceKey, dict[str, Any] | None],
+) -> dict[str, str]:
+    path = Path(path_value).expanduser()
+    descriptor = -1
+    try:
+        path_metadata = path.lstat()
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        opened_metadata = os.fstat(descriptor)
+    except OSError as error:
+        raise HelperError(
+            "PSK source config must be an accessible regular non-symlink file"
+        ) from error
+    try:
+        if not (
+            stat.S_ISREG(path_metadata.st_mode)
+            and stat.S_ISREG(opened_metadata.st_mode)
+            and (path_metadata.st_dev, path_metadata.st_ino)
+            == (opened_metadata.st_dev, opened_metadata.st_ino)
+        ):
+            raise HelperError("PSK source config must be a regular non-symlink file")
+        if stat.S_IMODE(opened_metadata.st_mode) & 0o077:
+            raise HelperError("PSK source config must not be accessible by group or other users")
+        stream = os.fdopen(descriptor, encoding="utf-8")
+        descriptor = -1
+        try:
+            document = yaml.safe_load(stream.read())
+        except (OSError, UnicodeError, yaml.YAMLError) as error:
+            raise HelperError("cannot read or parse PSK source config") from error
+        finally:
+            stream.close()
+    except OSError as error:
+        raise HelperError("cannot read PSK source config") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if not isinstance(document, dict):
+        raise HelperError("PSK source config must contain a YAML mapping")
+    gateway_group = document.get("gateway_group")
+    connections = gateway_group.get("connections") if isinstance(gateway_group, dict) else None
+    if not isinstance(connections, list):
+        connections = document.get("connections")
+    if not isinstance(connections, list):
+        raise HelperError("PSK source config does not contain a connections list")
+
+    matching_connections = [
+        connection
+        for connection in connections
+        if isinstance(connection, dict) and connection.get("name") == plan.connection
+    ]
+    if len(matching_connections) != 1:
+        raise HelperError(
+            f"PSK source config must contain exactly one connection named {plan.connection}"
+        )
+    matching_connection = matching_connections[0]
+    raw_tunnels = matching_connection.get("tunnels")
+    if not isinstance(raw_tunnels, list):
+        raise HelperError("PSK source config contains a malformed matching connection")
+
+    values_by_name: dict[str, str] = {}
+    for raw_tunnel in raw_tunnels:
+        name = raw_tunnel.get("name") if isinstance(raw_tunnel, dict) else None
+        value = raw_tunnel.get("psk") if isinstance(raw_tunnel, dict) else None
+        if not isinstance(name, str) or not name or not isinstance(value, str):
+            raise HelperError("PSK source config contains a malformed named tunnel secret")
+        if name in values_by_name:
+            raise HelperError(f"PSK source config contains duplicate tunnel name {name}")
+        reference = re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", value)
+        if reference is not None:
+            raise HelperError("PSK source config must contain literal tunnel secrets")
+        values_by_name[name] = _psk(value, "PSK source config tunnel secret")
+
+    expected_names = {path.tunnel for path in plan.paths}
+    if set(values_by_name) != expected_names:
+        raise HelperError(
+            "PSK source config matching connection must contain exactly the two planned tunnel names"
+        )
+    tunnels_by_name = {
+        str(tunnel["name"]): tunnel
+        for tunnel in raw_tunnels
+        if isinstance(tunnel, dict) and isinstance(tunnel.get("name"), str)
+    }
+    _validate_private_config_topology(
+        document,
+        matching_connection,
+        tunnels_by_name,
+        plan,
+        resources,
+    )
+    return {path.psk_env_name: values_by_name[path.tunnel] for path in plan.paths}
+
+
+def _resolve_psks(
+    plan: Plan,
+    resources: dict[ResourceKey, dict[str, Any] | None],
+    *,
+    source_config: str | None = None,
+    rotate_existing: bool = False,
+) -> dict[str, str]:
+    required_paths = tuple(
+        path
+        for path in plan.paths
+        if rotate_existing or _missing(resources, "vpn-tunnels", path.tunnel)
+    )
+    if not required_paths:
+        return {}
+    configured = {
+        path.psk_env_name: os.environ.get(path.psk_env_name, "") for path in plan.paths
+    }
+    if source_config:
+        if any(configured.values()):
+            raise HelperError(
+                "--psk-source-config cannot be combined with planned tunnel PSK environment values"
+            )
+        return _psks_from_private_config(source_config, plan, resources)
+    resolved: dict[str, str] = {}
+    for path in required_paths:
+        value = configured[path.psk_env_name]
         if not value:
             raise HelperError(f"missing secret input {path.psk_env_name} for {path.tunnel}")
         resolved[path.psk_env_name] = _psk(value, f"secret input {path.psk_env_name}")
     return resolved
+
+
+def _creation_keys(
+    plan: Plan, resources: dict[ResourceKey, dict[str, Any] | None]
+) -> tuple[ResourceKey, ...]:
+    infrastructure: list[ResourceKey] = []
+    for path in plan.paths:
+        candidates = (
+            ("addresses", path.address),
+            ("target-vpn-gateways", path.gateway),
+            ("forwarding-rules", path.forwarding_esp),
+            ("forwarding-rules", path.forwarding_udp500),
+            ("forwarding-rules", path.forwarding_udp4500),
+            ("vpn-tunnels", path.tunnel),
+        )
+        infrastructure.extend(
+            key for key in candidates if _missing(resources, key[0], key[1])
+        )
+    routes = [
+        ("routes", route.name)
+        for path in plan.paths
+        for route in path.routes
+        if _missing(resources, "routes", route.name)
+    ]
+    return (*infrastructure, *routes)
 
 
 def _create(
@@ -485,6 +728,197 @@ def _create(
                 )
 
 
+def _rotation_delete_keys(
+    plan: Plan, resources: dict[ResourceKey, dict[str, Any] | None]
+) -> tuple[ResourceKey, ...]:
+    routes = tuple(
+        ("routes", route.name)
+        for path in plan.paths
+        for route in path.routes
+        if not _missing(resources, "routes", route.name)
+    )
+    tunnels = tuple(
+        ("vpn-tunnels", path.tunnel)
+        for path in plan.paths
+        if not _missing(resources, "vpn-tunnels", path.tunnel)
+    )
+    return (*routes, *tunnels)
+
+
+def _resources_after_rotation(
+    plan: Plan, resources: dict[ResourceKey, dict[str, Any] | None]
+) -> dict[ResourceKey, dict[str, Any] | None]:
+    effective = dict(resources)
+    for path in plan.paths:
+        effective[("vpn-tunnels", path.tunnel)] = None
+        for route in path.routes:
+            effective[("routes", route.name)] = None
+    return effective
+
+
+def _retained_rotation_keys(plan: Plan) -> tuple[ResourceKey, ...]:
+    return tuple(
+        key
+        for path in plan.paths
+        for key in (
+            ("addresses", path.address),
+            ("target-vpn-gateways", path.gateway),
+            ("forwarding-rules", path.forwarding_esp),
+            ("forwarding-rules", path.forwarding_udp500),
+            ("forwarding-rules", path.forwarding_udp4500),
+        )
+    )
+
+
+def _validate_rotation_preconditions(
+    plan: Plan,
+    resources: dict[ResourceKey, dict[str, Any] | None],
+) -> None:
+    if any(resources[key] is None for key in _retained_rotation_keys(plan)):
+        raise HelperError(
+            "retained Classic infrastructure is incomplete; rotation can only recreate "
+            "the two planned tunnels and their static routes"
+        )
+
+
+def _rotation_resource_identity(
+    key: ResourceKey,
+    resource: dict[str, Any] | None,
+) -> str | None:
+    if resource is None:
+        return None
+    kind, _name = key
+    stable_identifier = resource.get("id") or resource.get("selfLink") or resource.get("name")
+    binding: tuple[Any, ...]
+    if kind == "addresses":
+        binding = (
+            resource.get("address"),
+            resource.get("addressType"),
+            resource.get("networkTier"),
+            resource.get("region"),
+        )
+    elif kind == "target-vpn-gateways":
+        binding = (resource.get("network"),)
+    elif kind == "forwarding-rules":
+        binding = (
+            resource.get("IPAddress") or resource.get("ipAddress"),
+            resource.get("target"),
+            resource.get("IPProtocol") or resource.get("ipProtocol"),
+            sorted(_ports(resource.get("ports"), resource.get("portRange"))),
+            resource.get("networkTier"),
+            resource.get("loadBalancingScheme"),
+        )
+    elif kind == "vpn-tunnels":
+        binding = (
+            resource.get("targetVpnGateway"),
+            resource.get("peerIp"),
+            resource.get("ikeVersion"),
+            sorted(resource.get("localTrafficSelector") or ()),
+            sorted(resource.get("remoteTrafficSelector") or ()),
+        )
+    else:
+        binding = (
+            resource.get("network"),
+            resource.get("destRange"),
+            resource.get("nextHopVpnTunnel"),
+            resource.get("nextHopVpnTunnelRegion"),
+            resource.get("priority"),
+        )
+    return json.dumps((stable_identifier, binding), separators=(",", ":"), sort_keys=True)
+
+
+def _rotation_resource_snapshot(
+    resources: dict[ResourceKey, dict[str, Any] | None],
+) -> dict[ResourceKey, str | None]:
+    return {
+        key: _rotation_resource_identity(key, resource)
+        for key, resource in resources.items()
+    }
+
+
+def _remove_planned_routes_after_rotation_failure(plan: Plan, cloud: GCloud) -> None:
+    """Re-establish the rotation invariant that no planned route is exposed."""
+
+    unproven_absent: list[str] = []
+    for path in plan.paths:
+        for route in path.routes:
+            try:
+                if cloud.describe("routes", route.name, regional=False) is not None:
+                    cloud.mutate(
+                        [
+                            "compute",
+                            "routes",
+                            "delete",
+                            route.name,
+                            f"--project={plan.project}",
+                            "--quiet",
+                        ],
+                        label=f"remove partially restored static route {route.name}",
+                    )
+                if cloud.describe("routes", route.name, regional=False) is not None:
+                    unproven_absent.append(route.name)
+            except HelperError:
+                unproven_absent.append(route.name)
+    if unproven_absent:
+        raise HelperError(
+            "rotation failed and fail-closed cleanup could not prove these planned "
+            f"routes absent: {', '.join(sorted(set(unproven_absent)))}"
+        )
+
+
+def _rotate(
+    plan: Plan,
+    cloud: GCloud,
+    resources: dict[ResourceKey, dict[str, Any] | None],
+    psks: dict[str, str],
+) -> dict[ResourceKey, dict[str, Any] | None]:
+    mutation_started = False
+    try:
+        for kind, name in _rotation_delete_keys(plan, resources):
+            mutation_started = True
+            if kind == "routes":
+                cloud.mutate(
+                    [
+                        "compute",
+                        "routes",
+                        "delete",
+                        name,
+                        f"--project={plan.project}",
+                        "--quiet",
+                    ],
+                    label=f"delete static route {name}",
+                )
+            else:
+                cloud.mutate(
+                    [
+                        "compute",
+                        "vpn-tunnels",
+                        "delete",
+                        name,
+                        f"--region={plan.region}",
+                        f"--project={plan.project}",
+                        "--quiet",
+                    ],
+                    label=f"delete Classic VPN tunnel {name}",
+                )
+        mutation_started = True
+        _create(plan, cloud, _resources_after_rotation(plan, resources), psks)
+        final_resources = _inspect(plan, cloud)
+        if any(value is None for value in final_resources.values()):
+            raise HelperError(
+                "Classic VPN fixture did not converge to the complete planned graph"
+            )
+        return final_resources
+    except HelperError as error:
+        if not mutation_started:
+            raise
+        _remove_planned_routes_after_rotation_failure(plan, cloud)
+        raise HelperError(
+            "rotation failed; all planned static routes were removed "
+            f"and the same command is retryable: {error}"
+        ) from error
+
+
 def print_plan(plan: Plan, resources: dict[ResourceKey, dict[str, Any] | None]) -> None:
     print("Resolved isolated Classic static VM-HA plan:")
     print(f"  Project/region: {plan.project} / {plan.region}")
@@ -544,6 +978,21 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--dry-run", action="store_true")
     result.add_argument("--status", action="store_true")
     result.add_argument("--yes", action="store_true")
+    result.add_argument(
+        "--psk-source-config",
+        help=(
+            "reuse exactly two literal tunnel PSKs from a private mode-0600 VPNGW YAML "
+            "config; cannot be combined with planned PSK environment values"
+        ),
+    )
+    result.add_argument(
+        "--rotate-existing-tunnels",
+        action="store_true",
+        help=(
+            "explicitly delete and recreate the two planned Classic tunnels and their "
+            "static routes while retaining gateways, addresses, and forwarding rules"
+        ),
+    )
     return result
 
 
@@ -552,12 +1001,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = parser().parse_args(argv)
         if args.status and args.dry_run:
             raise HelperError("--status and --dry-run are mutually exclusive")
+        if args.status and args.rotate_existing_tunnels:
+            raise HelperError("--status and --rotate-existing-tunnels are mutually exclusive")
         plan = build_plan(args)
         cloud = GCloud(plan)
         cloud.require_auth()
         resources = _inspect(plan, cloud)
         print_plan(plan, resources)
         missing = [key for key, value in resources.items() if value is None]
+        if args.rotate_existing_tunnels:
+            _validate_rotation_preconditions(plan, resources)
+            rotation_snapshot = _rotation_resource_snapshot(resources)
+        else:
+            rotation_snapshot = None
         if args.status:
             print_connection(plan, resources)
             print(
@@ -565,24 +1021,51 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.dry_run:
-            for kind, name in missing:
+            if args.rotate_existing_tunnels:
+                for kind, name in _rotation_delete_keys(plan, resources):
+                    print(f"DRY-RUN delete {kind}: {name}")
+                preview_resources = _resources_after_rotation(plan, resources)
+            else:
+                preview_resources = resources
+            for kind, name in _creation_keys(plan, preview_resources):
                 print(f"DRY-RUN create {kind}: {name}")
             print_connection(plan, resources)
             print("\nDry-run complete; no GCP resources changed.")
             return 0
-        psks = _resolve_psks(plan, resources)
+        psks = _resolve_psks(
+            plan,
+            resources,
+            source_config=args.psk_source_config,
+            rotate_existing=args.rotate_existing_tunnels,
+        )
         cloud = GCloud(plan, secret_values=tuple(psks.values()))
         if not args.yes:
+            action = (
+                "recreate this isolated Classic plan"
+                if args.rotate_existing_tunnels
+                else "apply this isolated Classic plan"
+            )
             reply = input(
-                f"\nApply this isolated Classic plan in GCP project {plan.project}? [y/N] "
+                f"\n{action.capitalize()} in GCP project {plan.project}? [y/N] "
             )
             if reply.strip().lower() not in {"y", "yes"}:
                 print("Cancelled. No GCP resources were changed.")
                 return 1
-        _create(plan, cloud, resources, psks)
-        final_resources = _inspect(plan, cloud)
-        if any(value is None for value in final_resources.values()):
-            raise HelperError("Classic VPN fixture did not converge to the complete planned graph")
+        if args.rotate_existing_tunnels:
+            confirmed_resources = _inspect(plan, cloud)
+            _validate_rotation_preconditions(plan, confirmed_resources)
+            if _rotation_resource_snapshot(confirmed_resources) != rotation_snapshot:
+                raise HelperError(
+                    "Classic rotation resource graph changed after approval; rerun the command"
+                )
+            final_resources = _rotate(plan, cloud, confirmed_resources, psks)
+        else:
+            _create(plan, cloud, resources, psks)
+            final_resources = _inspect(plan, cloud)
+            if any(value is None for value in final_resources.values()):
+                raise HelperError(
+                    "Classic VPN fixture did not converge to the complete planned graph"
+                )
         print_connection(plan, final_resources)
         print("\nClassic static VM-HA fixture converged; resources were retained for review.")
         return 0

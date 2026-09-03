@@ -14,7 +14,12 @@ from nebius.aio.service_error import RequestError
 from nebius_vpngw.agent.vm_ha.models import StateValidationError
 from nebius_vpngw.agent.vm_ha.runtime import RuntimeStateStore
 from nebius_vpngw.agent.vm_ha.store import AtomicGenerationStore, CorruptStateError
-from nebius_vpngw.deploy.route_manager import NebiusSDKRouteBackend, RouteManager
+from nebius_vpngw.deploy.route_manager import (
+    NebiusSDKRouteBackend,
+    RouteManagementError,
+    RouteManager,
+    VMHAStaticRouteAuthority,
+)
 from nebius_vpngw.deploy.vm_ha_cloud import AmbiguousHACloudError, vm_ha_request_kwargs
 from nebius_vpngw.deploy.vm_ha_routes import (
     AcceptedRouteOperation,
@@ -45,6 +50,41 @@ def _target(suffix: str = "a") -> VMHARouteTarget:
         workload_subnet_id=f"subnet-{suffix}",
         route_table_id=f"route-table-{suffix}",
     )
+
+
+def test_vm_ha_route_backend_reads_every_page_with_bounded_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Request:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    requests: list[tuple[Request, dict[str, object]]] = []
+
+    class Client:
+        def __init__(self, _sdk: object) -> None:
+            pass
+
+        def list(self, request: Request, **kwargs: object) -> SimpleNamespace:
+            requests.append((request, kwargs))
+            suffix = "one" if not request.page_token else "two"
+            return SimpleNamespace(
+                items=[SimpleNamespace(metadata=SimpleNamespace(id=f"route-{suffix}"))],
+                next_page_token="next" if not request.page_token else "",
+            )
+
+    backend = NebiusSDKRouteBackend(object())
+    monkeypatch.setattr(backend, "_client_types", lambda: (Client, Request))
+
+    routes = backend._raw_routes("route-table-a")
+
+    assert [route.metadata.id for route in routes] == ["route-one", "route-two"]
+    assert [request.page_token for request, _kwargs in requests] == ["", "next"]
+    assert all(request.parent_id == "route-table-a" for request, _kwargs in requests)
+    assert all(request.page_size == 1000 for request, _kwargs in requests)
+    assert all(kwargs == vm_ha_request_kwargs() for _request, kwargs in requests)
 
 
 def _static_manifest(*prefixes: str) -> LogicalStaticRouteManifest:
@@ -183,9 +223,7 @@ def _sdk_route_with_labels(labels: dict[str, str]) -> SimpleNamespace:
         spec=SimpleNamespace(
             description="",
             destination=SimpleNamespace(cidr="10.20.0.0/16"),
-            next_hop=SimpleNamespace(
-                allocation=SimpleNamespace(id="shared-allocation")
-            ),
+            next_hop=SimpleNamespace(allocation=SimpleNamespace(id="shared-allocation")),
         ),
     )
 
@@ -204,7 +242,9 @@ def test_sdk_cloud_authority_labels_are_a_shared_two_node_ledger(monkeypatch) ->
         route_target=target,
         route_kind=ManagedRouteKind.STATIC,
     )
-    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (_sdk_route_with_labels(labels),))
+    monkeypatch.setattr(
+        backend, "_raw_routes", lambda _route_table_id: (_sdk_route_with_labels(labels),)
+    )
 
     observed = backend.list_routes(target, {})
 
@@ -230,6 +270,179 @@ def test_sdk_cloud_authority_labels_are_a_shared_two_node_ledger(monkeypatch) ->
             ),
         ),
     )
+
+
+def _static_cloud_authority(target: VMHARouteTarget) -> VMHAStaticRouteAuthority:
+    return VMHAStaticRouteAuthority(
+        lifecycle_record_sha256="d" * 64,
+        cluster_id="cluster-a",
+        owner_hostname="gateway-0",
+        owner_node_id="node-0",
+        allocation_id="shared-allocation",
+        generation_id="a" * 64,
+        route_runtime_id="route-runtime-a",
+        digests=(
+            ("bgp_policy", "c" * 64),
+            ("configuration", "a" * 64),
+            ("static_routes", "b" * 64),
+        ),
+        ownership_epochs_by_hostname=(("gateway-0", "11"), ("gateway-1", "12")),
+        route_targets=(target,),
+    )
+
+
+def test_static_cloud_postcondition_preserves_unequal_foreign_overlap(monkeypatch) -> None:
+    target = _target()
+    authority = _static_cloud_authority(target)
+    labels = NebiusSDKRouteBackend._authority_labels(
+        cluster_id=authority.cluster_id,
+        allocation_id=authority.allocation_id,
+        route_target=target,
+        route_kind=ManagedRouteKind.STATIC,
+    )
+    managed = _sdk_route_with_labels(labels)
+    managed.spec.destination.cidr = "10.10.0.0/24"
+    foreign_more_specific = _sdk_route_with_labels({})
+    foreign_more_specific.metadata.id = "foreign-more-specific"
+    foreign_more_specific.metadata.name = "customer-host-route"
+    foreign_more_specific.spec.destination.cidr = "10.10.0.2/32"
+    foreign_more_specific.spec.next_hop.allocation.id = "foreign-allocation"
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "verify_target",
+        lambda _self, _target: None,
+    )
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "_raw_routes",
+        lambda _self, _route_table_id: (managed, foreign_more_specific),
+    )
+
+    assert RouteManager._vm_ha_static_cloud_postcondition(
+        authority,
+        frozenset({"10.10.0.0/24"}),
+        object(),
+    )
+
+
+def test_static_cloud_postcondition_accepts_preserved_customer_labels(monkeypatch) -> None:
+    target = _target()
+    authority = _static_cloud_authority(target)
+    authority_labels = NebiusSDKRouteBackend._authority_labels(
+        cluster_id=authority.cluster_id,
+        allocation_id=authority.allocation_id,
+        route_target=target,
+        route_kind=ManagedRouteKind.STATIC,
+    )
+    managed = _sdk_route_with_labels({"owner": "customer", **authority_labels})
+    managed.spec.destination.cidr = "10.10.0.0/24"
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "verify_target",
+        lambda _self, _target: None,
+    )
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "_raw_routes",
+        lambda _self, _route_table_id: (managed,),
+    )
+
+    assert RouteManager._vm_ha_static_cloud_postcondition(
+        authority,
+        frozenset({"10.10.0.0/24"}),
+        object(),
+    )
+
+
+def test_static_cloud_postcondition_rejects_partial_authority_with_customer_labels(
+    monkeypatch,
+) -> None:
+    target = _target()
+    authority = _static_cloud_authority(target)
+    partial = _sdk_route_with_labels(
+        {
+            "owner": "customer",
+            NebiusSDKRouteBackend._AUTHORITY_MANAGED_LABEL: "vm-ha-v1",
+        }
+    )
+    partial.spec.destination.cidr = "10.10.0.0/24"
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "verify_target",
+        lambda _self, _target: None,
+    )
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "_raw_routes",
+        lambda _self, _route_table_id: (partial,),
+    )
+
+    with pytest.raises(RouteManagementError, match="authority labels are malformed or partial"):
+        RouteManager._vm_ha_static_cloud_postcondition(
+            authority,
+            frozenset({"10.10.0.0/24"}),
+            object(),
+        )
+
+
+def test_static_cloud_postcondition_blocks_exact_foreign_prefix(monkeypatch) -> None:
+    target = _target()
+    authority = _static_cloud_authority(target)
+    foreign = _sdk_route_with_labels({})
+    foreign.metadata.name = "customer-route"
+    foreign.spec.destination.cidr = "10.10.0.0/24"
+    foreign.spec.next_hop.allocation.id = "foreign-allocation"
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "verify_target",
+        lambda _self, _target: None,
+    )
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "_raw_routes",
+        lambda _self, _route_table_id: (foreign,),
+    )
+
+    with pytest.raises(RouteManagementError, match="foreign route already occupies"):
+        RouteManager._vm_ha_static_cloud_postcondition(
+            authority,
+            frozenset({"10.10.0.0/24"}),
+            object(),
+        )
+
+
+def test_static_cloud_postcondition_blocks_extra_current_cluster_route(monkeypatch) -> None:
+    target = _target()
+    authority = _static_cloud_authority(target)
+    labels = NebiusSDKRouteBackend._authority_labels(
+        cluster_id=authority.cluster_id,
+        allocation_id=authority.allocation_id,
+        route_target=target,
+        route_kind=ManagedRouteKind.STATIC,
+    )
+    expected = _sdk_route_with_labels(labels)
+    expected.spec.destination.cidr = "10.10.0.0/24"
+    extra = _sdk_route_with_labels(labels)
+    extra.metadata.id = "managed-extra"
+    extra.metadata.name = "vpngw-managed-extra"
+    extra.spec.destination.cidr = "10.20.0.0/24"
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "verify_target",
+        lambda _self, _target: None,
+    )
+    monkeypatch.setattr(
+        NebiusSDKRouteBackend,
+        "_raw_routes",
+        lambda _self, _route_table_id: (expected, extra),
+    )
+
+    with pytest.raises(RouteManagementError, match="extra current-cluster static route"):
+        RouteManager._vm_ha_static_cloud_postcondition(
+            authority,
+            frozenset({"10.10.0.0/24"}),
+            object(),
+        )
 
 
 def test_sdk_cloud_authority_supersedes_only_the_exact_migration_revision(
@@ -335,6 +548,48 @@ def test_sdk_owner_publishes_legacy_local_ledger_without_overwriting_conflicts(
 
     route.metadata.labels = {backend._AUTHORITY_MANAGED_LABEL: "foreign"}
     with pytest.raises(RuntimeError, match="conflicting cloud authority labels"):
+        backend.synchronize_authority_labels(ledger)
+
+
+def test_sdk_defers_labels_only_for_an_exact_approval_bound_migration_predecessor(
+    monkeypatch,
+) -> None:
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a",
+        allocation_id="shared-allocation",
+        route_targets=(target,),
+    )
+    binding = VMHAMigrationRouteBinding(
+        route_id="route-shared",
+        name="vpngw-10.20.0.0-16",
+        prefix="10.20.0.0/16",
+        allocation_id="ordinary-allocation",
+        resource_revision="7",
+        route_target=target,
+    )
+    backend.bind_migration_routes((binding,))
+    route = _sdk_route_with_labels({})
+    route.metadata.name = binding.name
+    route.spec.next_hop.allocation.id = binding.allocation_id
+    monkeypatch.setattr(backend, "verify_target", MagicMock())
+    monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (route,))
+    publish = MagicMock()
+    monkeypatch.setattr(backend, "_write_authority_labels", publish)
+    ledger = {
+        binding.route_id: ManagedRouteOwnership(
+            cluster_id="cluster-a",
+            kind=ManagedRouteKind.BGP,
+            route_target=target,
+        )
+    }
+
+    backend.synchronize_authority_labels(ledger)
+
+    publish.assert_not_called()
+    route.metadata.resource_version = "8"
+    with pytest.raises(RuntimeError, match="no longer uses the shared allocation"):
         backend.synchronize_authority_labels(ledger)
 
 
@@ -543,6 +798,7 @@ def test_sdk_route_create_timeout_accepts_one_authoritative_desired_outcome(
         cluster_id="cluster-a",
         route_target=_target(),
     )
+
     class TimedOutOperation:
         def sync_wait(self, **_kwargs) -> None:
             raise TimeoutError("accepted but timed out")
@@ -575,9 +831,7 @@ def test_sdk_route_timeout_rejects_foreign_same_signature_outcome(monkeypatch) -
         metadata=SimpleNamespace(id="route-foreign", name="customer-managed-route"),
         spec=SimpleNamespace(
             destination=SimpleNamespace(cidr=mutation.prefix),
-            next_hop=SimpleNamespace(
-                allocation=SimpleNamespace(id=mutation.allocation_id)
-            ),
+            next_hop=SimpleNamespace(allocation=SimpleNamespace(id=mutation.allocation_id)),
         ),
     )
     monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (foreign,))
@@ -622,6 +876,7 @@ def test_sdk_route_duplicate_timeout_outcome_blocks_without_compensation(
         cluster_id="cluster-a",
         route_target=_target(),
     )
+
     class TimedOutOperation:
         def sync_wait(self, **_kwargs) -> None:
             raise TimeoutError("accepted but timed out")
@@ -634,9 +889,7 @@ def test_sdk_route_duplicate_timeout_outcome_blocks_without_compensation(
     monkeypatch.setattr(
         backend,
         "_observe_desired_route",
-        lambda _mutation: (_ for _ in ()).throw(
-            RuntimeError("duplicate desired outcomes")
-        ),
+        lambda _mutation: (_ for _ in ()).throw(RuntimeError("duplicate desired outcomes")),
     )
     restore = MagicMock()
     monkeypatch.setattr(backend, "_restore_raw_route", restore)
@@ -1067,9 +1320,7 @@ def test_sdk_route_rollback_observation_requires_exact_metadata(monkeypatch) -> 
         spec=SimpleNamespace(
             description=rollback.description,
             destination=SimpleNamespace(cidr=rollback.prefix),
-            next_hop=SimpleNamespace(
-                allocation=SimpleNamespace(id=rollback.allocation_id)
-            ),
+            next_hop=SimpleNamespace(allocation=SimpleNamespace(id=rollback.allocation_id)),
         ),
     )
     monkeypatch.setattr(backend, "_raw_routes", lambda _route_table_id: (changed,))
@@ -1103,6 +1354,7 @@ def test_sdk_route_create_uses_canonical_bounded_request_kwargs(monkeypatch) -> 
 
     def constructor(**kwargs):
         return kwargs
+
     monkeypatch.setattr(
         backend,
         "_client_types",

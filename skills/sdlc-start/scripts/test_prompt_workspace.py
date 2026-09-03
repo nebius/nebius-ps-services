@@ -584,7 +584,7 @@ class PromptWorkspaceTests(unittest.TestCase):
         design = self.project / "docs" / "design.md"
         requirements.parent.mkdir()
         requirements.write_text(
-            """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+            """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
 # Requirements
 
 <!-- REQUIREMENT: REQ-001 status=active priority=P0 type=feature -->
@@ -620,10 +620,10 @@ Inspect the receipt.
             encoding="utf-8",
         )
         design.write_text(
-            """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+            """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 # Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=unassessed priority=P0 version=1 -->
 ### FEAT-001: Keep one owner
 
 #### Requirements Covered
@@ -674,6 +674,14 @@ Fail closed on downgrade.
 
 The prompt revision is traceable.
 
+#### Implementation Evidence
+
+The implementation predates schema v2 evidence tracking.
+
+#### Verification Evidence
+
+Independent verification predates schema v2 evidence tracking.
+
 <!-- /FEATURE: FEAT-001 -->
 <!-- maintain-project-specs:design:end -->
 """,
@@ -716,7 +724,7 @@ The prompt revision is traceable.
         write_private(
             run_dir / "prompt-impact-claim.json",
             {
-                "schema": "maintain-project-specs.prompt-impact-claim.v1",
+                "schema": "agentic-sdlc/prompt-impact-claim-v1",
                 "prompt_id": state["prompt_id"],
                 "revision": state["revision"],
                 "intent_sha256": state["intent_sha256"],

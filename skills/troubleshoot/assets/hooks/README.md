@@ -10,7 +10,8 @@ blocks supported tool calls after exhaustion, and requires the final report.
 - `remediation_attempt_guard.py`: `UserPromptSubmit` and `PreToolUse` handler,
   plus the troubleshooting Stop evaluator called by the arbiter.
 - `stop_lifecycle_arbiter.py`: byte-identical single Stop registration shared
-  with project-contract and SDLC bundles.
+  with project-spec observer, prompt-session, and SDLC bundles. It has no
+  project-spec delegate.
 - `tests/test_remediation_attempt_guard.py`: disposable unit tests.
 
 At runtime the handler may create
@@ -28,8 +29,9 @@ workspace/session/turn bindings, and one status: `active`, `delivered`,
 preserved and requires a fresh Codex session; it is never migrated in place.
 
 A valid concise report is finalized only after the shared Stop arbiter proves
-that no project-contract or SDLC delegate still needs continuation. A peer
-continuation remains authoritative. An ordinary incomplete, malformed,
+that no SDLC or prompt-session delegate still needs continuation. Project-spec
+status is not a Stop delegate. A peer continuation remains authoritative. An
+ordinary incomplete, malformed,
 partial, `FAIL`, or `UNKNOWN` report records `advisory_incomplete` and returns
 `continue: true`; it requests no corrective turn, denies no later tool, and
 emits no generated fallback. Prefer repository-relative inline labels. Inline
@@ -98,17 +100,24 @@ blocking, and concurrent same-event command handlers.
   0700 private task-state directory and is bound to hashes of the workspace,
   session, and user turn.
 - A bare invocation keeps the session profile, one flag preserves the other
-  value, and explicit 5/120 resets the defaults. Active changes require both
-  resulting limits to remain strictly above consumed attempts and active time.
-  While the marker update is pending, only the exact advertised `current.md`
-  patch is admitted. Pending feedback reports a precise bounded missing-marker,
+  value, and explicit 5/120 resets the defaults. Active or resolved-state
+  changes require both resulting limits to remain strictly above consumed
+  attempts and active time.
+  A resolved marker remains completed evidence: a later bare invocation does
+  not create pending state or gate discovery, while explicit profile flags use
+  the profile-only handshake and preserve its non-profile fields. While a
+  marker update is pending, only one exact `apply_patch` targeting the
+  advertised `current.md` is admitted: `*** Update File` when it exists or
+  `*** Add File` only when it is absent. `*** Delete File`, delete/add
+  replacement, shell rewrites, and every other tool are denied. Pending feedback reports a precise
+  bounded missing-marker,
   invalid-marker, or invalid-transition reason before the repair action instead
   of masking it with generic pending guidance. Next-tranche guidance requires
   one complete canonical fresh marker, including a public-safe
   `blocker_summary`, and distinguishes exact-key same-blocker continuation from
   a new-key causally independent blocker. It refers to the source as the prior
-  terminal marker because the handoff can follow either resolved or exhausted
-  state. For an invalid active-resize marker,
+  terminal marker only for a post-exhaustion handoff. For an invalid
+  active-resize marker,
   it requires atomic restoration of every non-profile field plus the authorized
   profile fields. A deleted resize marker remains fail-closed: bounded sidecar
   metadata cannot reconstruct it, so guidance requires the exact prior marker

@@ -49,8 +49,13 @@ batches; batches do not change logical dependencies or wave IDs.
 ## State And Resources
 
 Private execution state uses `agentic-sdlc/execution-coordinator-v7`,
-`execution-wave-v2`, `execution-task-v4`, `worker-assignment-v3`, and
-`worker-result-v4`. Wave, task, assignment, incoming-handoff, and result files are
+`execution-wave-v2`, `execution-task-v4`, `worker-assignment-v4`, and
+`worker-result-v5`. Assignment v4 binds the accepted root-intent digest and
+canonical project-spec receipt; result v5 carries typed `spec_gaps` for root
+reconciliation. Worker path inventories use `--no-renames`, preserving both
+sides of a move for claim and project-spec checks, and gap text passes the
+shared sensitive-evidence scanner before output or persistence. Wave, task,
+assignment, incoming-handoff, and result files are
 separate so parallel workers never write shared mutable JSON. Assignments and
 results carry SHA-256 digests. A corrective result must include
 `regression-oracle-evidence-v1` with the assignment's exact diagnosis and

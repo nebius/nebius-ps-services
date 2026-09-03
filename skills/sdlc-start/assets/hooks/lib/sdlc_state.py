@@ -285,7 +285,7 @@ def _execution_registration(
                 assignment = load_json(assignment_path) or {}
             except json.JSONDecodeError:
                 continue
-            if assignment.get("schema") != "agentic-sdlc/worker-assignment-v3":
+            if assignment.get("schema") != "agentic-sdlc/worker-assignment-v4":
                 continue
             worker_path = assignment.get("worktree")
             if not worker_path or not is_inside(cwd_path, str(worker_path)):

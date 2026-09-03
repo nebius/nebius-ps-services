@@ -7,10 +7,7 @@ from pathlib import Path
 
 import yaml
 
-SCRIPT = (
-    Path(__file__).parents[2]
-    / "src/nebius_vpngw/systemd/nebius-vpngw-vm-ha-peer-firewall.sh"
-)
+SCRIPT = Path(__file__).parents[2] / "src/nebius_vpngw/systemd/nebius-vpngw-vm-ha-peer-firewall.sh"
 
 
 def _config() -> dict:

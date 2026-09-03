@@ -107,7 +107,6 @@ def test_wait_for_vici_socket_uses_configured_path(tmp_path, monkeypatch) -> Non
             socket_path.unlink()
 
 
-
 def test_active_render_uses_one_duplicate_safe_start_path(
     tmp_path,
     monkeypatch,

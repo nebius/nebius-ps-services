@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
-from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.flux_render as flux_render_module
+import nebius_cxcli.soperator_config_materialization as soperator_config
 from nebius_cxcli import cli
 from nebius_cxcli.component_sources import (
     ComponentOutput,
@@ -19,7 +22,12 @@ from nebius_cxcli.component_sources import (
     set_component_sources_file_override,
     set_component_sources_profile_override,
 )
-from nebius_cxcli.components import ComponentEntry, component_entries, reset_component_entry_cache
+from nebius_cxcli.components import (
+    ComponentEntry,
+    component_entries,
+    reset_component_entry_cache,
+    soperator_install_entry,
+)
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
@@ -36,16 +44,147 @@ from nebius_cxcli.mysterybox_eso import materialize_mysterybox_eso_app_values
 from nebius_cxcli.nfs_csi import ensure_nfs_csi_app_rows
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.render import (
+    build_project_generation_plan,
     promote_staged_generated_paths,
     render_project,
     staged_generated_paths,
 )
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
+from nebius_cxcli.soperator_adapter import SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS
+from nebius_cxcli.soperator_flux_graph import expected_soperator_release_names
+from nebius_cxcli.soperator_release import seal_soperator_release_snapshot
 from nebius_cxcli.terraform_provider import build_provider_module_name
+from soperator_fixtures import sample_snapshot
 
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
+
+
+def test_project_generation_plan_writes_full_postimage_and_preserves_lifecycle_reports(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("old: true\n", encoding="utf-8")
+    final_paths = resolve_project_paths(config_path)
+    final_paths.infra_dir.mkdir(parents=True)
+    final_paths.reports_dir.mkdir(parents=True)
+    obsolete = final_paths.infra_dir / "obsolete.tf"
+    obsolete.write_text("obsolete\n", encoding="utf-8")
+    preserved = final_paths.reports_dir / "soperator-upgrade-report.json"
+    preserved.write_text("{}\n", encoding="utf-8")
+    observability_receipt = (
+        final_paths.reports_dir / "soperator-observability-cluster-a-verification.json"
+    )
+    observability_receipt.write_text("{}\n", encoding="utf-8")
+    staged_paths = staged_generated_paths(final_paths)
+    staged_paths.infra_dir.mkdir(parents=True)
+    replacement = staged_paths.infra_dir / "main.tf"
+    replacement.write_text("terraform {}\n", encoding="utf-8")
+
+    plan = build_project_generation_plan(
+        final_paths=final_paths,
+        staged_paths=staged_paths,
+        config_path=config_path,
+        config_content="new: true\n",
+    )
+
+    assert plan.writes[config_path] == b"new: true\n"
+    assert plan.writes[final_paths.infra_dir / "main.tf"] == b"terraform {}\n"
+    assert obsolete in plan.removals
+    assert preserved not in plan.removals
+    assert observability_receipt not in plan.removals
+    assert plan.sha256.startswith("sha256:")
+    assert plan.preimage_sha256.startswith("sha256:")
+
+
+def test_project_generation_plan_ignores_operation_receipts_created_after_admission(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("old: true\n", encoding="utf-8")
+    final_paths = resolve_project_paths(config_path)
+    final_paths.reports_dir.mkdir(parents=True)
+    snapshot = final_paths.reports_dir / "soperator-release-snapshot-cluster-a.json"
+    snapshot.write_text("{}\n", encoding="utf-8")
+    staged_paths = staged_generated_paths(final_paths)
+    staged_paths.infra_dir.mkdir(parents=True)
+    (staged_paths.infra_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+
+    admitted = build_project_generation_plan(
+        final_paths=final_paths,
+        staged_paths=staged_paths,
+        config_path=config_path,
+        config_content="new: true\n",
+    )
+    (final_paths.reports_dir / "soperator-release-intent-cluster-a.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    (final_paths.reports_dir / "soperator-upgrade-admission-cluster-a.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    data_plane = final_paths.reports_dir / "soperator-protected-data-plane-cluster-a.json"
+    data_plane.write_text("{}\n", encoding="utf-8")
+    source_ownership = (
+        final_paths.reports_dir / "soperator-protected-source-ownership-cluster-a.json"
+    )
+    source_ownership.write_text("{}\n", encoding="utf-8")
+    recovery = final_paths.reports_dir / "soperator-recovery-cluster-a.json"
+    recovery.write_text("{}\n", encoding="utf-8")
+    reconcile = final_paths.reports_dir / "soperator-release-reconcile-cluster-a.json"
+    reconcile.write_text("{}\n", encoding="utf-8")
+    validation_reports = tuple(
+        final_paths.reports_dir / name
+        for name in (
+            "cluster-inventory-report-mk8s.json",
+            "deploy-smoke-report-soperator.json",
+            "acceptance-smoke-report-mk8s.json",
+            "acceptance-benchmark-report-mk8s.json",
+            "deploy-gpu-stack-readiness-report-mk8s.json",
+            "deploy-gpu-visibility-report-mk8s.json",
+        )
+    )
+    for report in validation_reports:
+        report.write_text("{}\n", encoding="utf-8")
+    lock_path = final_paths.reports_dir / ".locks" / "release-intent-cluster-a.lock"
+    lock_path.parent.mkdir()
+    lock_path.write_text("", encoding="utf-8")
+    recovered = build_project_generation_plan(
+        final_paths=final_paths,
+        staged_paths=staged_paths,
+        config_path=config_path,
+        config_content="new: true\n",
+    )
+
+    assert admitted.sha256 == recovered.sha256
+    assert admitted.preimage_sha256 == recovered.preimage_sha256
+    assert snapshot not in admitted.removals
+    assert data_plane not in recovered.removals
+    assert source_ownership not in recovered.removals
+    assert recovery not in recovered.removals
+    assert reconcile not in recovered.removals
+    assert all(report not in recovered.removals for report in validation_reports)
+    assert lock_path not in recovered.removals
+
+
+def test_project_generation_plan_rebases_an_exact_project_root_alias(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config_path = project / "config.yaml"
+    config_path.write_text("old: true\n", encoding="utf-8")
+    alias = tmp_path / "project-alias"
+    alias.symlink_to(project, target_is_directory=True)
+    final_paths = resolve_project_paths(config_path)
+    staged_paths = staged_generated_paths(final_paths)
+
+    plan = build_project_generation_plan(
+        final_paths=final_paths,
+        staged_paths=staged_paths,
+        config_path=alias / "config.yaml",
+        config_content="new: true\n",
+    )
+
+    assert plan.writes[config_path.resolve()] == b"new: true\n"
 
 
 def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
@@ -115,53 +254,62 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _cache_local_soperator_chart_dependencies(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[None]:
-    """Avoid rebuilding the same local Soperator chart dependencies for every render test."""
-    monkeypatch = pytest.MonkeyPatch()
-    original_stage = flux_render_module._stage_local_helm_chart
-    original_build = flux_render_module._build_local_helm_chart_dependencies
-    cache_root = tmp_path_factory.mktemp("soperator-chart-staging")
-    staged_cache: dict[Path, str] = {}
-    prepared_staged_paths: set[Path] = set()
-
-    def _is_soperator_chart(chart_path: str) -> bool:
-        source = Path(chart_path).expanduser().resolve()
-        return source.name == "soperator" and (source / "Chart.yaml").is_file()
-
-    def _stage_local_helm_chart(chart_path: str, staging_root: Path) -> str:
-        if not _is_soperator_chart(chart_path):
-            return original_stage(chart_path, staging_root)
-        source = Path(chart_path).expanduser().resolve()
-        staged = staged_cache.get(source)
-        if staged is None:
-            staged = original_stage(str(source), cache_root)
-            original_build(staged)
-            staged_cache[source] = staged
-            prepared_staged_paths.add(Path(staged).resolve())
-        return staged
-
-    def _build_local_helm_chart_dependencies(chart_path: str) -> None:
-        if Path(chart_path).expanduser().resolve() in prepared_staged_paths:
-            return
-        original_build(chart_path)
-
-    monkeypatch.setattr(
-        flux_render_module,
-        "_stage_local_helm_chart",
-        _stage_local_helm_chart,
+@pytest.fixture(autouse=True)
+def _freeze_soperator_release_for_render_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    release_names = tuple(
+        sorted(
+            expected_soperator_release_names(
+                {
+                    "backup": {"enabled": True, "config": {"enabled": True}},
+                    "certManager": {"enabled": True},
+                    "mariadbOperator": {"enabled": True},
+                    "nodesets": {"enabled": True},
+                    "notifier": {"enabled": True},
+                    "observability": {
+                        "enabled": True,
+                        "dcgmExporter": {"enabled": True},
+                        "opentelemetry": {
+                            "enabled": True,
+                            "logs": {"values": {"jailLogs": {"enabled": True}}},
+                        },
+                        "prometheusOperator": {"enabled": True},
+                        "publicEndpointEnabled": True,
+                        "publicEndpointTokenKind": "secret",
+                        "vmLogs": {"enabled": True},
+                        "vmStack": {
+                            "enabled": True,
+                            "tsaToken": {"writer": {"enabled": True}},
+                        },
+                    },
+                    "soperator": {
+                        "monitoringDashboards": {"enabled": True},
+                        "soperatorChecks": {"enabled": True},
+                    },
+                    "soperatorActiveChecks": {"enabled": True},
+                    "storageClasses": {"enabled": True},
+                }
+            )
+        )
     )
-    monkeypatch.setattr(
-        flux_render_module,
-        "_build_local_helm_chart_dependencies",
-        _build_local_helm_chart_dependencies,
-    )
-    try:
-        yield
-    finally:
-        monkeypatch.undo()
+    third_party = {
+        "soperator-fluxcd-cert-manager": "certManager",
+        "soperator-fluxcd-kruise": "kruise",
+        "soperator-fluxcd-mariadb-operator": "mariadbOperator",
+        "soperator-fluxcd-mariadb-operator-crds": "mariadbOperator",
+        "soperator-fluxcd-ns": "namespaceRaw",
+        "soperator-fluxcd-security-profiles-operator": "securityProfilesOperator",
+    }
+
+    def _freeze(selector: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            snapshot=sample_snapshot(
+                release=selector,
+                release_names=release_names,
+                third_party_release_chart_keys=third_party,
+            )
+        )
+
+    monkeypatch.setattr(flux_render_module, "freeze_soperator_release", _freeze)
 
 
 def _project_config_path(base: Path) -> Path:
@@ -177,7 +325,16 @@ def _load_mysterybox_eso_post_flux_objects(paths, target_ref: str = "mk8s") -> l
     return [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
 
 
+def _load_soperator_upstream_values(paths, target_ref: str = "mk8s") -> dict:
+    path = _target_flux_dir(paths, target_ref) / "configmap-terraform-fluxcd-values.yaml"
+    configmap = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return yaml.safe_load(configmap["data"]["values.yaml"])
+
+
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
+    app_entries = component_entries("apps")
+    if "soperator" in selected_apps:
+        app_entries = (*app_entries, soperator_install_entry("4.1.7"))
     payload = yaml.safe_load(
         starter_config_yaml(
             client_name="client-a",
@@ -188,10 +345,13 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
             selected_infra=selected_infra,
             selected_apps=selected_apps,
             infra_entries=component_entries("infra"),
-            app_entries=component_entries("apps"),
+            app_entries=app_entries,
         )
     )
     assert isinstance(payload, dict)
+    if "soperator" in selected_apps:
+        soperator = next(chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator")
+        soperator["version"] = "4.1.7"
     return payload
 
 
@@ -356,19 +516,6 @@ def _set_catalog_override(
 
 def _local_catalog_path() -> Path:
     return Path(__file__).resolve().parents[1] / "component_sources.yaml"
-
-
-def _local_soperator_chart_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "helm-charts" / "soperator"
-
-
-def _stage_soperator_chart_for_helm_template(tmp_path: Path) -> Path:
-    return Path(
-        flux_render_module._stage_local_helm_chart(
-            str(_local_soperator_chart_path()),
-            tmp_path / "soperator-chart-staging",
-        )
-    )
 
 
 def _catalog(
@@ -767,124 +914,50 @@ def test_render_uses_cluster_instance_ids_for_multi_target_artifacts(
 
 def test_render_binds_soperator_external_nfs_from_matching_nfs_output(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
 
     payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps={"soperator"})
-    payload["infra"]["components"] = [
-        {
-            "id": "mk8s",
-            "instance_id": "cluster1",
-            "enabled": True,
-            "inputs": _mk8s_inputs(
-                cluster_name="cluster1",
-                cpu=True,
-                gpu=True,
-                gpu_platform="gpu-h100-sxm",
-                gpu_preset="8gpu-128vcpu-1600gb",
-            ),
-        },
-        {
-            "id": "nfs",
-            "instance_id": "nfs-cluster1",
-            "enabled": True,
-            "inputs": {"kubernetes_target_ref": "cluster1"},
-        },
-    ]
-    soperator = _app_entry("soperator", SourceProfile.PORTABLE)
-    payload["apps"]["charts"] = [
-        {
-            "id": "soperator",
-            "instance_id": "cluster1",
-            "group": soperator.group,
-            "enabled": True,
-            "repo": soperator.source,
-            "version": soperator.version,
-            "namespace": soperator.default_namespace,
-            "release-name": soperator.default_release_name,
-            "values": {},
-        }
-    ]
-    rendered_calls: list[dict[str, object]] = []
-
-    def _render_remote_static(**kwargs: object) -> str:
-        rendered_calls.append(kwargs)
-        return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: rendered-soperator\n"
-
-    monkeypatch.setattr(
-        flux_render_module,
-        "_render_remote_helm_chart_static",
-        _render_remote_static,
-    )
+    soperator_config._materialize_soperator_component_defaults(payload)
 
     render_flux(
         payload,
         paths,
         component_output_values={
-            "cluster1.server_ip": "10.10.0.5",
-            "cluster1.export_path": "/srv/nfs/home",
-            "nfs-cluster1.server_ip": "10.10.0.5",
-            "nfs-cluster1.export_path": "/srv/nfs/home",
+            "nfs.server_ip": "10.10.0.5",
+            "nfs.export_path": "/srv/nfs/home",
         },
     )
 
-    flux_dir = _target_flux_dir(paths, "cluster1")
-    rendered_chart = flux_dir / "post-flux-helmrender-slurm-soperator.yaml"
-    assert rendered_chart.exists()
-    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
-    assert rendered_calls
-    assert rendered_calls[0]["chart_ref"] == "soperator"
-    assert rendered_calls[0]["chart_version"] == soperator.version
-    assert rendered_calls[0]["source_url"] == soperator.source.rsplit("/", maxsplit=1)[0]
-    rendered_values = rendered_calls[0]["values"]
-    assert isinstance(rendered_values, dict)
-    assert rendered_values["externalNfs"] == {
-        "enabled": True,
+    flux_dir = _target_flux_dir(paths)
+    assert not (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
+    adapter_documents = [
+        item
+        for item in yaml.safe_load_all(
+            (flux_dir / "soperator-nebius-adapter.yaml").read_text(encoding="utf-8")
+        )
+        if isinstance(item, dict)
+    ]
+    nfs_volume = next(
+        item
+        for item in adapter_documents
+        if item.get("kind") == "PersistentVolume"
+        and item.get("metadata", {}).get("name") == "external-nfs-home-pv"
+    )
+    assert nfs_volume["spec"]["nfs"] == {
         "server": "10.10.0.5",
         "path": "/srv/nfs/home",
+        "readOnly": False,
     }
-
-
-def test_render_soperator_certificate_patch_preserves_explicit_rotation_policy(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"soperator"})
-    soperator = next(chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator")
-    soperator.setdefault("values", {}).setdefault("certManager", {})["privateKey"] = {
-        "rotationPolicy": "Never"
-    }
-    _retarget_enabled_apps(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    rendered_calls: list[dict[str, object]] = []
-
-    def _render_remote_static(**kwargs: object) -> str:
-        rendered_calls.append(kwargs)
-        return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: rendered-soperator\n"
-
-    monkeypatch.setattr(
-        flux_render_module,
-        "_render_remote_helm_chart_static",
-        _render_remote_static,
+    upstream_values = _load_soperator_upstream_values(paths)
+    volume_sources = upstream_values["slurmCluster"]["overrideValues"]["volumeSources"]
+    assert any(
+        item.get("name") == "external-nfs-home"
+        and item.get("persistentVolumeClaim", {}).get("claimName") == "external-nfs-home-pvc"
+        for item in volume_sources
     )
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.PORTABLE)
-
-    assert rendered_calls
-    rendered_values = rendered_calls[0]["values"]
-    assert isinstance(rendered_values, dict)
-    assert rendered_values["certManager"]["privateKey"]["rotationPolicy"] == "Never"
-    flux_dir = _target_flux_dir(paths)
-    assert (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
-    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
 
 
 def test_render_binds_general_nfs_csi_storage_class_from_matching_nfs_output(
@@ -1136,12 +1209,12 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
         selected_infra={"mk8s", "sfs"},
         selected_apps={"cert-manager", "soperator"},
     )
-    cli._materialize_soperator_component_defaults(payload)
+    soperator_config._materialize_soperator_component_defaults(payload)
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
     soperator["profile"] = "nebius-mixed-v1"
     soperator["values"]["partitionProfile"] = "with-h100-infiniband-debug-long"
     soperator["values"]["topologyProfile"] = "nebius-nvl-rack-v1"
-    cli._materialize_soperator_component_defaults(payload)
+    soperator_config._materialize_soperator_component_defaults(payload)
     assert [node["name"] for node in soperator["values"]["nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
@@ -1195,458 +1268,214 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
     ]
     jail_groups = values["storage"]["jail"]["matchExpressions"][0]["values"]
     assert {"worker", "worker-cpu", "worker-gpu"}.issubset(set(jail_groups))
-    assert "slurmConfig" not in values or "topologyPlugin" not in values["slurmConfig"]
+    assert values["slurmConfig"]["topologyPlugin"] == ""
 
 
-def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Path) -> None:
+def test_render_soperator_uses_upstream_umbrella_graph_and_thin_adapter(tmp_path: Path) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
 
     payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    soperator_values = soperator_chart.setdefault("values", {})
-    soperator_values.setdefault("soperator-checks", {})["enabled"] = True
-    soperator_values.setdefault("soperator-activechecks", {})["enabled"] = True
-    soperator_values.setdefault("certManager", {})["enabled"] = None
-    soperator_values.setdefault("mariadb-operator", {}).setdefault("webhook", {}).setdefault(
-        "cert", {}
-    ).setdefault("certManager", {})["enabled"] = None
-    cli._materialize_soperator_component_defaults(payload)
+    soperator_config._materialize_soperator_component_defaults(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
 
     flux_dir = _target_flux_dir(paths)
-    rendered_chart = flux_dir / "post-flux-helmrender-slurm-soperator.yaml"
-    assert rendered_chart.exists()
-    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
-    kustomization = yaml.safe_load((flux_dir / "kustomization.yaml").read_text(encoding="utf-8"))
-    assert "./post-flux-helmrender-slurm-soperator.yaml" not in kustomization["resources"]
-    rendered = rendered_chart.read_text(encoding="utf-8")
-    assert "kind: SlurmCluster" in rendered
-    assert "kind: Deployment" in rendered
-    assert "helm.sh/hook" not in rendered
-    assert "pre-delete-cleanup" not in rendered
-    assert "value: null" not in rendered
-    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
-    rendered_names = {
-        str(doc.get("metadata", {}).get("name") or "")
-        for doc in rendered_docs
-        if isinstance(doc.get("metadata"), dict)
-    }
-    assert "soperator-mariadb-operator-cert-controller" not in rendered_names
-    certificates = [
-        doc
-        for doc in rendered_docs
-        if doc.get("apiVersion") == "cert-manager.io/v1" and doc.get("kind") == "Certificate"
-    ]
-    assert {
-        str(doc.get("metadata", {}).get("name") or "")
-        for doc in certificates
-        if isinstance(doc.get("metadata"), dict)
-    } == {
-        "soperator-mariadb-operator-webhook-cert",
-        "soperator-serving-cert",
-    }
-    assert {
-        doc.get("spec", {}).get("privateKey", {}).get("rotationPolicy")
-        for doc in certificates
-        if isinstance(doc.get("spec"), dict)
-    } == {"Always"}
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert slurm_cluster["spec"]["partitionConfiguration"]["configType"] == "structured"
-    assert "PluginDir=/usr/lib/x86_64-linux-gnu/slurm" in slurm_cluster.get("spec", {}).get(
-        "customSlurmConfig", ""
+    assert not (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
+    release = yaml.safe_load(
+        (flux_dir / "helmrelease-slurm-soperator-fluxcd.yaml").read_text(encoding="utf-8")
     )
-    assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["enabled"] is True
-    assert slurm_cluster["spec"]["slurmNodes"]["rest"]["enabled"] is True
-    assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
-    assert (
-        slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["metrics"]["enabled"]
-        is False
+    assert release["metadata"] == {
+        "name": "soperator-fluxcd",
+        "namespace": "flux-system",
+        "labels": {"soperator.nebius.ai/lifecycle": "recreatable"},
+    }
+    assert release["spec"]["chartRef"] == {
+        "kind": "OCIRepository",
+        "name": "helm-soperator",
+        "namespace": "flux-system",
+    }
+    repositories = list(
+        yaml.safe_load_all((flux_dir / "helm-repositories.yaml").read_text(encoding="utf-8"))
     )
-    assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["storage"] == {
-        "size": "128Gi",
-        "storageClassName": "compute-csi-default-sc",
-        "volumeClaimTemplate": {
-            "accessModes": ["ReadWriteOnce"],
-            "resources": {"requests": {"storage": "128Gi"}},
-            "storageClassName": "compute-csi-default-sc",
+    soperator_repository = next(
+        item for item in repositories if item.get("metadata", {}).get("name") == "helm-soperator"
+    )
+    assert soperator_repository["spec"] == {
+        "interval": "30m",
+        "url": ("oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd"),
+        "layerSelector": {
+            "mediaType": "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+            "operation": "copy",
         },
+        "ref": {"digest": "sha256:" + "2" * 64},
     }
-    assert slurm_cluster["spec"]["sConfigController"]["runAsUid"] == 0
-    assert slurm_cluster["spec"]["sConfigController"]["runAsGid"] == 0
-    nodeset = next(doc for doc in rendered_docs if doc.get("kind") == "NodeSet")
-    assert "dynamic" not in nodeset["spec"]["nodeConfig"]
-    worker_mounts = nodeset["spec"]["slurmd"]["volumes"]["customVolumeMounts"]
-    assert {
-        "mountPath": "/opt/slurm_scripts/",
-        "name": "slurm-scripts",
-        "volumeSource": {"configMap": {"defaultMode": 493, "name": "mk8s-slurm-scripts"}},
-    } in worker_mounts
+    assert release["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    graph_documents = [
+        item
+        for item in yaml.safe_load_all(
+            (flux_dir / "soperator-release-graph.yaml").read_text(encoding="utf-8")
+        )
+        if isinstance(item, dict)
+    ]
+    assert any(item["kind"] == "OCIRepository" for item in graph_documents)
+    assert any(item["kind"] == "HelmChart" for item in graph_documents)
+    assert all(
+        "tag" not in item["spec"]["ref"]
+        for item in graph_documents
+        if item["kind"] == "OCIRepository"
+    )
+    values = _load_soperator_upstream_values(paths)
+    assert values["slurmCluster"]["version"] == "4.1.7"
+    assert values["nodesets"]["version"] == "4.1.7"
+    assert values["soperator"]["version"] == "4.1.7"
+    assert values["slurmCluster"]["overrideValues"]["volumeSources"]
+    observability = values["observability"]
+    assert observability["enabled"] is True
+    assert observability["clusterId"] == "mk8s"
+    assert observability["metricsProjectId"] == "project-456"
+    assert observability["logsProjectId"] == "project-456"
+    assert observability["opentelemetry"]["enabled"] is True
+    assert observability["vmStack"]["enabled"] is True
+    assert observability["vmStack"]["tsaToken"]["writer"] == {
+        "enabled": True,
+        "source": "imds",
+        "namespaces": ["monitoring-system", "logs-system"],
+    }
+    assert observability["vmStack"]["values"]["vmagent"]["spec"]["externalLabels"] == {
+        "iam_tenant_id": "tenant-123",
+        "iam_project_id": "project-456",
+        "mk8s_cluster_id": "mk8s",
+        "soperator_release": "4.1.7",
+    }
+    assert observability["vmStack"]["values"]["grafana"] == {"enabled": False}
 
-    filter_names = {item["name"] for item in slurm_cluster["spec"]["k8sNodeFilters"]}
-    assert filter_names == {"no-gpu", "system", "controller", "login", "accounting"}
-    filters_by_name = {item["name"]: item for item in slurm_cluster["spec"]["k8sNodeFilters"]}
-    assert filters_by_name["controller"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "controller",
-            "effect": "NoSchedule",
-        }
+    adapter_documents = [
+        item
+        for item in yaml.safe_load_all(
+            (flux_dir / "soperator-nebius-adapter.yaml").read_text(encoding="utf-8")
+        )
+        if isinstance(item, dict)
     ]
-    assert filters_by_name["login"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "login",
-            "effect": "NoSchedule",
-        }
+    assert not {"SlurmCluster", "NodeSet"} & {item["kind"] for item in adapter_documents}
+    adapter_pvs = [item for item in adapter_documents if item["kind"] == "PersistentVolume"]
+    assert adapter_pvs
+    assert all(item["spec"]["persistentVolumeReclaimPolicy"] == "Retain" for item in adapter_pvs)
+    assert all(
+        item["metadata"]["labels"]["soperator.nebius.ai/managed-by"] == "nebius-cxcli-adapter"
+        for item in adapter_documents
+    )
+
+
+def test_render_soperator_externalizes_the_known_broken_dashboard_chart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_frozen = flux_render_module.freeze_soperator_release("4.1.7")
+    base_snapshot = base_frozen.snapshot
+    broken_digest = next(iter(SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS))
+    monitoring_chart = replace(
+        base_snapshot.umbrella,
+        name="helm-soperator-monitoring-dashboards",
+        digest=broken_digest,
+        source_path="helm/soperator-monitoring-dashboards",
+    )
+    snapshot = seal_soperator_release_snapshot(
+        replace(
+            base_snapshot,
+            charts={
+                **dict(base_snapshot.charts),
+                "monitoringDashboards": monitoring_chart,
+            },
+            snapshot_sha256="",
+        )
+    )
+    source_root = tmp_path / "official-source"
+    dashboard_dir = source_root / monitoring_chart.source_path / "dashboards"
+    dashboard_dir.mkdir(parents=True)
+    dashboard_names = (
+        "cluster_health.json",
+        "gpu_cluster_stats.json",
+        "jobs_overview.json",
+        "nfs_server_client.json",
+        "slurm_controller.json",
+        "workers_detailed_stats.json",
+        "workers_overview.json",
+    )
+    for name in dashboard_names:
+        (dashboard_dir / name).write_text(
+            json.dumps({"title": name, "uid": Path(name).stem}) + "\n",
+            encoding="utf-8",
+        )
+    frozen = SimpleNamespace(
+        snapshot=snapshot,
+        source=SimpleNamespace(source_dir=str(source_root)),
+    )
+    monkeypatch.setattr(flux_render_module, "current_frozen_soperator_release", lambda _v: None)
+    monkeypatch.setattr(flux_render_module, "freeze_soperator_release", lambda _v: frozen)
+
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    soperator_config._materialize_soperator_component_defaults(payload)
+
+    render_flux(
+        payload,
+        paths,
+        component_output_values={"mk8s.cluster_id": "mk8scluster-test"},
+    )
+
+    flux_dir = _target_flux_dir(paths)
+    post_flux_path = flux_dir / "post-flux-soperator-monitoring-dashboards.yaml"
+    documents = [
+        item
+        for item in yaml.safe_load_all(post_flux_path.read_text(encoding="utf-8"))
+        if isinstance(item, dict)
     ]
-    assert filters_by_name["accounting"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "accounting",
-            "effect": "NoSchedule",
-        }
+    upstream_values = _load_soperator_upstream_values(paths)
+    graph_documents = [
+        item
+        for item in yaml.safe_load_all(
+            (flux_dir / "soperator-release-graph.yaml").read_text(encoding="utf-8")
+        )
+        if isinstance(item, dict)
     ]
 
-    activechecks_pod_template = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "PodTemplate"
-        and doc.get("metadata", {}).get("name") == "create-user-soperatorchecks"
+    assert upstream_values["soperator"]["monitoringDashboards"] == {"enabled": False}
+    assert len(documents) == len(dashboard_names)
+    assert all(item["metadata"]["labels"]["grafana_dashboard"] == "1" for item in documents)
+    assert not any(
+        item.get("kind") == "OCIRepository"
+        and item.get("metadata", {}).get("name") == "cxcli-soperator-fluxcd-monitoring-dashboards"
+        for item in graph_documents
     )
-    activechecks_values_path = (
-        _local_soperator_chart_path().parent / "soperator-activechecks" / "values.yaml"
+    kustomization = yaml.safe_load((flux_dir / "kustomization.yaml").read_text(encoding="utf-8"))
+    assert "./post-flux-soperator-monitoring-dashboards.yaml" not in kustomization["resources"]
+
+
+def test_soperator_post_terraform_render_uses_immutable_cluster_id(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    soperator_config._materialize_soperator_component_defaults(payload)
+
+    render_flux(
+        payload,
+        paths,
+        component_output_values={"mk8s.cluster_id": "mk8scluster-immutable"},
     )
-    activechecks_values = yaml.safe_load(activechecks_values_path.read_text(encoding="utf-8"))
-    expected_k8s_check_job_image = activechecks_values["images"]["k8sJob"]
-    assert activechecks_pod_template["template"]["spec"]["hostUsers"] is True
-    assert activechecks_pod_template["template"]["spec"]["restartPolicy"] == "Never"
-    assert activechecks_pod_template["template"]["spec"]["containers"] == [
-        {
-            "name": "create-user-soperatorchecks",
-            "image": expected_k8s_check_job_image,
-        }
-    ]
-    activecheck = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "ActiveCheck"
-        and doc.get("metadata", {}).get("name") == "create-user-soperatorchecks"
-    )
-    assert activecheck["spec"]["podTemplateNameRef"] == "create-user-soperatorchecks"
-    assert "hostUsers" not in activecheck["spec"]
-    enroot_activecheck = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "ActiveCheck"
-        and doc.get("metadata", {}).get("name") == "enroot-cleanup"
-    )
-    enroot_sbatch_script = enroot_activecheck["spec"]["slurmJobSpec"]["sbatchScript"]
-    assert "job-scoped Enroot containers" in enroot_sbatch_script
-    assert "pyxis_([0-9]+" in enroot_sbatch_script
+
+    values = _load_soperator_upstream_values(paths)
+    observability = values["observability"]
+    assert observability["clusterId"] == "mk8scluster-immutable"
     assert (
-        slurm_cluster["spec"]["slurmNodes"]["exporter"]["podMonitorConfig"]["scrapeTimeout"]
-        == "20s"
+        observability["vmStack"]["values"]["vmagent"]["spec"]["externalLabels"]["mk8s_cluster_id"]
+        == "mk8scluster-immutable"
     )
-    manager_deployment = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "Deployment"
-        and doc.get("metadata", {}).get("name") == "soperator-manager"
-    )
-    assert manager_deployment["metadata"]["namespace"] == "soperator"
-    system_affinity = filters_by_name["system"]["affinity"]
-    assert manager_deployment["spec"]["template"]["spec"]["affinity"] == system_affinity
-    checks_deployment = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "Deployment"
-        and doc.get("metadata", {}).get("name") == "soperator-checks-checks"
-    )
-    assert checks_deployment["spec"]["template"]["spec"]["affinity"] == system_affinity
-    mariadb_operator_deployment = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "Deployment"
-        and doc.get("metadata", {}).get("name") == "soperator-mariadb-operator"
-    )
-    assert mariadb_operator_deployment["metadata"]["namespace"] == "soperator"
-    assert mariadb_operator_deployment["spec"]["template"]["spec"]["affinity"] == system_affinity
-    mount_scripts = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "ConfigMap"
-        and doc.get("metadata", {}).get("name") == "mk8s-mount-scripts"
-    )
-    assert mount_scripts["metadata"]["namespace"] == "soperator"
-    slurm_scripts = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "ConfigMap"
-        and doc.get("metadata", {}).get("name") == "mk8s-slurm-scripts"
-    )
-    cleanup_enroot = slurm_scripts["data"]["cleanup_enroot.sh"]
-    assert "Cleanup leftover Enroot containers for this job" in cleanup_enroot
-    assert "pyxis_${SLURM_JOB_ID}" in cleanup_enroot
-    assert "pyxis_.+_${SLURM_JOB_ID}" in cleanup_enroot
-
-
-def test_render_local_soperator_defaults_skip_optional_service_gates(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    render_project(config, paths, source_profile=SourceProfile.LOCAL)
-
-    soperator_values = next(
-        chart["values"] for chart in config["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    assert soperator_values["soperator-activechecks"]["enabled"] is False
-    assert soperator_values["soperator-activechecks"]["waitForChecks"]["enabled"] is False
-    assert "srunReadyPartition" not in soperator_values["soperator-activechecks"]
-    assert soperator_values["soperator-checks"]["enabled"] is False
-    assert soperator_values["soperator-notifier"]["enabled"] is False
-    assert soperator_values["soperator-backup-config"]["enabled"] is False
-    assert soperator_values["soperator-dcgm-exporter"]["enabled"] is False
-
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    rendered_names = {
-        str(doc.get("metadata", {}).get("name") or "")
-        for doc in rendered_docs
-        if isinstance(doc.get("metadata"), dict)
-    }
-    assert all(doc.get("kind") != "ActiveCheck" for doc in rendered_docs)
-    assert "soperator-checks-checks" not in rendered_names
-    assert "soperator-notifier" not in rendered_names
-    assert "soperator-jail-backup" not in rendered_names
-    assert "soperator-dcgm-exporter" not in rendered_names
-    nodeconfigurator = next(doc for doc in rendered_docs if doc.get("kind") == "NodeConfigurator")
-    assert nodeconfigurator["spec"]["customContainer"]["enabled"] is True
-    assert nodeconfigurator["spec"]["customContainer"]["command"] == [
-        "/bin/sh",
-        "-c",
-        "trap : TERM INT; sleep infinity & wait",
-    ]
-    assert nodeconfigurator["spec"]["rebooter"]["enabled"] is False
-    assert all(
-        "nodeconfigurator-role" not in str(doc.get("metadata", {}).get("name") or "")
-        and "nodeconfigurator-binding" not in str(doc.get("metadata", {}).get("name") or "")
-        for doc in rendered_docs
-        if doc.get("kind") in {"ClusterRole", "ClusterRoleBinding"}
-    )
-    assert all(
-        "nodeconfigurator" not in str(doc.get("metadata", {}).get("name") or "")
-        for doc in rendered_docs
-        if doc.get("kind") == "ServiceAccount"
-    )
-    assert all(
-        "sssd" not in (doc.get("spec") or {})
-        for doc in rendered_docs
-        if doc.get("kind") == "NodeSet"
-    )
-
-
-def test_render_soperator_preserves_operator_service_gate_opt_ins(tmp_path: Path) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    values = soperator_chart.setdefault("values", {})
-    values["nodesets"] = [{"name": "worker", "sssd": {"enabled": True}}]
-    values["rebooter"] = {"enabled": True}
-    values["slurmNodes"] = {"sssd": {"enabled": True}}
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    render_project(config, paths, source_profile=SourceProfile.LOCAL)
-
-    soperator_values = next(
-        chart["values"] for chart in config["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    worker_values = next(item for item in soperator_values["nodesets"] if item["name"] == "worker")
-    assert worker_values["sssd"]["enabled"] is True
-    assert soperator_values["rebooter"]["enabled"] is True
-    assert soperator_values["slurmNodes"]["sssd"]["enabled"] is True
-
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    worker_nodeset = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "NodeSet" and doc.get("metadata", {}).get("name") == "worker"
-    )
-    assert "sssd" in worker_nodeset["spec"]
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert "sssd" in slurm_cluster["spec"]["slurmNodes"]["controller"]
-    assert "sssd" in slurm_cluster["spec"]["slurmNodes"]["login"]
-    nodeconfigurator = next(doc for doc in rendered_docs if doc.get("kind") == "NodeConfigurator")
-    assert nodeconfigurator["spec"]["customContainer"]["enabled"] is True
-    assert nodeconfigurator["spec"]["rebooter"]["enabled"] is True
-    assert any(
-        doc.get("kind") == "ClusterRole"
-        and str(doc.get("metadata", {}).get("name") or "").endswith("nodeconfigurator-role")
-        for doc in rendered_docs
-    )
-    assert any(
-        doc.get("kind") == "ClusterRoleBinding"
-        and str(doc.get("metadata", {}).get("name") or "").endswith("nodeconfigurator-binding")
-        for doc in rendered_docs
-    )
-    rebooter_service_account = nodeconfigurator["spec"]["rebooter"]["serviceAccountName"]
-    assert any(
-        doc.get("kind") == "ServiceAccount"
-        and doc.get("metadata", {}).get("name") == rebooter_service_account
-        for doc in rendered_docs
-    )
-
-
-def test_render_soperator_guided_sssd_gate_materializes_all_identity_surfaces(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    values = soperator_chart.setdefault("values", {})
-    values["sssd"] = {"enabled": True}
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    render_project(config, paths, source_profile=SourceProfile.LOCAL)
-
-    soperator_values = next(
-        chart["values"] for chart in config["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    assert "sssd" not in soperator_values
-    assert soperator_values["slurmNodes"]["sssd"]["enabled"] is True
-    assert all(
-        (nodeset.get("sssd") or {}).get("enabled") is True
-        for nodeset in soperator_values["nodesets"]
-        if isinstance(nodeset, dict)
-    )
-
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    nodesets = [doc for doc in rendered_docs if doc.get("kind") == "NodeSet"]
-    assert nodesets
-    assert all("sssd" in (doc.get("spec") or {}) for doc in nodesets)
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert "sssd" in slurm_cluster["spec"]["slurmNodes"]["controller"]
-    assert "sssd" in slurm_cluster["spec"]["slurmNodes"]["login"]
-
-
-def test_render_soperator_guided_sssd_false_clears_stale_identity_surfaces(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    values = soperator_chart.setdefault("values", {})
-    values["sssd"] = {"enabled": False}
-    values["nodesets"] = [{"name": "worker", "sssd": {"enabled": True}}]
-    values["slurmNodes"] = {"sssd": {"enabled": True}}
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    render_project(config, paths, source_profile=SourceProfile.LOCAL)
-
-    soperator_values = next(
-        chart["values"] for chart in config["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    assert "sssd" not in soperator_values
-    assert soperator_values["slurmNodes"]["sssd"]["enabled"] is False
-    assert all(
-        (nodeset.get("sssd") or {}).get("enabled") is False
-        for nodeset in soperator_values["nodesets"]
-        if isinstance(nodeset, dict)
-    )
-
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    nodesets = [doc for doc in rendered_docs if doc.get("kind") == "NodeSet"]
-    assert nodesets
-    assert all("sssd" not in (doc.get("spec") or {}) for doc in nodesets)
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert "sssd" not in slurm_cluster["spec"]["slurmNodes"]["controller"]
-    assert "sssd" not in slurm_cluster["spec"]["slurmNodes"]["login"]
-
-
-def test_render_local_soperator_cpu_profile_disables_dcgm_without_gpu_nodes(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    soperator_chart["profile"] = "nebius-cpu-v1"
-    soperator_chart["values"] = {"soperator-dcgm-exporter": {"enabled": True}}
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    config = load_config(config_path)
-    render_project(config, paths, source_profile=SourceProfile.LOCAL)
-
-    soperator_values = next(
-        chart["values"] for chart in config["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    assert soperator_values["soperator-dcgm-exporter"]["enabled"] is False
-
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    assert "soperator-dcgm-exporter" not in {
-        str(doc.get("metadata", {}).get("name") or "") for doc in rendered_docs
-    }
 
 
 def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) -> None:
@@ -1694,6 +1523,7 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
         group = mk8s_inputs["node_groups"][group_name]
         assert group["platform"] == "cpu-d3"
         assert group["preset"] == "32vcpu-128gb"
+        assert group["service_account"]["name"].startswith(f"sop-mk8s-{group_name}-")
     assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
     assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
@@ -1708,6 +1538,17 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
     ]
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     assert "node_count = 3" in main_tf
+    assert 'resource "nebius_iam_v1_group" "mk8s_soperator_observability" {' in main_tf
+    assert "for_each = module.mk8s.service_account_ids" in main_tf
+    assert 'resource "nebius_iam_v1_group_membership" "mk8s_soperator_observability" {' in main_tf
+    assert (
+        'resource "nebius_iam_v1_access_permit" "mk8s_soperator_observability_metrics" {' in main_tf
+    )
+    assert 'resource "nebius_iam_v1_access_permit" "mk8s_soperator_observability_logs" {' in main_tf
+    assert 'role        = "monitoring.metrics.writer"' in main_tf
+    assert 'role        = "logging.logs.writer"' in main_tf
+    assert 'role        = "editor"' not in main_tf
+    assert "resource_id = var.nebius_provider_parent_id" in main_tf
 
 
 def test_render_soperator_uses_cluster_target_name_not_client_name(tmp_path: Path) -> None:
@@ -2371,511 +2212,10 @@ def test_build_local_helm_chart_dependencies_filters_unrelated_repository_config
     ]
 
 
-def test_render_local_soperator_cpu_profile_writes_single_cpu_nodeset(tmp_path: Path) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    for chart in payload["apps"]["charts"]:
-        if isinstance(chart, dict) and chart.get("id") == "soperator":
-            chart["profile"] = "nebius-cpu-v1"
-            chart["values"] = {}
-    cli._materialize_soperator_component_defaults(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
-
-    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    node_sets = {
-        doc["metadata"]["name"]: doc
-        for doc in rendered_docs
-        if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
-    }
-    assert set(node_sets) == {"worker-cpu"}
-    worker_cpu_resources = node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
-    assert worker_cpu_resources["cpu"] == "24"
-    assert worker_cpu_resources["memory"] == "96Gi"
-    assert "nvidia.com/gpu" not in worker_cpu_resources
-    assert node_sets["worker-cpu"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=12 ThreadsPerCore=2"
-    )
-
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert "clusterType" not in slurm_cluster["spec"]
-    exporter = slurm_cluster["spec"]["slurmNodes"]["exporter"]
-    assert "jobSource" not in exporter
-    assert "accountingJobStates" not in exporter
-    assert "accountingJobsLookback" not in exporter
-    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu"],
-            "config": "Default=YES State=UP MaxTime=INFINITE PriorityTier=5",
-        },
-    ]
-    assert not any(
-        doc.get("metadata", {}).get("labels", {}).get("app") == "nvidia-dcgm-exporter"
-        for doc in rendered_docs
-    )
-
-
-def test_soperator_chart_template_renders_all_priority_weight_fields(tmp_path: Path) -> None:
-    chart_path = _stage_soperator_chart_for_helm_template(tmp_path)
-
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "weights-smoke",
-            str(chart_path),
-            "--namespace",
-            "soperator",
-            "--show-only",
-            "templates/slurm-cluster/slurm-cluster-cr.yaml",
-            "--set",
-            "schedulingConfig.accountingStorageEnforce[0]=associations",
-            "--set",
-            "schedulingConfig.accountingStorageEnforce[1]=limits",
-            "--set",
-            "schedulingConfig.accountingStorageEnforce[2]=qos",
-            "--set",
-            "schedulingConfig.enforcePartLimits=ANY",
-            "--set",
-            "schedulingConfig.priorityType=priority/multifactor",
-            "--set",
-            "schedulingConfig.priorityWeights.age=100",
-            "--set",
-            "schedulingConfig.priorityWeights.assoc=300",
-            "--set",
-            "schedulingConfig.priorityWeights.fairshare=200",
-            "--set",
-            "schedulingConfig.priorityWeights.partition=1000",
-            "--set",
-            "schedulingConfig.priorityWeights.jobSize=500",
-            "--set",
-            "schedulingConfig.priorityWeights.qos=900",
-            "--set",
-            "schedulingConfig.priorityWeights.tres=gres/gpu=1000",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    assert "AccountingStorageEnforce=associations,limits,qos" in result.stdout
-    assert "EnforcePartLimits=ANY" in result.stdout
-    assert "PriorityWeightAge=100" in result.stdout
-    assert "PriorityWeightAssoc=300" in result.stdout
-    assert "PriorityWeightFairshare=200" in result.stdout
-    assert "PriorityWeightPartition=1000" in result.stdout
-    assert "PriorityWeightJobSize=500" in result.stdout
-    assert "PriorityWeightQOS=900" in result.stdout
-    assert "PriorityWeightTRES=gres/gpu=1000" in result.stdout
-
-
-def test_soperator_chart_template_uses_custom_content_file_for_builtin_script(
+@pytest.mark.parametrize("removed_key", ["qosConfiguration", "schedulingConfig"])
+def test_load_config_rejects_removed_downstream_soperator_values(
     tmp_path: Path,
-) -> None:
-    chart_path = _stage_soperator_chart_for_helm_template(tmp_path)
-
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "script-smoke",
-            str(chart_path),
-            "--namespace",
-            "soperator",
-            "--show-only",
-            "templates/slurm-cluster/slurm-scripts-cm.yaml",
-            "--set",
-            "slurmScripts.builtIn.cleanup_enroot\\.sh.customContentFile=local_slurm_scripts/cleanup_enroot.sh",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    assert "Cleanup leftover Enroot containers for this job" in result.stdout
-    assert "pyxis_${SLURM_JOB_ID}" in result.stdout
-
-
-def test_soperator_chart_template_fails_for_missing_custom_content_file(
-    tmp_path: Path,
-) -> None:
-    chart_path = _stage_soperator_chart_for_helm_template(tmp_path)
-
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "script-smoke",
-            str(chart_path),
-            "--namespace",
-            "soperator",
-            "--show-only",
-            "templates/slurm-cluster/slurm-scripts-cm.yaml",
-            "--set",
-            "slurmScripts.builtIn.cleanup_enroot\\.sh.customContentFile=local_slurm_scripts/does-not-exist.sh",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert (
-        "slurmScripts.builtIn.cleanup_enroot.sh.customContentFile references missing file "
-        '"local_slurm_scripts/does-not-exist.sh"'
-    ) in result.stderr
-
-
-def test_soperator_chart_schema_rejects_unknown_nodeconfigurator_container_keys(
-    tmp_path: Path,
-) -> None:
-    chart_path = _stage_soperator_chart_for_helm_template(tmp_path)
-
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "schema-smoke",
-            str(chart_path),
-            "--namespace",
-            "soperator",
-            "--set",
-            "customContainer.args[0]=sleep",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    normalized_stderr = result.stderr.lower()
-    assert "customcontainer" in normalized_stderr
-    assert "args" in normalized_stderr
-    assert "additional propert" in normalized_stderr
-    assert "not allowed" in normalized_stderr
-
-
-def test_render_local_soperator_mixed_profile_writes_shape_specific_nodesets(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    mk8s = next(
-        row
-        for row in payload["infra"]["components"]
-        if isinstance(row, dict) and row.get("id") == "mk8s"
-    )
-    mk8s.setdefault("inputs", {}).setdefault("soperator", {}).update(
-        {
-            "worker_cpu_total_nodes": 2,
-            "worker_cpu_nodes_per_group": 1,
-            "worker_gpu_total_nodes": 3,
-            "worker_gpu_nodes_per_group": 2,
-        }
-    )
-    for chart in payload["apps"]["charts"]:
-        if isinstance(chart, dict) and chart.get("id") == "soperator":
-            chart["profile"] = "nebius-mixed-v1"
-            chart["placements"] = {"worker": ["worker-cpu", "worker-gpu"]}
-            chart["values"] = {}
-    cli._materialize_soperator_component_defaults(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
-
-    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    node_sets = {
-        doc["metadata"]["name"]: doc
-        for doc in rendered_docs
-        if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
-    }
-    assert set(node_sets) == {"worker-cpu-0", "worker-cpu-1", "worker-gpu-0", "worker-gpu-1"}
-    assert node_sets["worker-cpu-0"]["spec"]["replicas"] == 1
-    assert node_sets["worker-cpu-1"]["spec"]["replicas"] == 1
-    assert node_sets["worker-gpu-0"]["spec"]["replicas"] == 2
-    assert node_sets["worker-gpu-1"]["spec"]["replicas"] == 1
-    worker_cpu_resources = node_sets["worker-cpu-0"]["spec"]["slurmd"]["resources"]
-    assert worker_cpu_resources["cpu"] == "24"
-    assert worker_cpu_resources["memory"] == "96Gi"
-    assert "nvidia.com/gpu" not in worker_cpu_resources
-    assert node_sets["worker-gpu-0"]["spec"]["slurmd"]["resources"]["nvidia.com/gpu"] == 8
-    assert node_sets["worker-gpu-0"]["spec"]["slurmd"]["resources"]["cpu"] == "32"
-    assert node_sets["worker-cpu-0"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=12 ThreadsPerCore=2"
-    )
-    assert node_sets["worker-gpu-0"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:8"
-    )
-
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
-            "config": "Default=YES State=UP MaxTime=INFINITE PriorityTier=5",
-        },
-        {
-            "name": "gpu",
-            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
-            "config": "Default=NO State=UP MaxTime=INFINITE PriorityTier=10",
-        },
-    ]
-
-
-def test_render_local_soperator_mixed_profile_writes_ephemeral_shape_nodesets(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    mk8s = next(
-        row
-        for row in payload["infra"]["components"]
-        if isinstance(row, dict) and row.get("id") == "mk8s"
-    )
-    mk8s.setdefault("inputs", {}).setdefault("soperator", {}).update(
-        {
-            "worker_cpu_total_nodes": 3,
-            "worker_cpu_nodes_per_group": 2,
-            "worker_gpu_total_nodes": 4,
-            "worker_gpu_nodes_per_group": 3,
-            "worker_ephemeral_nodes": {
-                "suspend_time_seconds": 300,
-            },
-            "worker_node_groups": {
-                "worker-cpu-0": {
-                    "autoscaling": {
-                        "enabled": True,
-                        "min_node_count": 1,
-                        "max_node_count": 2,
-                    },
-                    "ephemeral_nodes": {"enabled": True},
-                },
-                "worker-cpu-1": {
-                    "autoscaling": {
-                        "enabled": True,
-                        "min_node_count": 0,
-                        "max_node_count": 1,
-                    },
-                    "ephemeral_nodes": {"enabled": True},
-                },
-                "worker-gpu-0": {
-                    "autoscaling": {
-                        "enabled": True,
-                        "min_node_count": 2,
-                        "max_node_count": 3,
-                    },
-                    "ephemeral_nodes": {"enabled": True},
-                },
-                "worker-gpu-1": {
-                    "autoscaling": {
-                        "enabled": True,
-                        "min_node_count": 0,
-                        "max_node_count": 1,
-                    },
-                    "ephemeral_nodes": {"enabled": True},
-                },
-            },
-        }
-    )
-    for chart in payload["apps"]["charts"]:
-        if isinstance(chart, dict) and chart.get("id") == "soperator":
-            chart["profile"] = "nebius-mixed-v1"
-            chart["values"] = {}
-    cli._materialize_soperator_component_defaults(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
-
-    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    node_sets = {
-        doc["metadata"]["name"]: doc
-        for doc in rendered_docs
-        if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
-    }
-    assert {
-        name: (
-            node_set["spec"]["replicas"],
-            node_set["spec"]["ephemeralNodes"],
-            node_set["spec"]["initialNumberEphemeralNodes"],
-        )
-        for name, node_set in node_sets.items()
-        if name.startswith("worker-")
-    } == {
-        "worker-cpu-0": (2, True, 1),
-        "worker-cpu-1": (1, True, 0),
-        "worker-gpu-0": (3, True, 2),
-        "worker-gpu-1": (1, True, 1),
-    }
-
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert slurm_cluster["spec"]["slurmConfig"]["suspendTime"] == 300
-    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
-            "config": "Default=YES State=UP MaxTime=INFINITE PriorityTier=5",
-        },
-        {
-            "name": "gpu",
-            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
-            "config": "Default=NO State=UP MaxTime=INFINITE PriorityTier=10",
-        },
-    ]
-
-
-def test_render_local_soperator_partition_profile_writes_policy_partitions(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    for chart in payload["apps"]["charts"]:
-        if isinstance(chart, dict) and chart.get("id") == "soperator":
-            chart["profile"] = "nebius-mixed-v1"
-            chart["values"] = {"partitionProfile": "with-debug-long"}
-    cli._materialize_soperator_component_defaults(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
-
-    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu"],
-            "config": "Default=YES State=UP MaxTime=INFINITE PriorityTier=5",
-        },
-        {
-            "name": "gpu",
-            "nodeSetRefs": ["worker-gpu"],
-            "config": "Default=NO State=UP MaxTime=INFINITE PriorityTier=10",
-        },
-        {
-            "name": "debug",
-            "nodeSetRefs": ["worker-cpu", "worker-gpu"],
-            "config": "Default=NO State=UP MaxTime=00:30:00 PriorityTier=100",
-        },
-        {
-            "name": "long",
-            "nodeSetRefs": ["worker-cpu", "worker-gpu"],
-            "config": "Default=NO State=UP MaxTime=7-00:00:00 PriorityTier=1",
-        },
-    ]
-
-
-def test_render_local_soperator_qos_preemption_profile_writes_slurm_policy(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    for chart in payload["apps"]["charts"]:
-        if isinstance(chart, dict) and chart.get("id") == "soperator":
-            chart["profile"] = "nebius-gpu-v1"
-            chart["values"] = {"partitionProfile": "with-qos-preemption"}
-    cli._materialize_soperator_component_defaults(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
-
-    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    qos_script = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "ConfigMap"
-        and str(doc.get("metadata", {}).get("name", "")).endswith("-qos-reconcile-script")
-    )
-
-    assert "PreemptType=preempt/qos" in slurm_cluster["spec"]["customSlurmConfig"]
-    assert "PreemptMode=REQUEUE" in slurm_cluster["spec"]["customSlurmConfig"]
-    assert "PreemptParameters=send_user_signal" in slurm_cluster["spec"]["customSlurmConfig"]
-    assert "PriorityWeightQOS=1000" in slurm_cluster["spec"]["customSlurmConfig"]
-    assert "PriorityWeightFairshare=100" in slurm_cluster["spec"]["customSlurmConfig"]
-    assert (
-        "AccountingStorageEnforce=associations,limits,qos"
-        in slurm_cluster["spec"]["customSlurmConfig"]
-    )
-    assert "EnforcePartLimits=ANY" in slurm_cluster["spec"]["customSlurmConfig"]
-    assert "app.kubernetes.io/component=accounting" in qos_script["data"]["driver.sh"]
-    assert (
-        'exec -i "${POD}" -c accounting -- /bin/bash -s < /scripts/reconcile.sh'
-        in (qos_script["data"]["driver.sh"])
-    )
-    assert "kubectl cp" not in qos_script["data"]["driver.sh"]
-    assert "apply_account 'root'" in qos_script["data"]["reconcile.sh"]
-    assert (
-        "apply_association 'root' 'root' 'DefaultQOS=data' 'Qos=debug,eval,train,data'"
-    ) in qos_script["data"]["reconcile.sh"]
-    qos_role = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "Role"
-        and str(doc.get("metadata", {}).get("name", "")).endswith("-qos-reconcile")
-    )
-    assert qos_role["rules"][0]["verbs"] == ["get", "list", "watch"]
-    qos_job = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "Job"
-        and str(doc.get("metadata", {}).get("name", "")).endswith("-qos-reconcile")
-    )
-    assert qos_job["spec"]["template"]["spec"]["containers"][0]["image"] == "alpine/k8s:1.33.5"
-    assert qos_job["spec"]["activeDeadlineSeconds"] == 1200
-    assert [
-        partition["name"]
-        for partition in slurm_cluster["spec"]["partitionConfiguration"]["partitions"]
-    ] == ["gpu", "debug", "eval", "train", "data"]
-    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"][-1] == {
-        "name": "data",
-        "nodeSetRefs": ["worker"],
-        "config": "Default=NO State=UP MaxTime=1-00:00:00 PriorityTier=10 AllowQos=data",
-    }
-
-
-def test_load_config_rejects_soperator_qos_preemption_without_qos_configuration(
-    tmp_path: Path,
+    removed_key: str,
 ) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2884,86 +2224,12 @@ def test_load_config_rejects_soperator_qos_preemption_without_qos_configuration(
     for chart in payload["apps"]["charts"]:
         if isinstance(chart, dict) and chart.get("id") == "soperator":
             chart["profile"] = "nebius-gpu-v1"
-            chart["values"] = {
-                "partitionProfile": "with-qos-preemption",
-                "qosConfiguration": {"enabled": False},
-            }
-    cli._materialize_soperator_component_defaults(payload)
+            chart["values"] = {removed_key: {"enabled": False}}
+    soperator_config._materialize_soperator_component_defaults(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Slurm preempt/qos"):
+    with pytest.raises(ValueError, match=f"{removed_key} is a removed downstream-only"):
         load_config(config_path)
-
-
-def test_render_local_soperator_feature_partition_profile_writes_node_features(
-    tmp_path: Path,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
-    for chart in payload["apps"]["charts"]:
-        if isinstance(chart, dict) and chart.get("id") == "soperator":
-            chart["profile"] = "nebius-mixed-v1"
-            chart["values"] = {"partitionProfile": "with-h100-infiniband-debug-long"}
-    cli._materialize_soperator_component_defaults(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
-
-    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered_docs = [
-        doc
-        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
-    ]
-    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert [
-        partition["name"]
-        for partition in slurm_cluster["spec"]["partitionConfiguration"]["partitions"]
-    ] == ["cpu", "gpu", "h100", "infiniband", "debug", "long"]
-    worker_gpu = next(
-        doc
-        for doc in rendered_docs
-        if doc.get("kind") == "NodeSet" and doc.get("metadata", {}).get("name") == "worker-gpu"
-    )
-    assert worker_gpu["spec"]["nodeConfig"]["features"] == [
-        "gpu",
-        "cuda",
-        "h100",
-        "infiniband",
-    ]
-
-
-def test_render_local_soperator_notifier_uses_only_secret_reference(tmp_path: Path) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"soperator"})
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    soperator_chart.setdefault("values", {}).setdefault("soperator-notifier", {})["enabled"] = True
-    _retarget_enabled_apps(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
-
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered = rendered_chart.read_text(encoding="utf-8")
-    assert "hooks.slack.com" not in rendered
-    assert "webhookUrl" not in rendered
-    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
-    alertmanager_config = next(
-        doc for doc in rendered_docs if doc.get("kind") == "VMAlertmanagerConfig"
-    )
-    slack_config = alertmanager_config["spec"]["receivers"][0]["slack_configs"][0]
-    assert slack_config["api_url"] == {
-        "name": "soperator-notifier-slack-webhook",
-        "key": "url",
-    }
 
 
 def test_render_soperator_notifier_mysterybox_eso_secret_source(tmp_path: Path) -> None:
@@ -3013,112 +2279,9 @@ def test_render_soperator_notifier_mysterybox_eso_secret_source(tmp_path: Path) 
     assert cli._mysterybox_eso_rendered_secret_keys(_target_flux_dir(paths)) == {
         ("soperator", "soperator-notifier-slack-webhook", "url")
     }
-    rendered = (_target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml").read_text(
-        encoding="utf-8"
-    )
+    rendered = yaml.safe_dump(_load_soperator_upstream_values(paths), sort_keys=False)
     assert "hooks.slack.com" not in rendered
     assert "webhookUrl" not in rendered
-
-
-def test_render_local_soperator_backup_uses_only_secret_reference(tmp_path: Path) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(
-        selected_infra={"mk8s", "object-storage"},
-        selected_apps={"soperator"},
-    )
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    soperator_chart.setdefault("values", {}).setdefault("soperator-backup-config", {})[
-        "enabled"
-    ] = True
-    _retarget_enabled_apps(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    render_project(
-        load_config(config_path),
-        paths,
-        component_output_values={
-            "object-storage.bucket_name": "soperator-jail-backups",
-            "object-storage.bucket_endpoint": "https://soperator-jail-backups.example:443",
-        },
-        source_profile=SourceProfile.LOCAL,
-    )
-
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator.yaml"
-    rendered = rendered_chart.read_text(encoding="utf-8")
-    assert "aws-access-key-id:" not in rendered
-    assert "aws-secret-value" not in rendered
-    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
-    schedule = next(doc for doc in rendered_docs if doc.get("kind") == "Schedule")
-    backend = schedule["spec"]["backend"]
-    assert backend["s3"]["bucket"] == "soperator-jail-backups"
-    assert backend["s3"]["accessKeyIDSecretRef"] == {
-        "name": "jail-backup",
-        "key": "aws-access-key-id",
-    }
-    assert backend["repoPasswordSecretRef"] == {
-        "name": "jail-backup",
-        "key": "backup-password",
-    }
-
-
-def test_render_soperator_backup_uses_chart_owned_k8up_dependency(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = _project_config_path(tmp_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths = resolve_project_paths(config_path)
-
-    payload = _starter_payload(
-        selected_infra={"mk8s", "object-storage"},
-        selected_apps={"soperator"},
-    )
-    soperator_chart = next(
-        chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
-    )
-    soperator = _app_entry("soperator", SourceProfile.PORTABLE)
-    soperator_chart["repo"] = soperator.source
-    soperator_chart["version"] = soperator.version
-    soperator_chart.setdefault("values", {}).setdefault("soperator-backup-config", {})[
-        "enabled"
-    ] = True
-    _retarget_enabled_apps(payload)
-    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    rendered_calls: list[dict[str, object]] = []
-
-    def _render_remote_static(**kwargs: object) -> str:
-        rendered_calls.append(kwargs)
-        return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: rendered-soperator\n"
-
-    monkeypatch.setattr(
-        flux_render_module,
-        "_render_remote_helm_chart_static",
-        _render_remote_static,
-    )
-
-    render_project(
-        load_config(config_path),
-        paths,
-        component_output_values={
-            "object-storage.bucket_name": "soperator-jail-backups",
-            "object-storage.bucket_endpoint": "https://soperator-jail-backups.example:443",
-        },
-        source_profile=SourceProfile.LOCAL,
-    )
-
-    flux_dir = _target_flux_dir(paths)
-    assert rendered_calls
-    rendered_values = rendered_calls[0]["values"]
-    assert isinstance(rendered_values, dict)
-    assert rendered_values["soperator-backup-config"]["enabled"] is True
-    assert (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
-    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
-    assert not (flux_dir / "helmrelease-storage-k8up.yaml").exists()
 
 
 def test_render_soperator_mk8s_node_groups_attach_sibling_sfs(tmp_path: Path) -> None:
@@ -3997,23 +3160,11 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     deploy_detail_report = paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
     soperator_cluster_report_dir = paths.reports_dir / "soperator-clusters" / "external-context"
     onboard_report = soperator_cluster_report_dir / "discovery"
-    migrate_report = soperator_cluster_report_dir / "ext-soperator-upgrade" / "report.md"
-    migration_detail_report = (
-        soperator_cluster_report_dir / "ext-soperator-upgrade" / "deploy-smoke-report-external.json"
-    )
-    segment_report_dir = (
-        soperator_cluster_report_dir
-        / "ext-soperator-upgrade"
-        / "segments"
-        / "segment-1-kubernetes-1-31-1-32-soperator"
-    )
-    segment_report = segment_report_dir / "report.md"
-    segment_json_report = segment_report_dir / "report.json"
-    unreferenced_migration_like_report = paths.reports_dir / "deploy-smoke-report-old.json"
+    unreferenced_stale_report = paths.reports_dir / "unclassified-stale-report-old.json"
     node_template_report = paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = paths.reports_dir / "upgrade-node-template-report.json"
-    node_group_report = paths.reports_dir / "upgrade-node-group-report.md"
-    node_group_report_json = paths.reports_dir / "upgrade-node-group-report.json"
+    node_group_report = paths.reports_dir / "migrate-node-group-report.md"
+    node_group_report_json = paths.reports_dir / "migrate-node-group-report.json"
     upgrade_report = soperator_cluster_report_dir / "soperator-upgrade" / "report.md"
     upgrade_report_json = soperator_cluster_report_dir / "soperator-upgrade" / "report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
@@ -4036,16 +3187,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.mkdir(parents=True)
     (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
-    migrate_report.parent.mkdir(parents=True)
-    migrate_report.write_text(
-        "# External Soperator Upgrade Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
-        encoding="utf-8",
-    )
-    migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
-    segment_report_dir.mkdir(parents=True)
-    segment_report.write_text("# Segment Report\n", encoding="utf-8")
-    segment_json_report.write_text('{"segment": "segment-1"}\n', encoding="utf-8")
-    unreferenced_migration_like_report.write_text('{"passed": false}\n', encoding="utf-8")
+    unreferenced_stale_report.write_text('{"passed": false}\n', encoding="utf-8")
     node_template_report.write_text("# MK8s Node Template Upgrade Report\n", encoding="utf-8")
     node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
     node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
@@ -4065,13 +3207,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
         '{"schema": "discovery"}\n'
     )
-    assert migrate_report.read_text(encoding="utf-8").startswith(
-        "# External Soperator Upgrade Report"
-    )
-    assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
-    assert segment_report.read_text(encoding="utf-8") == "# Segment Report\n"
-    assert segment_json_report.read_text(encoding="utf-8") == '{"segment": "segment-1"}\n'
-    assert not unreferenced_migration_like_report.exists()
+    assert not unreferenced_stale_report.exists()
     assert node_template_report.read_text(encoding="utf-8").startswith(
         "# MK8s Node Template Upgrade Report"
     )
@@ -4110,7 +3246,7 @@ def test_promote_staged_generated_paths_merges_cluster_lifecycle_reports(
         staged_paths.reports_dir / "soperator-clusters" / "mk8scluster-existing"
     )
     existing_discovery = cluster_reports / "discovery" / "manifest.json"
-    existing_upgrade = cluster_reports / "ext-soperator-upgrade" / "report.md"
+    existing_upgrade = cluster_reports / "soperator-upgrade" / "report.md"
     existing_onboarding = cluster_reports / "onboarding" / "report.json"
     staged_onboarding = staged_cluster_reports / "onboarding" / "report.json"
     staged_render_file = staged_paths.infra_dir / "main.tf"

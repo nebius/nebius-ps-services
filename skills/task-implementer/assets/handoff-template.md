@@ -48,21 +48,14 @@
 - Pending steering revisions: none
 - Applied steering revisions: none
 
-## Project Agent Instructions
+## Effective Instructions
 
-- Spec receipt schema: project-agent-instructions.spec-validation.v3
-- Decision schema: project-agent-instructions.decision.v3
-- State schema: project-agent-instructions.state.v3
-- Outcome: pending | created | attached | refreshed | adopted | retired | existing-sufficient | not-needed | blocked
-- Active instruction path: none
-- Decision SHA-256: none
-- Project instruction SHA-256: none
-- Spec receipt SHA-256: none
-- Ownership receipt SHA-256: none
-- Effective config SHA-256: none
-- Reload required: no
-- Contract commit: none
-- Blocker: none
+- Applicable repository instruction files read: none
+- Instruction conflict: none
+- Canonical project specs: missing | pending | current | invalid | migration-required
+
+Canonical spec status is informational in this Markdown projection. The
+machine-readable v2 receipt is bound in coordinator state and assignments.
 
 ## Request Summary
 

@@ -22,7 +22,7 @@ Load this reference when generating web APIs, operator dashboards, or internal w
 
 ## API Runtime Recommendations
 
-- Local dev: `uvicorn <package>.api:app --reload`
+- Local dev: `uv run --locked uvicorn <package>.api:app --reload`
 - Production: managed ASGI process (`gunicorn` with `uvicorn` workers or equivalent supervisor)
 - Emit JSON logs in production with request IDs.
 

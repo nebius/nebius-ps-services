@@ -101,8 +101,11 @@ changing committed product-truth documents directly.
   `sdlc-start`; do not let them become implementation truth until the owning
   product-truth document has been updated by `sdlc-create-requirements` or
   `sdlc-create-design`.
-- Treat `project-agent-instructions-change` as a request for `sdlc-start` to
-  rerun the conditional decision. Never edit a project instruction file here.
+- Treat `project-agent-instructions-change` as advisory unless the current user
+  explicitly requested the separate mutation workflow. Only in that explicit
+  case may `sdlc-start` route to `project-agent-instructions`; otherwise keep
+  the recommendation nonblocking and continue under already-effective
+  instructions. Never edit a project instruction file here.
 - If execution is prepared or running, include its plan digest, integration
   identity, active wave, started assignments, and cleanup blockers in routing
   reminders. A product-truth or plan change must request `REPLAN_REQUIRED` and
@@ -138,8 +141,9 @@ changing committed product-truth documents directly.
   `needs-human`.
 - Unsafe prompt content is redacted and classified with a safe summary; raw
   secrets or customer data must not be persisted.
-- Product-truth drift routes to `sdlc-create-requirements`,
-  `sdlc-create-design`, or `project-agent-instructions`.
+- Product-truth drift routes to `sdlc-create-requirements` or
+  `sdlc-create-design`. Project-instruction recommendations stay advisory
+  unless the current user explicitly requested the separate mutation workflow.
 - Documentation-only drift routes to `sdlc-update-documents`.
 
 ## Must Not

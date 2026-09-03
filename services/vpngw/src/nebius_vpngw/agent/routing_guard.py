@@ -142,9 +142,7 @@ def require_vm_ha_current_boot_ready(
 
 
 def _ipv4_forwarding_disabled() -> bool:
-    result = subprocess.run(
-        ["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True
-    )
+    result = subprocess.run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
     return result.returncode == 0 and result.stdout.strip() == "0"
 
 
@@ -249,11 +247,7 @@ def _vm_ha_route_maintenance_mode(
         guard = json.loads(effective_guard_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError("VM-HA route-maintenance authority is unavailable") from error
-    if not (
-        boot_id
-        and isinstance(guard, dict)
-        and guard.get("guard_boot_id") == boot_id
-    ):
+    if not (boot_id and isinstance(guard, dict) and guard.get("guard_boot_id") == boot_id):
         raise RuntimeError("VM-HA route-maintenance authority is stale")
     mode = guard.get("data_plane_mode")
     if mode == "active":
@@ -547,11 +541,7 @@ def _remove_table_220() -> bool:
         else []
     )
     has_rule = bool(table_rules)
-    table_routes = (
-        table_220_routes_from_all_json(routes.stdout)
-        if routes.returncode == 0
-        else None
-    )
+    table_routes = table_220_routes_from_all_json(routes.stdout) if routes.returncode == 0 else None
     has_routes = bool(table_routes)
     if not has_rule and not has_routes:
         return False
@@ -604,9 +594,7 @@ def has_table_220_rule(output: str) -> bool:
     for line in output.splitlines():
         tokens = line.split()
         if any(
-            token in {"lookup", "table"}
-            and index + 1 < len(tokens)
-            and tokens[index + 1] == "220"
+            token in {"lookup", "table"} and index + 1 < len(tokens) and tokens[index + 1] == "220"
             for index, token in enumerate(tokens)
         ):
             return True
@@ -633,9 +621,7 @@ def table_220_routes_from_all_json(output: str) -> list[dict[str, Any]] | None:
         if not isinstance(route, dict):
             return None
         table = route.get("table")
-        if table is not None and (
-            isinstance(table, bool) or not isinstance(table, (int, str))
-        ):
+        if table is not None and (isinstance(table, bool) or not isinstance(table, (int, str))):
             return None
         if str(table) == "220":
             selected.append(route)
@@ -1213,9 +1199,7 @@ def get_routing_diagnostics() -> dict[str, Any]:
     diagnostics["table_220_rule_exists"] = "220" in result.stdout
 
     # Check table 220 routes
-    result = subprocess.run(
-        ["ip", "route", "show", "table", "220"], capture_output=True, text=True
-    )
+    result = subprocess.run(["ip", "route", "show", "table", "220"], capture_output=True, text=True)
     diagnostics["table_220_routes"] = [
         route for route in result.stdout.split("\n") if route.strip()
     ]

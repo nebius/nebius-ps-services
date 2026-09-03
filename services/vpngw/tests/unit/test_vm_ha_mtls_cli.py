@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore
 from nebius_vpngw.agent.vm_ha.mtls_actions import execute_mtls_action
 from nebius_vpngw.cli import (
     _finalize_vm_ha_managed_mtls,
@@ -26,18 +29,25 @@ def _binding(*, passive_compute: str = "compute-b") -> SimpleNamespace:
         configuration_digest="a" * 64,
         static_routes_digest="b" * 64,
         bgp_policy_digest="c" * 64,
+        nebius_project_id="project-test",
+        nebius_service_account_id="service-account-test",
+        nebius_authorized_key_id="authorized-key-test",
         nodes=(
             SimpleNamespace(
                 node_id="node-a",
                 compute_id="compute-a",
                 network_interface_name="eth0",
                 role=SimpleNamespace(value="active"),
+                nebius_credentials_path="/credentials/node-a.json",
+                nebius_credentials_sha256="d" * 64,
             ),
             SimpleNamespace(
                 node_id="node-b",
                 compute_id=passive_compute,
                 network_interface_name="eth0",
                 role=SimpleNamespace(value="passive"),
+                nebius_credentials_path="/credentials/node-b.json",
+                nebius_credentials_sha256="d" * 64,
             ),
         ),
     )
@@ -149,6 +159,31 @@ def test_apply_bootstraps_managed_mtls_and_healthy_reapply_is_crypto_noop(
         ]
         for target, root in ssh.roots.items()
     } == fingerprints
+
+
+def test_apply_rejects_an_inhibition_only_interrupted_rotation(tmp_path: Path) -> None:
+    passive = _instance("node-b", "gateway-1", "passive")
+    active = _instance("node-a", "gateway-0", "active")
+    targets = {"gateway-0": "target-a", "gateway-1": "target-b"}
+    ssh = _LocalManagedSSH({"target-a": tmp_path / "member-a", "target-b": tmp_path / "member-b"})
+    operation_id = "f" * 64
+    ManagedMTLSStore(ssh.roots["target-b"] / "mtls").install_inhibition(
+        operation_id=operation_id,
+        cluster_id="cluster-a",
+        node_id="node-b",
+        generation_id="a" * 64,
+    )
+
+    with pytest.raises(RuntimeError, match="inhibited by a rotation transaction"):
+        _prepare_vm_ha_managed_mtls(
+            ssh=ssh,  # type: ignore[arg-type]
+            ordered_instances=[passive, active],
+            targets=targets,
+            local_cfg={},
+            runtime_binding=_binding(),
+        )
+
+    assert ssh.actions == [("target-b", "status"), ("target-a", "status")]
 
 
 def test_apply_replacement_preserves_survivor_key_and_prunes_former_leaf(

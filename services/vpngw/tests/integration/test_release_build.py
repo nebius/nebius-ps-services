@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -86,7 +88,48 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     assert "nebius_vpngw/systemd/nebius-vpngw-vm-ha.service" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-vm-ha-ordering.conf" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-ufw-lock.conf" in names
+    assert "nebius_vpngw/agent/vm_ha/promotion_receipt.py" in names
+    assert "nebius_vpngw/agent/vm_ha/restoration.py" in names
     assert "services/vpngw/src/nebius_vpngw/_version.py" not in names
+
+    install_root = tmp_path / "installed"
+    install = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-deps",
+            "--target",
+            str(install_root),
+            str(wheel_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert install.returncode == 0, install.stderr
+
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(install_root)
+    capability = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "nebius_vpngw.agent.main",
+            "--agent-capabilities",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert capability.returncode == 0, capability.stderr
+    assert "vm-ha-standby-restoration-v2" in json.loads(capability.stdout)["features"]
 
 
 def test_wheel_metadata_retains_runtime_dependency_bounds(tmp_path) -> None:

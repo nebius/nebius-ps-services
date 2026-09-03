@@ -106,6 +106,19 @@ class PromptSessionHookTests(unittest.TestCase):
             {},
         )
         self.assertFalse(self.event_path().exists())
+        secret_turn = {**self.base, "turn_id": "unbound-secret"}
+        with mock.patch.object(
+            state, "contains_secret", return_value=True
+        ) as secret_detector:
+            self.assertEqual(
+                state.evaluate_submit(
+                    {**secret_turn, "prompt": "Handle this direct request."},
+                    self.home,
+                ),
+                {},
+            )
+        secret_detector.assert_not_called()
+        self.assertFalse(self.event_path("unbound-secret").exists())
         missing = {**self.base, "prompt": "Implement it"}
         missing.pop("session_id")
         self.assertEqual(state.evaluate_submit(missing, self.home), {})

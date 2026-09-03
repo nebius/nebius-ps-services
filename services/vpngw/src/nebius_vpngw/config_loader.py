@@ -6,7 +6,6 @@ import ipaddress
 import json
 import os
 import re
-import stat
 import typing as t
 from dataclasses import dataclass, field
 from enum import Enum
@@ -60,7 +59,6 @@ class VMHANodeRecord:
     node_id: str
     instance_index: int
     role: schema.VMHARole
-    nebius_credentials_path: str
 
 
 @dataclass(frozen=True)
@@ -350,7 +348,6 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
             node_id=str(member["node_id"]),
             instance_index=int(member["instance_index"]),
             role=schema.VMHARole(member["role"]),
-            nebius_credentials_path=str(member["nebius_credentials_path"]),
         )
         for member in sorted(vm_ha["members"], key=lambda item: int(item["instance_index"]))
     )
@@ -395,8 +392,6 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
         canonical_config["gateway_group"]["vm_ha"]["members"],
         key=lambda item: int(item["instance_index"]),
     )
-    for member in canonical_config["gateway_group"]["vm_ha"]["members"]:
-        member.pop("nebius_credentials_path", None)
     canonical_configuration = _canonical_json(canonical_config)
     logical_manifests = VMHALogicalManifests(
         static_routes_json=_canonical_json(static_routes),
@@ -431,9 +426,18 @@ def load_local_config(
     allow_missing_placeholders: bool = False,
     allow_missing_tunnel_psk_placeholders: bool = False,
     validate_schema: bool = True,
+    region_override: str | None = None,
 ) -> dict:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+    if region_override is not None:
+        normalized_region_override = str(region_override).strip()
+        if not normalized_region_override:
+            raise ValueError("--region must resolve to a non-empty Nebius region.")
+        gateway_group = dict(raw.get("gateway_group") or {})
+        gateway_group["region"] = normalized_region_override
+        raw["gateway_group"] = gateway_group
+        raw["region_id"] = normalized_region_override
     missing: set[str] = set()
     expanded = _expand_env(raw, missing)
     vm_ha_was_provided = "vm_ha" in (expanded.get("gateway_group") or {})
@@ -518,13 +522,11 @@ def load_local_config(
             # (preserves existing code paths while ensuring schema compliance)
             expanded = validated_config.model_dump(mode="python", exclude_none=False)
             for (connection_index, tunnel_index), placeholder in retained_psks.items():
-                expanded["connections"][connection_index]["tunnels"][tunnel_index][
-                    "psk"
-                ] = placeholder
+                expanded["connections"][connection_index]["tunnels"][tunnel_index]["psk"] = (
+                    placeholder
+                )
             if not vm_ha_was_provided:
                 expanded["gateway_group"].pop("vm_ha", None)
-            else:
-                _validate_vm_ha_nebius_credentials(expanded)
         except ValidationError as e:
             # Format Pydantic errors into user-friendly messages
             errors = []
@@ -541,56 +543,6 @@ def load_local_config(
             ) from e
 
     return expanded
-
-
-def _validate_vm_ha_nebius_credentials(config: dict) -> None:
-    """Validate node-scoped operator credential JSON without disclosing paths."""
-
-    vm_ha = (config.get("gateway_group") or {}).get("vm_ha") or {}
-    if not vm_ha.get("enabled", False):
-        return
-    credential_inodes: dict[tuple[int, int], str] = {}
-    for member in vm_ha.get("members") or []:
-        node_id = str(member.get("node_id") or "unknown")
-        path = Path(str(member.get("nebius_credentials_path") or ""))
-        try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        except OSError as exc:
-            raise ValueError(
-                f"VM-HA Nebius credentials for {node_id} are unavailable"
-            ) from exc
-        try:
-            metadata = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or stat.S_IMODE(metadata.st_mode) != 0o600
-                or metadata.st_uid != os.geteuid()
-                or metadata.st_nlink != 1
-            ):
-                raise ValueError(
-                    f"VM-HA Nebius credentials for {node_id} must be an owner-only "
-                    "non-linked regular file"
-                )
-            payload = bytearray()
-            while chunk := os.read(descriptor, 1024 * 1024):
-                payload.extend(chunk)
-            identity = path.lstat()
-            if identity.st_dev != metadata.st_dev or identity.st_ino != metadata.st_ino:
-                raise ValueError(f"VM-HA Nebius credentials for {node_id} changed while reading")
-        except OSError as exc:
-            raise ValueError(f"VM-HA Nebius credentials for {node_id} are unreadable") from exc
-        finally:
-            os.close(descriptor)
-        try:
-            parsed = json.loads(bytes(payload).decode("utf-8"))
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"VM-HA Nebius credentials for {node_id} are not valid JSON") from exc
-        if not isinstance(parsed, dict) or not parsed:
-            raise ValueError(f"VM-HA Nebius credentials for {node_id} must be a JSON object")
-        inode = (metadata.st_dev, metadata.st_ino)
-        if inode in credential_inodes:
-            raise ValueError("VM-HA members must use distinct Nebius credential files")
-        credential_inodes[inode] = node_id
 
 
 def _detect_vendor(text: str) -> str:
@@ -979,8 +931,13 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
     vm_ha_cluster = _build_vm_ha_cluster_record(local_cfg)
     instance_count = int(gg.get("instance_count", 1))
     name = gg.get("name", "nebius-vpn-gw")
-    # Prefer gateway_group.region, else top-level region_id, else a sane default
-    region = gg.get("region") or (local_cfg.get("region_id") or "eu-north1-a")
+    # Prefer gateway_group.region, then top-level region_id. Never invent a zone.
+    region = str(gg.get("region") or local_cfg.get("region_id") or "").strip()
+    if not region or "${" in region:
+        raise ValueError("Nebius region is required; set gateway_group.region or region_id.")
+    gg["region"] = region
+    local_cfg["gateway_group"] = gg
+    local_cfg["region_id"] = region
     external_ips = gg.get("external_ips", []) or []
     network_id = str(gg.get("network_id") or "").strip() or None
     subnet = gg.get("subnet", {}) or {}

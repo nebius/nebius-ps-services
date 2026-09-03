@@ -17,7 +17,6 @@ import unittest
 from unittest import mock
 
 import prompt_workspace as pw
-import prompt_workspace_contract_delta as contract_delta
 import prompt_workspace_interop as task_interop
 import prompt_workspace_lanes as task_lanes
 import prompt_workspace_reporting as task_reporting
@@ -143,13 +142,6 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             clock=lambda: FIXED,
         )
         self.workspace = Path(initialized["workspace"])
-        self.project_agent_gate = mock.patch.object(
-            waves,
-            "verify_project_agent_contract",
-            return_value={"status": "ok", "outcome": "not-needed"},
-        )
-        self.project_agent_gate.start()
-        self.addCleanup(self.project_agent_gate.stop)
         self.refinement_gate = mock.patch.object(
             waves,
             "verify_requirements_refinement_contract",
@@ -274,69 +266,6 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             generation=int(acquired["generation"]),
             lease_id=str(acquired["token"]),
             claims=claims,
-        )
-
-    def _seal_terminal_lifecycle(self) -> dict[str, object]:
-        coordinator = waves.load_coordinator_state(self.run_dir)
-        assert coordinator is not None
-        wave_id = coordinator.get("active_wave")
-        if not isinstance(wave_id, str):
-            wave_id = str(coordinator["waves"][-1]["wave_id"])
-        wave = json.loads(
-            (self.run_dir / "orchestration" / "waves" / f"{wave_id}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        root = self.codex_home / "project-specs" / "example" / "terminal"
-        instructions = root / "project-instructions"
-        instructions.mkdir(parents=True, exist_ok=True)
-        agents = self.outer_scope / "AGENTS.md"
-        agents_sha256 = (
-            hashlib.sha256(agents.read_bytes()).hexdigest()
-            if agents.is_file()
-            else None
-        )
-        instruction_state = instructions / "state.json"
-        instruction_state.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.state.v3",
-                    "project_root": str(self.outer_scope.resolve()),
-                    "project_scope": "services/example",
-                    "target_path": str(agents.resolve()),
-                    "target_sha256": agents_sha256,
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        requirements = self.outer_scope / "docs" / "requirements.md"
-        design = self.outer_scope / "docs" / "design.md"
-        lifecycle = root / "lifecycle.json"
-        lifecycle.write_text(
-            json.dumps(
-                {
-                    "schema": "maintain-project-specs.lifecycle.v1",
-                    "phase": "sealed",
-                    "project_scope": "services/example",
-                    "git_head_at_prompt": wave["base_commit"],
-                    "requirements_sha256": hashlib.sha256(
-                        requirements.read_bytes()
-                    ).hexdigest(),
-                    "design_sha256": hashlib.sha256(design.read_bytes()).hexdigest(),
-                    "receipt_sha256": "a" * 64,
-                    "project_instructions_state_sha256": hashlib.sha256(
-                        instruction_state.read_bytes()
-                    ).hexdigest(),
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return contract_delta.adopt_contract_delta(
-            self.workspace, self.run_id, lifecycle, clock=lambda: FIXED
         )
 
     def test_replan_claims_block_a_conflicting_live_lane_before_state_write(
@@ -614,6 +543,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             "summary": "Implemented composed task",
             "decisions": [],
             "open_risks": [],
+            "spec_gaps": [],
             "validation": "focused validation passed",
             "end_to_end_validation": "composed behavior observed",
             "code_review": "code-review completed with no findings",
@@ -654,7 +584,6 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         self.assertEqual(
             git("rev-parse", "HEAD", cwd=self.outer), promoted["promoted_head"]
         )
-        self._seal_terminal_lifecycle()
         cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(cleaned["status"], "done")
         self.assertFalse(worker.exists())
@@ -868,22 +797,6 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             prepared_bytes,
             (self.run_dir / "orchestration" / "run-summary.json").read_bytes(),
         )
-        terminal_receipt = (
-            self.run_dir
-            / "orchestration"
-            / "terminal-lifecycle-seals"
-            / "wave-001.json"
-        )
-        terminal_receipt.unlink()
-        agents = self.outer_scope / "AGENTS.md"
-        agents.write_text(
-            agents.read_text(encoding="utf-8") + "\n<!-- late sealed provenance -->\n",
-            encoding="utf-8",
-        )
-        recovered = self._seal_terminal_lifecycle()
-        self.assertEqual(recovered["status"], "terminal-recovered")
-        self.assertEqual(recovered["generation"], 2)
-        self.assertEqual(recovered["paths"], ["services/example/AGENTS.md"])
         routed_complete = pw.route_project_prompt(
             self.outer_scope,
             self.codex_home,
@@ -926,9 +839,9 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             pending_report = task_reporting.lane_report(self.workspace)
         self.assertFalse(git_trace.exists())
         self.assertEqual(before, tree_fingerprint(self.root))
-        self.assertEqual(pending_report["generations"]["released_total"], 2)
+        self.assertEqual(pending_report["generations"]["released_total"], 1)
         self.assertEqual(pending_report["generations"]["integrated_total"], 0)
-        self.assertEqual(pending_report["generations"]["pending_integration"], 2)
+        self.assertEqual(pending_report["generations"]["pending_integration"], 1)
         self.assertEqual(pending_report["lane"]["state"], "pending")
         serialized_report = json.dumps(pending_report, sort_keys=True)
         self.assertNotIn(self.lane_id, serialized_report)
@@ -944,7 +857,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         inspected = wm.inspect_worktree(
             cwd=self.outer_scope, name=None, require_clean=True
         )
-        self.assertEqual(inspected["head"], recovered["promoted_head"])
+        self.assertEqual(inspected["head"], promoted["promoted_head"])
         ready = wm.task_lane_integrate(
             cwd=self.primary,
             lane_id=self.lane_id,
@@ -959,7 +872,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             restart=False,
         )
         self.assertEqual(integrated_lane["status"], "integrated")
-        self.assertEqual(integrated_lane["integrated_generations"], [1, 2])
+        self.assertEqual(integrated_lane["integrated_generations"], [1])
         self.assertEqual(
             (self.primary / "checkpoint-root.txt").read_text(encoding="utf-8"),
             "root checkpoint\n",

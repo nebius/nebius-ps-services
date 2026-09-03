@@ -246,10 +246,10 @@ Hooks do not implement the task. Normal startup remains lazy; compaction and
 the first complex prompt create only an empty `0600` scaffold below `0700`
 directories. The parent agent owns all semantic updates when continuity is
 useful. The config template allows sandbox writes under
-`$CODEX_HOME/task-state`. A selected-project lifecycle guard must not treat
-task state, config, hooks, installed skills, or other user files as its control
-plane; fixed external writes pass through to the operating system, Codex
-permissions, destructive-action safeguards, and any owning domain policy.
+`$CODEX_HOME/task-state`. The advisory project-spec observer does not control
+task state, config, hooks, installed skills, or other user files. Those writes
+remain subject to the operating system, Codex permissions, destructive-action
+safeguards, and any owning domain policy.
 The task-state file is a compact continuation record: replace stale or
 superseded details with the latest validated state, keep only the objective,
 constraints, decisions, changed files, validation status, risks, and next

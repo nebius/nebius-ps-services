@@ -1,0 +1,11 @@
+.venv*/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+results/
+logs/
+*.out
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+*.sqlite

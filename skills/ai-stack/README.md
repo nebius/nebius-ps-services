@@ -4,7 +4,9 @@
 training, inference, agents, durable execution, interoperability, retrieval,
 evaluation, safety, and operations. It starts from workload contracts and the
 current or no-new-component baseline, then adds only components that pass hard
-gates and have an operational owner.
+gates and have an operational owner. For agent subsystems it consumes the
+behavior, topology, authority, and policy contract frozen by
+`ai-agent-design`; it does not reopen those decisions.
 
 Every component is `Required`, `Conditional`, `Deferred`, or `Rejected`. Every
 material claim is `Measured`, `Officially documented`, or `Assumed`. This keeps
@@ -16,8 +18,10 @@ separate.
 The selection order is:
 
 1. Freeze materially different workloads and acceptance thresholds.
-2. Classify each AI capability as a direct model call, deterministic workflow
-   containing model calls, or agent.
+2. Consume each capability's frozen classification as deterministic code, a
+   direct model call, a deterministic workflow containing model calls, or an
+   agent. For a direct stack-only request, mark the minimum local
+   classification provisional.
 3. Choose the simplest sufficient architecture before naming products.
 4. Reject candidates that fail legal, data, safety, compatibility, quality,
    recovery, ownership, performance, or cost gates.
@@ -78,6 +82,8 @@ consumer.
 ## Boundaries
 
 - Use `app-stack` for the surrounding product and ordinary application stack.
+- Use `ai-agent-design` for agent-subsystem behavior, topology, authority,
+  contracts, context, memory, failure policy, evaluation, and governance.
 - Use `design` for complete cross-layer design and `/plan` handoff.
 - Use `research` for deep due diligence on one technology or claim.
 - Use `system-design-rules` for checklist review of an existing design.

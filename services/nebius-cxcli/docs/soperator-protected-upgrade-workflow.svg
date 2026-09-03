@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Full-stack Soperator upgrade campaign with protected release child</title>
+  <desc id="desc">One durable parent campaign freezes release, Kubernetes, operating-system, GPU, job-policy, and backend authority. It enters Slurm maintenance once, runs the protected Soperator release child, advances sequential Kubernetes and runtime-readiness segments, proves final product readiness, and restores only operation-owned scheduling changes. Managed clusters use Terraform authority; onboarded clusters use explicitly authorized provider API mutation. Observability verification is a separate read-only status action and never gates upgrade completion.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#1e40af"/></marker>
+    <style>.bg{fill:#f8fafc}.lane{fill:#fff;stroke:#cbd5e1;stroke-width:2}.step{fill:#eff6ff;stroke:#2563eb;stroke-width:2}.authority{fill:#f5f3ff;stroke:#7c3aed;stroke-width:2}.protect{fill:#fff7ed;stroke:#ea580c;stroke-width:2}.verify{fill:#f0fdf4;stroke:#16a34a;stroke-width:2}.status{fill:#f8fafc;stroke:#64748b;stroke-width:2;stroke-dasharray:7 5}.title{font:700 32px Inter,Arial,sans-serif;fill:#0f172a}.lanehead{font:700 17px Inter,Arial,sans-serif;fill:#1e3a8a}.head{font:700 15px Inter,Arial,sans-serif;fill:#0f172a}.body{font:500 12.5px Inter,Arial,sans-serif;fill:#334155}.small{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#334155}.flow{fill:none;stroke:#1e40af;stroke-width:2.5;marker-end:url(#arrow)}.note{font:600 12px Inter,Arial,sans-serif;fill:#854d0e}.statusText{font:600 13px Inter,Arial,sans-serif;fill:#475569}</style>
+  </defs>
+  <rect class="bg" width="1400" height="900"/>
+  <text class="title" x="700" y="48" text-anchor="middle">Full-stack Soperator upgrade campaign</text>
+  <text class="body" x="700" y="76" text-anchor="middle">One parent receipt · one backend authority · one maintenance boundary · exact checkpoint resume</text>
+
+  <rect class="lane" x="34" y="104" width="1332" height="202" rx="18"/>
+  <text class="lanehead" x="62" y="136">1 · RESOLVE TARGETS, FREEZE THE PARENT CAMPAIGN, ENTER MAINTENANCE ONCE</text>
+  <rect class="step" x="68" y="156" width="276" height="118" rx="13"/>
+  <text class="head" x="206" y="184" text-anchor="middle">Resolve and freeze targets</text>
+  <text class="body" x="206" y="208" text-anchor="middle">official release tag → commit → tree</text>
+  <text class="body" x="206" y="228" text-anchor="middle">K8s + OS/GPU targets</text>
+  <text class="body" x="206" y="248" text-anchor="middle">ordered segments + job policy</text>
+  <path class="flow" d="M354 215H387"/>
+  <rect class="authority" x="397" y="156" width="276" height="118" rx="13"/>
+  <text class="head" x="535" y="184" text-anchor="middle">Seal receipt and one backend</text>
+  <text class="body" x="535" y="204" text-anchor="middle">owner-only parent receipt; exact resume</text>
+  <text class="body" x="535" y="224" text-anchor="middle">managed → Terraform</text>
+  <text class="body" x="535" y="244" text-anchor="middle">onboarded → provider API</text>
+  <text class="body" x="535" y="264" text-anchor="middle">provider writes need new-campaign authority</text>
+  <path class="flow" d="M683 215H716"/>
+  <rect class="protect" x="726" y="156" width="276" height="118" rx="13"/>
+  <text class="head" x="864" y="184" text-anchor="middle">Acquire parent authority</text>
+  <text class="body" x="864" y="204" text-anchor="middle">cluster + K8s UID + node-group IDs</text>
+  <text class="body" x="864" y="224" text-anchor="middle">local lock + K8s Lease + epoch</text>
+  <text class="body" x="864" y="244" text-anchor="middle">child mutations reuse the same fence</text>
+  <text class="body" x="864" y="264" text-anchor="middle">ambiguity → non-mutating safety pause</text>
+  <path class="flow" d="M1012 215H1045"/>
+  <rect class="protect" x="1055" y="156" width="276" height="118" rx="13"/>
+  <text class="head" x="1193" y="184" text-anchor="middle">Enter maintenance once</text>
+  <text class="body" x="1193" y="208" text-anchor="middle">all observed UP partitions → DOWN</text>
+  <text class="body" x="1193" y="228" text-anchor="middle">full preimage + jobs + reservation</text>
+  <text class="body" x="1193" y="248" text-anchor="middle">one barrier spans every segment</text>
+
+  <rect class="lane" x="34" y="326" width="1332" height="226" rx="18"/>
+  <text class="lanehead" x="62" y="358">2 · RUN THE SOPERATOR RELEASE CHILD UNDER THE PARENT FENCE</text>
+  <rect class="step" x="68" y="378" width="276" height="132" rx="13"/>
+  <text class="head" x="206" y="406" text-anchor="middle">Re-prove frozen release</text>
+  <text class="body" x="206" y="430" text-anchor="middle">sealed snapshot matches receipt</text>
+  <text class="body" x="206" y="450" text-anchor="middle">no second latest lookup on resume</text>
+  <text class="body" x="206" y="470" text-anchor="middle">equal release is observation-only</text>
+  <path class="flow" d="M354 444H387"/>
+  <rect class="step" x="397" y="378" width="276" height="132" rx="13"/>
+  <text class="head" x="535" y="406" text-anchor="middle">Render and validate locally</text>
+  <text class="body" x="535" y="430" text-anchor="middle">isolated scratch filesystem</text>
+  <text class="body" x="535" y="450" text-anchor="middle">official Flux graph + adapter</text>
+  <text class="body" x="535" y="470" text-anchor="middle">no customer-cluster write</text>
+  <path class="flow" d="M683 444H716"/>
+  <rect class="protect" x="726" y="378" width="276" height="132" rx="13"/>
+  <text class="head" x="864" y="406" text-anchor="middle">Content-free release admission</text>
+  <text class="body" x="864" y="430" text-anchor="middle">target-wins image + protected paths</text>
+  <text class="body" x="864" y="450" text-anchor="middle">active/passive PVC bindings</text>
+  <text class="body" x="864" y="470" text-anchor="middle">no source/reference inventory</text>
+  <text class="body" x="864" y="490" text-anchor="middle">owner-only child receipt; no PVC write</text>
+  <path class="flow" d="M1012 444H1045"/>
+  <rect class="verify" x="1055" y="378" width="276" height="132" rx="13"/>
+  <text class="head" x="1193" y="406" text-anchor="middle">Protected release supervisor</text>
+  <text class="body" x="1193" y="430" text-anchor="middle">single-writer Flux + passive rootfs</text>
+  <text class="body" x="1193" y="450" text-anchor="middle">protected storage + Slurm gates</text>
+  <text class="body" x="1193" y="470" text-anchor="middle">capped backoff; ambiguity safety-pause</text>
+  <text class="body" x="1193" y="490" text-anchor="middle">typed main failure is terminal</text>
+  <text class="note" x="700" y="530" text-anchor="middle">Login reachability remains advisory and never gates the release child.</text>
+  <text class="note" x="700" y="546" text-anchor="middle">After interruption, rerun the same approved upgrade; the parent receipt resumes the first incomplete segment.</text>
+
+  <rect class="lane" x="34" y="572" width="1332" height="232" rx="18"/>
+  <text class="lanehead" x="62" y="604">3 · ADVANCE FROZEN INFRASTRUCTURE SEGMENTS, PROVE FINAL READINESS, RESTORE EXACTLY</text>
+  <rect class="authority" x="68" y="628" width="230" height="132" rx="13"/>
+  <text class="head" x="183" y="654" text-anchor="middle">Optional pre-hop catch-up</text>
+  <text class="small" x="183" y="678" text-anchor="middle">node-templates:&lt;source&gt;</text>
+  <text class="small" x="183" y="698" text-anchor="middle">→ runtime-readiness:&lt;source&gt;</text>
+  <text class="body" x="183" y="720" text-anchor="middle">only when a group lags source CP</text>
+  <text class="body" x="183" y="742" text-anchor="middle">skip otherwise; keep frozen order</text>
+  <path class="flow" d="M308 694H338"/>
+  <rect class="step" x="348" y="620" width="312" height="144" rx="13"/>
+  <text class="head" x="504" y="644" text-anchor="middle">Remaining frozen segment order</text>
+  <text class="small" x="504" y="668" text-anchor="middle">each hop: mk8s-hop:&lt;minor&gt;</text>
+  <text class="small" x="504" y="688" text-anchor="middle">→ runtime-readiness:&lt;minor&gt;</text>
+  <text class="small" x="504" y="714" text-anchor="middle">zero-hop OS/GPU: node-templates:&lt;endpoint&gt;</text>
+  <text class="small" x="504" y="734" text-anchor="middle">→ runtime-readiness:&lt;endpoint&gt;</text>
+  <text class="body" x="504" y="754" text-anchor="middle">otherwise add no segment; resume exact next</text>
+  <path class="flow" d="M670 694H716"/>
+  <rect class="verify" x="726" y="628" width="276" height="132" rx="13"/>
+  <text class="head" x="864" y="656" text-anchor="middle">Final readiness</text>
+  <text class="small" x="864" y="682" text-anchor="middle">final-readiness</text>
+  <text class="body" x="864" y="704" text-anchor="middle">provider CP + node groups + K8s nodes</text>
+  <text class="body" x="864" y="724" text-anchor="middle">GPU/CUDA/Slurm gates</text>
+  <text class="body" x="864" y="744" text-anchor="middle">or frozen zero-size validation proof</text>
+  <path class="flow" d="M1012 694H1045"/>
+  <rect class="verify" x="1055" y="628" width="276" height="132" rx="13"/>
+  <text class="head" x="1193" y="656" text-anchor="middle">Restore and complete</text>
+  <text class="body" x="1193" y="682" text-anchor="middle">exact partition records</text>
+  <text class="body" x="1193" y="704" text-anchor="middle">owned drains, holds, reservation</text>
+  <text class="body" x="1193" y="724" text-anchor="middle">release held jobs; seal complete receipt</text>
+  <text class="note" x="700" y="786" text-anchor="middle">Authority ambiguity is non-mutating; maintenance is restored only after final-readiness succeeds.</text>
+
+  <rect class="status" x="180" y="822" width="1040" height="56" rx="14"/>
+  <text class="statusText" x="700" y="846" text-anchor="middle">Separate read-only action: soperator status --verify-observability</text>
+  <text class="statusText" x="700" y="866" text-anchor="middle">Metrics and logs never gate upgrade completion or scheduling restoration.</text>
+</svg>

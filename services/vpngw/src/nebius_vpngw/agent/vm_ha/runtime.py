@@ -24,6 +24,13 @@ from nebius_vpngw.agent.routing_guard import (
     has_table_220_rule,
     table_220_routes_from_all_json,
 )
+from nebius_vpngw.agent.vm_ha.auto_healing import (
+    AutoHealingPolicyStore,
+    project_local_policy,
+)
+from nebius_vpngw.agent.vm_ha.inhibition import (
+    standby_replacement_inhibition_operation_id,
+)
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
 from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, MTLSSnapshot
 from nebius_vpngw.agent.vm_ha.transport import (
@@ -78,6 +85,21 @@ from nebius_vpngw.schema import (
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
+from nebius_vpngw.vm_ha_credentials import (
+    VM_HA_CREDENTIAL_MAX_BYTES,
+    VMHACredentialIdentityError,
+    credential_ids_from_payload,
+    verify_sdk_service_account_profile,
+)
+
+RUNTIME_IDENTITY_SCHEMA = "nebius-vpngw/vm-ha-runtime-identity-v1"
+RUNTIME_IDENTITY_FILENAME = "runtime-identity.json"
+RUNTIME_IDENTITY_PREFLIGHT_MAX_AGE_SECONDS = 60.0
+_RUNTIME_IDENTITY_PROOF_MODES = {
+    "online",
+    "systemd-preflight",
+    "systemd-controller",
+}
 
 
 def _default_sdk_factory(*, credentials_file_name: str) -> Any:
@@ -112,8 +134,10 @@ class InstalledCredentialBundle:
     generation_id: str
     bundle_digest: str
     path: Path
+    service_account_id: str | None = None
+    authorized_key_id: str | None = None
 
-    def revalidate(self) -> None:
+    def revalidate(self) -> tuple[str, str]:
         ancestors = tuple(dict.fromkeys((self.path.parent, *self.path.parents)))
         try:
             install_root_index = ancestors.index(Path("/etc/nebius-vpngw"))
@@ -137,11 +161,17 @@ class InstalledCredentialBundle:
                 or metadata.st_nlink != 1
             ):
                 raise ValueError("installed VM-HA Nebius credential file is not immutable")
+            if metadata.st_size > VM_HA_CREDENTIAL_MAX_BYTES:
+                raise ValueError("installed VM-HA Nebius credential file is oversized")
             digest = hashlib.sha256()
             payload = bytearray()
-            while chunk := os.read(descriptor, 1024 * 1024):
+            remaining = VM_HA_CREDENTIAL_MAX_BYTES + 1
+            while remaining and (chunk := os.read(descriptor, min(remaining, 1024 * 1024))):
                 digest.update(chunk)
                 payload.extend(chunk)
+                remaining -= len(chunk)
+            if remaining == 0:
+                raise ValueError("installed VM-HA Nebius credential file is oversized")
         finally:
             os.close(descriptor)
         identity = self.path.lstat()
@@ -150,15 +180,23 @@ class InstalledCredentialBundle:
         if digest.hexdigest() != self.bundle_digest:
             raise ValueError("installed VM-HA credential digest mismatch")
         try:
-            credentials = json.loads(bytes(payload).decode("utf-8"))
-        except (UnicodeError, json.JSONDecodeError):
-            raise ValueError("installed VM-HA Nebius credentials are malformed") from None
-        if not isinstance(credentials, Mapping) or not credentials:
+            declared_service_account_id, declared_key_id = credential_ids_from_payload(
+                bytes(payload)
+            )
+        except VMHACredentialIdentityError:
             raise ValueError("installed VM-HA Nebius credentials are malformed")
+        if (
+            self.service_account_id is not None
+            and declared_service_account_id != self.service_account_id
+        ):
+            raise ValueError("installed VM-HA credential service-account identity mismatch")
+        if self.authorized_key_id is not None and declared_key_id != self.authorized_key_id:
+            raise ValueError("installed VM-HA credential authorized-key identity mismatch")
+        return declared_service_account_id, declared_key_id
 
 
 class CredentialBundle(Protocol):
-    def revalidate(self) -> None: ...
+    def revalidate(self) -> tuple[str, str] | None: ...
 
 
 def validate_installed_credential_bundle(
@@ -178,11 +216,18 @@ def validate_installed_credential_bundle(
         generation_id=binding.generation_id,
         bundle_digest=parent.name,
         path=path,
+        service_account_id=binding.nebius_service_account_id,
+        authorized_key_id=binding.nebius_authorized_key_id,
     )
     if len(bundle.bundle_digest) != 64 or any(
         c not in "0123456789abcdef" for c in bundle.bundle_digest
     ):
         raise ValueError("installed VM-HA credential bundle identity is invalid")
+    if (
+        local.nebius_credentials_sha256 is not None
+        and local.nebius_credentials_sha256 != bundle.bundle_digest
+    ):
+        raise ValueError("installed VM-HA credential bundle is not runtime-bound")
     bundle.revalidate()
     return bundle
 
@@ -229,6 +274,259 @@ def _durably_unlink(path: Path) -> None:
         os.close(directory)
 
 
+def _runtime_identity_expected_record(
+    binding: VMHARuntimeBinding,
+    local: VMHARuntimeNodeBinding,
+    *,
+    boot_id: str,
+) -> dict[str, object]:
+    if not all(
+        (
+            binding.nebius_project_id,
+            binding.nebius_service_account_id,
+            binding.nebius_authorized_key_id,
+            local.nebius_credentials_sha256,
+        )
+    ):
+        raise VMHACredentialIdentityError("binding-incomplete")
+    runtime_binding_sha256 = hashlib.sha256(
+        json.dumps(
+            binding.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    return {
+        "schema": RUNTIME_IDENTITY_SCHEMA,
+        "state": "verified",
+        "reason": "exact-current-boot",
+        "boot_id": boot_id,
+        "cluster_id": binding.cluster_id,
+        "node_id": local.node_id,
+        "generation_id": binding.generation_id,
+        "configuration_digest": binding.configuration_digest,
+        "static_routes_digest": binding.static_routes_digest,
+        "bgp_policy_digest": binding.bgp_policy_digest,
+        "runtime_binding_sha256": runtime_binding_sha256,
+        "credential_path_sha256": hashlib.sha256(
+            local.nebius_credentials_path.encode()
+        ).hexdigest(),
+        "credential_sha256": local.nebius_credentials_sha256,
+        "project_id": binding.nebius_project_id,
+        "service_account_id": binding.nebius_service_account_id,
+        "authorized_key_id": binding.nebius_authorized_key_id,
+    }
+
+
+def runtime_identity_binding_is_explicit(
+    binding: VMHARuntimeBinding,
+    local: VMHARuntimeNodeBinding,
+) -> bool:
+    return all(
+        (
+            binding.nebius_project_id,
+            binding.nebius_service_account_id,
+            binding.nebius_authorized_key_id,
+            local.nebius_credentials_sha256,
+        )
+    )
+
+
+def begin_runtime_identity_preflight(*, state_dir: Path, boot_id: str) -> None:
+    """Invalidate any older proof before production startup parses its binding."""
+
+    _atomic_write_json(
+        state_dir / RUNTIME_IDENTITY_FILENAME,
+        {
+            "schema": RUNTIME_IDENTITY_SCHEMA,
+            "state": "blocked",
+            "reason": "identity-proof-pending",
+            "boot_id": boot_id,
+        },
+    )
+
+
+def record_runtime_identity_migration_required(*, state_dir: Path, boot_id: str) -> None:
+    _atomic_write_json(
+        state_dir / RUNTIME_IDENTITY_FILENAME,
+        {
+            "schema": RUNTIME_IDENTITY_SCHEMA,
+            "state": "migration-required",
+            "reason": "apply-required",
+            "boot_id": boot_id,
+        },
+    )
+
+
+def _valid_systemd_invocation_id(value: str | None) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) is not None
+
+
+def _record_contains_expected_identity(
+    record: Mapping[str, object] | None,
+    expected: Mapping[str, object],
+) -> bool:
+    return record is not None and all(record.get(key) == value for key, value in expected.items())
+
+
+def _reusable_systemd_preflight(
+    record: Mapping[str, object] | None,
+    expected: Mapping[str, object],
+    *,
+    invocation_id: str | None,
+    now: float,
+) -> bool:
+    if not _valid_systemd_invocation_id(invocation_id) or not _record_contains_expected_identity(
+        record, expected
+    ):
+        return False
+    verified_at = record.get("verified_at") if record is not None else None
+    return bool(
+        record is not None
+        and record.get("proof_scope") == "systemd-preflight"
+        and record.get("systemd_invocation_id") == invocation_id
+        and isinstance(verified_at, (int, float))
+        and math.isfinite(float(verified_at))
+        and 0.0 <= now - float(verified_at) <= RUNTIME_IDENTITY_PREFLIGHT_MAX_AGE_SECONDS
+    )
+
+
+def _read_runtime_identity_record(path: Path) -> dict[str, object] | None:
+    try:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+        ):
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def runtime_identity_public_status(*, state_dir: Path, current_boot_id: str) -> dict[str, str]:
+    """Return only a stable state/reason projection from the private proof."""
+
+    record = _read_runtime_identity_record(state_dir / RUNTIME_IDENTITY_FILENAME)
+    if record is None or record.get("schema") != RUNTIME_IDENTITY_SCHEMA:
+        return {"state": "unknown", "reason": "identity-proof-unavailable"}
+    if record.get("boot_id") != current_boot_id:
+        return {"state": "unknown", "reason": "identity-proof-stale"}
+    state = str(record.get("state") or "")
+    reason = str(record.get("reason") or "")
+    if state not in {"verified", "blocked", "migration-required"} or not reason:
+        return {"state": "unknown", "reason": "identity-proof-invalid"}
+    return {"state": state, "reason": reason}
+
+
+def build_identity_bound_sdk(
+    *,
+    binding: VMHARuntimeBinding,
+    local: VMHARuntimeNodeBinding,
+    credential_bundle: CredentialBundle,
+    state_dir: Path,
+    boot_id: str | None,
+    factory: Callable[..., Any] = _default_sdk_factory,
+    identity_proof_mode: str = "online",
+    systemd_invocation_id: str | None = None,
+    clock: Callable[[], float] = time.time,
+    cached_identity_record: Mapping[str, object] | None = None,
+) -> RenewableNebiusSDK:
+    """Construct an SDK only after exact current credential identity is proven."""
+
+    if identity_proof_mode not in _RUNTIME_IDENTITY_PROOF_MODES:
+        raise ValueError("VM-HA runtime identity proof mode is invalid")
+    identity_path = state_dir / RUNTIME_IDENTITY_FILENAME
+    explicit_identity = runtime_identity_binding_is_explicit(binding, local)
+    if not explicit_identity:
+        if boot_id is not None:
+            record_runtime_identity_migration_required(state_dir=state_dir, boot_id=boot_id)
+            raise VMHACredentialIdentityError("migration-required")
+        return RenewableNebiusSDK(
+            local.nebius_credentials_path,
+            factory=factory,
+            credential_check=credential_bundle.revalidate,
+        )
+
+    assert boot_id is not None
+    expected = _runtime_identity_expected_record(binding, local, boot_id=boot_id)
+    cached = (
+        dict(cached_identity_record)
+        if cached_identity_record is not None
+        else _read_runtime_identity_record(identity_path)
+    )
+    now = clock()
+    if not math.isfinite(now):
+        raise ValueError("VM-HA runtime identity clock is invalid")
+    reuse_preflight = bool(
+        identity_proof_mode == "systemd-controller"
+        and _reusable_systemd_preflight(
+            cached,
+            expected,
+            invocation_id=systemd_invocation_id,
+            now=now,
+        )
+    )
+    verify_online = not reuse_preflight
+    try:
+        sdk = RenewableNebiusSDK(
+            local.nebius_credentials_path,
+            factory=factory,
+            credential_check=credential_bundle.revalidate,
+            expected_service_account_id=(
+                binding.nebius_service_account_id if verify_online else None
+            ),
+            expected_project_id=binding.nebius_project_id if verify_online else None,
+        )
+    except Exception as error:
+        reason = (
+            error.reason
+            if isinstance(error, VMHACredentialIdentityError)
+            else "credential-validation-failed"
+        )
+        _atomic_write_json(
+            identity_path,
+            {
+                "schema": RUNTIME_IDENTITY_SCHEMA,
+                "state": "blocked",
+                "reason": reason,
+                "boot_id": boot_id,
+                "cluster_id": binding.cluster_id,
+                "node_id": local.node_id,
+                "generation_id": binding.generation_id,
+            },
+        )
+        raise VMHACredentialIdentityError(reason) from None
+    proof_record = {
+        **expected,
+        "proof_scope": (
+            "systemd-preflight"
+            if identity_proof_mode == "systemd-preflight"
+            and _valid_systemd_invocation_id(systemd_invocation_id)
+            else "controller-start"
+            if reuse_preflight
+            else "online-start"
+        ),
+        "verified_at": cached.get("verified_at") if reuse_preflight and cached is not None else now,
+    }
+    if (
+        identity_proof_mode == "systemd-preflight"
+        and _valid_systemd_invocation_id(systemd_invocation_id)
+    ) or reuse_preflight:
+        proof_record["systemd_invocation_id"] = systemd_invocation_id
+    if reuse_preflight:
+        proof_record["consumed_at"] = now
+    try:
+        _atomic_write_json(identity_path, proof_record)
+    except Exception:
+        sdk.close()
+        raise
+    return sdk
+
+
 class RenewableNebiusSDK:
     """Own exactly one renewable SDK and close its background resources."""
 
@@ -237,19 +535,40 @@ class RenewableNebiusSDK:
         credentials_file_name: str,
         *,
         factory: Callable[..., Any] = _default_sdk_factory,
-        credential_check: Callable[[], None] | None = None,
+        credential_check: Callable[[], object] | None = None,
+        expected_service_account_id: str | None = None,
+        expected_project_id: str | None = None,
     ) -> None:
         credentials = _credential_file(credentials_file_name, "Nebius credentials")
         if credential_check is not None:
             credential_check()
-        self.client = factory(credentials_file_name=str(credentials))
-        if self.client is None or not callable(getattr(self.client, "sync_close", None)):
-            raise RuntimeError("Nebius SDK does not provide the required synchronous lifecycle")
+        self.client: Any | None = None
         self._closed = False
+        try:
+            self.client = factory(credentials_file_name=str(credentials))
+            if self.client is None or not callable(getattr(self.client, "sync_close", None)):
+                raise RuntimeError("Nebius SDK does not provide the required synchronous lifecycle")
+            if expected_service_account_id is not None:
+                if expected_project_id is None:
+                    raise VMHACredentialIdentityError("binding-incomplete")
+                verify_sdk_service_account_profile(
+                    self.client,
+                    expected_service_account_id=expected_service_account_id,
+                    expected_project_id=expected_project_id,
+                )
+        except Exception:
+            if self.client is not None and callable(getattr(self.client, "sync_close", None)):
+                try:
+                    self.client.sync_close()
+                except Exception:
+                    pass
+            self._closed = True
+            raise
 
     def close(self) -> None:
         if not self._closed:
             self._closed = True
+            assert self.client is not None
             self.client.sync_close()
 
     def __enter__(self) -> RenewableNebiusSDK:
@@ -268,11 +587,16 @@ class BoundCloudRuntime:
         local: VMHARuntimeNodeBinding,
         peer: VMHARuntimeNodeBinding,
         adapter: VMHACloudAdapter,
+        *,
+        peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
+        standby_replacement_inhibited: Callable[[], bool] | None = None,
     ) -> None:
         self.binding = binding
         self.local = local
         self.peer = peer
         self.adapter = adapter
+        self._peer_binding_provider = peer_binding_provider
+        self._standby_replacement_inhibited = standby_replacement_inhibited or (lambda: False)
         self._attach_started_revision: str | None = None
         self._confirmed_candidate_revision: str | None = None
 
@@ -284,18 +608,32 @@ class BoundCloudRuntime:
     def _owner(node: VMHARuntimeNodeBinding) -> AllocationOwner:
         return AllocationOwner(node.compute_id, node.network_interface_name)
 
-    def _cluster(self) -> ClusterCloudObservation:
+    def _current_peer(self) -> VMHARuntimeNodeBinding:
+        peer = self.peer if self._peer_binding_provider is None else self._peer_binding_provider()
+        expected = self.peer.model_dump(exclude={"compute_id"})
+        observed = peer.model_dump(exclude={"compute_id"})
+        if expected != observed or not peer.compute_id:
+            raise RuntimeError("live VM-HA peer binding changed outside replacement authority")
+        return peer
+
+    def _cluster(
+        self,
+        peer: VMHARuntimeNodeBinding | None = None,
+    ) -> ClusterCloudObservation:
+        peer = self._current_peer() if peer is None else peer
         return self.adapter.observe_cluster(
             allocation_id=self.allocation_id,
-            former_owner=self._owner(self.peer),
+            former_owner=self._owner(peer),
             candidate=self._owner(self.local),
+            allow_missing_former=self._standby_replacement_inhibited(),
         )
 
     def observe(self) -> CloudObservation:
-        observed = self._cluster()
+        peer = self._current_peer()
+        observed = self._cluster(peer)
         owner = observed.allocation.owner
         owner_id = None
-        for node in self.binding.nodes:
+        for node in (self.local, peer):
             if owner == self._owner(node):
                 owner_id = node.node_id
         if owner is not None and owner_id is None:
@@ -314,7 +652,7 @@ class BoundCloudRuntime:
             authoritative=True,
             allocation_id=self.allocation_id,
             observed_owner_node_id=owner_id,
-            former_owner_node_id=self.peer.node_id,
+            former_owner_node_id=peer.node_id,
             former_owner_compute_state=_compute_state(observed.former.state),
             former_attachment_absent=observed.former_attachment_absent,
             candidate_attachment_exact=exact,
@@ -325,38 +663,40 @@ class BoundCloudRuntime:
         )
 
     def stop_former(self, action: ControllerAction) -> None:
+        peer = self._current_peer()
         observation = self.observe()
         if observation.former_owner_compute_state is ComputeState.STOPPED:
             return
         if not (
-            observation.observed_owner_node_id == self.peer.node_id
+            observation.observed_owner_node_id == peer.node_id
             and observation.ownership_epoch == action.ownership_epoch
         ):
             raise RuntimeError("former-owner stop authority changed before the effect")
-        self.adapter.require_stopped(self.peer.compute_id, action.operation_id)
+        self.adapter.require_stopped(peer.compute_id, action.operation_id)
 
     def detach_former(self, action: ControllerAction) -> None:
+        peer = self._current_peer()
         observation = self.observe()
         if observation.former_owner_compute_state is not ComputeState.STOPPED:
             raise RuntimeError("former owner is not STOPPED")
         if observation.former_attachment_absent:
             self.adapter.require_compute_attachment(
-                self.allocation_id, self._owner(self.peer), present=False
+                self.allocation_id, self._owner(peer), present=False
             )
             return
         if not (
-            observation.observed_owner_node_id == self.peer.node_id
+            observation.observed_owner_node_id == peer.node_id
             and observation.ownership_epoch == action.ownership_epoch
         ):
             raise RuntimeError("former-owner detach authority changed before the effect")
         self.adapter.require_former_attachment_absent(
             self.allocation_id,
-            self._owner(self.peer),
+            self._owner(peer),
             self._owner(self.local),
             action.operation_id,
         )
         self.adapter.require_compute_attachment(
-            self.allocation_id, self._owner(self.peer), present=False
+            self.allocation_id, self._owner(peer), present=False
         )
 
     def attach_candidate(self, action: ControllerAction) -> None:
@@ -386,6 +726,7 @@ class BoundCloudRuntime:
         )
 
     def detach_candidate_for_reproof(self, action: ControllerAction) -> None:
+        peer = self._current_peer()
         observation = self.observe()
         if not (
             observation.former_owner_compute_state is ComputeState.STOPPED
@@ -397,7 +738,7 @@ class BoundCloudRuntime:
         self.adapter.require_former_attachment_absent(
             self.allocation_id,
             self._owner(self.local),
-            self._owner(self.peer),
+            self._owner(peer),
             action.operation_id,
         )
         self.adapter.require_compute_attachment(
@@ -431,6 +772,8 @@ def build_cloud_runtime(
     poll_interval: float = 1.0,
     sleeper: Callable[[float], None] = time.sleep,
     operation_journal: VMHACloudOperationJournal | None = None,
+    peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
+    standby_replacement_inhibited: Callable[[], bool] | None = None,
 ) -> BoundCloudRuntime:
     nodes = {node.node_id: node for node in binding.nodes}
     if local_node_id not in nodes or len(nodes) != 2:
@@ -447,7 +790,14 @@ def build_cloud_runtime(
         poll_interval=poll_interval,
         sleeper=sleeper,
     )
-    return BoundCloudRuntime(binding, local, peer, adapter)
+    return BoundCloudRuntime(
+        binding,
+        local,
+        peer,
+        adapter,
+        peer_binding_provider=peer_binding_provider,
+        standby_replacement_inhibited=standby_replacement_inhibited,
+    )
 
 
 @dataclass(frozen=True)
@@ -619,6 +969,11 @@ def _configured_bgp_summary_sessions(value: object) -> frozenset[str] | None:
 
     if not isinstance(value, Mapping):
         return None
+    # FRR emits an exact empty object when no BGP instance or peer is
+    # configured. That is the expected summary for a static-only gateway, not
+    # malformed evidence. Keep every other incomplete shape fail-closed.
+    if not value:
+        return frozenset()
     ipv4_unicast = value.get("ipv4Unicast")
     if not isinstance(ipv4_unicast, Mapping):
         return None
@@ -827,9 +1182,7 @@ def _passive_bgp_policy_matches(
     if not peers:
         return True
     lines = {line.strip() for line in running_config.splitlines() if line.strip()}
-    deny_entries = {
-        line for line in lines if line.startswith("route-map ADVERTISE-NONE ")
-    }
+    deny_entries = {line for line in lines if line.startswith("route-map ADVERTISE-NONE ")}
     if deny_entries != {"route-map ADVERTISE-NONE deny 10"}:
         return False
     for peer in peers:
@@ -900,8 +1253,7 @@ class SystemDataPlaneRuntime:
         try:
             self.expected_bgp_exports = {
                 str(peer): frozenset(
-                    str(ipaddress.ip_network(str(prefix), strict=True))
-                    for prefix in prefixes
+                    str(ipaddress.ip_network(str(prefix), strict=True)) for prefix in prefixes
                 )
                 for peer, prefixes in expected_exports.items()
             }
@@ -971,20 +1323,13 @@ class SystemDataPlaneRuntime:
         configured_sessions: Iterable[str] | None = None,
         established_sessions: Iterable[str] | None = None,
     ) -> tuple[frozenset[str], dict[str, frozenset[str]]] | None:
-        if (
-            not self.expected_bgp_exports
-            and not self.bgp_export_observation_required
-        ):
+        if not self.expected_bgp_exports and not self.bgp_export_observation_required:
             return frozenset(), {}
         configured = (
-            frozenset(configured_sessions)
-            if configured_sessions is not None
-            else frozenset()
+            frozenset(configured_sessions) if configured_sessions is not None else frozenset()
         )
         established = (
-            frozenset(established_sessions)
-            if established_sessions is not None
-            else frozenset()
+            frozenset(established_sessions) if established_sessions is not None else frozenset()
         )
         if configured_sessions is None or established_sessions is None:
             summary_result = self._run(
@@ -1020,9 +1365,7 @@ class SystemDataPlaneRuntime:
                 observed[peer] = prefixes
         return configured, observed
 
-    def _expected_exports_for_mode(
-        self, mode: DataPlaneMode
-    ) -> dict[str, frozenset[str]]:
+    def _expected_exports_for_mode(self, mode: DataPlaneMode) -> dict[str, frozenset[str]]:
         if mode is DataPlaneMode.ACTIVE:
             return dict(self.expected_bgp_exports)
         return {peer: frozenset() for peer in self.expected_bgp_exports}
@@ -1123,9 +1466,7 @@ class SystemDataPlaneRuntime:
         )
         routes = _json_object(all_routes, "routes")
         rules = self._run(self.commands.ip, "rule", "show")
-        broad_apipa = self._run(
-            self.commands.ip, "route", "show", "169.254.0.0/16"
-        )
+        broad_apipa = self._run(self.commands.ip, "route", "show", "169.254.0.0/16")
         xfrm = _json_or_text(self._run(self.commands.ip, "-j", "xfrm", "state"), "XFRM state")
         xfrm_policies = _json_or_text(
             self._run(self.commands.ip, "-j", "xfrm", "policy"), "XFRM policy"
@@ -1191,17 +1532,14 @@ class SystemDataPlaneRuntime:
                 advertised,
                 configured_peers=configured,
             ),
-            routing_hygiene_ready=_routing_hygiene_ready(
-                rules, all_routes, broad_apipa
-            ),
+            routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
         )
 
     def _suspend_cluster_tunnels_locked(self, *, stop_if_unavailable: bool) -> None:
         active_services = tuple(
             service
             for service in ("strongswan-starter", "strongswan")
-            if self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode
-            == 0
+            if self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
         )
         if not active_services:
             return
@@ -1224,10 +1562,7 @@ class SystemDataPlaneRuntime:
                         "cluster tunnel service could not be stopped behind the guard"
                     )
             if any(
-                self._run(
-                    self.commands.systemctl, "is-active", "--quiet", service
-                ).returncode
-                == 0
+                self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
                 for service in active_services
             ):
                 raise RuntimeError("cluster tunnel service remained active behind the guard")
@@ -1263,10 +1598,7 @@ class SystemDataPlaneRuntime:
     def _withdraw_bgp_exports_locked(self) -> None:
         """Install and prove deny-all exports, with service stop as the safety fallback."""
 
-        if (
-            not self.expected_bgp_exports
-            and not self.bgp_export_observation_required
-        ):
+        if not self.expected_bgp_exports and not self.bgp_export_observation_required:
             return
         render_error: Exception | None = None
         if self.blocked_preparer is not None:
@@ -1457,9 +1789,7 @@ class SystemDataPlaneRuntime:
         repair_deadline = action.repair_deadline_at - 1.0
         try:
             reasons = set(action.repair_reasons)
-            encrypted_path_unhealthy = bool(
-                {"local-service-unhealthy", "xfrm-not-ready"} & reasons
-            )
+            encrypted_path_unhealthy = bool({"local-service-unhealthy", "xfrm-not-ready"} & reasons)
             if encrypted_path_unhealthy:
                 result = self._run_before(
                     repair_deadline,
@@ -1887,6 +2217,9 @@ class BoundRouteRuntime:
                 allocation_id=binding.shared_allocation_id,
                 route_targets=binding.route_targets,
             )
+        bind_migration_routes = getattr(self.backend, "bind_migration_routes", None)
+        if callable(bind_migration_routes):
+            bind_migration_routes(binding.migration_routes)
         set_checkpoint = getattr(self.backend, "set_mutation_checkpoint", None)
         if callable(set_checkpoint):
             set_checkpoint(self.store)
@@ -1958,20 +2291,14 @@ class BoundRouteRuntime:
             BGPExportState.UNKNOWN: "bgp-export-unavailable",
         }.get(observed.bgp_export_state)
         passive_mode = self.data_plane.mode() is DataPlaneMode.PASSIVE
-        routing_hygiene_ready = (
-            observed.routing_hygiene_ready if passive_mode else True
-        )
-        hygiene_reason = (
-            "routing-hygiene-not-ready" if not routing_hygiene_ready else None
-        )
+        routing_hygiene_ready = observed.routing_hygiene_ready if passive_mode else True
+        hygiene_reason = "routing-hygiene-not-ready" if not routing_hygiene_ready else None
         readiness = LocalReadiness(
             service_healthy=observed.service_healthy,
             static_ready=static_ready,
             bgp_ready=bgp.promotion_ready and export_ready,
             xfrm_ready=required_xfrm_prefixes.issubset(observed.usable_xfrm_prefixes),
-            path_degraded=bool(
-                missing_redundant_sessions or export_reason or hygiene_reason
-            ),
+            path_degraded=bool(missing_redundant_sessions or export_reason or hygiene_reason),
             degraded_reasons=tuple(
                 reason
                 for condition, reason in (
@@ -2193,9 +2520,7 @@ class BoundRouteRuntime:
         self.store.save_ledger(ledger)
 
     def reconcile(self, action: ControllerAction) -> None:
-        ownership = self._ownership(
-            require_takeover_fence=action.takeover_fence_required
-        )
+        ownership = self._ownership(require_takeover_fence=action.takeover_fence_required)
         context = self._context(action, self.binding.cluster_id)
         if not context.matches(ownership):
             raise RuntimeError("route action does not match fresh current ownership")
@@ -2244,6 +2569,10 @@ class BoundRouteRuntime:
 
         state = self.store.load_transition(now=self.clock())
         plan = self._plan(ownership, state, prepare_authority=True)
+        # Authority preparation can durably adopt an exact migration route.
+        # Use that same-cycle ledger for the mutation closure instead of the
+        # pre-adoption snapshot loaded before pending-operation recovery.
+        ledger = self.store.load_ledger()
 
         def apply(mutation: RouteMutation) -> None:
             self.store.save_pending_mutation(mutation, context)
@@ -2257,15 +2586,20 @@ class BoundRouteRuntime:
                 require_takeover_fence=action.takeover_fence_required
             ),
             reobserve_plan=lambda: self._plan(
-                self._ownership(
-                    require_takeover_fence=action.takeover_fence_required
-                ),
+                self._ownership(require_takeover_fence=action.takeover_fence_required),
                 state,
             ),
             receipt_store=self.store,
         )
         if result.receipt is None or result.committed_state is None:
             raise RuntimeError("route reconciliation did not produce an exact durable receipt")
+        synchronize_authority_labels = getattr(
+            self.backend,
+            "synchronize_authority_labels",
+            None,
+        )
+        if callable(synchronize_authority_labels):
+            synchronize_authority_labels(ledger)
         self.store.save_transition(result.committed_state)
 
     def _apply_mutation(
@@ -2414,17 +2748,42 @@ class BoundRouteRuntime:
         return _route_plan_digest(plan)  # type: ignore[arg-type]
 
 
+class AcceptedPeerHeartbeatStore(Protocol):
+    """Durable last-authenticated-heartbeat port used only as stale parity evidence."""
+
+    def load_accepted_peer_heartbeat(self, peer_node_id: str) -> PeerHeartbeat | None: ...
+
+    def save_accepted_peer_heartbeat(self, peer_node_id: str, heartbeat: PeerHeartbeat) -> None: ...
+
+
 class BoundPeerRuntime:
     """Explicit service-loop peer port; no hidden thread or ownership claim."""
 
-    def __init__(self, exchange: PeerStateExchange, *, clock: Callable[[], float]) -> None:
+    def __init__(
+        self,
+        exchange: PeerStateExchange,
+        *,
+        clock: Callable[[], float],
+        peer_node_id: str,
+        heartbeat_store: AcceptedPeerHeartbeatStore | None = None,
+    ) -> None:
         self.exchange = exchange
         self.clock = clock
-        self.latest_heartbeat: PeerHeartbeat | None = None
+        self.peer_node_id = peer_node_id
+        self.heartbeat_store = heartbeat_store
+        self.latest_heartbeat = (
+            heartbeat_store.load_accepted_peer_heartbeat(peer_node_id)
+            if heartbeat_store is not None
+            else None
+        )
+        # A cached heartbeat proves only the last authenticated peer generation.
+        # It is deliberately never fresh across a controller-process restart.
         self.received_at: float | None = None
 
     def poll(self, *, timeout_seconds: float) -> PeerHeartbeat:
         heartbeat, _replay = self.exchange.receive(timeout_seconds=timeout_seconds)
+        if self.heartbeat_store is not None:
+            self.heartbeat_store.save_accepted_peer_heartbeat(self.peer_node_id, heartbeat)
         self.latest_heartbeat = heartbeat
         self.received_at = self.clock()
         return heartbeat
@@ -2450,6 +2809,7 @@ class VMHARuntimePorts:
     peer_runtime: BoundPeerRuntime
     credential_bundle: CredentialBundle
     mtls_snapshot_provider: Callable[[], MTLSSnapshot]
+    auto_healing_policy_provider: Callable[[], tuple[str, str]]
 
     def providers(self) -> dict[str, Callable[..., object]]:
         return {
@@ -2563,9 +2923,7 @@ class VMHARuntimePorts:
             ActionKind.DISABLE_ACTIVE: checked(
                 ActionKind.DISABLE_ACTIVE, self.data_plane.disable_active
             ),
-            ActionKind.REPAIR_LOCAL_DATAPLANE: checked(
-                ActionKind.REPAIR_LOCAL_DATAPLANE, repair
-            ),
+            ActionKind.REPAIR_LOCAL_DATAPLANE: checked(ActionKind.REPAIR_LOCAL_DATAPLANE, repair),
             ActionKind.STOP_FORMER_OWNER: checked(
                 ActionKind.STOP_FORMER_OWNER, self.cloud.stop_former
             ),
@@ -2598,6 +2956,7 @@ class VMHARuntimePorts:
         """Build one secret-free advisory heartbeat from fresh local truth."""
 
         mtls = self.mtls_snapshot_provider()
+        auto_healing_state, auto_healing_digest = self.auto_healing_policy_provider()
         cloud = self.cloud.observe()
         readiness = self.routes.readiness()
         data_plane_mode = self.data_plane.mode()
@@ -2634,13 +2993,11 @@ class VMHARuntimePorts:
             service_healthy=readiness.service_healthy,
             route_ready=readiness.transfer_ready,
             promotion_ready=bool(
-                (
-                    readiness.promotion_ready
-                    if active_ready
-                    else readiness.transfer_ready
-                )
+                (readiness.promotion_ready if active_ready else readiness.transfer_ready)
                 and (active_ready or passive_ready)
             ),
+            auto_healing_policy_state=auto_healing_state,
+            auto_healing_policy_digest=auto_healing_digest,
         )
 
     def install_shutdown_guard(self, *, boot_id: str) -> None:
@@ -2754,9 +3111,9 @@ def _expected_bgp_exports(
         if connection_name not in expected_connections:
             continue
         bgp = connection.get("bgp")
-        advertise = not isinstance(bgp, Mapping) or bgp.get(
-            "advertise_local_prefixes", True
-        ) is True
+        advertise = (
+            not isinstance(bgp, Mapping) or bgp.get("advertise_local_prefixes", True) is True
+        )
         tunnels = connection.get("tunnels")
         if not isinstance(tunnels, list):
             raise ValueError("VM-HA BGP connection has no resolved tunnels")
@@ -2803,11 +3160,37 @@ def _expected_import_policy_digest(config: Mapping[str, object], bgp_records: li
     return _policy_digest(policy)
 
 
+def _live_peer_binding_from_mtls(
+    *,
+    snapshot: MTLSSnapshot,
+    binding: VMHARuntimeBinding,
+    local: VMHARuntimeNodeBinding,
+    peer: VMHARuntimeNodeBinding,
+) -> VMHARuntimeNodeBinding:
+    """Resolve the exact current peer Compute identity from managed mTLS state."""
+
+    if (
+        snapshot.cluster_id != binding.cluster_id
+        or snapshot.node_id != local.node_id
+        or snapshot.compute_id != local.compute_id
+    ):
+        raise RuntimeError("managed mTLS local identity does not match the VM-HA binding")
+    candidates = [item for item in snapshot.peers if item.node_id == peer.node_id]
+    if not candidates:
+        raise RuntimeError("managed mTLS has no exact VM-HA peer identity")
+    latest_epoch = max(item.epoch for item in candidates)
+    compute_ids = {item.compute_id for item in candidates if item.epoch == latest_epoch}
+    if len(compute_ids) != 1:
+        raise RuntimeError("managed mTLS has ambiguous current VM-HA peer identity")
+    return peer.model_copy(update={"compute_id": compute_ids.pop()})
+
+
 def build_runtime_ports(
     config: Mapping[str, object],
     *,
     state_dir: Path,
     replay_store: ReplayStateStore,
+    peer_heartbeat_store: AcceptedPeerHeartbeatStore | None = None,
     sdk_factory: Callable[..., Any] = _default_sdk_factory,
     route_backend_factory: Callable[[Any], RouteBackend] = NebiusSDKRouteBackend,
     data_plane_factory: Callable[..., LocalDataPlanePort] = SystemDataPlaneRuntime,
@@ -2818,11 +3201,21 @@ def build_runtime_ports(
     runner: CommandRunner = _run_command,
     clock: Callable[[], float] = time.time,
     monotonic_clock: Callable[[], float] | None = None,
+    boot_id: str | None = None,
+    identity_proof_mode: str = "online",
+    systemd_invocation_id: str | None = None,
     active_preparer: Callable[[], None] | None = None,
     blocked_preparer: Callable[[], None] | None = None,
 ) -> VMHARuntimePorts:
     """Construct every runtime port without connecting it to the default service."""
 
+    preserved_preflight = (
+        _read_runtime_identity_record(state_dir / RUNTIME_IDENTITY_FILENAME)
+        if boot_id is not None and identity_proof_mode == "systemd-controller"
+        else None
+    )
+    if boot_id is not None:
+        begin_runtime_identity_preflight(state_dir=state_dir, boot_id=boot_id)
     binding = VMHARuntimeBinding.model_validate(config.get("runtime_binding"))
     node = config.get("node")
     generation = config.get("generation")
@@ -2868,14 +3261,47 @@ def build_runtime_ports(
     configured_sessions = _configured_bgp_sessions(config, bgp_records)
     expected_bgp_exports = _expected_bgp_exports(config, bgp_records)
     expected_import_policy_digest = _expected_import_policy_digest(config, bgp_records)
-    credential_bundle = credential_bundle_factory(binding, local)
-    snapshot_provider = mtls_snapshot_provider or ManagedMTLSStore(
-        state_dir / "mtls"
-    ).snapshot
-    sdk = RenewableNebiusSDK(
-        local.nebius_credentials_path,
+    if boot_id is not None and not runtime_identity_binding_is_explicit(binding, local):
+        record_runtime_identity_migration_required(state_dir=state_dir, boot_id=boot_id)
+        raise VMHACredentialIdentityError("migration-required")
+    try:
+        credential_bundle = credential_bundle_factory(binding, local)
+    except Exception:
+        if boot_id is not None and binding.nebius_service_account_id is not None:
+            _atomic_write_json(
+                state_dir / RUNTIME_IDENTITY_FILENAME,
+                {
+                    "schema": RUNTIME_IDENTITY_SCHEMA,
+                    "state": "blocked",
+                    "reason": "credential-validation-failed",
+                    "boot_id": boot_id,
+                    "cluster_id": binding.cluster_id,
+                    "node_id": local.node_id,
+                    "generation_id": binding.generation_id,
+                },
+            )
+        raise
+    snapshot_provider = mtls_snapshot_provider or ManagedMTLSStore(state_dir / "mtls").snapshot
+
+    def live_peer_binding() -> VMHARuntimeNodeBinding:
+        return _live_peer_binding_from_mtls(
+            snapshot=snapshot_provider(),
+            binding=binding,
+            local=local,
+            peer=peer,
+        )
+
+    sdk = build_identity_bound_sdk(
+        binding=binding,
+        local=local,
+        credential_bundle=credential_bundle,
+        state_dir=state_dir,
+        boot_id=boot_id,
         factory=sdk_factory,
-        credential_check=credential_bundle.revalidate,
+        identity_proof_mode=identity_proof_mode,
+        systemd_invocation_id=systemd_invocation_id,
+        clock=clock,
+        cached_identity_record=preserved_preflight,
     )
     try:
         cloud = build_cloud_runtime(
@@ -2884,6 +3310,16 @@ def build_runtime_ports(
             sdk.client,
             operation_journal=VMHACloudOperationJournal(
                 state_dir / "accepted-cloud-operation.json"
+            ),
+            peer_binding_provider=live_peer_binding,
+            standby_replacement_inhibited=lambda: (
+                standby_replacement_inhibition_operation_id(
+                    state_dir,
+                    cluster_id=binding.cluster_id,
+                    node_id=local.node_id,
+                    generation_id=binding.generation_id,
+                )
+                is not None
             ),
         )
         effective_monotonic_clock = monotonic_clock or clock
@@ -2948,9 +3384,21 @@ def build_runtime_ports(
             cloud=cloud,
             data_plane=data_plane,
             routes=routes,
-            peer_runtime=BoundPeerRuntime(exchange, clock=effective_monotonic_clock),
+            peer_runtime=BoundPeerRuntime(
+                exchange,
+                clock=effective_monotonic_clock,
+                peer_node_id=peer.node_id,
+                heartbeat_store=peer_heartbeat_store,
+            ),
             credential_bundle=credential_bundle,
             mtls_snapshot_provider=snapshot_provider,
+            auto_healing_policy_provider=lambda: project_local_policy(
+                AutoHealingPolicyStore(state_dir),
+                cluster_id=binding.cluster_id,
+                node_id=local.node_id,
+                peer_node_id=peer.node_id,
+                generation_id=binding.generation_id,
+            ),
         )
         return ports
     except Exception:

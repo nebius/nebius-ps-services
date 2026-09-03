@@ -341,6 +341,37 @@ def test_terraform_show_json_can_skip_init(tmp_path: Path, monkeypatch: pytest.M
     ]
 
 
+def test_terraform_show_json_reads_saved_plan_inside_infra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Any, ...]] = []
+    infra_dir = tmp_path / "infra"
+    infra_dir.mkdir(parents=True)
+    plan_file = infra_dir / "install.tfplan"
+    plan_file.write_bytes(b"plan")
+    plan_file.chmod(0o600)
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run_capture",
+        lambda cmd, *, cwd, timeout, extra_env=None: (
+            calls.append(("run_capture", (tuple(cmd), cwd, timeout, extra_env)))
+            or ('{"resource_changes":[]}', "")
+        ),
+    )
+
+    assert terraform_show_json(
+        infra_dir,
+        initialize=False,
+        plan_file=plan_file,
+    ) == {"resource_changes": []}
+    assert calls == [
+        (
+            "run_capture",
+            (("terraform", "show", "-json", "install.tfplan"), infra_dir, 120, None),
+        )
+    ]
+
+
 def test_terraform_state_list_returns_empty_tuple_when_state_is_absent(monkeypatch) -> None:
     monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
 
@@ -397,6 +428,47 @@ def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:
     ]
 
 
+def test_terraform_destroy_plan_is_target_scoped_and_saved(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, ...]] = []
+    plan_file = tmp_path / ".soperator-destroy-cluster-a.tfplan"
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run",
+        lambda cmd, *, cwd, timeout, extra_env=None: calls.append(tuple(cmd)),
+    )
+
+    terraform_plan(
+        tmp_path,
+        initialize=False,
+        plan_file=plan_file,
+        destroy=True,
+        targets=("module.cluster_a", "nebius_iam_v1_group.cluster_a[0]"),
+    )
+
+    assert calls == [
+        (
+            "terraform",
+            "plan",
+            "-input=false",
+            "-lock-timeout=5m",
+            "-destroy",
+            "-target=module.cluster_a",
+            "-target=nebius_iam_v1_group.cluster_a[0]",
+            f"-out={plan_file}",
+        )
+    ]
+
+
+@pytest.mark.parametrize("target", ("", "-destroy", "module.cluster a"))
+def test_terraform_plan_rejects_unsafe_target_address(
+    monkeypatch, tmp_path: Path, target: str
+) -> None:
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+
+    with pytest.raises(ValueError, match="target address is invalid"):
+        terraform_plan(tmp_path, initialize=False, targets=(target,))
+
+
 def test_terraform_plan_quiet_captures_output_without_printing(monkeypatch) -> None:
     calls: list[tuple[Any, ...]] = []
 
@@ -423,6 +495,95 @@ def test_terraform_plan_quiet_captures_output_without_printing(monkeypatch) -> N
             None,
         )
     ]
+
+
+def test_terraform_saved_plan_is_created_and_applied_without_replanning(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    plan_file = tmp_path / ".soperator-install.tfplan"
+    plan_file.write_bytes(b"immutable plan")
+    plan_file.chmod(0o600)
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run",
+        lambda cmd, *, cwd, timeout, extra_env=None: calls.append(tuple(cmd)),
+    )
+
+    terraform_plan(tmp_path, initialize=False, plan_file=plan_file)
+    terraform_apply(tmp_path, initialize=False, plan_file=plan_file)
+
+    assert calls == [
+        (
+            "terraform",
+            "plan",
+            "-input=false",
+            "-lock-timeout=5m",
+            f"-out={plan_file}",
+        ),
+        (
+            "terraform",
+            "apply",
+            "-input=false",
+            "-lock-timeout=5m",
+            str(plan_file),
+        ),
+    ]
+    assert plan_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_terraform_saved_plan_rejects_symlink_and_broad_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    target = tmp_path / "target.tfplan"
+    target.write_bytes(b"target")
+    target.chmod(0o600)
+    symlink = tmp_path / "symlink.tfplan"
+    symlink.symlink_to(target)
+
+    with pytest.raises(ValueError, match="owner-only"):
+        terraform_apply(tmp_path, initialize=False, plan_file=symlink)
+
+    broad = tmp_path / "broad.tfplan"
+    broad.write_bytes(b"plan")
+    broad.chmod(0o644)
+    with pytest.raises(ValueError, match="owner-only"):
+        terraform_apply(tmp_path, initialize=False, plan_file=broad)
+
+
+def test_terraform_apply_rejects_plan_digest_drift_before_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan = tmp_path / "approved.tfplan"
+    plan.write_bytes(b"tampered")
+    plan.chmod(0o600)
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run",
+        lambda *_args, **_kwargs: pytest.fail("Terraform must not run for a drifted plan"),
+    )
+
+    with pytest.raises(RuntimeError, match="approved receipt digest"):
+        terraform_apply(
+            tmp_path,
+            initialize=False,
+            plan_file=plan,
+            expected_plan_sha256="sha256:" + "0" * 64,
+        )
+
+
+def test_terraform_saved_plan_cannot_escape_rendered_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    with pytest.raises(ValueError, match="inside the rendered infra directory"):
+        terraform_plan(
+            tmp_path / "infra",
+            initialize=False,
+            plan_file=tmp_path / "outside.tfplan",
+        )
 
 
 def test_stream_json_events_aborts_early_when_abort_check_requests_it(

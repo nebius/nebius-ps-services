@@ -28,7 +28,8 @@ class CommitContractTest(unittest.TestCase):
             "temporary index",
             "one-shot private claim token",
             "digest-pinned helper",
-            "sibling project attestations are not required",
+            "Project lifecycle state is advisory",
+            "attestations are not required",
             "REVIEW_REQUIRED",
             "one-direct-child authorization is minted by `task-start`",
             "interrupted-commit recovery",
@@ -83,11 +84,10 @@ class CommitContractTest(unittest.TestCase):
         ):
             self.assertIn(required, manager)
         for required in (
-            "fresh",
-            "explicit `$commit`",
-            "Never auto-commit source dirt",
-            "never narrow it to the selected project",
-            "authorization and claim paths for one direct-child `$commit`",
+            "unrelated source dirt",
+            "invokes `$commit` exactly once",
+            "registered worktree and claims",
+            "coordinator independently verifies",
         ):
             self.assertIn(required, task_skill)
 

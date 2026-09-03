@@ -10,17 +10,13 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import re
-import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 from unittest import mock
 
 import prompt_workspace as pw
-import prompt_workspace_contract_delta as contract_delta
 import prompt_workspace_lanes as lanes
 import prompt_workspace_recovery as recovery
 import prompt_workspace_resume as resume
@@ -52,54 +48,109 @@ FIXED_TEXT = FIXED.isoformat(timespec="seconds")
 
 REQUIREMENT_BODY = """# Task Implementer Requirements
 
-## Requirement Records
-
+<!-- REQUIREMENT: TI-REQ-001 status=active priority=P1 type=feature -->
 ### TI-REQ-001: Execute dependency waves safely
 
-- Status: active
-- Requirement: Bind execution to accepted project intent.
-- Constraints: Preserve the managed lane.
-- Non-goals: Runtime installation.
+#### User Story
 
-#### Acceptance criteria
+Bind execution to accepted project intent while preserving the managed lane;
+runtime installation is excluded.
 
-- Validated waves progress.
+#### Acceptance Criteria
 
-#### Verification
+- AC-001: Validated waves progress.
 
-- Run the focused wave tests.
+#### Negative Criteria
 
-## Task Implementer Open Questions
+- NC-001: Unvalidated waves do not progress.
+
+#### Validation Method
+
+Run focused validation.
+
+#### Test Method
+
+Run the focused wave tests.
+
+#### Evaluation Method
+
+Inspect wave progression evidence.
+
+<!-- /REQUIREMENT: TI-REQ-001 -->
+
+## Open Questions
 
 - None.
 
-## Task Implementer Requirements Change Log
+## Change Log
 
 - 2026-07-14: Established the test contract.
 """
 
 DESIGN_BODY = """# Task Implementer Designs
 
-## Design Records
-
+<!-- FEATURE: TI-DES-001 reqs=TI-REQ-001 status=ready delivery=not-started priority=P1 version=1 -->
 ### TI-DES-001: Bind wave execution
 
-- Status: planned
-- Requirements: TI-REQ-001
-- Selected approach: Validate intent before wave progression.
-- Boundaries and interfaces: Prompt impact and wave state.
-- Validation: Focused owner and wave tests.
-- Rollback: Retain the managed lane.
+#### Requirements Covered
 
-#### Alternatives considered
+- TI-REQ-001: Execute dependency waves safely.
+
+#### Context Evidence
+
+Focused owner and dependency-wave tests.
+
+#### Design Details
+
+Validate intent before wave progression through prompt-impact and wave state.
+
+#### Selected Option
+
+Validate intent before wave progression.
+
+#### Alternatives Considered
 
 - Unbound execution was rejected.
 
-#### Implementation evidence
+#### Implementation Boundaries
+
+Prompt impact and wave state.
+
+#### Test-First Success Criteria
+
+- TDD-001: Unbound execution fails before wave progression.
+
+#### Validation Plan
+
+Run focused owner and wave tests.
+
+#### Test Plan
+
+Run focused dependency-wave tests.
+
+#### Evaluation Plan
+
+Inspect wave progression evidence.
+
+#### Rollout And Rollback
+
+Retain the managed lane on failure.
+
+#### Done Definition
+
+The mapped requirement and focused checks pass.
+
+#### Implementation Evidence
 
 - Prompt impact settlement tests.
 
-## Task Implementer Design Change Log
+#### Verification Evidence
+
+- Independent verification is pending.
+
+<!-- /FEATURE: TI-DES-001 -->
+
+## Change Log
 
 - 2026-07-14: Established the test design.
 """
@@ -207,13 +258,6 @@ class WorktreeWaveTest(unittest.TestCase):
         self.repo = lane_root
         self.scope = Path(str(lane["scope_cwd"]))
         self.workspace = Path(initialized["workspace"])
-        self.project_agent_gate = mock.patch.object(
-            waves,
-            "verify_project_agent_contract",
-            return_value={"status": "ok", "outcome": "not-needed"},
-        )
-        self.project_agent_gate.start()
-        self.addCleanup(self.project_agent_gate.stop)
         self.refinement_gate = mock.patch.object(
             waves,
             "verify_requirements_refinement_contract",
@@ -427,119 +471,11 @@ class WorktreeWaveTest(unittest.TestCase):
         path.chmod(0o600)
         return path
 
-    def _lifecycle_inspect_command(self, integration: Path) -> tuple[Path, str]:
-        project = integration / "services" / "example"
-        orchestration = self.run_dir / "orchestration"
-        private_root = orchestration / "project-agent-instructions"
-        helper = (
-            Path(__file__).resolve().parents[2]
-            / "project-agent-instructions"
-            / "scripts"
-            / "project_agent_instructions.py"
-        )
-        command = shlex.join(
-            [
-                sys.executable,
-                str(helper),
-                "inspect",
-                "--project-root",
-                str(project),
-                "--spec-owner",
-                "maintain-project-specs",
-                "--requirements",
-                "docs/requirements.md",
-                "--design",
-                "docs/design.md",
-                "--spec-receipt",
-                str(orchestration / "project-agent-spec-receipt.json"),
-                "--runtime-config",
-                str(orchestration / "project-agent-runtime.json"),
-                "--codex-home",
-                str(self.codex_home),
-                "--private-root",
-                str(private_root),
-                "--output",
-                str(private_root / "manifest.json"),
-            ]
-        )
-        return project, command
-
-    def _prepare_lifecycle_inspect(self) -> tuple[Path, Path, str]:
+    def _prepare_contract_edit(self) -> tuple[Path, Path]:
         pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
         prepared = pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         integration = Path(str(prepared["integration_worktree"]))
-        project, command = self._lifecycle_inspect_command(integration)
-        return integration, project, command
-
-    def _seal_terminal_lifecycle(self) -> dict[str, object]:
-        coordinator = waves.load_coordinator_state(self.run_dir)
-        assert coordinator is not None and isinstance(coordinator["active_wave"], str)
-        wave_path = (
-            self.run_dir
-            / "orchestration"
-            / "waves"
-            / f"{coordinator['active_wave']}.json"
-        )
-        wave = json.loads(wave_path.read_text(encoding="utf-8"))
-        lifecycle_root = (
-            self.codex_home
-            / "project-specs"
-            / "example"
-            / f"terminal-{wave['wave_id']}"
-        )
-        instruction_root = lifecycle_root / "project-instructions"
-        instruction_root.mkdir(parents=True, exist_ok=True)
-        agents = self.scope / "AGENTS.md"
-        agents_sha256 = (
-            hashlib.sha256(agents.read_bytes()).hexdigest()
-            if agents.is_file()
-            else None
-        )
-        instruction_state = instruction_root / "state.json"
-        instruction_state.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.state.v3",
-                    "project_root": str(self.scope.resolve()),
-                    "project_scope": "services/example",
-                    "target_path": str(agents.resolve()),
-                    "target_sha256": agents_sha256,
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        requirements = self.scope / "docs" / "requirements.md"
-        design = self.scope / "docs" / "design.md"
-        lifecycle_path = lifecycle_root / "lifecycle.json"
-        lifecycle_path.write_text(
-            json.dumps(
-                {
-                    "schema": "maintain-project-specs.lifecycle.v1",
-                    "phase": "sealed",
-                    "project_scope": "services/example",
-                    "git_head_at_prompt": wave["base_commit"],
-                    "requirements_sha256": hashlib.sha256(
-                        requirements.read_bytes()
-                    ).hexdigest(),
-                    "design_sha256": hashlib.sha256(design.read_bytes()).hexdigest(),
-                    "receipt_sha256": "a" * 64,
-                    "project_instructions_state_sha256": hashlib.sha256(
-                        instruction_state.read_bytes()
-                    ).hexdigest(),
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return contract_delta.adopt_contract_delta(
-            self.workspace,
-            self.run_id,
-            lifecycle_path,
-            clock=lambda: FIXED + timedelta(seconds=20),
-        )
+        return integration, integration / "services" / "example"
 
     def _substitute_counterfeit_integration(self, integration: Path) -> Path:
         branch = git("branch", "--show-current", cwd=integration)
@@ -633,47 +569,6 @@ class WorktreeWaveTest(unittest.TestCase):
                 root / "commit-transactions" / "repo" / "session",
             )
 
-    def test_trusted_worker_python_accepts_only_exact_path_canonical_family(
-        self,
-    ) -> None:
-        hook_python = self.root / "hook-bin" / "python3.12"
-        canonical_python = self.root / "path-bin" / "python3.14"
-        alternate_python = self.root / "alternate-bin" / "python3.14"
-        helper = self.root / "helper.py"
-        helper.write_text("# helper\n", encoding="utf-8")
-        for executable in (hook_python, canonical_python, alternate_python):
-            executable.parent.mkdir(parents=True, exist_ok=True)
-            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            executable.chmod(0o755)
-
-        def which(value: str) -> str | None:
-            return str(canonical_python) if value == "python3.14" else None
-
-        with (
-            mock.patch.object(waves.sys, "executable", str(hook_python)),
-            mock.patch.object(waves.shutil, "which", side_effect=which),
-        ):
-            self.assertTrue(
-                waves._trusted_python_command(
-                    [str(canonical_python), str(helper), "prepare"], helper
-                )
-            )
-            self.assertTrue(
-                waves._trusted_python_command(
-                    ["python3.14", str(helper), "prepare"], helper
-                )
-            )
-            self.assertFalse(
-                waves._trusted_python_command(
-                    [str(alternate_python), str(helper), "prepare"], helper
-                )
-            )
-            self.assertFalse(
-                waves._trusted_python_command(
-                    ["python2", str(helper), "prepare"], helper
-                )
-            )
-
     def test_task_start_returns_unambiguous_transient_commit_context(self) -> None:
         pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
         pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
@@ -704,27 +599,17 @@ class WorktreeWaveTest(unittest.TestCase):
             hashlib.sha256(b"raw-worker-session").hexdigest(),
         )
         context = started["commit_context"]
-        self.assertEqual(context["schema"], "task-implementer/worker-commit-context-v1")
+        self.assertEqual(context["schema"], "task-implementer/worker-commit-context-v2")
         self.assertEqual(context["session_id"], "raw-worker-session")
         self.assertEqual(context["session_id_source"], "CODEX_THREAD_ID")
         self.assertEqual(Path(context["repo_root"]), Path(assignment["worktree"]))
-        self.assertEqual(Path(context["lifecycle_cwd"]), self.scope)
+        self.assertEqual(Path(context["scope_cwd"]), self.scope)
         self.assertEqual(context["prepare_argv"][0], context["python_executable"])
         self.assertEqual(context["prepare_argv"][1], context["helper_path"])
         self.assertEqual(
-            waves.authorize_task_commit_lifecycle(
-                self.workspace, self.run_id, shlex.join(context["prepare_argv"])
-            )["status"],
-            "authorized",
+            context["prepare_argv"][context["prepare_argv"].index("--session-id") + 1],
+            "raw-worker-session",
         )
-        bad_argv = list(context["prepare_argv"])
-        bad_argv[bad_argv.index("--session-id") + 1] = started[
-            "worker_session_fingerprint_sha256"
-        ]
-        with self.assertRaises(PromptWorkspaceError):
-            waves.authorize_task_commit_lifecycle(
-                self.workspace, self.run_id, shlex.join(bad_argv)
-            )
         self.assertFalse(Path(context["claim"]).exists())
         for persisted in (
             assignment_path,
@@ -839,6 +724,7 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": "Implemented task one",
             "decisions": ["Kept one canonical path."],
             "open_risks": ["Offline proof only."],
+            "spec_gaps": [],
             "validation": "Focused validation passed.",
             "end_to_end_validation": "Observed deterministic behavior.",
             "code_review": "No unresolved finding.",
@@ -914,6 +800,15 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": "Stopped before editing because a required path was unclaimed.",
             "decisions": ["Preserved the clean task base."],
             "open_risks": ["A corrected immutable claim is required."],
+            "spec_gaps": [
+                {
+                    "kind": "design",
+                    "summary": "The immutable task lacks one required path boundary.",
+                    "evidence": ["Preflight found an unclaimed required path."],
+                    "requirement_ids": ["TI-REQ-001"],
+                    "design_ids": ["TI-DES-001"],
+                }
+            ],
             "validation": "Preflight only; no product edits were made.",
             "end_to_end_validation": "Not run because preflight required replanning.",
             "code_review": "The clean stop preserves every activation blocker.",
@@ -924,6 +819,28 @@ class WorktreeWaveTest(unittest.TestCase):
         draft_path.write_bytes(specs.stable_json(draft))
         os.chdir(Path(context["publication_cwd"]))
         try:
+            secret_draft = {
+                **draft,
+                "spec_gaps": [
+                    {
+                        "kind": "design",
+                        "summary": "token=abcdefghijklmnopqrstuvwxyz123456",
+                        "evidence": ["Preflight found a missing design boundary."],
+                        "requirement_ids": ["TI-REQ-001"],
+                        "design_ids": ["TI-DES-001"],
+                    }
+                ],
+            }
+            draft_path.write_bytes(specs.stable_json(secret_draft))
+            with self.assertRaises(PromptWorkspaceError) as sensitive:
+                pw.publish_task_result(
+                    assignment_path,
+                    draft_path,
+                    Path(context["result_path"]),
+                )
+            self.assertEqual(sensitive.exception.code, "EXECUTION_STATE_INVALID")
+            self.assertFalse(Path(context["result_path"]).exists())
+            draft_path.write_bytes(specs.stable_json(draft))
             published = pw.publish_task_result(
                 assignment_path,
                 draft_path,
@@ -1006,6 +923,7 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": "Changed two claimed files.",
             "decisions": [],
             "open_risks": [],
+            "spec_gaps": [],
             "validation": "Focused validation passed.",
             "end_to_end_validation": "Both files were observed.",
             "code_review": "No findings.",
@@ -1088,6 +1006,7 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": "Changed one claimed file.",
             "decisions": [],
             "open_risks": [],
+            "spec_gaps": [],
             "validation": "Focused validation passed.",
             "end_to_end_validation": "The file was observed.",
             "code_review": "No findings.",
@@ -1253,6 +1172,7 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": f"Implemented {task_id}",
             "decisions": [],
             "open_risks": [],
+            "spec_gaps": [],
             "validation": "focused validation passed",
             "end_to_end_validation": "task behavior observed",
             "code_review": "code-review completed with no findings",
@@ -1366,6 +1286,7 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": "Stopped before editing because a required path was unclaimed.",
             "decisions": ["Preserved the reviewed integration exactly."],
             "open_risks": ["A corrected immutable claim is required."],
+            "spec_gaps": [],
             "validation": "Preflight only; no product edits were made.",
             "end_to_end_validation": "The reviewed integration stayed unchanged.",
             "code_review": "The clean stop preserved every activation blocker.",
@@ -1463,280 +1384,13 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertEqual(second["next_transition"], "wave-promote")
         self.assertEqual(first["state_sha256"], second["state_sha256"])
 
-    def test_dispatch_revalidates_project_agent_state_after_preparation(self) -> None:
+    def test_dispatch_does_not_require_project_agent_state(self) -> None:
         pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        waves.verify_project_agent_contract.side_effect = pw.PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "project-agent state became stale"
-        )
         pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        with self.assertRaises(pw.PromptWorkspaceError) as caught:
-            pw.dispatch_wave(
-                self.workspace, self.run_id, self.initial, clock=lambda: FIXED
-            )
-        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
-        waves.verify_project_agent_contract.assert_called_once()
-
-    def test_lifecycle_bridge_authorizes_only_active_run_project_instructions(
-        self,
-    ) -> None:
-        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        prepared = pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        integration = Path(str(prepared["integration_worktree"]))
-        project = integration / "services" / "example"
-        orchestration = self.run_dir / "orchestration"
-        private_root = orchestration / "project-agent-instructions"
-        receipt = orchestration / "project-agent-spec-receipt.json"
-        runtime = orchestration / "project-agent-runtime.json"
-        helper = (
-            Path(__file__).resolve().parents[2]
-            / "project-agent-instructions"
-            / "scripts"
-            / "project_agent_instructions.py"
+        dispatched = pw.dispatch_wave(
+            self.workspace, self.run_id, self.initial, clock=lambda: FIXED
         )
-        command = shlex.join(
-            [
-                sys.executable,
-                str(helper),
-                "inspect",
-                "--project-root",
-                str(project),
-                "--spec-owner",
-                "maintain-project-specs",
-                "--requirements",
-                "docs/requirements.md",
-                "--design",
-                "docs/design.md",
-                "--spec-receipt",
-                str(receipt),
-                "--runtime-config",
-                str(runtime),
-                "--codex-home",
-                str(self.codex_home),
-                "--private-root",
-                str(private_root),
-                "--output",
-                str(private_root / "manifest.json"),
-            ]
-        )
-
-        authorized = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, command
-        )
-
-        self.assertEqual(authorized["status"], "authorized")
-        self.assertEqual(authorized["action"], "inspect")
-        self.assertEqual(authorized["outer_project_root"], str(self.scope))
-        self.assertEqual(authorized["project_root"], str(project))
-        self.assertEqual(
-            authorized["command_sha256"], hashlib.sha256(command.encode()).hexdigest()
-        )
-        spec_helper = (
-            Path(__file__).resolve().parents[2]
-            / "maintain-project-specs"
-            / "scripts"
-            / "project_specs.py"
-        )
-        validation_session = "019ff65c-3e02-7780-8f24-448c391b5f66"
-        validate_command = shlex.join(
-            [
-                sys.executable,
-                str(spec_helper),
-                "validate",
-                "--project-root",
-                str(project),
-                "--output",
-                str(receipt),
-                "--session-id",
-                validation_session,
-                "--task-implementer-workspace",
-                str(self.workspace),
-                "--task-implementer-run-id",
-                self.run_id,
-            ]
-        )
-        validated = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, validate_command
-        )
-        self.assertEqual(validated["action"], "validate")
-        self.assertEqual(validated["project_root"], str(project))
-        for replacement in (
-            validate_command.replace(str(receipt), str(orchestration / "other.json")),
-            validate_command.replace(validation_session, "not-a-session"),
-        ):
-            with self.subTest(validate_replacement=replacement):
-                with self.assertRaises(pw.PromptWorkspaceError) as invalid_validate:
-                    pw.authorize_project_agent_lifecycle(
-                        self.workspace, self.run_id, replacement
-                    )
-                self.assertEqual(
-                    invalid_validate.exception.code, "EXECUTION_STATE_INVALID"
-                )
-        bridged = subprocess.run(
-            [
-                sys.executable,
-                str(Path(pw.__file__).resolve()),
-                "lifecycle-authorize",
-                "--workspace",
-                str(self.workspace),
-                "--run-id",
-                self.run_id,
-                "--kind",
-                "project-instructions",
-                "--json",
-            ],
-            input=command,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=20,
-        )
-        self.assertEqual(bridged.returncode, 0, bridged.stdout + bridged.stderr)
-        self.assertEqual(json.loads(bridged.stdout), authorized)
-        render_command = shlex.join(
-            [
-                sys.executable,
-                str(helper),
-                "render",
-                "--private-root",
-                str(private_root),
-                "--manifest",
-                str(private_root / "manifest.json"),
-                "--decision",
-                str(private_root / "decision.json"),
-                "--output",
-                str(private_root / "rules.md"),
-                "--state",
-                str(private_root / "state.json"),
-            ]
-        )
-        rendered = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, render_command
-        )
-        self.assertEqual(rendered["action"], "render")
-        for name in ("manifest.json", "decision.json", "rules.md", "state.json"):
-            expected = private_root / name
-            alternate = private_root / f"other-{name}"
-            with self.subTest(render_path=name):
-                with self.assertRaises(pw.PromptWorkspaceError) as invalid_render:
-                    pw.authorize_project_agent_lifecycle(
-                        self.workspace,
-                        self.run_id,
-                        render_command.replace(str(expected), str(alternate)),
-                    )
-                self.assertEqual(
-                    invalid_render.exception.code, "EXECUTION_STATE_INVALID"
-                )
-        bridged_render = subprocess.run(
-            [
-                sys.executable,
-                str(Path(pw.__file__).resolve()),
-                "lifecycle-authorize",
-                "--workspace",
-                str(self.workspace),
-                "--run-id",
-                self.run_id,
-                "--kind",
-                "project-instructions",
-                "--json",
-            ],
-            input=render_command,
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=20,
-        )
-        self.assertEqual(json.loads(bridged_render.stdout), rendered)
-        for action, arguments in (
-            (
-                "apply",
-                [
-                    "--private-root",
-                    str(private_root),
-                    "--manifest",
-                    str(private_root / "manifest.json"),
-                    "--decision",
-                    str(private_root / "decision.json"),
-                    "--ownership",
-                    str(private_root / "ownership.json"),
-                    "--state",
-                    str(private_root / "state.json"),
-                ],
-            ),
-            (
-                "verify",
-                [
-                    "--private-root",
-                    str(private_root),
-                    "--state",
-                    str(private_root / "state.json"),
-                ],
-            ),
-        ):
-            terminal_command = shlex.join(
-                [sys.executable, str(helper), action, *arguments]
-            )
-            with self.subTest(action=action):
-                with self.assertRaises(pw.PromptWorkspaceError) as terminal:
-                    pw.authorize_project_agent_lifecycle(
-                        self.workspace, self.run_id, terminal_command
-                    )
-                self.assertEqual(terminal.exception.code, "EXECUTION_STATE_INVALID")
-        with self.assertRaises(pw.PromptWorkspaceError) as caught:
-            pw.authorize_project_agent_lifecycle(
-                self.workspace,
-                self.run_id,
-                command.replace(str(project), str(integration / "services" / "other")),
-            )
-        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
-
-    def test_lifecycle_bridge_accepts_only_promotion_pending_coordinator_delta(
-        self,
-    ) -> None:
-        _integrated, integration, _evidence = self._integrated_first_wave()
-        project = integration / "services" / "example"
-        requirements = project / "docs" / "requirements.md"
-        requirements.write_text(
-            requirements.read_text(encoding="utf-8")
-            + "\n<!-- reconciled after worker integration -->\n",
-            encoding="utf-8",
-        )
-        orchestration = self.run_dir / "orchestration"
-        spec_helper = (
-            Path(__file__).resolve().parents[2]
-            / "maintain-project-specs"
-            / "scripts"
-            / "project_specs.py"
-        )
-        command = shlex.join(
-            [
-                sys.executable,
-                str(spec_helper),
-                "validate",
-                "--project-root",
-                str(project),
-                "--output",
-                str(orchestration / "project-agent-spec-receipt.json"),
-                "--session-id",
-                "019ff65c-3e02-7780-8f24-448c391b5f66",
-                "--task-implementer-workspace",
-                str(self.workspace),
-                "--task-implementer-run-id",
-                self.run_id,
-            ]
-        )
-
-        authorized = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, command
-        )
-        self.assertEqual(authorized["status"], "authorized")
-        self.assertEqual(authorized["action"], "validate")
-
-        (project / "one.txt").write_text("unsafe product edit\n", encoding="utf-8")
-        with self.assertRaises(PromptWorkspaceError) as caught:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
+        self.assertEqual(len(dispatched["assignments"]), 1)
 
     def test_coordinator_commit_is_single_claim_bound_and_replay_safe(self) -> None:
         integrated, integration, _evidence = self._integrated_first_wave()
@@ -1761,22 +1415,6 @@ class WorktreeWaveTest(unittest.TestCase):
             integrated["integrated_head"],
         )
         self.assertEqual(git("status", "--short", cwd=integration), "")
-        command = shlex.join(
-            [
-                sys.executable,
-                str(Path(pw.__file__).resolve()),
-                "coordinator-commit",
-                "--workspace",
-                str(self.workspace),
-                "--run-id",
-                self.run_id,
-                "--json",
-            ]
-        )
-        authorized = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, command
-        )
-        self.assertEqual(authorized["action"], "coordinator-commit")
         replayed = pw.commit_coordinator_delta(
             self.workspace, self.run_id, clock=lambda: FIXED
         )
@@ -1792,241 +1430,11 @@ class WorktreeWaveTest(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
 
-    def test_lifecycle_impact_attests_before_and_after_wave_plan(self) -> None:
-        command = shlex.join(
-            [
-                sys.executable,
-                str(Path(pw.__file__).resolve()),
-                "wave-plan",
-                "--workspace",
-                str(self.workspace),
-                "--run-id",
-                self.run_id,
-                "--capacity",
-                "1",
-                "--json",
-            ]
-        )
-
-        before = pw.authorize_lifecycle_impact(self.workspace, self.run_id, command)
-        self.assertIsNone(before["checkpoint_head"])
-        self.assertFalse(before["review_correction"])
-        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        after = pw.authorize_lifecycle_impact(self.workspace, self.run_id, command)
-
-        self.assertEqual(after["status"], "authorized")
-        self.assertEqual(after["action"], "wave-plan")
-        self.assertEqual(after["outer_project_root"], str(self.scope))
-        self.assertRegex(str(after["checkpoint_head"]), r"^[0-9a-f]{40,64}$")
-        self.assertFalse(after["review_correction"])
-        self.assertEqual(before["command_sha256"], after["command_sha256"])
-
-        self._write_resume_intent("wave-plan", {"capacity": 1})
-        resumed_command = shlex.join(
-            [
-                sys.executable,
-                str(Path(pw.__file__).resolve()),
-                "wave-plan",
-                "--workspace",
-                str(self.workspace),
-                "--run-id",
-                self.run_id,
-                "--capacity",
-                "1",
-                "--resume-token",
-                "2" * 64,
-                "--json",
-            ]
-        )
-        resumed = pw.authorize_lifecycle_impact(
-            self.workspace, self.run_id, resumed_command
-        )
-        self.assertEqual(resumed["status"], "authorized")
-        with self.assertRaisesRegex(
-            PromptWorkspaceError, "resume-controlled wave-plan binding is invalid"
-        ):
-            pw.authorize_lifecycle_impact(
-                self.workspace,
-                self.run_id,
-                resumed_command.replace("2" * 64, "3" * 64),
-            )
-        control_path = self.run_dir / "orchestration" / "resume-control.json"
-        control = json.loads(control_path.read_text(encoding="utf-8"))
-        control.update(
-            {
-                "phase": "idle",
-                "transition": None,
-                "arguments": None,
-                "arguments_sha256": None,
-                "resume_token": None,
-            }
-        )
-        control_path.write_text(json.dumps(control), encoding="utf-8")
-        control_path.chmod(0o600)
-        idle = pw.authorize_lifecycle_impact(
-            self.workspace,
-            self.run_id,
-            resumed_command.replace("2" * 64, "3" * 64),
-        )
-        self.assertEqual(idle["status"], "authorized")
-
-    def test_worker_commit_crosses_coordinator_bound_lifecycle_hook(self) -> None:
-        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        pw.dispatch_wave(self.workspace, self.run_id, self.initial, clock=lambda: FIXED)
-        assignment_path = (
-            self.run_dir / "orchestration/assignments/wave-001/task-1.json"
-        )
-        assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
-        armed = pw.arm_task(self.workspace, self.run_id, "task-1", clock=lambda: FIXED)
-        worker_session = "cross-worktree-worker"
-        previous = Path.cwd()
-        os.chdir(Path(assignment["scope_cwd"]))
-        try:
-            started = pw.start_task(
-                self.workspace,
-                self.run_id,
-                "task-1",
-                assignment["assignment_sha256"],
-                str(armed["start_lease"]),
-                session_id=worker_session,
-                clock=lambda: FIXED,
-            )
-        finally:
-            os.chdir(previous)
-        helper = (
-            Path(__file__).resolve().parents[2]
-            / "commit"
-            / "scripts"
-            / "commit_transaction.py"
-        )
-        command = shlex.join(
-            [
-                sys.executable,
-                str(helper),
-                "prepare",
-                "--repo-root",
-                assignment["worktree"],
-                "--session-id",
-                worker_session,
-                "--authorization",
-                started["commit_authorization"],
-                "--claim",
-                started["commit_claim"],
-            ]
-        )
-
-        attested = pw.authorize_task_commit_lifecycle(
-            self.workspace, self.run_id, command
-        )
-        self.assertEqual(attested["worker_root"], assignment["worktree"])
-        self.assertEqual(attested["worker_session_id"], worker_session)
-        lifecycle = load_lifecycle_hook()
-        payload = {
-            "cwd": str(self.scope),
-            "session_id": "outer-lifecycle-session",
-            "turn_id": "outer-turn",
-        }
-        lifecycle.evaluate({**payload, "hook_event_name": "UserPromptSubmit"})
-        self.assertEqual(
-            lifecycle.evaluate(
-                {
-                    **payload,
-                    "hook_event_name": "PreToolUse",
-                    "tool_name": "Bash",
-                    "tool_input": {"command": command},
-                }
-            ),
-            {},
-        )
-        with self.assertRaises(pw.PromptWorkspaceError) as wrong_root:
-            pw.authorize_task_commit_lifecycle(
-                self.workspace,
-                self.run_id,
-                command.replace(assignment["worktree"], str(self.repo), 1),
-            )
-        self.assertEqual(wrong_root.exception.code, "EXECUTION_STATE_INVALID")
-
-    def test_lifecycle_bridge_accepts_only_staged_managed_specs(self) -> None:
-        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        prepared = pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        integration = Path(str(prepared["integration_worktree"]))
-        project = integration / "services" / "example"
-        docs = project / "docs"
-        for name in ("requirements.md", "design.md"):
-            (docs / name).write_text(f"# {name}\n", encoding="utf-8")
-        git(
-            "add",
-            "services/example/docs/requirements.md",
-            "services/example/docs/design.md",
-            cwd=integration,
-        )
-        orchestration = self.run_dir / "orchestration"
-        private_root = orchestration / "project-agent-instructions"
-        helper = (
-            Path(__file__).resolve().parents[2]
-            / "project-agent-instructions"
-            / "scripts"
-            / "project_agent_instructions.py"
-        )
-        command = shlex.join(
-            [
-                sys.executable,
-                str(helper),
-                "inspect",
-                "--project-root",
-                str(project),
-                "--spec-owner",
-                "maintain-project-specs",
-                "--requirements",
-                "docs/requirements.md",
-                "--design",
-                "docs/design.md",
-                "--spec-receipt",
-                str(orchestration / "project-agent-spec-receipt.json"),
-                "--runtime-config",
-                str(orchestration / "project-agent-runtime.json"),
-                "--codex-home",
-                str(self.codex_home),
-                "--private-root",
-                str(private_root),
-                "--output",
-                str(private_root / "manifest.json"),
-            ]
-        )
-
-        allowed = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, command
-        )
-        self.assertEqual(allowed["action"], "inspect")
-        (project / "unexpected.txt").write_text("unexpected\n", encoding="utf-8")
-        git("add", "services/example/unexpected.txt", cwd=integration)
-        with self.assertRaises(pw.PromptWorkspaceError) as caught:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
-
     def test_prepared_contract_stage_and_commit_are_owner_bound(self) -> None:
-        integration, project, _inspect_command = self._prepare_lifecycle_inspect()
+        integration, project = self._prepare_contract_edit()
         for name in ("requirements.md", "design.md"):
             path = project / "docs" / name
             path.write_bytes(path.read_bytes() + b"\n<!-- correction contract -->\n")
-        helper = Path(pw.__file__).resolve()
-        stage_command = shlex.join(
-            [
-                sys.executable,
-                str(helper),
-                "coordinator-stage",
-                "--workspace",
-                str(self.workspace),
-                "--run-id",
-                self.run_id,
-                "--json",
-            ]
-        )
-        authorized_stage = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, stage_command
-        )
-        self.assertEqual(authorized_stage["action"], "coordinator-stage")
         staged = pw.stage_coordinator_contract(
             self.workspace, self.run_id, clock=lambda: FIXED
         )
@@ -2046,13 +1454,6 @@ class WorktreeWaveTest(unittest.TestCase):
             ),
             expected,
         )
-        commit_command = stage_command.replace(
-            "coordinator-stage", "coordinator-commit", 1
-        )
-        authorized_commit = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, commit_command
-        )
-        self.assertEqual(authorized_commit["action"], "coordinator-commit")
         committed = pw.commit_coordinator_delta(
             self.workspace, self.run_id, clock=lambda: FIXED
         )
@@ -2070,7 +1471,7 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertEqual(replayed["commit"], committed["commit"])
 
     def test_prepared_contract_stage_rejects_partial_spec_delta(self) -> None:
-        _integration, project, _inspect_command = self._prepare_lifecycle_inspect()
+        _integration, project = self._prepare_contract_edit()
         requirements = project / "docs" / "requirements.md"
         requirements.write_bytes(requirements.read_bytes() + b"\npartial\n")
         with self.assertRaises(pw.PromptWorkspaceError) as caught:
@@ -2078,251 +1479,6 @@ class WorktreeWaveTest(unittest.TestCase):
                 self.workspace, self.run_id, clock=lambda: FIXED
             )
         self.assertEqual(caught.exception.code, "WORKTREE_CONFLICT")
-
-    def test_lifecycle_bridge_rejects_partial_staged_contract(self) -> None:
-        integration, project, command = self._prepare_lifecycle_inspect()
-        docs = project / "docs"
-        (docs / "requirements.md").write_text("# requirements\n", encoding="utf-8")
-        git("add", "services/example/docs/requirements.md", cwd=integration)
-
-        with self.assertRaises(pw.PromptWorkspaceError) as caught:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-
-        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
-
-    def test_lifecycle_bridge_rejects_unstaged_and_untracked_deltas(self) -> None:
-        _integration, project, command = self._prepare_lifecycle_inspect()
-        tracked = project / "one.txt"
-        tracked.write_text("unstaged\n", encoding="utf-8")
-        with self.assertRaises(pw.PromptWorkspaceError) as unstaged:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(unstaged.exception.code, "EXECUTION_STATE_INVALID")
-
-        tracked.write_text("base\n", encoding="utf-8")
-        unexpected = project / "unexpected.txt"
-        unexpected.write_text("untracked\n", encoding="utf-8")
-        with self.assertRaises(pw.PromptWorkspaceError) as untracked:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(untracked.exception.code, "EXECUTION_STATE_INVALID")
-
-    def test_lifecycle_bridge_rejects_deleted_and_symlinked_paths(self) -> None:
-        integration, project, command = self._prepare_lifecycle_inspect()
-        git("rm", "services/example/one.txt", cwd=integration)
-        with self.assertRaises(pw.PromptWorkspaceError) as deleted:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(deleted.exception.code, "EXECUTION_STATE_INVALID")
-
-        (project / "one.txt").write_text("base\n", encoding="utf-8")
-        git("add", "services/example/one.txt", cwd=integration)
-        docs = project / "docs"
-        (docs / "requirements.md").unlink()
-        (docs / "requirements.md").symlink_to("../one.txt")
-        (docs / "design.md").write_text("# design\n", encoding="utf-8")
-        git(
-            "add",
-            "services/example/docs/requirements.md",
-            "services/example/docs/design.md",
-            cwd=integration,
-        )
-        with self.assertRaises(pw.PromptWorkspaceError) as symlinked:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(symlinked.exception.code, "EXECUTION_STATE_INVALID")
-
-    def test_lifecycle_bridge_rejects_stale_run_and_wave(self) -> None:
-        _integration, _project, command = self._prepare_lifecycle_inspect()
-        with self.assertRaises(pw.PromptWorkspaceError) as stale_run:
-            pw.authorize_project_agent_lifecycle(
-                self.workspace, "run-20000101t000000z-missing", command
-            )
-        self.assertEqual(stale_run.exception.code, "RUN_STATE_INVALID")
-
-        pw.dispatch_wave(self.workspace, self.run_id, self.initial, clock=lambda: FIXED)
-        with self.assertRaises(pw.PromptWorkspaceError) as stale_wave:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(stale_wave.exception.code, "EXECUTION_STATE_INVALID")
-
-    def test_lifecycle_bridge_rejects_branch_and_head_drift(self) -> None:
-        integration, _project, command = self._prepare_lifecycle_inspect()
-        expected_branch = git("branch", "--show-current", cwd=integration)
-        git("switch", "-qc", "unexpected-integration-branch", cwd=integration)
-        with self.assertRaises(pw.PromptWorkspaceError) as branch_drift:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(branch_drift.exception.code, "EXECUTION_STATE_INVALID")
-
-        git("switch", "-q", expected_branch, cwd=integration)
-        git("commit", "--allow-empty", "-qm", "unexpected head drift", cwd=integration)
-        with self.assertRaises(pw.PromptWorkspaceError) as head_drift:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(head_drift.exception.code, "EXECUTION_STATE_INVALID")
-
-    def test_lifecycle_bridge_rejects_untrusted_inputs_and_unsafe_mode(self) -> None:
-        _integration, _project, command = self._prepare_lifecycle_inspect()
-        orchestration = self.run_dir / "orchestration"
-        private_root = orchestration / "project-agent-instructions"
-        helper = (
-            Path(__file__).resolve().parents[2]
-            / "project-agent-instructions"
-            / "scripts"
-            / "project_agent_instructions.py"
-        )
-        replacements = {
-            "helper": (str(helper), str(self.root / "untrusted-helper.py")),
-            "requirements": (
-                "--requirements docs/requirements.md",
-                "--requirements docs/other.md",
-            ),
-            "receipt": (
-                str(orchestration / "project-agent-spec-receipt.json"),
-                str(orchestration / "other-receipt.json"),
-            ),
-            "runtime": (
-                str(orchestration / "project-agent-runtime.json"),
-                str(orchestration / "other-runtime.json"),
-            ),
-            "output": (
-                str(private_root / "manifest.json"),
-                str(private_root / "other-manifest.json"),
-            ),
-            "private-root": (
-                str(private_root),
-                str(orchestration / "other-private-root"),
-            ),
-            "codex-home": (str(self.codex_home), str(self.root / "other-home")),
-        }
-        for label, (expected, alternate) in replacements.items():
-            with self.subTest(label=label):
-                with self.assertRaises(pw.PromptWorkspaceError) as caught:
-                    pw.authorize_project_agent_lifecycle(
-                        self.workspace,
-                        self.run_id,
-                        command.replace(expected, alternate),
-                    )
-                self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
-
-        self.workspace.chmod(0o644)
-        with self.assertRaises(pw.PromptWorkspaceError) as unsafe_mode:
-            pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
-        self.assertEqual(unsafe_mode.exception.code, "WORKSPACE_PERMISSION_INVALID")
-
-    def test_real_lifecycle_hook_crosses_wave_plan_and_run_bundle(self) -> None:
-        lifecycle = load_lifecycle_hook()
-        payload = {
-            "cwd": str(self.scope),
-            "session_id": "task-wave-lifecycle-session",
-            "turn_id": "task-wave-lifecycle-turn",
-        }
-        lifecycle.evaluate({**payload, "hook_event_name": "UserPromptSubmit"})
-        project, git_root, _scope = lifecycle._project(str(self.scope))
-        state_path = lifecycle._state_path(git_root, payload["session_id"])
-        state = lifecycle._load(state_path)
-        assert state is not None
-        rules = state_path.parent / lifecycle.RULES_NAME
-        rules.write_bytes(b"")
-        rules.chmod(0o600)
-        state.update(
-            {
-                "phase": "implementation-open",
-                "receipt_sha256": "a" * 64,
-                "rules_path": lifecycle.RULES_NAME,
-                "rules_sha256": hashlib.sha256(b"").hexdigest(),
-                "planned_write_epoch": 0,
-            }
-        )
-        lifecycle._write(state_path, state)
-        wave_command = shlex.join(
-            [
-                sys.executable,
-                str(Path(pw.__file__).resolve()),
-                "wave-plan",
-                "--workspace",
-                str(self.workspace),
-                "--run-id",
-                self.run_id,
-                "--capacity",
-                "1",
-                "--json",
-            ]
-        )
-        pre = {
-            **payload,
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": wave_command},
-        }
-        self.assertEqual(lifecycle.evaluate(pre), {})
-        lifecycle.evaluate(
-            {
-                **pre,
-                "hook_event_name": "PostToolUse",
-                "tool_response": {"exit_code": 2},
-            }
-        )
-        failed_state = lifecycle._load(state_path)
-        assert failed_state is not None
-        self.assertEqual(failed_state["phase"], "implementation-open")
-        self.assertEqual(failed_state["write_epoch"], 0)
-        self.assertEqual(lifecycle.evaluate(pre), {})
-        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        post = {
-            **pre,
-            "hook_event_name": "PostToolUse",
-            "tool_response": {"exit_code": 0},
-        }
-        lifecycle.evaluate(post)
-        lifecycle.evaluate(post)
-        current = lifecycle._load(state_path)
-        assert current is not None
-        self.assertEqual(current["phase"], "reconciliation-required")
-        self.assertEqual(current["write_epoch"], 1)
-
-        prepared = pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        integration = Path(str(prepared["integration_worktree"]))
-        integration_project = integration / "services" / "example"
-        orchestration = self.run_dir / "orchestration"
-        private_root = orchestration / "project-agent-instructions"
-        helper = (
-            Path(__file__).resolve().parents[2]
-            / "project-agent-instructions"
-            / "scripts"
-            / "project_agent_instructions.py"
-        )
-        inspect_command = shlex.join(
-            [
-                sys.executable,
-                str(helper),
-                "inspect",
-                "--project-root",
-                str(integration_project),
-                "--spec-owner",
-                "maintain-project-specs",
-                "--requirements",
-                "docs/requirements.md",
-                "--design",
-                "docs/design.md",
-                "--spec-receipt",
-                str(orchestration / "project-agent-spec-receipt.json"),
-                "--runtime-config",
-                str(orchestration / "project-agent-runtime.json"),
-                "--codex-home",
-                str(self.codex_home),
-                "--private-root",
-                str(private_root),
-                "--output",
-                str(private_root / "manifest.json"),
-            ]
-        )
-        self.assertEqual(
-            lifecycle.evaluate(
-                {
-                    **payload,
-                    "hook_event_name": "PreToolUse",
-                    "tool_name": "Bash",
-                    "tool_input": {"command": inspect_command},
-                }
-            ),
-            {},
-        )
-        self.assertEqual(project, self.scope.resolve())
 
     def test_full_repository_worktrees_ordered_merge_ff_promotion_and_cleanup(
         self,
@@ -2342,14 +1498,6 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertEqual(git("rev-parse", "HEAD", cwd=integration), self.initial)
         dispatched = pw.dispatch_wave(
             self.workspace, self.run_id, self.initial, clock=lambda: FIXED
-        )
-        waves.verify_project_agent_contract.assert_called_once()
-        self.assertEqual(
-            waves.verify_project_agent_contract.call_args.args[2],
-            integration / "services" / "example",
-        )
-        self.assertEqual(
-            waves.verify_project_agent_contract.call_args.args[3], self.initial
         )
         self.assertEqual(len(dispatched["assignments"]), 1)
         first_handoff = json.loads(
@@ -2769,6 +1917,7 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": "Expanded task scope",
             "decisions": [],
             "open_risks": ["scope exceeded"],
+            "spec_gaps": [],
             "validation": "focused validation passed",
             "end_to_end_validation": "behavior observed",
             "code_review": "review completed",
@@ -3480,7 +2629,7 @@ class WorktreeWaveTest(unittest.TestCase):
         previous = Path.cwd()
         os.chdir(scope_cwd)
         try:
-            started = pw.start_task(
+            pw.start_task(
                 self.workspace,
                 self.run_id,
                 "task-1",
@@ -3505,13 +2654,85 @@ class WorktreeWaveTest(unittest.TestCase):
                 watched["scope_violation_paths"],
                 ["services/example/docs/design.md"],
             )
-            with self.assertRaises(PromptWorkspaceError) as commit_guard:
-                waves.authorize_task_commit_lifecycle(
+            with self.assertRaises(PromptWorkspaceError) as heartbeat:
+                pw.heartbeat_task(
                     self.workspace,
                     self.run_id,
-                    shlex.join(started["commit_context"]["prepare_argv"]),
+                    "task-1",
+                    assignment["assignment_sha256"],
+                    "implementing",
+                    session_id="coordinator-path-worker",
+                    clock=lambda: FIXED + timedelta(seconds=1),
                 )
-            self.assertEqual(commit_guard.exception.code, "WORKER_SCOPE_VIOLATION")
+            self.assertEqual(heartbeat.exception.code, "WORKER_SCOPE_VIOLATION")
+        finally:
+            os.chdir(previous)
+
+    def test_renamed_project_spec_remains_a_worker_scope_violation(self) -> None:
+        handoff_path = self.run_dir / "handoff.md"
+        handoff_path.write_text(
+            handoff_path.read_text(encoding="utf-8").replace(
+                "- Write claims: exact: services/example/one.txt",
+                "- Write claims: prefix: services/example",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        handoff_path.chmod(0o600)
+        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+        pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        pw.dispatch_wave(self.workspace, self.run_id, self.initial, clock=lambda: FIXED)
+        assignment = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "assignments"
+                / "wave-001"
+                / "task-1.json"
+            ).read_text(encoding="utf-8")
+        )
+        scope_cwd = Path(assignment["scope_cwd"])
+        pw.arm_task(self.workspace, self.run_id, "task-1", clock=lambda: FIXED)
+        previous = Path.cwd()
+        os.chdir(scope_cwd)
+        try:
+            pw.start_task(
+                self.workspace,
+                self.run_id,
+                "task-1",
+                assignment["assignment_sha256"],
+                FIXED_TEXT,
+                session_id="renamed-spec-worker",
+                clock=lambda: FIXED,
+            )
+            (scope_cwd / "docs" / "requirements.md").rename(
+                scope_cwd / "moved-requirements.md"
+            )
+            watched = pw.watch_task(
+                self.workspace,
+                self.run_id,
+                "task-1",
+                clock=lambda: FIXED + timedelta(seconds=1),
+            )
+            self.assertEqual(watched["status"], "WORKER_SCOPE_VIOLATION")
+            self.assertEqual(
+                watched["scope_violation_paths"],
+                ["services/example/docs/requirements.md"],
+            )
+            recovered = pw.recover_task(
+                self.workspace,
+                self.run_id,
+                "task-1",
+                confirmed_stopped=True,
+                session_id="renamed-spec-recovery",
+                clock=lambda: FIXED + timedelta(seconds=2),
+            )
+            self.assertTrue(recovered["replan_required"])
+            self.assertEqual(
+                recovered["scope_violation_paths"],
+                ["services/example/docs/requirements.md"],
+            )
+            self.assertIsNone(recovered["commit_authorization"])
         finally:
             os.chdir(previous)
 
@@ -3574,7 +2795,6 @@ class WorktreeWaveTest(unittest.TestCase):
         promoted = pw.promote_wave(
             self.workspace, self.run_id, evidence, clock=lambda: FIXED
         )
-        self._seal_terminal_lifecycle()
         cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(cleaned["status"], "done")
 
@@ -3838,7 +3058,7 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertEqual(prepared["base_commit"], promoted["promoted_head"])
         self.assertIn("resume", prepared)
 
-    def test_final_wave_cleanup_requires_terminal_lifecycle_seal(self) -> None:
+    def test_final_wave_cleanup_does_not_require_terminal_lifecycle_seal(self) -> None:
         handoff = self.run_dir / "handoff.md"
         handoff.write_text(
             handoff.read_text(encoding="utf-8").replace(
@@ -3851,424 +3071,9 @@ class WorktreeWaveTest(unittest.TestCase):
         _, integration, evidence = self._integrated_first_wave()
         pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
 
-        with self.assertRaises(PromptWorkspaceError) as missing:
-            pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        self.assertEqual(missing.exception.code, "LIFECYCLE_SEAL_REQUIRED")
-        self.assertTrue(integration.is_dir())
-
-        sealed = self._seal_terminal_lifecycle()
-        self.assertEqual(sealed["status"], "terminal-sealed")
-        self.assertEqual(sealed["paths"], [])
         cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(cleaned["status"], "done")
-
-    def test_intermediate_promoted_wave_accepts_only_zero_delta_lifecycle_seal(
-        self,
-    ) -> None:
-        _, _, evidence = self._integrated_first_wave()
-        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
-
-        sealed = self._seal_terminal_lifecycle()
-        self.assertEqual(sealed["status"], "terminal-sealed")
-        self.assertEqual(sealed["paths"], [])
-        cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        self.assertEqual(cleaned["status"], "done")
-        coordinator = json.loads(
-            (self.run_dir / "orchestration" / "coordinator.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(coordinator["active_wave"], "wave-002")
-
-    def test_intermediate_instruction_proof_preserves_human_prefix(self) -> None:
-        body = b"# Project Agent Instructions\n\nManaged body.\n"
-        marker = (
-            b"<!-- project-agent-instructions:managed-v3 manifest-sha256="
-            + b"1" * 64
-            + b" decision-sha256="
-            + b"2" * 64
-            + b" body-sha256="
-            + hashlib.sha256(body).hexdigest().encode("ascii")
-            + b" -->\n\n"
-        )
-        lane = self.root / "lane-prefixed-AGENTS.md"
-        integration = self.root / "integration-prefixed-AGENTS.md"
-        prefix = b"# Human instructions\n\nKeep this prefix."
-        lane.write_bytes(prefix + b"\n\n" + marker + body)
-        integration.write_bytes(prefix + b"\n\n" + marker + body)
-        self.assertEqual(
-            contract_delta._managed_instruction_content(lane),
-            (prefix, body),
-        )
-        self.assertEqual(
-            contract_delta._managed_instruction_content(lane),
-            contract_delta._managed_instruction_content(integration),
-        )
-        integration.write_bytes(b"# Changed human instructions\n\n" + marker + body)
-        self.assertNotEqual(
-            contract_delta._managed_instruction_content(lane),
-            contract_delta._managed_instruction_content(integration),
-        )
-
-    def test_intermediate_promoted_wave_promotes_provenance_only_marker_refresh(
-        self,
-    ) -> None:
-        _, _, evidence = self._integrated_first_wave()
-        promoted = pw.promote_wave(
-            self.workspace, self.run_id, evidence, clock=lambda: FIXED
-        )
-        agents = self.scope / "AGENTS.md"
-        _marker, separator, body = agents.read_bytes().partition(b"\n\n")
-        self.assertTrue(separator)
-        agents.write_bytes(
-            b"<!-- project-agent-instructions:managed-v3 manifest-sha256="
-            + b"1" * 64
-            + b" decision-sha256="
-            + b"2" * 64
-            + b" body-sha256="
-            + hashlib.sha256(body).hexdigest().encode()
-            + b" -->\n\n"
-            + body
-        )
-
-        sealed = self._seal_terminal_lifecycle()
-        self.assertEqual(sealed["paths"], ["services/example/AGENTS.md"])
-        self.assertNotEqual(sealed["contract_head"], promoted["promoted_head"])
-        cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        self.assertEqual(cleaned["status"], "done")
-        self.assertEqual(
-            git("rev-parse", "HEAD", cwd=self.repo), sealed["contract_head"]
-        )
-
-    def test_intermediate_promoted_wave_rejects_instruction_body_change(self) -> None:
-        _, _, evidence = self._integrated_first_wave()
-        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
-        agents = self.scope / "AGENTS.md"
-        agents.write_text(
-            agents.read_text(encoding="utf-8") + "\nworker-owned rule\n",
-            encoding="utf-8",
-        )
-
-        with self.assertRaises(PromptWorkspaceError) as rejected:
-            self._seal_terminal_lifecycle()
-        self.assertEqual(rejected.exception.code, "REPLAN_REQUIRED")
-
-    def test_intermediate_promoted_wave_rejects_invalid_instruction_marker(
-        self,
-    ) -> None:
-        _, _, evidence = self._integrated_first_wave()
-        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
-        agents = self.scope / "AGENTS.md"
-        content = agents.read_bytes()
-        agents.write_bytes(
-            re.sub(
-                rb"body-sha256=[0-9a-f]{64}",
-                b"body-sha256=" + b"0" * 64,
-                content,
-                count=1,
-            )
-        )
-
-        with self.assertRaises(PromptWorkspaceError) as rejected:
-            self._seal_terminal_lifecycle()
-        self.assertEqual(rejected.exception.code, "REPLAN_REQUIRED")
-
-    def test_intermediate_material_reconciliation_cleans_before_tail_replan(
-        self,
-    ) -> None:
-        _, _, evidence = self._integrated_first_wave()
-        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
-        agents = self.scope / "AGENTS.md"
-        _marker, separator, body = agents.read_bytes().partition(b"\n\n")
-        self.assertTrue(separator)
-        agents.write_bytes(
-            b"<!-- project-agent-instructions:managed-v3 manifest-sha256="
-            + b"1" * 64
-            + b" decision-sha256="
-            + b"2" * 64
-            + b" body-sha256="
-            + hashlib.sha256(body).hexdigest().encode()
-            + b" -->\n\n"
-            + body
-        )
-        self._seal_terminal_lifecycle()
-
-        current_impact = specs.load_current_prompt_impact(self.run_dir, required=True)
-        assert current_impact is not None
-        material_impact = dict(current_impact[0])
-        material_impact["plan_action"] = "replan_required"
-        material_sha256 = hashlib.sha256(specs.stable_json(material_impact)).hexdigest()
-        drift = PromptWorkspaceError(
-            "REPLAN_REQUIRED",
-            "canonical project specs drifted after impact settlement",
-        )
-        with (
-            mock.patch.object(waves, "verify_prompt_impact_plan", side_effect=drift),
-            mock.patch.object(
-                waves,
-                "verify_requirements_refinement_contract",
-                return_value={
-                    "impact": material_impact,
-                    "impact_sha256": material_sha256,
-                },
-            ),
-            mock.patch.object(waves, "settle_prompt_impact_plan") as settled,
-        ):
-            cleaned = pw.cleanup_wave(
-                self.workspace,
-                self.run_id,
-                clock=lambda: FIXED + timedelta(seconds=21),
-            )
-
-        self.assertEqual(cleaned["status"], "done")
-        settled.assert_not_called()
-        coordinator = waves.load_coordinator_state(self.run_dir)
-        assert coordinator is not None
-        self.assertEqual(coordinator["active_wave"], "wave-002")
-        next_wave = json.loads(
-            (self.run_dir / "orchestration/waves/wave-002.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(next_wave["status"], "planned")
-
-    def test_provenance_only_terminal_seal_is_promoted_before_cleanup(self) -> None:
-        handoff = self.run_dir / "handoff.md"
-        handoff.write_text(
-            handoff.read_text(encoding="utf-8").replace(
-                "### task-3\n\n- Status: pending",
-                "### task-3\n\n- Status: done",
-            ),
-            encoding="utf-8",
-        )
-        handoff.chmod(0o600)
-        _, _, evidence = self._integrated_first_wave()
-        promoted = pw.promote_wave(
-            self.workspace, self.run_id, evidence, clock=lambda: FIXED
-        )
-        agents = self.scope / "AGENTS.md"
-        agents.write_text(
-            agents.read_text(encoding="utf-8")
-            + "\n<!-- refreshed terminal provenance -->\n",
-            encoding="utf-8",
-        )
-        sealed = self._seal_terminal_lifecycle()
-        self.assertEqual(sealed["paths"], ["services/example/AGENTS.md"])
-        self.assertNotEqual(sealed["contract_head"], promoted["promoted_head"])
-
-        cleaned = pw.cleanup_wave(
-            self.workspace,
-            self.run_id,
-            clock=lambda: FIXED + timedelta(seconds=21),
-        )
-        self.assertEqual(cleaned["status"], "done")
-        self.assertEqual(git("status", "--short", cwd=self.repo), "")
-        self.assertEqual(
-            git("rev-parse", "HEAD", cwd=self.repo), sealed["contract_head"]
-        )
-        self.assertEqual(
-            git("show", "-s", "--format=%s", "HEAD", cwd=self.repo),
-            contract_delta.TERMINAL_SEAL_MESSAGE,
-        )
-        self.assertIn(
-            "refreshed terminal provenance", agents.read_text(encoding="utf-8")
-        )
-
-    def test_terminal_seal_spec_reconciliation_is_settled_before_cleanup(self) -> None:
-        handoff = self.run_dir / "handoff.md"
-        handoff.write_text(
-            handoff.read_text(encoding="utf-8").replace(
-                "### task-3\n\n- Status: pending",
-                "### task-3\n\n- Status: done",
-            ),
-            encoding="utf-8",
-        )
-        handoff.chmod(0o600)
-        _, _, evidence = self._integrated_first_wave()
-        promoted = pw.promote_wave(
-            self.workspace, self.run_id, evidence, clock=lambda: FIXED
-        )
-        design = self.scope / "docs" / "design.md"
-        design.write_text(
-            design.read_text(encoding="utf-8")
-            + "\nTerminal implementation status reconciliation.\n",
-            encoding="utf-8",
-        )
-        sealed = self._seal_terminal_lifecycle()
-        self.assertEqual(sealed["paths"], ["services/example/docs/design.md"])
-        self.assertNotEqual(sealed["contract_head"], promoted["promoted_head"])
-
-        current_impact = specs.load_current_prompt_impact(self.run_dir, required=True)
-        assert current_impact is not None
-        terminal_impact = dict(current_impact[0])
-        terminal_impact["plan_action"] = "replan_required"
-        terminal_impact_sha256 = hashlib.sha256(
-            specs.stable_json(terminal_impact)
-        ).hexdigest()
-        drift = PromptWorkspaceError(
-            "REPLAN_REQUIRED",
-            "prompt impact plan basis is stale",
-        )
-        with (
-            mock.patch.object(
-                waves,
-                "verify_prompt_impact_plan",
-                side_effect=[
-                    drift,
-                    {"status": "settled"},
-                    {"status": "settled"},
-                ],
-            ),
-            mock.patch.object(
-                waves,
-                "verify_requirements_refinement_contract",
-                return_value={
-                    "impact": terminal_impact,
-                    "impact_sha256": terminal_impact_sha256,
-                },
-            ),
-        ):
-            cleaned = pw.cleanup_wave(
-                self.workspace,
-                self.run_id,
-                clock=lambda: FIXED + timedelta(seconds=21),
-            )
-        self.assertEqual(cleaned["status"], "done")
-        self.assertEqual(git("status", "--short", cwd=self.repo), "")
-        self.assertEqual(
-            git("rev-parse", "HEAD", cwd=self.repo), sealed["contract_head"]
-        )
-        plan_basis = json.loads(
-            (self.run_dir / "prompt-impact" / "plan-basis.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(plan_basis["plan_action"], "replan_required")
-
-    def test_digest_recovery_binds_receipt_only_impact_refresh(self) -> None:
-        handoff = self.run_dir / "handoff.md"
-        text = handoff.read_text(encoding="utf-8").replace(
-            "### task-3\n\n- Status: pending",
-            "### task-3\n\n- Status: done",
-        )
-        handoff.write_text(text, encoding="utf-8")
-        handoff.chmod(0o600)
-
-        _, _, evidence = self._integrated_first_wave()
-        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
-        self._seal_terminal_lifecycle()
-        pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        handoff.write_text(
-            handoff.read_text(encoding="utf-8")
-            + """
-
-### task-4
-
-- Status: pending
-- Depends on: task-1, task-2
-- Write claims: exact: services/example/three.txt
-- Conflict domains: files:three.txt
-- Implementation steps: correct only services/example/three.txt
-- Validation: inspect three.txt
-- End-to-end validation: verify the corrected integrated behavior
-- Done criteria: three.txt contains the correction
-""",
-            encoding="utf-8",
-        )
-        handoff.chmod(0o600)
-
-        replanned = pw.replan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
-        expected_index_sha256 = sha256_json(
-            [entry["tasks"] for entry in replanned["waves"]]
-        )
-        replacement_sha256 = sha256_json(
-            [entry["tasks"] for entry in replanned["waves"][1:]]
-        )
-        coordinator_path = self.run_dir / "orchestration" / "coordinator.json"
-        coordinator = json.loads(coordinator_path.read_text(encoding="utf-8"))
-        coordinator["plan_sha256"] = replacement_sha256
-        waves._save_coordinator(self.run_dir, coordinator)
-        basis_path = self.run_dir / "prompt-impact" / "plan-basis.json"
-        basis = json.loads(basis_path.read_text(encoding="utf-8"))
-        basis["plan_sha256"] = replacement_sha256
-        basis_path.write_text(
-            json.dumps(basis, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-
-        prior_impact = specs.load_current_prompt_impact(self.run_dir, required=True)
-        assert prior_impact is not None
-        design_path = self.scope / "docs" / "design.md"
-        design_path.write_bytes(
-            design_path.read_bytes() + b"\n<!-- receipt-only refresh -->\n"
-        )
-        recovery_path = self.run_dir / "orchestration" / "plan-digest-recovery.json"
-        with mock.patch.object(
-            recovery, "write_exclusive", side_effect=OSError("injected journal failure")
-        ):
-            with self.assertRaisesRegex(OSError, "injected journal failure"):
-                recovery.recover_replanned_plan_digest(
-                    self.workspace,
-                    self.run_id,
-                    replacement_sha256,
-                    expected_index_sha256,
-                    clock=lambda: FIXED + timedelta(seconds=1),
-                )
-        self.assertFalse(recovery_path.exists())
-        refreshed_impact = specs.load_current_prompt_impact(self.run_dir, required=True)
-        assert refreshed_impact is not None
-        self.assertNotEqual(refreshed_impact[1], prior_impact[1])
-        self.assertEqual(refreshed_impact[0]["plan_action"], "retain_plan")
-        self.assertEqual(
-            json.loads(basis_path.read_text(encoding="utf-8"))["plan_sha256"],
-            replacement_sha256,
-        )
-
-        recovered = recovery.recover_replanned_plan_digest(
-            self.workspace,
-            self.run_id,
-            replacement_sha256,
-            expected_index_sha256,
-            clock=lambda: FIXED + timedelta(seconds=2),
-        )
-        self.assertEqual(recovered["status"], "recovered")
-        recovery_state = json.loads(recovery_path.read_text(encoding="utf-8"))
-        recovered_basis = json.loads(basis_path.read_text(encoding="utf-8"))
-        self.assertEqual(recovery_state["impact_sha256"], refreshed_impact[1])
-        self.assertEqual(recovered_basis["impact_sha256"], refreshed_impact[1])
-        self.assertEqual(recovered_basis["plan_sha256"], expected_index_sha256)
-        self.assertEqual(
-            recovered_basis["spec_receipt_sha256"],
-            refreshed_impact[0]["spec_receipt_sha256"],
-        )
-        specs.verify_prompt_impact_plan(
-            self.run_dir,
-            waves.load_coordinator_state(self.run_dir),
-            self.scope,
-        )
-        current_impact_before_change = specs.load_current_prompt_impact(
-            self.run_dir, required=True
-        )
-        coordinator_after_recovery = coordinator_path.read_bytes()
-        basis_after_recovery = basis_path.read_bytes()
-        design_path.write_bytes(
-            design_path.read_bytes() + b"\n<!-- changed after recovery intent -->\n"
-        )
-        with self.assertRaisesRegex(
-            PromptWorkspaceError, "plan digest recovery impact changed"
-        ):
-            recovery.recover_replanned_plan_digest(
-                self.workspace,
-                self.run_id,
-                replacement_sha256,
-                expected_index_sha256,
-                clock=lambda: FIXED + timedelta(seconds=3),
-            )
-        self.assertEqual(
-            specs.load_current_prompt_impact(self.run_dir, required=True),
-            current_impact_before_change,
-        )
-        self.assertEqual(coordinator_path.read_bytes(), coordinator_after_recovery)
-        self.assertEqual(basis_path.read_bytes(), basis_after_recovery)
+        self.assertFalse(integration.exists())
 
     def test_promotion_review_can_append_and_integrate_one_correction_round(
         self,
@@ -4443,13 +3248,7 @@ class WorktreeWaveTest(unittest.TestCase):
             self.run_id,
             clock=lambda: FIXED + timedelta(seconds=4),
         )
-        _project, inspect_command = self._lifecycle_inspect_command(integration)
         retained = self._substitute_counterfeit_integration(integration)
-        with self.assertRaises(PromptWorkspaceError) as lifecycle:
-            pw.authorize_project_agent_lifecycle(
-                self.workspace, self.run_id, inspect_command
-            )
-        self.assertEqual(lifecycle.exception.code, "EXECUTION_STATE_INVALID")
         with self.assertRaises(PromptWorkspaceError) as dispatch:
             pw.dispatch_wave(
                 self.workspace,
@@ -4548,474 +3347,6 @@ class WorktreeWaveTest(unittest.TestCase):
             git("rev-parse", "HEAD", cwd=integration), first_correction_head
         )
         self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.initial)
-
-    def test_sealed_contract_delta_is_adopted_without_cleaning_the_lane(self) -> None:
-        integrated, integration, evidence = self._integrated_first_wave()
-        integration_base = str(integrated["integrated_head"])
-        requirements = self.scope / "docs" / "requirements.md"
-        design = self.scope / "docs" / "design.md"
-        requirements.write_bytes(requirements.read_bytes() + b"\n<!-- reconciled -->\n")
-        design.write_bytes(design.read_bytes() + b"\n<!-- reconciled -->\n")
-        paths = [
-            "services/example/docs/design.md",
-            "services/example/docs/requirements.md",
-        ]
-        lane_status = git("status", "--porcelain=v1", cwd=self.repo)
-        lifecycle_root = self.codex_home / "project-specs" / "example" / "session"
-        lifecycle_root.mkdir(parents=True)
-        instruction_root = lifecycle_root / "project-instructions"
-        instruction_root.mkdir()
-        instruction_state = instruction_root / "state.json"
-        instruction_state.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.state.v3",
-                    "project_root": str(self.scope.resolve()),
-                    "project_scope": "services/example",
-                    "target_path": str((self.scope / "AGENTS.md").resolve()),
-                    "target_sha256": hashlib.sha256(
-                        (self.scope / "AGENTS.md").read_bytes()
-                    ).hexdigest(),
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        lifecycle_path = lifecycle_root / "lifecycle.json"
-        lifecycle_path.write_text(
-            json.dumps(
-                {
-                    "schema": "maintain-project-specs.lifecycle.v1",
-                    "phase": "sealed",
-                    "project_scope": "services/example",
-                    "git_head_at_prompt": self.initial,
-                    "requirements_sha256": hashlib.sha256(
-                        requirements.read_bytes()
-                    ).hexdigest(),
-                    "design_sha256": hashlib.sha256(design.read_bytes()).hexdigest(),
-                    "receipt_sha256": "a" * 64,
-                    "project_instructions_state_sha256": hashlib.sha256(
-                        instruction_state.read_bytes()
-                    ).hexdigest(),
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        original_write_atomic = contract_delta.write_atomic
-        interrupted = False
-
-        def interrupt_after_contract_commit(path: Path, data: bytes) -> None:
-            nonlocal interrupted
-            if path.name == "contract-delta-adoption.json" and not interrupted:
-                interrupted = True
-                raise RuntimeError("injected contract journal interruption")
-            original_write_atomic(path, data)
-
-        with mock.patch.object(
-            contract_delta, "verify_prompt_impact_plan", return_value={"status": "ok"}
-        ):
-            with mock.patch.object(
-                contract_delta,
-                "write_atomic",
-                side_effect=interrupt_after_contract_commit,
-            ):
-                with self.assertRaisesRegex(
-                    RuntimeError, "contract journal interruption"
-                ):
-                    contract_delta.adopt_contract_delta(
-                        self.workspace,
-                        self.run_id,
-                        lifecycle_path,
-                        clock=lambda: FIXED + timedelta(seconds=1),
-                    )
-            adopted = contract_delta.adopt_contract_delta(
-                self.workspace,
-                self.run_id,
-                lifecycle_path,
-                clock=lambda: FIXED + timedelta(seconds=1),
-            )
-        self.assertEqual(adopted["paths"], paths)
-        self.assertEqual(git("rev-parse", "HEAD^", cwd=integration), integration_base)
-        self.assertEqual(
-            git("show", "-s", "--format=%s", "HEAD", cwd=integration),
-            contract_delta.CONTRACT_DELTA_MESSAGE,
-        )
-        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.initial)
-        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), lane_status)
-        journal = contract_delta.contract_delta_journal(self.run_dir)
-        assert journal is not None
-        self.assertEqual(journal["phase"], "integration-committed")
-        coordinator = waves.load_coordinator_state(self.run_dir)
-        assert coordinator is not None
-        active_wave = json.loads(
-            (
-                self.run_dir
-                / "orchestration"
-                / "waves"
-                / f"{coordinator['active_wave']}.json"
-            ).read_text(encoding="utf-8")
-        )
-        self.assertTrue(
-            contract_delta.contract_delta_active(
-                pw.verify_workspace(self.workspace),
-                self.run_dir,
-                coordinator,
-                active_wave,
-            )
-        )
-        handoff = self.run_dir / "handoff.md"
-        handoff.write_text(
-            handoff.read_text(encoding="utf-8")
-            + """
-
-### task-4
-
-- Status: pending
-- Depends on: task-1
-- Write claims: exact: services/example/one.txt
-- Conflict domains: files:one.txt
-- Implementation steps: correct the retained integration
-- Validation: inspect the correction
-- End-to-end validation: verify the adopted contract remains in integration
-- Done criteria: the correction is merged after contract adoption
-""",
-            encoding="utf-8",
-        )
-        handoff.chmod(0o600)
-        adopted_head = str(adopted["contract_head"])
-        journal_path = self.run_dir / "orchestration" / "contract-delta-adoption.json"
-        journal_bytes = journal_path.read_bytes()
-        unrelated = integration / "services" / "example" / "one.txt"
-        unrelated.write_text("unattested descendant\n", encoding="utf-8")
-        git("add", "services/example/one.txt", cwd=integration)
-        git("commit", "-m", "unrelated integration descendant", cwd=integration)
-        self.assertTrue(
-            contract_delta.contract_delta_active(
-                pw.verify_workspace(self.workspace),
-                self.run_dir,
-                coordinator,
-                active_wave,
-            )
-        )
-        with self.assertRaises(PromptWorkspaceError) as descendant_replan:
-            pw.replan_waves(
-                self.workspace,
-                self.run_id,
-                2,
-                clock=lambda: FIXED + timedelta(seconds=2),
-            )
-        self.assertEqual(descendant_replan.exception.code, "WORKTREE_CONFLICT")
-
-        forward_journal = json.loads(journal_bytes)
-        forward_journal["contract_head"] = git("rev-parse", "HEAD", cwd=integration)
-        journal_path.write_text(
-            json.dumps(forward_journal, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
-        self.assertFalse(
-            contract_delta.contract_delta_active(
-                pw.verify_workspace(self.workspace),
-                self.run_dir,
-                coordinator,
-                active_wave,
-            )
-        )
-        with self.assertRaises(PromptWorkspaceError) as forward_journal_replan:
-            pw.replan_waves(
-                self.workspace,
-                self.run_id,
-                2,
-                clock=lambda: FIXED + timedelta(seconds=2),
-            )
-        self.assertEqual(forward_journal_replan.exception.code, "WORKTREE_CONFLICT")
-        journal_path.write_bytes(journal_bytes)
-        git("reset", "--hard", adopted_head, cwd=integration)
-
-        replanned = pw.replan_waves(
-            self.workspace, self.run_id, 2, clock=lambda: FIXED + timedelta(seconds=2)
-        )
-        self.assertEqual(replanned["waves"][0]["tasks"][-1]["task_id"], "task-4")
-        prepared = pw.prepare_wave(
-            self.workspace, self.run_id, clock=lambda: FIXED + timedelta(seconds=3)
-        )
-        self.assertEqual(prepared["contract_commit"], adopted["contract_head"])
-        self.assertNotEqual(prepared["contract_commit"], prepared["base_commit"])
-        self.assertEqual(
-            git("rev-parse", "HEAD", cwd=integration), prepared["contract_commit"]
-        )
-        project, inspect_command = self._lifecycle_inspect_command(integration)
-        authorized = pw.authorize_project_agent_lifecycle(
-            self.workspace, self.run_id, inspect_command
-        )
-        self.assertEqual(authorized["status"], "authorized")
-        self.assertEqual(authorized["action"], "inspect")
-        self.assertEqual(authorized["project_root"], str(project))
-
-        unrelated.write_text("unattested descendant\n", encoding="utf-8")
-        git("add", "services/example/one.txt", cwd=integration)
-        git("commit", "-m", "unrelated prepared descendant", cwd=integration)
-        with self.assertRaises(PromptWorkspaceError) as descendant_authorization:
-            pw.authorize_project_agent_lifecycle(
-                self.workspace, self.run_id, inspect_command
-            )
-        self.assertEqual(
-            descendant_authorization.exception.code, "EXECUTION_STATE_INVALID"
-        )
-        git("reset", "--hard", adopted_head, cwd=integration)
-
-        stale_journal = json.loads(journal_bytes)
-        stale_journal["contract_head"] = stale_journal["integration_base"]
-        journal_path.write_text(
-            json.dumps(stale_journal, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
-        with self.assertRaises(PromptWorkspaceError) as stale_authorization:
-            pw.authorize_project_agent_lifecycle(
-                self.workspace, self.run_id, inspect_command
-            )
-        self.assertEqual(stale_authorization.exception.code, "EXECUTION_STATE_INVALID")
-        journal_path.write_bytes(journal_bytes)
-
-        git("reset", "--hard", prepared["base_commit"], cwd=integration)
-        with self.assertRaises(PromptWorkspaceError) as base_authorization:
-            pw.authorize_project_agent_lifecycle(
-                self.workspace, self.run_id, inspect_command
-            )
-        self.assertEqual(base_authorization.exception.code, "EXECUTION_STATE_INVALID")
-        git("reset", "--hard", adopted_head, cwd=integration)
-
-        pw.dispatch_wave(
-            self.workspace,
-            self.run_id,
-            str(adopted["contract_head"]),
-            clock=lambda: FIXED + timedelta(seconds=4),
-        )
-        self._complete_worker("task-4", "one.txt")
-        corrected = pw.integrate_wave(
-            self.workspace, self.run_id, clock=lambda: FIXED + timedelta(seconds=5)
-        )
-        evidence_value = json.loads(evidence.read_text(encoding="utf-8"))
-        evidence_value["integration_head"] = str(corrected["integrated_head"])
-        evidence.write_text(json.dumps(evidence_value), encoding="utf-8")
-        evidence.chmod(0o600)
-        with mock.patch.object(
-            waves,
-            "promote_ff_only",
-            side_effect=waves.GitPromotionError("injected promotion failure"),
-        ):
-            with self.assertRaises(PromptWorkspaceError) as failed:
-                pw.promote_wave(
-                    self.workspace,
-                    self.run_id,
-                    evidence,
-                    clock=lambda: FIXED + timedelta(seconds=6),
-                )
-        self.assertEqual(failed.exception.code, "PROMOTION_BLOCKED")
-        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.initial)
-        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), lane_status)
-        restored_journal = contract_delta.contract_delta_journal(self.run_dir)
-        assert restored_journal is not None
-        self.assertEqual(restored_journal["phase"], "integration-committed")
-        self.assertIsNone(restored_journal["promotion_target"])
-
-        reconciled_requirements = integration / "services/example/docs/requirements.md"
-        reconciled_requirements.write_text(
-            reconciled_requirements.read_text(encoding="utf-8").replace(
-                "- Validated waves progress.\n",
-                "- Validated waves progress.\n"
-                "- Retained corrections are reflected before promotion.\n",
-            ),
-            encoding="utf-8",
-        )
-        final = pw.commit_coordinator_delta(
-            self.workspace,
-            self.run_id,
-            clock=lambda: FIXED + timedelta(seconds=7),
-        )
-        evidence_value["integration_head"] = final["commit"]
-        evidence.write_text(json.dumps(evidence_value), encoding="utf-8")
-        evidence.chmod(0o600)
-
-        coordinator = waves.load_coordinator_state(self.run_dir)
-        assert coordinator is not None
-        active_wave = json.loads(
-            (
-                self.run_dir
-                / "orchestration"
-                / "waves"
-                / f"{coordinator['active_wave']}.json"
-            ).read_text(encoding="utf-8")
-        )
-        self.assertTrue(
-            contract_delta.contract_delta_active(
-                pw.verify_workspace(self.workspace),
-                self.run_dir,
-                coordinator,
-                active_wave,
-            )
-        )
-        resumed = resume.plan_run_resume(
-            pw.verify_workspace(self.workspace),
-            self.run_id,
-            clock=lambda: FIXED + timedelta(seconds=8),
-        )
-        self.assertIn(resumed["outcome"], {"execute", "requires_confirmation"})
-        self.assertIn(
-            resumed["next_transition"],
-            {"wave-promote", "wave-resource-recover"},
-        )
-
-        with mock.patch.object(
-            waves,
-            "promote_ff_only",
-            side_effect=waves.GitPromotionError(
-                "injected post-reconciliation promotion failure"
-            ),
-        ):
-            with self.assertRaises(PromptWorkspaceError) as reconciled_failure:
-                pw.promote_wave(
-                    self.workspace,
-                    self.run_id,
-                    evidence,
-                    clock=lambda: FIXED + timedelta(seconds=9),
-                )
-        self.assertEqual(reconciled_failure.exception.code, "PROMOTION_BLOCKED")
-        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), lane_status)
-        restored_after_reconciliation = contract_delta.contract_delta_journal(
-            self.run_dir
-        )
-        assert restored_after_reconciliation is not None
-        self.assertEqual(
-            restored_after_reconciliation["phase"], "integration-committed"
-        )
-
-        with mock.patch.object(
-            waves,
-            "record_promotion",
-            side_effect=RuntimeError("injected post-fast-forward interruption"),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "post-fast-forward interruption"):
-                pw.promote_wave(
-                    self.workspace,
-                    self.run_id,
-                    evidence,
-                    clock=lambda: FIXED + timedelta(seconds=10),
-                )
-        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), final["commit"])
-        interrupted_wave = json.loads(
-            (
-                self.run_dir
-                / "orchestration"
-                / "waves"
-                / f"{coordinator['active_wave']}.json"
-            ).read_text(encoding="utf-8")
-        )
-        self.assertEqual(interrupted_wave["status"], "promotion_pending")
-
-        promoted = pw.promote_wave(
-            self.workspace,
-            self.run_id,
-            evidence,
-            clock=lambda: FIXED + timedelta(seconds=11),
-        )
-        self.assertEqual(promoted["promoted_head"], final["commit"])
-        self.assertEqual(git("status", "--short", cwd=self.repo), "")
-        promoted_journal = contract_delta.contract_delta_journal(self.run_dir)
-        assert promoted_journal is not None
-        self.assertEqual(promoted_journal["phase"], "promoted")
-
-        self.impact_plan_gate.stop()
-        self.refinement_gate.stop()
-        lane_requirements = self.scope / "docs/requirements.md"
-        lane_requirements.write_bytes(
-            lane_requirements.read_bytes() + b"\n<!-- unrelated drift -->\n"
-        )
-        with self.assertRaises(PromptWorkspaceError) as unrelated_drift:
-            pw.cleanup_wave(
-                self.workspace,
-                self.run_id,
-                clock=lambda: FIXED + timedelta(seconds=12),
-            )
-        self.assertEqual(unrelated_drift.exception.code, "REPLAN_REQUIRED")
-        git(
-            "restore",
-            "--worktree",
-            "--",
-            "services/example/docs/requirements.md",
-            cwd=self.repo,
-        )
-        cleaned = pw.cleanup_wave(
-            self.workspace,
-            self.run_id,
-            clock=lambda: FIXED + timedelta(seconds=13),
-        )
-        self.assertEqual(cleaned["status"], "done")
-        current_impact = specs.load_current_prompt_impact(self.run_dir, required=True)
-        assert current_impact is not None
-        self.assertGreater(int(current_impact[0]["generation"]), 1)
-        current_coordinator = waves.load_coordinator_state(self.run_dir)
-        assert current_coordinator is not None
-        specs.verify_prompt_impact_plan(
-            self.run_dir,
-            current_coordinator,
-            self.scope,
-        )
-
-        next_wave = {
-            "wave_id": "wave-002",
-            "base_commit": final["commit"],
-        }
-        current_coordinator["waves"].append({"wave_id": "wave-002"})
-        current_coordinator["active_wave"] = "wave-002"
-        self.assertFalse(
-            contract_delta.recover_contract_delta_promotion(
-                pw.verify_workspace(self.workspace),
-                self.run_dir,
-                current_coordinator,
-                next_wave,
-            )
-        )
-        contract_delta.complete_contract_delta_promotion(
-            pw.verify_workspace(self.workspace),
-            self.run_dir,
-            current_coordinator,
-            next_wave,
-            final["commit"],
-        )
-        self.assertEqual(
-            contract_delta.contract_delta_journal(self.run_dir),
-            promoted_journal,
-        )
-
-        tampered_promoted_journal = dict(promoted_journal)
-        tampered_promoted_journal["promotion_target"] = self.initial
-        journal_path.write_text(
-            json.dumps(
-                tampered_promoted_journal,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        with self.assertRaises(PromptWorkspaceError) as stale_promoted_journal:
-            contract_delta.recover_contract_delta_promotion(
-                pw.verify_workspace(self.workspace),
-                self.run_dir,
-                current_coordinator,
-                next_wave,
-            )
-        self.assertEqual(
-            stale_promoted_journal.exception.code,
-            "EXECUTION_STATE_INVALID",
-        )
-        journal_path.write_text(
-            json.dumps(promoted_journal, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
 
     def test_promotion_review_correction_cannot_depend_on_future_work(self) -> None:
         self._integrated_first_wave()
@@ -5413,6 +3744,7 @@ class WorktreeWaveTest(unittest.TestCase):
             "summary": "Reported exact tracked dirt outside immutable claims.",
             "decisions": ["Preserve it only through the quarantine owner."],
             "open_risks": ["A corrected assignment is required."],
+            "spec_gaps": [],
             "validation": "Recovery preflight only.",
             "end_to_end_validation": "No product validation was run.",
             "code_review": "No commit was authorized.",

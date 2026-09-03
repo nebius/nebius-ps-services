@@ -44,11 +44,9 @@ gateway_group:
     #   - node_id: "gateway-a"
     #     instance_index: 0
     #     role: "active"
-    #     nebius_credentials_path: "/operator-secrets/gateway-a/nebius-credentials.json"
     #   - node_id: "gateway-b"
     #     instance_index: 1
     #     role: "passive"
-    #     nebius_credentials_path: "/operator-secrets/gateway-b/nebius-credentials.json"
   external_ips: []  # []=auto
   # Example (list per VM, inner list per NIC):
   # external_ips:

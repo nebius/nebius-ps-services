@@ -32,13 +32,14 @@ from project_specs_lib.contracts import (  # noqa: E402
     canonical_digest,
 )
 from project_specs_lib.impact import (  # noqa: E402
-    CLAIM_SCHEMA,
-    RECEIPT_SCHEMA,
+    CLAIM_SCHEMA as SHARED_CLAIM_SCHEMA,
     public_impact_status,
-    validate_prompt_impact,
+    validate_prompt_impact as validate_shared_prompt_impact,
 )
 
 
+CLAIM_SCHEMA = "agentic-sdlc/prompt-impact-claim-v1"
+RECEIPT_SCHEMA = "agentic-sdlc/prompt-impact-receipt-v1"
 LEDGER_SCHEMA = "agentic-sdlc/prompt-impact-ledger-v1"
 EXECUTION_BASIS_SCHEMA = "agentic-sdlc/prompt-impact-execution-basis-v1"
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -57,6 +58,21 @@ class PromptImpactError(RuntimeError):
 
 def claim_path(run_dir: Path) -> Path:
     return run_dir / "prompt-impact-claim.json"
+
+
+def _derive_prompt_impact(
+    project_root: Path, *, claim: dict[str, object], **arguments: object
+) -> dict[str, object]:
+    """Use the pure shared validator without inheriting lifecycle-owned schemas."""
+
+    shared_claim = {**claim, "schema": SHARED_CLAIM_SCHEMA}
+    receipt = validate_shared_prompt_impact(
+        project_root,
+        workflow="agentic-sdlc",
+        claim=shared_claim,
+        **arguments,
+    )
+    return {**receipt, "schema": RECEIPT_SCHEMA}
 
 
 def _root(run_dir: Path) -> Path:
@@ -337,9 +353,8 @@ def _publish_locked(
             else prior.get("spec_receipt_sha256")
         )
         try:
-            retry = validate_prompt_impact(
+            retry = _derive_prompt_impact(
                 project_root,
-                workflow="agentic-sdlc",
                 prompt_id=str(binding["prompt_id"]),
                 revision=str(latest["revision"]),
                 prompt_sha256=str(latest["sha256"]),
@@ -365,9 +380,8 @@ def _publish_locked(
     maximum = _max_attempt_generation(root)
     while True:
         try:
-            receipt = validate_prompt_impact(
+            receipt = _derive_prompt_impact(
                 project_root,
-                workflow="agentic-sdlc",
                 prompt_id=str(binding["prompt_id"]),
                 revision=str(latest["revision"]),
                 prompt_sha256=str(latest["sha256"]),

@@ -42,14 +42,23 @@ from nebius_cxcli.slurm_jobs import (
     SLURM_PARTITION_CUSTOMER_OWNED_FIELDS,
     SLURM_PARTITION_DERIVED_TOPOLOGY_FIELDS,
     AffectedSlurmJob,
+    canonical_slurm_partition_migration_record,
+    parse_scontrol_show_job_record,
     parse_scontrol_show_partition_states,
     parse_squeue_jobs,
+    slurm_job_control_is_held,
+    slurm_job_control_record_from_payload,
+    slurm_job_control_record_from_query,
     slurm_job_is_active,
     slurm_job_is_terminating,
+    slurm_partition_alloc_nodes_is_all,
+    slurm_partition_configuration_from_preimage,
+    slurm_partition_migration_fields_match,
     slurm_partition_owned_fields_match,
     slurm_partition_pause_records,
     slurm_partitions_overlapping_nodes,
     slurm_remaining_seconds,
+    slurm_requeuehold_eligibility,
 )
 
 
@@ -88,6 +97,94 @@ def _binding(job_id: str) -> SlurmJobActionBinding:
         identity_fingerprint=f"identity-{job_id}",
         lineage_fingerprint=f"lineage-{job_id}",
     )
+
+
+def test_scontrol_job_record_proves_batch_requeuehold_eligibility_and_identity() -> None:
+    record = parse_scontrol_show_job_record(
+        "JobId=41 JobIdRaw=41 JobName=train UserId=alice(1001) "
+        "JobState=RUNNING BatchFlag=1 SubmitTime=2026-09-01T10:00:00 "
+        "Priority=100 Reason=None"
+    )
+
+    assert slurm_requeuehold_eligibility(record) == (
+        True,
+        "eligible running batch job",
+    )
+    assert slurm_job_control_record_from_payload(record.as_payload()) == record
+    assert record.identity_sha256.startswith("sha256:")
+
+
+def test_scontrol_job_query_binds_exact_requested_identity_and_missing_job() -> None:
+    output = (
+        "JobId=41 JobName=train UserId=alice(1001) JobState=RUNNING "
+        "BatchFlag=1 SubmitTime=2026-09-01T10:00:00 Priority=100 Reason=None"
+    )
+
+    record = slurm_job_control_record_from_query(
+        requested_job_id="41",
+        returncode=0,
+        stdout=output,
+        stderr="",
+    )
+
+    assert record is not None and record.job_id == "41"
+    assert (
+        slurm_job_control_record_from_query(
+            requested_job_id="41",
+            returncode=1,
+            stdout="",
+            stderr="slurm_load_jobs error: Invalid job id specified",
+        )
+        is None
+    )
+    with pytest.raises(RuntimeError, match="different job identity"):
+        slurm_job_control_record_from_query(
+            requested_job_id="42",
+            returncode=0,
+            stdout=output,
+            stderr="",
+        )
+
+
+@pytest.mark.parametrize(
+    ("state", "batch_flag", "reason"),
+    [
+        ("COMPLETING", 1, "job is completing"),
+        ("RUNNING", 0, "not a batch job"),
+        ("PENDING", 1, "state PENDING is not safely requeueable"),
+    ],
+)
+def test_scontrol_job_record_routes_unsupported_jobs_to_wait_only(
+    state: str,
+    batch_flag: int,
+    reason: str,
+) -> None:
+    record = parse_scontrol_show_job_record(
+        f"JobId=41 JobName=train UserId=alice(1001) JobState={state} "
+        f"BatchFlag={batch_flag} SubmitTime=2026-09-01T10:00:00 "
+        "Priority=100 Reason=None"
+    )
+
+    assert slurm_requeuehold_eligibility(record) == (False, reason)
+
+
+def test_scontrol_job_record_requires_exact_pending_hold_postimage() -> None:
+    held = parse_scontrol_show_job_record(
+        "JobId=41 JobName=train UserId=alice(1001) JobState=PENDING "
+        "BatchFlag=2 SubmitTime=2026-09-01T10:00:00 Priority=0 "
+        "Reason=JobHeldAdmin"
+    )
+    not_held = parse_scontrol_show_job_record(
+        "JobId=41 JobName=train UserId=alice(1001) JobState=PENDING "
+        "BatchFlag=2 SubmitTime=2026-09-01T10:00:00 Priority=0 Reason=Resources"
+    )
+
+    assert slurm_job_control_is_held(held) is True
+    assert slurm_job_control_is_held(not_held) is False
+    tampered = held.as_payload()
+    tampered["submit_time"] = "2026-09-01T11:00:00"
+    with pytest.raises(ValueError, match="identity digest"):
+        slurm_job_control_record_from_payload(tampered)
 
 
 def _journal_provider(journal: Mapping[str, Any]):
@@ -131,6 +228,19 @@ def test_slurm_partition_pause_records_only_up_partitions() -> None:
     assert len(record.previous_record_fingerprint) == 64
     assert record.applied_record == ""
     assert record.applied_record_fingerprint == ""
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        "PartitionName=gpu State",
+        "PartitionName=gpu Nodes=worker-0",
+        "PartitionName=gpu State=UP\nPartitionName=gpu State=DOWN",
+    ),
+)
+def test_partition_state_parser_rejects_incomplete_or_duplicate_evidence(output: str) -> None:
+    with pytest.raises(ValueError, match="Slurm partition observation"):
+        parse_scontrol_show_partition_states(output)
 
 
 def test_slurm_partition_pause_records_fail_closed_for_unknown_partition() -> None:
@@ -187,6 +297,149 @@ def test_slurm_partition_pause_observation_rejects_unknown_field_drift() -> None
 
     with pytest.raises(ValueError, match="customer-owned or unknown field"):
         record.with_applied_observation(applied)
+
+
+def test_slurm_partition_migration_view_ignores_only_topology_and_exact_defaults() -> None:
+    source = (
+        "PartitionName=main State=DOWN Nodes=worker-[0-1] NodeSets=ALL "
+        "Default=YES PriorityTier=10 TotalNodes=2 TotalCPUs=32"
+    )
+    target = (
+        "PartitionName=main State=DOWN Nodes=worker-0-[0-1] NodeSets=worker-0 "
+        "Default=YES PriorityTier=10 TotalNodes=2 TotalCPUs=28 "
+        "PowerDownOnIdle=NO ResumeTimeout=GLOBAL SuspendTimeout=GLOBAL "
+        "SuspendTime=GLOBAL"
+    )
+
+    assert slurm_partition_migration_fields_match(source, target)
+    assert not slurm_partition_owned_fields_match(source, target)
+    assert not slurm_partition_migration_fields_match(
+        source,
+        target.replace("PriorityTier=10", "PriorityTier=11"),
+    )
+    assert not slurm_partition_migration_fields_match(source, target + " FutureField=value")
+
+
+def test_slurm_partition_migration_view_normalizes_slurm_25_11_unlimited_memory_output() -> None:
+    source = (
+        "PartitionName=main State=DOWN Nodes=worker-[0-1] "
+        "DefMemPerNode=UNLIMITED MaxMemPerNode=UNLIMITED"
+    )
+    target = (
+        "PartitionName=main State=DOWN Nodes=worker-0-[0-1] "
+        "DefMemPerCPU=9223372036854775807 MaxMemPerCPU=9223372036854775807 "
+        "PowerDownOnIdle=NO ResumeTimeout=GLOBAL SuspendTimeout=GLOBAL "
+        "SuspendTime=GLOBAL"
+    )
+
+    assert slurm_partition_migration_fields_match(source, target)
+    assert not slurm_partition_owned_fields_match(source, target)
+    assert not slurm_partition_migration_fields_match(
+        source,
+        target.replace("DefMemPerCPU=9223372036854775807", "DefMemPerCPU=1024"),
+    )
+    assert not slurm_partition_migration_fields_match(
+        source,
+        target.replace("MaxMemPerCPU=9223372036854775807", "MaxMemPerCPU=2048"),
+    )
+
+
+def test_slurm_partition_migration_view_rejects_conflicting_memory_modes() -> None:
+    source = (
+        "PartitionName=main State=DOWN DefMemPerNode=UNLIMITED DefMemPerCPU=9223372036854775807"
+    )
+
+    with pytest.raises(ValueError, match="mutually exclusive memory fields"):
+        canonical_slurm_partition_migration_record(source)
+
+
+def test_slurm_partition_alloc_nodes_all_detection_is_exact() -> None:
+    assert slurm_partition_alloc_nodes_is_all("AllocNodes=ALL PartitionName=main State=UP")
+    assert not slurm_partition_alloc_nodes_is_all(
+        "AllocNodes=login-[0-1] PartitionName=main State=UP"
+    )
+    assert not slurm_partition_alloc_nodes_is_all("PartitionName=main State=UP")
+
+
+@pytest.mark.parametrize(
+    "memory_field,memory_value,target_field",
+    (
+        ("DefMemPerNode", "UNLIMITED", "DefMemPerNode"),
+        ("MaxMemPerNode", "UNLIMITED", "MaxMemPerNode"),
+        ("DefMemPerCPU", "UNLIMITED", "DefMemPerCPU"),
+        ("MaxMemPerCPU", "UNLIMITED", "MaxMemPerCPU"),
+        ("DefMemPerCPU", "9223372036854775807", "DefMemPerNode"),
+        ("MaxMemPerCPU", "9223372036854775807", "MaxMemPerNode"),
+    ),
+)
+def test_target_partition_projection_preserves_unlimited_memory_as_explicit_zero(
+    memory_field: str,
+    memory_value: str,
+    target_field: str,
+) -> None:
+    states = parse_scontrol_show_partition_states(
+        f"PartitionName=main State=UP {memory_field}={memory_value} Nodes=worker-0"
+    )
+
+    projected = slurm_partition_configuration_from_preimage(states)
+    legacy_projected = slurm_partition_configuration_from_preimage(
+        states,
+        output_sentinel_policy="legacy-v1",
+    )
+
+    assert f"{target_field}=0" in projected["partitions"][0]["config"]
+    assert "9223372036854775807" not in projected["partitions"][0]["config"]
+    assert "=UNLIMITED" not in projected["partitions"][0]["config"]
+    assert f"{memory_field}={memory_value}" in legacy_projected["partitions"][0]["config"]
+
+
+def test_target_partition_projection_preserves_finite_memory_policy() -> None:
+    states = parse_scontrol_show_partition_states(
+        "PartitionName=main State=UP DefMemPerNode=174080 MaxMemPerNode=174080 Nodes=worker-0"
+    )
+
+    projected = slurm_partition_configuration_from_preimage(states)
+
+    assert "DefMemPerNode=174080" in projected["partitions"][0]["config"]
+    assert "MaxMemPerNode=174080" in projected["partitions"][0]["config"]
+
+
+def test_slurm_partition_preimage_projects_every_policy_down_without_topology() -> None:
+    states = parse_scontrol_show_partition_states(
+        "\n".join(
+            (
+                "PartitionName=background State=UP Nodes=worker-[0-1] NodeSets=ALL "
+                "Hidden=YES PriorityTier=1 DefaultTime=NONE OverTimeLimit=NONE "
+                "SelectTypeParameters=NONE JobDefaults=(null) QoS=N/A TotalNodes=2",
+                "PartitionName=main State=UP Nodes=worker-[0-1] NodeSets=ALL "
+                "Default=YES PriorityTier=10 PreemptMode=REQUEUE TotalNodes=2",
+            )
+        )
+    )
+
+    projected = slurm_partition_configuration_from_preimage(states, desired_state="DOWN")
+    legacy_projected = slurm_partition_configuration_from_preimage(
+        states,
+        desired_state="DOWN",
+        output_sentinel_policy="legacy-v1",
+    )
+
+    assert projected["configType"] == "structured"
+    partitions = projected["partitions"]
+    assert isinstance(partitions, list)
+    assert [item["name"] for item in partitions] == ["background", "main"]
+    assert all(item["isAll"] is True for item in partitions)
+    assert all("State=DOWN" in item["config"] for item in partitions)
+    assert "Hidden=YES" in partitions[0]["config"]
+    assert "PreemptMode=REQUEUE" in partitions[1]["config"]
+    assert all("Nodes=" not in item["config"] for item in partitions)
+    assert all("NodeSets=" not in item["config"] for item in partitions)
+    assert "JobDefaults=" not in partitions[0]["config"]
+    assert "QoS=" not in partitions[0]["config"]
+    assert "DefaultTime=" not in partitions[0]["config"]
+    assert "OverTimeLimit=" not in partitions[0]["config"]
+    assert "SelectTypeParameters=" not in partitions[0]["config"]
+    assert "DefaultTime=NONE" in legacy_projected["partitions"][0]["config"]
 
 
 def test_slurm_partitions_overlapping_nodes_include_hidden_and_background() -> None:

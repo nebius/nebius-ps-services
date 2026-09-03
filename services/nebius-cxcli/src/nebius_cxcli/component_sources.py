@@ -534,12 +534,6 @@ class HelmChartLocator:
 
 
 @dataclass(frozen=True)
-class SoperatorNodesetsProfileSettings:
-    default: str = ""
-    profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class HelmChartUsage:
     lifecycle: str = ""
     config_ref: str = ""
@@ -567,7 +561,6 @@ class HelmChartSource:
     mk8s_gpu: Mk8sGpuAppPolicy = Mk8sGpuAppPolicy()
     observability: AppObservabilitySettings = AppObservabilitySettings()
     grafana: GrafanaCliSettings = GrafanaCliSettings()
-    soperator_nodesets: SoperatorNodesetsProfileSettings = SoperatorNodesetsProfileSettings()
 
     @property
     def chart_name(self) -> str | None:
@@ -2614,130 +2607,6 @@ def _parse_grafana_cli_settings(
     )
 
 
-_SOPERATOR_PLACEMENT_KINDS = {
-    "platform-support",
-    "slurm-service",
-    "slurm-worker-nodeset",
-}
-
-
-def _validate_soperator_nodesets_profile(raw_profile: dict[str, Any], *, field_label: str) -> None:
-    if "role_mapping" in raw_profile:
-        raise ValueError(
-            f"{field_label}.role_mapping is no longer supported; use {field_label}.placements"
-        )
-    placements = raw_profile.get("placements")
-    if placements is not None:
-        if not isinstance(placements, dict):
-            raise ValueError(f"{field_label}.placements must be a mapping")
-        for raw_name, raw_placement in placements.items():
-            name = _as_text(raw_name)
-            if not name:
-                raise ValueError(f"{field_label}.placements entries must have non-empty names")
-            if not isinstance(raw_placement, dict):
-                raise ValueError(f"{field_label}.placements.{name} must be a mapping")
-            for legacy_key in (
-                "k8s_node_filter_name",
-                "chart_filter_paths",
-                "chart_affinity_paths",
-            ):
-                if legacy_key in raw_placement:
-                    raise ValueError(
-                        f"{field_label}.placements.{name}.{legacy_key} is no longer supported"
-                    )
-            kind = _as_text(raw_placement.get("kind"))
-            if kind not in _SOPERATOR_PLACEMENT_KINDS:
-                allowed = ", ".join(sorted(_SOPERATOR_PLACEMENT_KINDS))
-                raise ValueError(
-                    f"{field_label}.placements.{name}.kind must be one of: {allowed}"
-                )
-            bindings = raw_placement.get("soperator_value_bindings")
-            if bindings is not None and not isinstance(bindings, dict):
-                raise ValueError(
-                    f"{field_label}.placements.{name}.soperator_value_bindings must be a mapping"
-                )
-    mk8s_profile = raw_profile.get("mk8s")
-    if isinstance(mk8s_profile, dict):
-        node_groups = mk8s_profile.get("node_groups")
-        if isinstance(node_groups, dict):
-            for raw_group_name, raw_group in node_groups.items():
-                if isinstance(raw_group, dict) and "nodeset_name" in raw_group:
-                    group_name = _as_text(raw_group_name)
-                    raise ValueError(
-                        f"{field_label}.mk8s.node_groups.{group_name}.nodeset_name "
-                        "is no longer supported for service/support node groups; "
-                        "use placement_name"
-                    )
-        worker_nodesets = mk8s_profile.get("worker_nodesets")
-        if isinstance(worker_nodesets, list):
-            for index, raw_worker in enumerate(worker_nodesets):
-                if not isinstance(raw_worker, dict):
-                    continue
-                if "node_group_key_prefix" in raw_worker:
-                    raise ValueError(
-                        f"{field_label}.mk8s.worker_nodesets[{index}].node_group_key_prefix "
-                        "is no longer supported; use node_group_prefix"
-                    )
-                if "autoscaling_input" in raw_worker:
-                    raise ValueError(
-                        f"{field_label}.mk8s.worker_nodesets[{index}].autoscaling_input "
-                        "is no longer supported; worker autoscaling is controlled through "
-                        "inputs.soperator.worker_node_groups.<worker>.autoscaling"
-                    )
-                for input_field, legacy_path in {
-                    "total_nodes_input": "soperator.worker_total_nodes",
-                    "nodes_per_group_input": "soperator.worker_nodes_per_group",
-                }.items():
-                    if _as_text(raw_worker.get(input_field)) == legacy_path:
-                        raise ValueError(
-                            f"{field_label}.mk8s.worker_nodesets[{index}].{input_field} "
-                            f"must not use removed helper {legacy_path}; use a CPU/GPU "
-                            "shape-specific worker helper"
-                        )
-
-
-def _parse_soperator_nodesets_profile_settings(
-    raw: Any,
-    *,
-    field_label: str,
-) -> SoperatorNodesetsProfileSettings:
-    if raw is None:
-        return SoperatorNodesetsProfileSettings()
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"default", "profiles"}
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown:
-        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-
-    profiles_raw = raw.get("profiles")
-    if profiles_raw is None:
-        profiles_raw = {}
-    if not isinstance(profiles_raw, dict):
-        raise ValueError(f"{field_label}.profiles must be a mapping")
-
-    profiles: dict[str, dict[str, Any]] = {}
-    for raw_name, raw_profile in profiles_raw.items():
-        name = _as_text(raw_name)
-        if not name:
-            raise ValueError(f"{field_label}.profiles entries must have non-empty names")
-        if not isinstance(raw_profile, dict):
-            raise ValueError(f"{field_label}.profiles.{name} must be a mapping")
-        _validate_soperator_nodesets_profile(
-            raw_profile,
-            field_label=f"{field_label}.profiles.{name}",
-        )
-        profiles[name] = copy.deepcopy(raw_profile)
-
-    default = _as_text(raw.get("default"))
-    if default and default not in profiles:
-        raise ValueError(f"{field_label}.default references unknown profile '{default}'")
-    if not default and len(profiles) == 1:
-        default = next(iter(profiles))
-
-    return SoperatorNodesetsProfileSettings(default=default, profiles=profiles)
-
-
 def _grafana_dashboard_defaults(
     defaults: tuple[ComponentDefault, ...],
 ) -> dict[tuple[str, str], Mapping[str, Any]]:
@@ -3109,21 +2978,18 @@ def _parse_app_component_cli(
     Mk8sGpuAppPolicy,
     AppObservabilitySettings,
     GrafanaCliSettings,
-    SoperatorNodesetsProfileSettings,
 ]:
     if raw is None:
         return (
             Mk8sGpuAppPolicy(),
             AppObservabilitySettings(),
             GrafanaCliSettings(),
-            SoperatorNodesetsProfileSettings(),
         )
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {
         "mk8s_gpu_policy",
         "observability",
-        "soperator_nodesets_profile",
     } | GRAFANA_CLI_SETTING_KEYS
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
@@ -3141,10 +3007,6 @@ def _parse_app_component_cli(
         _parse_grafana_cli_settings(
             grafana_raw or None,
             field_label=field_label,
-        ),
-        _parse_soperator_nodesets_profile_settings(
-            raw.get("soperator_nodesets_profile"),
-            field_label=f"{field_label}.soperator_nodesets_profile",
         ),
     )
 
@@ -4053,6 +3915,11 @@ def _parse_sources_payload(
         component_id = _as_text(component_id_raw)
         if not component_id:
             continue
+        if normalize_component_token(component_id) == "soperator":
+            raise ValueError(
+                "components.apps.soperator is no longer supported in component_sources; "
+                "use the dedicated `nebius-cxcli soperator` lifecycle commands"
+            )
         if not isinstance(raw, dict):
             raise ValueError(f"components.apps.{component_id} must be a mapping")
         supported_chart_keys = {
@@ -4138,7 +4005,7 @@ def _parse_sources_payload(
             field_label=f"components.apps.{component_id}.defaults",
         )
         raw_cli = cli_settings.apps.get(component_id)
-        mk8s_gpu, observability, grafana, soperator_nodesets = _parse_app_component_cli(
+        mk8s_gpu, observability, grafana = _parse_app_component_cli(
             raw_cli,
             field_label=f"components.apps.{component_id}.cli",
         )
@@ -4178,7 +4045,6 @@ def _parse_sources_payload(
                 mk8s_gpu=mk8s_gpu,
                 observability=observability,
                 grafana=grafana,
-                soperator_nodesets=soperator_nodesets,
             )
         )
 

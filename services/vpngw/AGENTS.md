@@ -1,4 +1,4 @@
-<!-- project-agent-instructions:managed-v3 manifest-sha256=237770ceba91e468968a7f080cec93b111f90aebee6814f4a58ed2da681201e3 decision-sha256=863119b9e8d4335f48db3eceeefa739ce9db6cc3d7833829f02e0648d22a5de7 body-sha256=312c7188338308dd0e8fbd7f1849571c660256340ca19159c8bc46c964bc8e52 -->
+<!-- project-agent-instructions:managed-v3 manifest-sha256=8d74cd21bc42e6d384493eadf93f02f34807df4aa08b197996dffad07a9d2e9b decision-sha256=42903038b3f75f2e19442b6b9297173929ee2984575e0f36758634c8789db0c8 body-sha256=451c0ce58ba66be456f83a0705d7222e14db648634a44ed4ffb23f849028f12e -->
 
 # Project Agent Instructions
 
@@ -18,8 +18,8 @@ Closer nested instruction files may refine these defaults for their subtree.
 
 ## Change requirements
 
-- Breaking a supported API, CLI contract, configuration or persisted format, or upgrade path requires explicit approval, a deprecation or migration plan, and regression coverage. Keep internals on one canonical path.
-- This project has existing users. Preserve supported behavior and public interfaces across changes; treat unintended compatibility breakage as a regression.
+- Breaking supported APIs, CLI contracts, configuration or persisted formats, or upgrade paths requires explicit approval and regression coverage. REQ-008 and REQ-015 are approved pre-adoption VM-HA exceptions; keep one canonical implementation.
+- Preserve supported non-HA behavior and public interfaces except REQ-015's approved region-only rename. VM-HA is pre-adoption: add no legacy readers, aliases, dual modes, mixed-version fallbacks, or migration shims unless explicitly requested.
 
 ## Security and operations
 

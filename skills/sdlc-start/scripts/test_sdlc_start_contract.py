@@ -119,34 +119,51 @@ class SdlcStartContractTests(unittest.TestCase):
             ],
         )
 
-    def test_project_instructions_route_after_design(self) -> None:
+    def test_project_specs_validate_without_becoming_workflow_authority(self) -> None:
         self.assert_terms(
             "sdlc-start/SKILL.md",
             [
                 "`scripts/validate_project_specs.py`",
-                "project-agent-instructions.spec-validation.v3",
-                "`project-agent-instructions` before auto-steering",
-                "`maintain-project-specs` ownership",
-                "`reload_required: true`",
+                "exact canonical v2 pair",
+                "never authorizes auto-steering",
+                "Do not create, edit, retire, or reload project instructions automatically",
                 "`project-agent-instructions-change`",
             ],
         )
         self.assert_terms(
             "sdlc-start/references/state-schema.md",
             [
-                "4. project-agent-instructions",
-                "17. managed child only: outer-integration-pending",
-                "20. sdlc-merge-pr",
-                '"project-agent-instructions": 0',
+                '"project_spec_observation"',
+                '"status": "current|pending|invalid|migration-required"',
+                "recorded as advisory and does not block SDLC progress",
             ],
         )
         self.assert_terms(
             "sdlc-prepare-execution/SKILL.md",
             [
-                "ownership-receipted v3 selected-project",
-                "Reject an\n   unverified, reload-pending, edited, or human-owned `AGENTS.md`",
+                "already-effective",
+                "canonical v2 spec pair itself",
             ],
         )
+        sequence = self.text("sdlc-start/references/state-schema.md")
+        self.assertNotIn("4. project-agent-instructions", sequence)
+
+    def test_project_instruction_change_is_explicit_only(self) -> None:
+        start = self.text("sdlc-start/SKILL.md")
+        state_schema = self.text("sdlc-start/references/state-schema.md")
+        steering = self.text("sdlc-auto-steering/SKILL.md")
+        for content in (start, state_schema, steering):
+            normalized = " ".join(content.split())
+            self.assertIn(
+                "current user explicitly requested the separate mutation workflow",
+                normalized,
+            )
+            self.assertIn("advisory", content)
+        self.assertNotIn(
+            "`project-agent-instructions-change` to `project-agent-instructions`",
+            start,
+        )
+        self.assertNotIn("rerun the conditional decision", steering)
 
     def test_no_current_bare_continuation_contract(self) -> None:
         hook = self.text("sdlc-start/assets/hooks/stop_sdlc_continue.py")

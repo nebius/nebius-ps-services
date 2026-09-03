@@ -28,23 +28,6 @@ def _block_unit_test_network(
 
 
 @pytest.fixture(autouse=True)
-def _zero_fast_verification_convergence_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep failing fast-verification tests single-attempt and sleep-free.
-
-    The production default retries a failed read-only stage verification for a
-    bounded convergence budget; unit tests exercising failure paths must not
-    wait it out. Tests covering the retry loop set their own budget explicitly.
-    """
-    import nebius_cxcli.soperator_migration as soperator_migration
-
-    monkeypatch.setattr(
-        soperator_migration,
-        "_FAST_STAGE_VERIFICATION_CONVERGENCE_TIMEOUT_SECONDS",
-        0,
-    )
-
-
-@pytest.fixture(autouse=True)
 def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_outputs(module_source: str) -> tuple[ComponentOutput, ...]:
         source = str(module_source).strip().lower()

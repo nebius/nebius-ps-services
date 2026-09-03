@@ -1,7 +1,7 @@
 # Project Agent Instructions
 
-`project-agent-instructions` is an explicit-only, coordinator-owned support
-skill for `maintain-project-specs`. After the shared owner validates
+`project-agent-instructions` is an explicit-only mutation skill that may be
+routed by `maintain-project-specs`. After the shared owner validates
 the current requirements and design, the skill decides whether the exact
 selected project needs a concise `AGENTS.md` that should apply in every future
 agent session. `not-needed` is a valid result; specifications do not
@@ -33,10 +33,7 @@ automatically require a project instruction file.
 ## Coordinator Flow
 
 ```text
-ordinary project work, Task Implementer, or Agentic SDLC
-                         |
-                         v
-                 maintain-project-specs
+explicit user request or maintain-project-specs route
                          |
                          v
       canonical requirements/design receipt
@@ -45,21 +42,20 @@ ordinary project work, Task Implementer, or Agentic SDLC
 inspect context -> decide -> render -> implement -> apply safely -> verify
                          |
                          v
-continue, block, or restart in a fresh Codex session
+finish this mutation workflow or report its own blocker
 ```
 
-This is an internal workflow boundary. `maintain-project-specs` is the sole
-direct router; outer coordinators consume its decision through that owner. It
-has no standalone public workflow action, and its helper commands and flags
-are not a user-facing interface. Use `$project-agent-instructions --help` or
+Task Implementer and Agentic SDLC do not invoke, wait for, or seal this
+workflow; they read only the instruction chain already effective in their
+session and treat project-instruction lifecycle status as advisory. Helper
+commands and flags are not a user-facing interface. Use
+`$project-agent-instructions --help` or
 `$project-agent-instructions -h` only for report-only help; Help performs no
 inspection, mutation, or private-state write.
 
 When repository instruction bytes are created, attached, refreshed, or
-retired, the
-coordinator stops and starts a fresh Codex session before planning, contract
-lock, auto-steering, or worker dispatch. The fresh session replays validation
-and explicitly reads the active instruction file.
+retired, this workflow recommends a fresh Codex session before relying on the
+new rules. That recommendation never halts Task Implementer or Agentic SDLC.
 
 ## Decision And Ownership Model
 
@@ -94,18 +90,43 @@ Possible results are:
 
 The selected-project `AGENTS.md` is committed project truth. Manifests,
 decisions, ownership receipts, runtime declarations, approvals, and final state
-remain private outside Git. Adoption and retirement require exact target
-approval. An active receipt may be explicitly re-adopted after marker-only
-drift from another authorized lifecycle only when its project, target, and
-managed-body bindings are unchanged. Human prefix edits remain outside
-automation ownership; managed-body edits transfer the region out of automation
-ownership. Recovery artifacts block every transition until resolved instead of
-being removed or bypassed automatically.
+remain private outside Git. A new session automatically continues ownership
+from a locked, monotonic workspace-private registry entry that binds the exact
+project, scope, target path, whole-target digest, source-state digest, and
+active receipt. If the subject has no entry, the helper may bootstrap it once
+only when all relevant safe sealed history unanimously proves that exact
+active authority; retirement, mismatch, damaged evidence, ambiguity, or no
+proof publishes a durable blocked subject generation. Removing that evidence
+does not retry bootstrap; only exact-digest adoption may supersede the block.
+The registry root itself appears atomically with a complete generation-zero
+registry. When one exact completed apply is awaiting registry publication, the
+helper records a pending generation bound to its receipt and state digest;
+observers cannot import it, while the exact interrupted writer can recover it
+to active. The helper imports the verified receipt into the current private
+bundle before apply. Instruction discovery, marker presence, session IDs,
+timestamps, and filesystem order never confer rewrite authority. Unproven
+adoption and every retirement require exact target approval. Marker-only drift
+may continue only from a receipt already in the current session whose project,
+target, and managed-body bindings are unchanged. Human prefix edits remain
+outside automation ownership; managed-body edits transfer the region out of
+automation ownership. Recovery artifacts block every transition until
+resolved instead of being removed or bypassed automatically.
 
 Lifecycle-owned inspection is one uncomposed canonical command. It declares
 the active Codex home explicitly and uses absolute receipt, runtime,
 private-root, and manifest-output paths from the exact current-session bundle;
 environment fallback or relative output is not valid lifecycle evidence.
+Inspection reports `ownership_continuity` as `current`, `carried-forward`,
+`unproven`, or `not-applicable`; callers must not copy ownership files between
+sessions themselves.
+The same canonical registry validator supplies a private closed retention
+disposition to project-spec maintenance. `pending`, absent-registry legacy
+evidence, missing final manifest/decision evidence, and malformed or mismatched
+state remain protected; only matching active, retired, or blocked registry
+generation plus canonical registry digest snapshots release historical
+ownership evidence. Public inspect, render,
+apply, and verify commands hold the stable
+workspace/session maintenance locks before render or ownership locks.
 Matching `PreToolUse` guards run before the command and may report a rejection
 before the assistant can explain or retry it. `Stop` evaluates turn-final
 lifecycle state after the assistant response; these event positions are not a
@@ -113,7 +134,8 @@ workflow command ordering mechanism.
 
 ## Boundaries
 
-- Do not invoke this skill directly outside `maintain-project-specs`.
+- Do not infer mutation authority from ordinary project work or from Task
+  Implementer, Agentic SDLC, or hook observations.
 - Do not generate generic advice, temporary task rules, prompts, architecture
   prose, handoffs, troubleshooting history, or repeatable procedures.
 - Do not create `AGENTS.override.md` or recursively generate instruction files.

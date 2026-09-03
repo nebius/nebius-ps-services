@@ -436,9 +436,7 @@ class ManagedMTLSStore:
     def _transaction_path(self, operation_id: str) -> Path:
         return self.transactions / f"{_require_sha256('operation identity', operation_id)}.json"
 
-    def _identity_paths(
-        self, fingerprint: str, *, create: bool = False
-    ) -> tuple[Path, Path]:
+    def _identity_paths(self, fingerprint: str, *, create: bool = False) -> tuple[Path, Path]:
         identity_root = self.identities / _require_sha256("certificate fingerprint", fingerprint)
         if create:
             identity_root.mkdir(mode=0o700, exist_ok=True)
@@ -456,9 +454,7 @@ class ManagedMTLSStore:
                 or metadata.st_uid != os.geteuid()
                 or stat.S_IMODE(metadata.st_mode) != 0o700
             ):
-                raise ManagedMTLSError(
-                    "managed mTLS identity directory permissions are invalid"
-                )
+                raise ManagedMTLSError("managed mTLS identity directory permissions are invalid")
         finally:
             os.close(descriptor)
         return identity_root / "certificate.pem", identity_root / "private-key.pem"
@@ -508,8 +504,7 @@ class ManagedMTLSStore:
             return None
         value = _read_json(self.inhibition_path)
         if not (
-            set(value)
-            == {"schema", "operation_id", "cluster_id", "node_id", "generation_id"}
+            set(value) == {"schema", "operation_id", "cluster_id", "node_id", "generation_id"}
             and value.get("schema") == "nebius-vpngw/vm-ha-mtls-inhibition-v1"
             and _SHA256_RE.fullmatch(str(value.get("operation_id")))
             and _SHA256_RE.fullmatch(str(value.get("generation_id")))
@@ -1101,8 +1096,7 @@ class ManagedMTLSStore:
             inhibited_transaction = self._load_transaction(inhibition_operation_id)
             if (
                 inhibited_transaction is not None
-                and inhibited_transaction.get("phase")
-                != MTLSTransactionPhase.ROLLED_BACK.value
+                and inhibited_transaction.get("phase") != MTLSTransactionPhase.ROLLED_BACK.value
             ):
                 pending = inhibited_transaction
         for path in transactions:

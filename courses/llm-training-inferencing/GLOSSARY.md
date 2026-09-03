@@ -1,0 +1,38 @@
+# Glossary
+
+- **Activation checkpointing**: discarding selected forward activations and recomputing them during backward to trade compute for memory.
+- **Continuous batching**: admitting and retiring requests as sequences progress instead of waiting for a fixed batch to finish together.
+- **Context parallelism**: sharding long sequence context or attention work across ranks to reduce activation pressure, with communication of key/value or partial-attention state.
+- **CUDA Graph**: a captured device-work graph replayed with lower CPU launch overhead when shapes, addresses, control flow, and operations satisfy capture constraints.
+- **DDP**: DistributedDataParallel; one model replica per rank with gradient synchronization, commonly by all-reduce.
+- **Decode**: autoregressive generation after prefill, usually producing one new token position per sequence per iteration.
+- **DP**: data parallelism; replicating a model across ranks or serving workers while assigning different examples or requests to each replica.
+- **E2E latency**: end-to-end latency from the declared request or workload start to completion at the declared observation boundary.
+- **EP**: expert parallelism; placing different mixture-of-experts experts on different ranks and routing tokens among their owners.
+- **FSDP2**: PyTorch fully sharded data parallel APIs based on per-parameter sharding, used to distribute parameter, gradient, and optimizer-state storage.
+- **Gradient accumulation**: summing gradients from multiple microbatches before one optimizer step to increase effective batch size without storing all activations together.
+- **Gradient scaling**: multiplying an FP16 loss before backward, then unscaling gradients before inspection or update, to reduce underflow risk while skipping unsafe updates.
+- **GRPO**: group relative policy optimization; a reinforcement-learning objective using relative rewards within sampled groups. The course's small objective lab is instructional, not a full production recipe.
+- **HBM**: high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
+- **HFU**: hardware FLOP utilization; executed hardware FLOP/s divided by a declared aggregate peak. It can include recomputation or other work that does not increase useful model progress.
+- **ITL**: inter-token latency; the distribution of time gaps between successive generated tokens at an explicitly defined observation boundary.
+- **KV cache**: cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
+- **Length bucketing**: grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
+- **LoRA**: low-rank adaptation, which freezes base weights and trains small low-rank update matrices.
+- **Loss mask**: labels set to an ignore value so padding or selected prompt positions do not contribute to training loss.
+- **MFU**: model FLOP utilization; estimated useful model FLOP/s divided by a declared aggregate peak, with the model-FLOP formula and precision denominator disclosed.
+- **Model artifact bundle**: the pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
+- **MoE**: mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
+- **Paged KV cache**: managing KV storage in blocks/pages to reduce fragmentation and support dynamic request scheduling.
+- **PP**: pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
+- **Prefill**: processing prompt tokens, usually as a parallel sequence computation, to initialize model state and KV cache.
+- **Prefix caching**: reusing KV state for an exactly matching reusable prefix under the serving engine's cache rules.
+- **Remote model code**: Python supplied by a model repository and executed when an operator explicitly enables a trust option; it requires an exact-revision review and is disabled in these labs.
+- **SDPA**: scaled dot-product attention; the PyTorch API that can select among supported attention implementations for a given shape, dtype, mask, and environment.
+- **SFT**: supervised fine-tuning on prompt/target or instruction/response examples.
+- **SLO**: service-level objective; a declared target such as a latency percentile, throughput, error rate, or goodput threshold.
+- **Speculative decoding**: proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
+- **TP (tensor parallelism)**: splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
+- **Throughput**: completed requests or tokens per second for a declared workload and boundary.
+- **TPOT**: time per output token; an aggregate decode measure, commonly decode duration divided by the number of output-token intervals, and not a substitute for the ITL distribution.
+- **TTFT**: time from request start to the first observed generated token or streamed content at a declared boundary.

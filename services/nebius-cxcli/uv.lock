@@ -156,20 +156,6 @@ wheels = [
 ]
 
 [[package]]
-name = "build"
-version = "1.4.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "os_name == 'nt'" },
-    { name = "packaging" },
-    { name = "pyproject-hooks" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/16/4b272700dea44c1d2e8ca963ebb3c684efe22b3eba8cfa31c5fdb60de707/build-1.4.3.tar.gz", hash = "sha256:5aa4231ae0e807efdf1fd0623e07366eca2ab215921345a2e38acdd5d0fa0a74", size = 89314, upload-time = "2026-04-10T21:25:40.857Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/30/f169e1d8b2071beaf8b97088787e30662b1d8fb82f8c0941d14678c0cbf1/build-1.4.3-py3-none-any.whl", hash = "sha256:1bc22b19b383303de8f2c8554c9a32894a58d3f185fe3756b0b20d255bee9a38", size = 26171, upload-time = "2026-04-10T21:25:39.671Z" },
-]
-
-[[package]]
 name = "certifi"
 version = "2026.2.25"
 source = { registry = "https://pypi.org/simple" }
@@ -816,7 +802,7 @@ wheels = [
 
 [[package]]
 name = "nebius"
-version = "0.5.6"
+version = "0.6.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -829,9 +815,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6b/c3/1c4ba2ec6476557dd1e966673aea38fbce35bdaa2772d918dc476ad67084/nebius-0.5.6.tar.gz", hash = "sha256:09618a8378330bc3293cc2af6d862b1af4bcb3217f44f4aef0d4111a02d4bf60", size = 1129044, upload-time = "2026-08-19T09:25:39.176Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ab/80/70fa9f4a5f988f120f01027ba28e9e764f612a7df62ae6ea1c43e583ab60/nebius-0.6.4.tar.gz", hash = "sha256:c12e6eaf5f467f230a2900964d0c41fe6d2d3184c207c1e361f6efcd5e602533", size = 1422273, upload-time = "2026-09-01T08:21:12.875Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/18/8b9fb634ff16cc7b091427f0b24f6e5cca2249a0b35943e77e8a94b98dc5/nebius-0.5.6-py3-none-any.whl", hash = "sha256:c1627521751c31716fd568b9ed2a3422b7e752b0f92e6bab2b4ebb2f1638e8bb", size = 1082391, upload-time = "2026-08-19T09:25:36.874Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/31/5c328a10c804f97cb1935e9a26fcf29b635f7234d032b8c607b699f17057/nebius-0.6.4-py3-none-any.whl", hash = "sha256:e186164a60561dec7cb184bed78fc66dadf8d08b452b050361317ffc575d325c", size = 1371787, upload-time = "2026-09-01T08:21:11.105Z" },
 ]
 
 [[package]]
@@ -849,39 +835,44 @@ dependencies = [
     { name = "typer" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
-    { name = "build" },
     { name = "click" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "setuptools" },
     { name = "setuptools-scm" },
+    { name = "types-pyyaml" },
     { name = "watchfiles" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.0,<2.0.0" },
-    { name = "click", marker = "extra == 'dev'", specifier = ">=8.1.7,<8.4.0" },
     { name = "googleapis-common-protos", specifier = ">=1.74.0,<2.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.0,<2.0.0" },
-    { name = "nebius", specifier = ">=0.4.0,<1.0.0" },
+    { name = "nebius", specifier = ">=0.6.4,<1.0.0" },
     { name = "pynacl", specifier = ">=1.5.0,<2.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3,<10.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0,<7.0.0" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0.0" },
     { name = "questionary", specifier = ">=2.1.0,<3.0.0" },
     { name = "rich", specifier = ">=13.9.0,<15.0.0" },
     { name = "ruamel-yaml", specifier = ">=0.18.6,<0.19.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0,<1.0.0" },
-    { name = "setuptools-scm", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
     { name = "textual", specifier = ">=8.2.0,<9.0.0" },
     { name = "typer", specifier = ">=0.12.0,<0.26.0" },
-    { name = "watchfiles", marker = "extra == 'dev'", specifier = ">=1.2.0,<2.0.0" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "click", specifier = ">=8.1.7,<8.4.0" },
+    { name = "mypy", specifier = ">=1.11.0,<2.0.0" },
+    { name = "pytest", specifier = ">=9.0.3,<10.0.0" },
+    { name = "pytest-cov", specifier = ">=5.0.0,<7.0.0" },
+    { name = "ruff", specifier = ">=0.6.0,<1.0.0" },
+    { name = "setuptools", specifier = ">=83.0.0,<84.0.0" },
+    { name = "setuptools-scm", specifier = ">=8.0.0,<9.0.0" },
+    { name = "types-pyyaml", specifier = ">=6.0.12.20260815,<7.0.0" },
+    { name = "watchfiles", specifier = ">=1.2.0,<2.0.0" },
+]
 
 [[package]]
 name = "packaging"
@@ -1105,15 +1096,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyproject-hooks"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e7/82/28175b2414effca1cdac8dc99f76d660e7a4fb0ceefa4b4ab8f5f6742925/pyproject_hooks-1.2.0.tar.gz", hash = "sha256:1e859bd5c40fae9448642dd871adf459e5e2084186e8d2c2a79a824c970da1f8", size = 19228, upload-time = "2024-09-29T09:24:13.293Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/24/12818598c362d7f300f18e74db45963dbcb85150324092410c8b49405e42/pyproject_hooks-1.2.0-py3-none-any.whl", hash = "sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913", size = 10216, upload-time = "2024-09-29T09:24:11.978Z" },
-]
-
-[[package]]
 name = "pytest"
 version = "9.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1307,11 +1289,11 @@ wheels = [
 
 [[package]]
 name = "setuptools"
-version = "82.0.1"
+version = "83.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/34/26/f5d29e25ffdb535afef2d35cdb55b325298f96debd670da4c325e08d70f4/setuptools-83.0.0.tar.gz", hash = "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef", size = 1154254, upload-time = "2026-07-04T15:31:22.699Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl", hash = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3", size = 1008090, upload-time = "2026-07-04T15:31:20.885Z" },
 ]
 
 [[package]]
@@ -1366,6 +1348,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f5/24/cb09efec5cc954f7f9b930bf8279447d24618bb6758d4f6adf2574c41780/typer-0.24.1.tar.gz", hash = "sha256:e39b4732d65fbdcde189ae76cf7cd48aeae72919dea1fdfc16593be016256b45", size = 118613, upload-time = "2026-02-21T16:54:40.609Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4a/91/48db081e7a63bb37284f9fbcefda7c44c277b18b0e13fbc36ea2335b71e6/typer-0.24.1-py3-none-any.whl", hash = "sha256:112c1f0ce578bfb4cab9ffdabc68f031416ebcc216536611ba21f04e9aa84c9e", size = 56085, upload-time = "2026-02-21T16:54:41.616Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260815"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/72/b56089aeee6c496d969bac42376bedb6e3eeab4682e1018fa3137122f94b/types_pyyaml-6.0.12.20260815.tar.gz", hash = "sha256:28764110c9cf35846e733da32d8d734df7473c5dde9ef67c3b7332ec0e819858", size = 18545, upload-time = "2026-08-15T02:41:51.532Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/52/eefeba09be4ef2a1eb989eb92934561e8e502a6ee3c32654996e4be7e399/types_pyyaml-6.0.12.20260815-py3-none-any.whl", hash = "sha256:6f332212b7e191f3afd5016a713c510b6340593b7ebec573c7d5d20aa5386d3b", size = 21148, upload-time = "2026-08-15T02:41:50.555Z" },
 ]
 
 [[package]]

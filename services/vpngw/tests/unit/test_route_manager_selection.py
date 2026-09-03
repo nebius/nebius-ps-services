@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import subprocess
 import typing as t
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+from rich.console import Console
 
 from nebius_vpngw.config_loader import (
     GatewayGroupSpec,
@@ -33,6 +36,113 @@ def test_add_routes_normalizes_unexpected_sdk_failure(monkeypatch) -> None:
         route_manager.add_routes(SimpleNamespace(), {})
 
     assert "sensitive detail" not in str(caught.value)
+
+
+def test_mutating_route_inventory_reads_every_page() -> None:
+    class Request:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    requests: list[Request] = []
+
+    def list_page(request: Request) -> SimpleNamespace:
+        requests.append(request)
+        return SimpleNamespace(
+            items=[SimpleNamespace(metadata=SimpleNamespace(id=f"route-{len(requests)}"))],
+            next_page_token="next" if not request.page_token else "",
+        )
+
+    routes = RouteManager(project_id="project-test")._list_route_table_routes(
+        SimpleNamespace(List=list_page),
+        SimpleNamespace(ListRoutesRequest=Request),
+        route_table_id="route-table-1",
+    )
+
+    assert [route.metadata.id for route in routes] == ["route-1", "route-2"]
+    assert [request.page_token for request in requests] == ["", "next"]
+    assert all(request.parent_id == "route-table-1" for request in requests)
+    assert all(request.page_size == 1000 for request in requests)
+
+
+def test_route_refresh_failure_after_first_write_stops_later_writes() -> None:
+    from nebius.api.nebius.common.v1 import metadata_pb2
+    from nebius.api.nebius.vpc.v1 import route_pb2, route_service_pb2
+
+    route_stub = SimpleNamespace(
+        Create=Mock(return_value=SimpleNamespace()),
+        List=Mock(side_effect=OSError("inventory unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="Route table route inventory is unavailable"):
+        RouteManager(project_id="project-test")._reconcile_route_table(
+            route_stub,
+            route_service_pb2,
+            route_pb2,
+            metadata_pb2,
+            route_table_id="route-table-1",
+            prefix_targets={
+                "10.10.0.0/16": "allocation-1",
+                "10.20.0.0/16": "allocation-1",
+            },
+            summarize=False,
+            initial_routes=(),
+        )
+
+    route_stub.Create.assert_called_once()
+
+
+def test_route_next_hops_use_exact_configured_instance_lookups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nebius.api.nebius.compute.v1 import instance_service_pb2_grpc
+
+    requests: list[object] = []
+
+    class Stub:
+        def __init__(self, _channel: object) -> None:
+            pass
+
+        def GetByName(self, request: object) -> SimpleNamespace:
+            requests.append(request)
+            name = str(request.name)  # type: ignore[attr-defined]
+            index = int(name.rsplit("-", 1)[-1])
+            return SimpleNamespace(
+                metadata=SimpleNamespace(
+                    id=f"compute-{index}",
+                    name=name,
+                    parent_id="project-test",
+                ),
+                status=SimpleNamespace(
+                    network_interfaces=[
+                        SimpleNamespace(
+                            ip_address=SimpleNamespace(
+                                address=f"10.0.0.{index + 1}/24",
+                                allocation_id=f"allocation-{index}",
+                            )
+                        )
+                    ]
+                ),
+            )
+
+    monkeypatch.setattr(instance_service_pb2_grpc, "InstanceServiceStub", Stub)
+    plan = SimpleNamespace(
+        iter_instance_configs=lambda: (
+            SimpleNamespace(hostname="gateway-0", instance_index=0),
+            SimpleNamespace(hostname="gateway-1", instance_index=1),
+        )
+    )
+
+    result = RouteManager(project_id="project-test")._find_gateway_private_allocations_by_index(
+        object(), plan
+    )
+
+    assert result == {0: "allocation-0", 1: "allocation-1"}
+    assert [(request.parent_id, request.name) for request in requests] == [  # type: ignore[attr-defined]
+        ("project-test", "gateway-0"),
+        ("project-test", "gateway-1"),
+    ]
 
 
 def test_static_remote_prefixes_union_connection_and_enabled_member_tunnels() -> None:
@@ -87,7 +197,11 @@ def _fake_subnet(
         )
 
     return SimpleNamespace(
-        metadata=SimpleNamespace(name=name, id=f"id-{name}"),
+        metadata=SimpleNamespace(
+            name=name,
+            id=f"id-{name}",
+            parent_id="project-test",
+        ),
         spec=SimpleNamespace(
             network_id=network_id,
             ipv4_private_pools=SimpleNamespace(
@@ -96,9 +210,7 @@ def _fake_subnet(
             ),
         ),
         status=SimpleNamespace(
-            ipv4_private_pools=[
-                SimpleNamespace(cidrs=status_cidrs or explicit_cidrs or [])
-            ],
+            ipv4_private_pools=[SimpleNamespace(cidrs=status_cidrs or explicit_cidrs or [])],
             ipv4_private_cidrs=status_cidrs or explicit_cidrs or [],
             route_table=SimpleNamespace(id="", default=True),
         ),
@@ -121,9 +233,7 @@ def test_status_subnet_cidrs_prefer_current_pool_shape_without_legacy_access() -
 
 
 def test_status_subnet_cidrs_support_legacy_sdk_shape() -> None:
-    subnet = SimpleNamespace(
-        status=SimpleNamespace(ipv4_private_cidrs=["10.30.0.0/16"])
-    )
+    subnet = SimpleNamespace(status=SimpleNamespace(ipv4_private_cidrs=["10.30.0.0/16"]))
 
     assert RouteManager._extract_status_subnet_cidrs(subnet) == [
         ipaddress.ip_network("10.30.0.0/16")
@@ -277,6 +387,107 @@ def test_list_routes_uses_public_sdk_clients_and_reads_all_pages(
     assert route_client.page_tokens == ["", "routes-2"]
     assert bgp_calls == [(plan, local_cfg)]
     assert sdk.closed is True
+
+
+def test_list_routes_buffers_all_nebius_route_tables_before_rendering(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import nebius.api.nebius.vpc.v1 as vpc_v1
+
+    class Request:
+        def __init__(self, response: object) -> None:
+            self.response = response
+
+        def wait(self) -> object:
+            return self.response
+
+    first_subnet = _fake_subnet(
+        name="workload-one",
+        network_id="network-1",
+        explicit_cidrs=["10.20.0.0/16"],
+    )
+    first_subnet.status.route_table = SimpleNamespace(id="route-table-1", default=False)
+    second_subnet = _fake_subnet(
+        name="workload-two",
+        network_id="network-1",
+        explicit_cidrs=["10.30.0.0/16"],
+    )
+    second_subnet.status.route_table = SimpleNamespace(id="route-table-2", default=False)
+
+    class AllocationClient:
+        def list(self, _request: object) -> Request:
+            return Request(SimpleNamespace(items=[], next_page_token=""))
+
+    class SubnetClient:
+        def list(self, _request: object) -> Request:
+            return Request(
+                SimpleNamespace(
+                    items=[first_subnet, second_subnet],
+                    next_page_token="",
+                )
+            )
+
+    class RouteClient:
+        def list(self, request: object) -> Request:
+            parent_id = str(getattr(request, "parent_id", "") or "")
+            page_token = str(getattr(request, "page_token", "") or "")
+            if parent_id == "route-table-1":
+                return Request(
+                    SimpleNamespace(
+                        items=[
+                            _fake_route(
+                                route_id="route-one",
+                                name="route-one",
+                                cidr="10.50.0.0/16",
+                                allocation_id="allocation-one",
+                            )
+                        ],
+                        next_page_token="",
+                    )
+                )
+            if not page_token:
+                return Request(
+                    SimpleNamespace(
+                        items=[
+                            _fake_route(
+                                route_id="route-two",
+                                name="route-two",
+                                cidr="10.60.0.0/16",
+                                allocation_id="allocation-two",
+                            )
+                        ],
+                        next_page_token="next",
+                    )
+                )
+            raise OSError("later route page unavailable")
+
+    sdk = SimpleNamespace(sync_close=Mock())
+    route_manager = RouteManager(project_id="project-test", auth_token="token-test")
+    monkeypatch.setattr(route_manager, "_create_read_sdk", lambda: sdk)
+    monkeypatch.setattr(
+        route_manager,
+        "_resolve_target_network_id_with_sdk",
+        lambda *_args, **_kwargs: "network-1",
+    )
+    bgp = Mock()
+    monkeypatch.setattr(route_manager, "_list_bgp_advertised_routes", bgp)
+    monkeypatch.setattr(vpc_v1, "AllocationServiceClient", lambda _sdk: AllocationClient())
+    monkeypatch.setattr(vpc_v1, "SubnetServiceClient", lambda _sdk: SubnetClient())
+    monkeypatch.setattr(vpc_v1, "RouteServiceClient", lambda _sdk: RouteClient())
+
+    with pytest.raises(RuntimeError, match="VPC route resource inventory is unavailable"):
+        route_manager.list_routes(
+            _three_vm_plan(),
+            {
+                "gateway": {"local_prefixes": ["10.20.0.0/16", "10.30.0.0/16"]},
+                "gateway_group": {"subnet": {"name": "vpngw-subnet"}},
+            },
+        )
+
+    assert "Subnet:" not in capsys.readouterr().out
+    bgp.assert_not_called()
+    sdk.sync_close.assert_called_once_with()
 
 
 def _metadata_name(resource: object) -> str:
@@ -816,6 +1027,67 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
     assert prefixes == ["10.20.0.0/16"]
 
 
+@pytest.mark.parametrize(
+    ("ssh_outcome", "message"),
+    (
+        (
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="private remote diagnostic",
+            ),
+            "failed",
+        ),
+        (
+            SimpleNamespace(
+                returncode=0,
+                stdout="{private remote diagnostic",
+                stderr="",
+            ),
+            "invalid JSON",
+        ),
+        (
+            subprocess.TimeoutExpired(cmd="ssh", timeout=15),
+            "timed out",
+        ),
+        (
+            RuntimeError("private remote diagnostic"),
+            "failed",
+        ),
+    ),
+)
+def test_get_bgp_learned_routes_fails_closed_on_query_error(
+    monkeypatch: pytest.MonkeyPatch,
+    ssh_outcome: object,
+    message: str,
+) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    local_cfg: _LocalConfig = {"gateway_group": {"vm_spec": {}}}
+    conn = {
+        "name": "gcp-site-b",
+        "routing_mode": "bgp",
+        "tunnels": [
+            {
+                "gateway_instance_index": 1,
+                "ha_role": "active",
+                "inner_remote_ip": "169.254.20.2",
+            }
+        ],
+    }
+
+    def fake_run_ssh(*_args, **_kwargs):
+        if isinstance(ssh_outcome, BaseException):
+            raise ssh_outcome
+        return ssh_outcome
+
+    monkeypatch.setattr(route_manager, "_run_ssh", fake_run_ssh)
+
+    with pytest.raises(RouteManagementError, match=message) as caught:
+        route_manager._get_bgp_learned_routes(_three_vm_plan(), conn, local_cfg)
+
+    assert "private remote diagnostic" not in str(caught.value)
+
+
 def test_get_bgp_learned_routes_honors_custom_ssh_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1320,6 +1592,35 @@ def test_list_static_routes_honors_custom_ssh_config(
             "ip route show",
         ]
     ]
+
+
+def test_list_static_routes_normalizes_iproute2_host_route_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    monkeypatch.setattr(
+        route_manager,
+        "_run_ssh",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="10.10.0.2 dev xfrm1\n",
+            stderr="",
+        ),
+    )
+    console = Console(record=True, color_system=None, width=160)
+
+    route_manager._list_static_routes(
+        {},
+        "nebius-vpn-gw-1",
+        "203.0.113.20",
+        "static-site",
+        ["10.10.0.2/32", "10.60.0.0/16"],
+        console,
+    )
+
+    rendered = " ".join(console.export_text().replace("│", " ").split())
+    assert "10.10.0.2/32 installed - xfrm1" in rendered
+    assert "10.60.0.0/16 missing - -" in rendered
 
 
 def test_find_connection_for_peer_respects_gateway_instance_scope() -> None:

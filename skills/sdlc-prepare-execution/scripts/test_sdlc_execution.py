@@ -100,6 +100,106 @@ PLAN = """# FEAT-001 Plan v1
 - Rollback or stop conditions: stop on contract drift
 """
 
+REQUIREMENTS = """# Requirements
+
+<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
+<!-- REQUIREMENT: REQ-001 status=active priority=P0 type=feature -->
+### REQ-001: Implement the selected behavior
+
+#### User Story
+
+As a maintainer, I need the planned behavior to be implemented safely.
+
+#### Acceptance Criteria
+
+- AC-001: The planned behavior passes focused validation.
+
+#### Negative Criteria
+
+- NC-001: Workers do not exceed their declared scope.
+
+#### Validation Method
+
+Run the combined execution validation.
+
+#### Test Method
+
+Run the focused execution tests.
+
+#### Evaluation Method
+
+Inspect the promoted result evidence.
+
+<!-- /REQUIREMENT: REQ-001 -->
+<!-- maintain-project-specs:requirements:end -->
+"""
+
+DESIGN = """# Design
+
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=not-started priority=P0 version=1 -->
+### FEAT-001: Execute isolated task waves
+
+#### Requirements Covered
+
+- REQ-001
+
+#### Context Evidence
+
+The execution fixture models one isolated feature.
+
+#### Design Details
+
+Use coordinator-owned dependency waves and isolated workers.
+
+#### Selected Option
+
+Bind immutable assignments to one integration base.
+
+#### Alternatives Considered
+
+Shared mutable workers were rejected because ownership would be ambiguous.
+
+#### Implementation Boundaries
+
+Workers may change only their declared paths.
+
+#### Test-First Success Criteria
+
+- TDD-001: Out-of-scope changes fail closed.
+
+#### Validation Plan
+
+Run focused execution-plane checks.
+
+#### Test Plan
+
+Run the execution unit suite.
+
+#### Evaluation Plan
+
+Inspect assignment, result, merge, and cleanup evidence.
+
+#### Rollout And Rollback
+
+Promote only a clean verified integration head.
+
+#### Done Definition
+
+All waves are integrated and validated.
+
+#### Implementation Evidence
+
+Not implemented yet.
+
+#### Verification Evidence
+
+Not verified yet.
+
+<!-- /FEATURE: FEAT-001 -->
+<!-- maintain-project-specs:design:end -->
+"""
+
 MANAGED_PLAN = """# FEAT-001 Plan v1
 
 ## Task Graph
@@ -194,7 +294,7 @@ def seed_prompt_impact(run_dir: Path, selected_project: Path) -> None:
     requirements_bytes = (selected_project / "docs" / "requirements.md").read_bytes()
     design_bytes = (selected_project / "docs" / "design.md").read_bytes()
     impact_receipt = {
-        "schema": "maintain-project-specs.prompt-impact-receipt.v1",
+        "schema": "agentic-sdlc/prompt-impact-receipt-v1",
         "workflow": "agentic-sdlc",
         "generation": 1,
         "prompt_id": prompt_id,
@@ -316,10 +416,8 @@ class GitLifecycleTests(unittest.TestCase):
         self.project.mkdir(parents=True)
         docs = self.project / "docs"
         docs.mkdir()
-        requirements_bytes = b"test requirements\n"
-        design_bytes = b"test design\n"
-        (docs / "requirements.md").write_bytes(requirements_bytes)
-        (docs / "design.md").write_bytes(design_bytes)
+        (docs / "requirements.md").write_text(REQUIREMENTS, encoding="utf-8")
+        (docs / "design.md").write_text(DESIGN, encoding="utf-8")
         self.plan.parent.mkdir(parents=True)
         self.plan.write_text(PLAN, encoding="utf-8")
         self.plan.with_suffix(self.plan.suffix + ".lock").write_text(
@@ -414,6 +512,25 @@ class GitLifecycleTests(unittest.TestCase):
             }
         )
         write_private(binding_path, binding)
+
+    def test_assignment_binds_root_intent_and_canonical_spec_receipt(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): bind specs")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.assertEqual(assignment["schema"], "agentic-sdlc/worker-assignment-v4")
+        self.assertEqual(assignment["root_intent_sha256"], "b" * 64)
+        self.assertEqual(
+            assignment["project_spec_receipt"],
+            {
+                "schema": "maintain-project-specs.worker-receipt.v1",
+                "requirements_sha256": hashlib.sha256(
+                    REQUIREMENTS.encode("utf-8")
+                ).hexdigest(),
+                "design_sha256": hashlib.sha256(
+                    DESIGN.encode("utf-8")
+                ).hexdigest(),
+            },
+        )
 
     def test_new_prompt_revision_freezes_dispatch_until_impact_reconciliation(
         self,
@@ -625,7 +742,7 @@ class GitLifecycleTests(unittest.TestCase):
             )
             write_private(binding_path, binding)
             receipt = {
-                "schema": "maintain-project-specs.prompt-impact-receipt.v1",
+                "schema": "agentic-sdlc/prompt-impact-receipt-v1",
                 "workflow": "agentic-sdlc",
                 "generation": generation,
                 "prompt_id": binding["prompt_id"],
@@ -2069,6 +2186,60 @@ class GitLifecycleTests(unittest.TestCase):
             git(self.project, "rev-parse", "HEAD"), coordinator["base_head"]
         )
 
+    def test_worker_cannot_change_project_specs_through_a_broad_claim(self) -> None:
+        self.plan.write_text(
+            PLAN.replace("exact: src/a.py", "prefix: docs", 1), encoding="utf-8"
+        )
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.start_assignment(assignment, "WAVE-001")
+        worker = Path(assignment["worktree"])
+        requirements = worker / "docs/requirements.md"
+        requirements.write_text(REQUIREMENTS + "\nworker edit\n", encoding="utf-8")
+
+        with self.assertRaises(ExecutionError) as raised:
+            finish_task(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                assignment["task_id"],
+                "validation passed",
+                "review passed",
+                "feat: invalid project spec write",
+                summary="invalid project-spec handoff",
+            )
+
+        self.assertEqual(raised.exception.code, "WORKER_SCOPE_VIOLATION")
+        self.assertEqual(git(worker, "diff", "--cached", "--name-only"), "")
+
+    def test_worker_cannot_hide_project_spec_rename_in_a_broad_claim(self) -> None:
+        self.plan.write_text(
+            PLAN.replace("exact: src/a.py", "prefix: src", 1), encoding="utf-8"
+        )
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.start_assignment(assignment, "WAVE-001")
+        worker = Path(assignment["worktree"])
+        (worker / "src").mkdir(exist_ok=True)
+        (worker / "docs/requirements.md").rename(worker / "src/moved-requirements.md")
+
+        with self.assertRaises(ExecutionError) as raised:
+            finish_task(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                assignment["task_id"],
+                "validation passed",
+                "review passed",
+                "feat: invalid project spec rename",
+                summary="invalid project-spec rename handoff",
+            )
+
+        self.assertEqual(raised.exception.code, "WORKER_SCOPE_VIOLATION")
+        self.assertEqual(git(worker, "diff", "--cached", "--name-only"), "")
+
     def test_wave_prepare_adopts_exact_interrupted_worker_resource(self) -> None:
         coordinator = self.prepare()
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
@@ -2490,10 +2661,10 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             (selected / "service.txt").write_text("base\n", encoding="utf-8")
             (selected / "docs").mkdir()
             (selected / "docs" / "requirements.md").write_text(
-                "test requirements\n", encoding="utf-8"
+                REQUIREMENTS, encoding="utf-8"
             )
             (selected / "docs" / "design.md").write_text(
-                "test design\n", encoding="utf-8"
+                DESIGN, encoding="utf-8"
             )
             git(repository, "add", "-A")
             git(repository, "commit", "-qm", "initial")
@@ -2590,10 +2761,10 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             (selected / "service.txt").write_text("base\n", encoding="utf-8")
             (selected / "docs").mkdir()
             (selected / "docs" / "requirements.md").write_text(
-                "test requirements\n", encoding="utf-8"
+                REQUIREMENTS, encoding="utf-8"
             )
             (selected / "docs" / "design.md").write_text(
-                "test design\n", encoding="utf-8"
+                DESIGN, encoding="utf-8"
             )
             git(repository, "add", "-A")
             git(repository, "commit", "-qm", "initial")

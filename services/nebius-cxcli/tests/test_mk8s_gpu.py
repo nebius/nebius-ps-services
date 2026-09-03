@@ -193,7 +193,7 @@ def _external_h100_sxm_payload() -> dict[str, Any]:
                             },
                         }
                     },
-                    "soperator_onboarding": {
+                    "soperator_registration": {
                         "accepted": True,
                         "state": "existing-soperator-supported",
                         "actions": ["reconcile-target-gpu-stack"],
@@ -522,6 +522,29 @@ def test_mk8s_cluster_smoke_validation_specs_cover_cpu_only_targets() -> None:
         }
     ]
     assert mk8s_gpu_validation_specs(payload) == []
+
+
+def test_mk8s_cluster_smoke_preserves_intentional_zero_gpu_capacity() -> None:
+    payload = _mk8s_payload()
+    payload["infra"]["components"][0]["inputs"] = {
+        "node_groups": {
+            "gpu-workers": {
+                "node_count": 0,
+                "gpu": True,
+                "platform": "gpu-h100-sxm",
+                "preset": "1gpu-16vcpu-200gb",
+                "gpu_stack_source": "nebius_image",
+            }
+        }
+    }
+
+    validation = mk8s_cluster_smoke_validation_specs(payload)[0]
+
+    assert mk8s_gpu._raw_node_group_expected_node_count({"node_count": 0}) == 0
+    assert validation["expect_gpu_nodes"] is False
+    assert validation["expected_gpu_node_count"] == 0
+    assert validation["expected_gpu_node_groups"] == ()
+    assert validation["expected_gpu_node_group_counts"] == {}
 
 
 def test_materialize_mk8s_gpu_app_values_heals_stale_network_operator_affinity_defaults() -> None:
@@ -922,9 +945,7 @@ def test_external_mk8s_heterogeneous_gpu_inventory_materializes_app_values() -> 
         row["values"] for row in payload["apps"]["charts"] if row["id"] == "nvidia-gpu-operator"
     )
     network_values = next(
-        row["values"]
-        for row in payload["apps"]["charts"]
-        if row["id"] == "nvidia-network-operator"
+        row["values"] for row in payload["apps"]["charts"] if row["id"] == "nvidia-network-operator"
     )
     assert gpu_values["driver"]["enabled"] is False
     assert gpu_values["toolkit"]["enabled"] is False
@@ -1936,6 +1957,48 @@ def test_nccl_dmabuf_metadata_reports_rendered_mpi_env() -> None:
     }
 
 
+def test_node_inventory_prefers_rendered_group_name_and_accepts_provider_group_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nodes = [
+        {
+            "metadata": {
+                "name": "rendered-label-node",
+                "labels": {
+                    "nebius.com/node-group": "gpu-workers",
+                    "nebius.com/node-group-id": "provider-gpu-id",
+                },
+            },
+            "status": {
+                "allocatable": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"},
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        },
+        {
+            "metadata": {
+                "name": "provider-label-node",
+                "labels": {"nebius.com/node-group-id": "provider-gpu-id"},
+            },
+            "status": {
+                "allocatable": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"},
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        },
+    ]
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: {"items": nodes},
+    )
+
+    inventory = mk8s_gpu._node_inventory(extra_env=None)
+
+    assert [node["node_group"] for node in inventory] == [
+        "gpu-workers",
+        "provider-gpu-id",
+    ]
+
+
 def test_cluster_smoke_validation_reports_all_nodes_without_workload_pods(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2637,6 +2700,252 @@ def test_cuda_smoke_skips_when_all_gpus_are_already_allocated(
     assert any("Skipping GPU visibility probe" in item for item in emits)
 
 
+def test_allocated_soperator_gpu_visibility_probes_exact_ready_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "visibility.json"
+    skipped_report = {
+        "kind": "mk8s_gpu_visibility",
+        "passed": True,
+        "skipped": True,
+        "skip_reason": "allocated",
+        "total_gpu_node_count": 1,
+        "skipped_nodes": [
+            {
+                "node_name": "gpu-node-a",
+                "gpu_count": 1,
+                "requested_gpu_count": 1,
+                "free_gpu_count": 0,
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "metadata": {"name": "worker-0-0", "labels": {}},
+                    "spec": {
+                        "nodeName": "gpu-node-a",
+                        "containers": [
+                            {
+                                "name": "slurmd",
+                                "resources": {"requests": {"nvidia.com/gpu": "1"}},
+                            }
+                        ],
+                    },
+                    "status": {
+                        "phase": "Running",
+                        "containerStatuses": [{"name": "slurmd", "ready": True}],
+                    },
+                }
+            ]
+        },
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda args, **_kwargs: (
+            commands.append(args),
+            subprocess.CompletedProcess(
+                args,
+                0,
+                stdout="NVIDIA H100 80GB HBM3, 580.159.04\ncuInit=0\n",
+                stderr="",
+            ),
+        )[1],
+    )
+
+    mk8s_gpu.run_allocated_soperator_gpu_visibility_validation(
+        spec={"max_nodes": 1},
+        report_path=report_path,
+        skipped_report=skipped_report,
+        soperator_namespace="soperator",
+        soperator_instance="soperator",
+        extra_env=None,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["skipped"] is False
+    assert report["probe_mode"] == "allocated-soperator-worker"
+    assert report["selected_node_count"] == 1
+    assert report["passed_node_count"] == 1
+    assert report["nodes"][0]["cuda_driver_api"] == "cuInit=0"
+    assert commands[0][:6] == ["exec", "-n", "soperator", "worker-0-0", "-c", "slurmd"]
+
+
+def test_allocated_soperator_gpu_visibility_rejects_invalid_instance_selector(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: pytest.fail("invalid selector reached kubectl"),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid instance label"):
+        mk8s_gpu.run_allocated_soperator_gpu_visibility_validation(
+            spec={"max_nodes": 1},
+            report_path=tmp_path / "visibility.json",
+            skipped_report={"skipped_nodes": [{"node_name": "gpu-node-a"}]},
+            soperator_namespace="soperator",
+            soperator_instance="soperator,foreign=true",
+            extra_env=None,
+        )
+
+
+def test_allocated_soperator_gpu_visibility_requires_one_ready_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(mk8s_gpu, "_kubectl_json", lambda *_args, **_kwargs: {"items": []})
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda *_args, **_kwargs: pytest.fail("ambiguous worker selection ran a probe"),
+    )
+
+    with pytest.raises(RuntimeError, match="exactly one Ready slurmd pod"):
+        mk8s_gpu.run_allocated_soperator_gpu_visibility_validation(
+            spec={"max_nodes": 1},
+            report_path=tmp_path / "visibility.json",
+            skipped_report={
+                "total_gpu_node_count": 1,
+                "skipped_nodes": [
+                    {
+                        "node_name": "gpu-node-a",
+                        "gpu_count": 1,
+                        "requested_gpu_count": 1,
+                        "free_gpu_count": 0,
+                    }
+                ],
+            },
+            soperator_namespace="soperator",
+            soperator_instance="soperator",
+            extra_env=None,
+        )
+
+
+def test_allocated_soperator_gpu_visibility_rejects_partial_slurmd_gpu_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "metadata": {"name": "worker-0-0"},
+                    "spec": {
+                        "nodeName": "gpu-node-a",
+                        "containers": [
+                            {
+                                "name": "slurmd",
+                                "resources": {"requests": {"nvidia.com/gpu": "1"}},
+                            }
+                        ],
+                    },
+                    "status": {
+                        "phase": "Running",
+                        "containerStatuses": [{"name": "slurmd", "ready": True}],
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda *_args, **_kwargs: pytest.fail("partial GPU ownership ran a probe"),
+    )
+
+    with pytest.raises(RuntimeError, match="exactly one Ready slurmd pod"):
+        mk8s_gpu.run_allocated_soperator_gpu_visibility_validation(
+            spec={"max_nodes": 1},
+            report_path=tmp_path / "visibility.json",
+            skipped_report={
+                "total_gpu_node_count": 1,
+                "skipped_nodes": [
+                    {
+                        "node_name": "gpu-node-a",
+                        "gpu_count": 8,
+                        "requested_gpu_count": 8,
+                        "free_gpu_count": 0,
+                    }
+                ],
+            },
+            soperator_namespace="soperator",
+            soperator_instance="soperator",
+            extra_env=None,
+        )
+
+
+def test_allocated_soperator_gpu_visibility_requires_every_visible_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "metadata": {"name": "worker-0-0"},
+                    "spec": {
+                        "nodeName": "gpu-node-a",
+                        "containers": [
+                            {
+                                "name": "slurmd",
+                                "resources": {"requests": {"nvidia.com/gpu": "2"}},
+                            }
+                        ],
+                    },
+                    "status": {
+                        "phase": "Running",
+                        "containerStatuses": [{"name": "slurmd", "ready": True}],
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda args, **_kwargs: subprocess.CompletedProcess(
+            args,
+            0,
+            stdout="NVIDIA H100 80GB HBM3, 580.159.04\ncuInit=0\n",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="failed CUDA initialization"):
+        mk8s_gpu.run_allocated_soperator_gpu_visibility_validation(
+            spec={"max_nodes": 1},
+            report_path=tmp_path / "visibility.json",
+            skipped_report={
+                "total_gpu_node_count": 1,
+                "skipped_nodes": [
+                    {
+                        "node_name": "gpu-node-a",
+                        "gpu_count": 2,
+                        "requested_gpu_count": 2,
+                        "free_gpu_count": 0,
+                    }
+                ],
+            },
+            soperator_namespace="soperator",
+            soperator_instance="soperator",
+            extra_env=None,
+        )
+
+
 def test_cuda_acceptance_smoke_skips_when_all_gpus_are_already_allocated(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3082,9 +3391,7 @@ def test_nccl_validation_fails_multi_gpu_below_threshold(
             emit=None,
         )
 
-    report = json.loads(
-        (tmp_path / "acceptance-benchmark-report.json").read_text(encoding="utf-8")
-    )
+    report = json.loads((tmp_path / "acceptance-benchmark-report.json").read_text(encoding="utf-8"))
     assert report["passed"] is False
     assert report["launcher_phase"] == "Succeeded"
     assert report["platform_gpu_count"] == 8

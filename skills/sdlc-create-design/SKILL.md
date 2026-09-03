@@ -61,7 +61,9 @@ and feature designs in `docs/design.md`.
 
 ## Writes
 
-- `docs/design.md`.
+- The design managed region through the `maintain-project-specs` paired
+  publisher. The exact requirements bytes participate in validation and
+  compare-and-set even when this adapter does not change them.
 - Feature blocks using `FEAT-*`.
 - Design decisions, design change log, and local design fingerprint.
 
@@ -109,6 +111,10 @@ and feature designs in `docs/design.md`.
   criteria, rollback, and done definition per ready feature.
 - Mark features as ready, draft, blocked, or stale and update the decision log,
   change log, and design fingerprint.
+- Before implementation, use delivery `not-started` for ready features. After
+  implementation, the root SDLC coordinator reconciles separate implementation
+  and verification evidence through the same paired publisher; verified
+  delivery is required before mapped requirements become satisfied.
 - If reconsideration reaffirms the current design, do not create a new design
   loop or fingerprint. Return the reaffirmation evidence through
   `sdlc-classify-failure` so it can route to the proven localized owner.
@@ -145,6 +151,8 @@ and feature designs in `docs/design.md`.
 - Create local execution plans.
 - Implement code.
 - Modify tests.
+- Change the requirements managed region. Passing its exact existing bytes to
+  the paired publisher is required and is not a requirements edit.
 - Delete feature blocks without explicit requirement removal.
 - Ignore acceptance criteria.
 - Treat implementation size or difficulty inside one existing private boundary
@@ -167,8 +175,9 @@ and feature designs in `docs/design.md`.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- `maintain-project-specs` owns both canonical documents. This skill may write
-  design only while routed as its Agentic SDLC authoring adapter;
+- `maintain-project-specs` owns both canonical documents and their paired
+  transaction. This skill may change design only while routed as its Agentic
+  SDLC authoring adapter;
   `sdlc-create-requirements` has the corresponding requirements boundary.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest

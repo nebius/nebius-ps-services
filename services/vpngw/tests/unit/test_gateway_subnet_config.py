@@ -83,14 +83,18 @@ def test_gateway_network_auto_discovery_reports_once_without_caching_sdk_reads(
     from nebius.api.nebius.vpc import v1 as vpc_v1
 
     network = SimpleNamespace(
-        metadata=SimpleNamespace(id="network-default", name="default-network")
+        metadata=SimpleNamespace(
+            id="network-default",
+            name="default-network",
+            parent_id="project-test",
+        )
     )
     get_by_name = Mock(return_value=SimpleNamespace(wait=lambda: network))
     network_client = SimpleNamespace(get_by_name=get_by_name)
     subnet_client = object()
     monkeypatch.setattr(vpc_v1, "NetworkServiceClient", lambda _client: network_client)
     monkeypatch.setattr(vpc_v1, "SubnetServiceClient", lambda _client: subnet_client)
-    manager = VMManager(project_id="project-test", zone="eu-west1")
+    manager = VMManager(project_id="project-test", region="eu-west1")
     spec = _gateway_group_spec()
 
     silent = manager._resolve_gateway_network(object(), spec)
@@ -118,14 +122,18 @@ def test_explicit_gateway_network_reports_once_without_caching_sdk_reads(
     from nebius.api.nebius.vpc import v1 as vpc_v1
 
     network = SimpleNamespace(
-        metadata=SimpleNamespace(id="network-explicit", name="custom-network")
+        metadata=SimpleNamespace(
+            id="network-explicit",
+            name="custom-network",
+            parent_id="project-test",
+        )
     )
     get_network = Mock(return_value=SimpleNamespace(wait=lambda: network))
     network_client = SimpleNamespace(get=get_network)
     subnet_client = object()
     monkeypatch.setattr(vpc_v1, "NetworkServiceClient", lambda _client: network_client)
     monkeypatch.setattr(vpc_v1, "SubnetServiceClient", lambda _client: subnet_client)
-    manager = VMManager(project_id="project-test", zone="eu-west1")
+    manager = VMManager(project_id="project-test", region="eu-west1")
     spec = _gateway_group_spec()
     spec.network_id = "network-explicit"
 
@@ -138,6 +146,47 @@ def test_explicit_gateway_network_reports_once_without_caching_sdk_reads(
     assert (
         capsys.readouterr().out.count("[VMManager] Using network from YAML: network-explicit") == 1
     )
+
+
+def test_explicit_gateway_network_rejects_inexact_sdk_identity(monkeypatch) -> None:
+    from nebius.api.nebius.vpc import v1 as vpc_v1
+
+    network = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="network-other",
+            name="custom-network",
+            parent_id="project-test",
+        )
+    )
+    network_client = SimpleNamespace(
+        get=Mock(return_value=SimpleNamespace(wait=lambda: network))
+    )
+    monkeypatch.setattr(vpc_v1, "NetworkServiceClient", lambda _client: network_client)
+    monkeypatch.setattr(vpc_v1, "SubnetServiceClient", lambda _client: object())
+    manager = VMManager(project_id="project-test", region="eu-west1")
+    spec = _gateway_group_spec()
+    spec.network_id = "network-explicit"
+
+    with pytest.raises(RuntimeError, match="inexact identity"):
+        manager._resolve_gateway_network(object(), spec)
+
+
+def test_explicit_gateway_network_keeps_provider_failure_detail_private(monkeypatch) -> None:
+    from nebius.api.nebius.vpc import v1 as vpc_v1
+
+    network_client = SimpleNamespace(
+        get=Mock(side_effect=RuntimeError("sensitive provider detail"))
+    )
+    monkeypatch.setattr(vpc_v1, "NetworkServiceClient", lambda _client: network_client)
+    monkeypatch.setattr(vpc_v1, "SubnetServiceClient", lambda _client: object())
+    manager = VMManager(project_id="project-test", region="eu-west1")
+    spec = _gateway_group_spec()
+    spec.network_id = "network-explicit"
+
+    with pytest.raises(RuntimeError, match="could not be read") as raised:
+        manager._resolve_gateway_network(object(), spec)
+
+    assert "sensitive provider detail" not in str(raised.value)
 
 
 def test_existing_instance_progress_matches_recreate_mode() -> None:
@@ -158,7 +207,9 @@ def test_network_selection_reporting_is_owned_by_provisioning_caller(
     client = object()
     subnet = SimpleNamespace(metadata=SimpleNamespace(id="subnet-1"))
     subnet_client = SimpleNamespace(
-        list_by_network=Mock(return_value=SimpleNamespace(wait=lambda: SimpleNamespace(items=[])))
+        list_by_network=Mock(
+            return_value=SimpleNamespace(wait=lambda: SimpleNamespace(items=[], next_page_token=""))
+        )
     )
     resolver = Mock(
         return_value=(
@@ -168,7 +219,7 @@ def test_network_selection_reporting_is_owned_by_provisioning_caller(
             subnet_client,
         )
     )
-    manager = VMManager(project_id="project-test", zone="eu-west1")
+    manager = VMManager(project_id="project-test", region="eu-west1")
     spec = _gateway_group_spec()
     monkeypatch.setattr(manager, "_resolve_gateway_network", resolver)
     monkeypatch.setattr(
@@ -258,7 +309,7 @@ def test_extract_explicit_subnet_networks_skips_invalid_and_inherited_pools() ->
 
 
 def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
-    manager = VMManager(project_id="project-test", zone="eu-west1")
+    manager = VMManager(project_id="project-test", region="eu-west1")
 
     rendered = manager._build_cloud_init(
         ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey",
@@ -600,15 +651,11 @@ def test_vm_ha_ready_expected_skip_has_no_traceback(monkeypatch, capsys) -> None
     assert captured.err == ""
 
 
-def test_vm_ha_route_maintenance_expected_skip_has_no_traceback(
-    monkeypatch, capsys
-) -> None:
+def test_vm_ha_route_maintenance_expected_skip_has_no_traceback(monkeypatch, capsys) -> None:
     def not_ready() -> None:
         raise RuntimeError("member is intentionally blocked")
 
-    monkeypatch.setattr(
-        agent_main, "require_vm_ha_route_maintenance_readiness", not_ready
-    )
+    monkeypatch.setattr(agent_main, "require_vm_ha_route_maintenance_readiness", not_ready)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -661,6 +708,12 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
         "features": [
             "force-reconcile-v1",
             "vm-ha-authority-bound-force-reconcile-v1",
+            "vm-ha-controller-route-reconcile-v1",
+            "vm-ha-mtls-rotation-quiescence-v1",
+            "vm-ha-standby-auto-healing-policy-v4",
+            "vm-ha-live-peer-replacement-v4",
+            "vm-ha-standby-replacement-inhibition-v2",
+            "vm-ha-standby-restoration-v2",
         ],
         "schema": "nebius-vpngw.agent-capabilities.v1",
     }
@@ -670,6 +723,7 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     systemd = Path(__file__).parents[2] / "src" / "nebius_vpngw" / "systemd"
     guard = (systemd / "nebius-vpngw-vm-ha-guard.service").read_text(encoding="utf-8")
     controller = (systemd / "nebius-vpngw-vm-ha.service").read_text(encoding="utf-8")
+    health_monitor = (systemd / "nebius-vpngw-health-monitor.service").read_text(encoding="utf-8")
     rearm = (systemd / "nebius-vpngw-vm-ha-rearm.service").read_text(encoding="utf-8")
     ordering = (systemd / "nebius-vpngw-vm-ha-ordering.conf").read_text(encoding="utf-8")
     ufw_lock = (systemd / "nebius-vpngw-ufw-lock.conf").read_text(encoding="utf-8")
@@ -680,18 +734,24 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     assert "f /run/ufw.lock 0600 root root -" in ufw_lock
     assert "ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in guard
     assert "RuntimeDirectory=nebius-vpngw" in guard
+    assert "RuntimeDirectoryPreserve=yes" in guard
     assert (
         "ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw "
         "/proc/sys/net/ipv4/ip_forward" in guard
     )
     assert "Requires=nebius-vpngw-vm-ha-guard.service" in controller
+    assert "RuntimeDirectory=nebius-vpngw" in controller
+    assert "RuntimeDirectoryMode=0755" in controller
+    assert "RuntimeDirectoryPreserve=yes" in controller
+    assert "RuntimeDirectoryPreserve=yes" in health_monitor
     assert "nebius-vpngw-vm-ha-rearm.service" not in controller
     assert (
         "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-preflight" in controller
     )
     assert "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in controller
     assert "Type=notify" in controller
-    assert "After=network-online.target nebius-vpngw-vm-ha-guard.service" in controller
+    assert "After=nebius-vpngw-vm-ha-guard.service" in controller
+    assert "After=network-online.target" not in controller
     assert "Before=strongswan-starter.service strongswan.service frr.service" in controller
     assert "After=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
     assert "Requires=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
@@ -699,8 +759,12 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
         "ExecCondition=/usr/bin/python3 -m nebius_vpngw.agent.main "
         "--vm-ha-route-maintenance-ready" in fix_routes
     )
-    assert "ExecCondition=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready" not in fix_routes
-    assert "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready" not in fix_routes
+    assert (
+        "ExecCondition=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready" not in fix_routes
+    )
+    assert (
+        "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready" not in fix_routes
+    )
     assert "ExecStopPost=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in controller
     assert "Restart=on-failure" in controller
     assert "TimeoutStopSec=30" in controller

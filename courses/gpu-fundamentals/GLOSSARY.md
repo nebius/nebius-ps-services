@@ -1,0 +1,26 @@
+# Glossary
+
+- **Arithmetic intensity**: useful arithmetic operations divided by estimated bytes moved for a declared operation boundary.
+- **Block**: a group of CUDA threads scheduled together on one streaming multiprocessor; a block does not split across SMs.
+- **CTA**: cooperative thread array, CUDA's architectural term for a thread block.
+- **CUDA Core**: a general arithmetic execution resource used by CUDA workloads; it is not a synonym for a thread.
+- **CUDA event**: a device-timeline marker used to order work or measure elapsed device time.
+- **Divergence**: a warp executing different control-flow paths for different active lanes, usually serializing the paths.
+- **Eligible warp**: a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
+- **Grid**: all thread blocks launched for one kernel invocation.
+- **GPC**: graphics processing cluster, a replicated top-level on-chip processing group that contains TPCs; the enabled count varies by H100 product.
+- **HBM**: the GPU's high-bandwidth device memory.
+- **Issued warp**: an eligible warp selected by a scheduler to issue an instruction in the current scheduling opportunity.
+- **Kernel**: a function launched for parallel execution on the GPU.
+- **Latency hiding**: issuing eligible work from another resident warp while a warp waits for a dependency.
+- **Occupancy**: resident warps relative to the hardware limit; a resource constraint indicator, not a performance score.
+- **Pinned memory**: page-locked host memory that enables efficient DMA and is required for truly asynchronous host-to-device copies in common CUDA paths.
+- **Roofline model**: a model that relates attainable work rate to arithmetic intensity, a bandwidth ceiling, and a compute ceiling.
+- **SIMT**: single-instruction, multiple-thread execution in which a warp issues an instruction for active lanes.
+- **SM**: streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
+- **SMSP**: an SM subpartition with its own warp scheduler, dispatch resources, register-file implementation partition, and associated execution resources.
+- **Tensor Core**: specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
+- **Thread-block cluster**: a Hopper scheduling hierarchy that co-schedules a bounded group of thread blocks so they can synchronize and use distributed shared memory.
+- **TPC**: texture/processing cluster; in Hopper, a TPC contains two SMs within a GPC.
+- **Triton program**: one instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.
+- **Warp**: 32 CUDA threads scheduled as an execution group on current NVIDIA GPUs covered by this course.

@@ -4,11 +4,39 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+from .credential_compensation import (
+    CredentialCompensationError,
+    CredentialCompensationJournal,
+    CredentialDeliveryAdapter,
+    CredentialDeliveryDisposition,
+)
 from .sdk_auth import init_nebius_sdk, suppress_deleted_key_refresh_logs
+
+
+class CredentialProviderError(RuntimeError):
+    """A stable, secret-free IAM credential provider failure."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: Nebius IAM credential operation failed")
+
+
+def _credential_provider_result[Result](
+    code: str,
+    invoke: Callable[[], Result],
+) -> Result:
+    """Run one secret-bearing provider call behind a sanitized error boundary."""
+
+    try:
+        return invoke()
+    except Exception:
+        raise CredentialProviderError(code) from None
 
 
 @dataclass(frozen=True)
@@ -279,8 +307,7 @@ def _ensure_project_role_permits(
     unexpected_roles = sorted(existing_roles - expected_roles)
     if reject_unexpected_role_ids and unexpected_roles:
         raise RuntimeError(
-            f"{principal_label} has unexpected project role permits: "
-            + ", ".join(unexpected_roles)
+            f"{principal_label} has unexpected project role permits: " + ", ".join(unexpected_roles)
         )
 
     missing_roles = sorted(expected_roles - existing_roles)
@@ -489,8 +516,9 @@ def _upload_auth_public_key(
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import AuthPublicKeySpec, CreateAuthPublicKeyRequest
 
-    try:
-        operation = auth_keys.create(
+    operation = _credential_provider_result(
+        "iam-auth-public-key-create-failed",
+        lambda: auth_keys.create(
             CreateAuthPublicKeyRequest(
                 metadata=ResourceMetadata(parent_id=project_id),
                 spec=AuthPublicKeySpec(
@@ -499,11 +527,8 @@ def _upload_auth_public_key(
                     data=public_key_pem,
                 ),
             )
-        ).wait()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to create auth public key for service account '{service_account_id}': {exc}"
-        ) from exc
+        ).wait(),
+    )
 
     auth_public_key_id = getattr(operation, "resource_id", "")
     if not auth_public_key_id:
@@ -536,7 +561,7 @@ def _create_object_storage_access_key(
     project_id: str,
     service_account_id: str,
     description: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v2 import (
         AccessKeySpec,
@@ -545,38 +570,36 @@ def _create_object_storage_access_key(
         GetAccessKeySecretRequest,
     )
 
-    try:
-        operation = access_keys.create(
+    operation = _credential_provider_result(
+        "iam-access-key-create-failed",
+        lambda: access_keys.create(
             CreateAccessKeyRequest(
                 metadata=ResourceMetadata(parent_id=project_id),
                 spec=AccessKeySpec(
                     account=_account_ref(service_account_id), description=description
                 ),
             )
-        ).wait()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to create access key for service account '{service_account_id}': {exc}"
-        ) from exc
+        ).wait(),
+    )
 
     access_key_id = getattr(operation, "resource_id", "")
     if not access_key_id:
         raise RuntimeError("Access key was created but key ID could not be resolved")
 
-    try:
-        secret_response = access_keys.get_secret(GetAccessKeySecretRequest(id=access_key_id)).wait()
-    except Exception as exc:
-        raise RuntimeError(
-            "Access key was created but retrieving secret failed. "
-            "Create a new access key and capture its secret immediately."
-        ) from exc
+    secret_response = _credential_provider_result(
+        "iam-access-key-secret-read-failed",
+        lambda: access_keys.get_secret(GetAccessKeySecretRequest(id=access_key_id)).wait(),
+    )
 
     aws_access_key_id = getattr(secret_response, "aws_access_key_id", "")
     s3_secret_access_key = getattr(secret_response, "secret", "")
 
     if not aws_access_key_id:
         # Fallback for SDK variants where aws_access_key_id is absent on GetAccessKeySecret response.
-        key = access_keys.get(GetAccessKeyRequest(id=access_key_id)).wait()
+        key = _credential_provider_result(
+            "iam-access-key-read-failed",
+            lambda: access_keys.get(GetAccessKeyRequest(id=access_key_id)).wait(),
+        )
         aws_access_key_id = getattr(getattr(key, "status", None), "aws_access_key_id", "")
 
     if not aws_access_key_id or not s3_secret_access_key:
@@ -584,7 +607,225 @@ def _create_object_storage_access_key(
             "Access key secret response did not include expected values (aws_access_key_id/secret)"
         )
 
-    return aws_access_key_id, s3_secret_access_key
+    return access_key_id, aws_access_key_id, s3_secret_access_key
+
+
+def _credential_description(base: str, operation_id: str) -> str:
+    return f"{base.strip()} [cxcli-op:{operation_id}]"
+
+
+def _credential_digest(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _credential_name(base: str, operation_id: str) -> str:
+    suffix = f"-cxcli-{operation_id[:12]}"
+    normalized = re.sub(r"[^a-z0-9-]+", "-", base.lower()).strip("-") or "credential"
+    return normalized[: 63 - len(suffix)].rstrip("-") + suffix
+
+
+def _credential_metadata_id(item: object) -> str:
+    return str(getattr(getattr(item, "metadata", None), "id", "") or "").strip()
+
+
+def _operation_owned_credential_ids(
+    *,
+    kind: str,
+    service_account_id: str,
+    operation_id: str,
+    project_id: str,
+    auth_keys: object | None,
+    access_keys: object | None,
+    static_keys: object | None,
+) -> tuple[str, ...]:
+    suffix = f"[cxcli-op:{operation_id}]"
+    matches: list[str] = []
+    page_token: str | None = None
+    seen_tokens: set[str] = set()
+    while True:
+        if kind == "auth-public-key":
+            if auth_keys is None:
+                raise RuntimeError("authorized-key compensation client is unavailable")
+            from nebius.api.nebius.iam.v1 import ListAuthPublicKeyByAccountRequest
+
+            try:
+                response = auth_keys.list_by_account(  # type: ignore[attr-defined]
+                    ListAuthPublicKeyByAccountRequest(
+                        account=_account_ref(service_account_id),
+                        page_token=page_token,
+                    )
+                ).wait()
+            except Exception:
+                raise CredentialProviderError("iam-auth-public-key-list-failed") from None
+        elif kind == "access-key":
+            if access_keys is None:
+                raise RuntimeError("access-key compensation client is unavailable")
+            from nebius.api.nebius.iam.v2 import ListAccessKeysByAccountRequest
+
+            try:
+                response = access_keys.list_by_account(  # type: ignore[attr-defined]
+                    ListAccessKeysByAccountRequest(
+                        account=_account_ref(service_account_id),
+                        page_token=page_token,
+                    )
+                ).wait()
+            except Exception:
+                raise CredentialProviderError("iam-access-key-list-failed") from None
+        elif kind == "static-key":
+            if static_keys is None:
+                raise RuntimeError("static-key compensation client is unavailable")
+            from nebius.api.nebius.iam.v1 import ListStaticKeysRequest
+
+            try:
+                response = static_keys.list(  # type: ignore[attr-defined]
+                    ListStaticKeysRequest(parent_id=project_id, page_token=page_token)
+                ).wait()
+            except Exception:
+                raise CredentialProviderError("iam-static-key-list-failed") from None
+        else:
+            raise RuntimeError(f"unsupported credential compensation kind: {kind}")
+
+        for item in list(getattr(response, "items", [])):
+            metadata = getattr(item, "metadata", None)
+            spec = getattr(item, "spec", None)
+            description = str(getattr(spec, "description", "") or "").strip()
+            name = str(getattr(metadata, "name", "") or "").strip()
+            account = getattr(spec, "account", None)
+            item_service_account_id = str(
+                getattr(getattr(account, "service_account", None), "id", "") or ""
+            ).strip()
+            owned = (
+                name.endswith(f"-cxcli-{operation_id[:12]}")
+                if kind == "static-key"
+                else description.endswith(suffix)
+            )
+            resource_id = _credential_metadata_id(item)
+            if owned and item_service_account_id == service_account_id and resource_id:
+                matches.append(resource_id)
+        page_token = str(getattr(response, "next_page_token", "") or "").strip() or None
+        if not page_token:
+            break
+        if page_token in seen_tokens:
+            raise RuntimeError("credential compensation listing repeated a pagination token")
+        seen_tokens.add(page_token)
+    return tuple(sorted(set(matches)))
+
+
+def _delete_operation_credential(
+    *,
+    kind: str,
+    resource_id: str,
+    auth_keys: object | None,
+    access_keys: object | None,
+    static_keys: object | None,
+) -> None:
+    if kind == "auth-public-key":
+        if auth_keys is None:
+            raise RuntimeError("authorized-key compensation client is unavailable")
+        from nebius.api.nebius.iam.v1 import DeleteAuthPublicKeyRequest
+
+        try:
+            auth_keys.delete(DeleteAuthPublicKeyRequest(id=resource_id)).wait()  # type: ignore[attr-defined]
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                return
+            raise CredentialProviderError("iam-auth-public-key-delete-failed") from None
+    elif kind == "access-key":
+        if access_keys is None:
+            raise RuntimeError("access-key compensation client is unavailable")
+        from nebius.api.nebius.iam.v2 import DeleteAccessKeyRequest
+
+        try:
+            access_keys.delete(DeleteAccessKeyRequest(id=resource_id)).wait()  # type: ignore[attr-defined]
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                return
+            raise CredentialProviderError("iam-access-key-delete-failed") from None
+    elif kind == "static-key":
+        if static_keys is None:
+            raise RuntimeError("static-key compensation client is unavailable")
+        from nebius.api.nebius.iam.v1 import DeleteStaticKeyRequest
+
+        try:
+            static_keys.delete(DeleteStaticKeyRequest(id=resource_id)).wait()  # type: ignore[attr-defined]
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                return
+            raise CredentialProviderError("iam-static-key-delete-failed") from None
+    else:
+        raise RuntimeError(f"unsupported credential compensation kind: {kind}")
+
+
+def _run_compensated_credential_issue[CredentialResult](
+    *,
+    project_id: str,
+    scope: str,
+    auth_keys: object | None,
+    access_keys: object | None,
+    static_keys: object | None,
+    create: Callable[[CredentialCompensationJournal, str], CredentialResult],
+    delivery: CredentialDeliveryAdapter[CredentialResult],
+) -> CredentialResult:
+    journal = CredentialCompensationJournal(project_id=project_id, scope=scope)
+
+    def _delete(kind: str, resource_id: str) -> None:
+        _delete_operation_credential(
+            kind=kind,
+            resource_id=resource_id,
+            auth_keys=auth_keys,
+            access_keys=access_keys,
+            static_keys=static_keys,
+        )
+
+    def _resolve(item: Mapping[str, Any], operation_id: str) -> tuple[str, ...]:
+        return _operation_owned_credential_ids(
+            kind=str(item["kind"]),
+            service_account_id=str(item["serviceAccountId"]),
+            operation_id=operation_id,
+            project_id=project_id,
+            auth_keys=auth_keys,
+            access_keys=access_keys,
+            static_keys=static_keys,
+        )
+
+    with journal.locked():
+        journal.recover(delete=_delete, resolve=_resolve, delivery=delivery)
+        operation_id = journal.begin()
+        delivery_started = False
+        try:
+            result = create(journal, operation_id)
+            intent = delivery.prepare(
+                result,
+                operation_id=operation_id,
+                credentials=journal.created_credentials(),
+            )
+            journal.record_delivery_intent(intent)
+            delivery_started = True
+            disposition = delivery.deliver(result, intent)
+        except BaseException:
+            if journal.payload is not None:
+                if delivery_started:
+                    journal.mark_delivery_uncertain()
+                else:
+                    journal.recover(delete=_delete, resolve=_resolve, delivery=delivery)
+            raise
+        if disposition is CredentialDeliveryDisposition.DELIVERED:
+            journal.mark_delivered()
+            return result
+        if disposition is CredentialDeliveryDisposition.NOT_DELIVERED:
+            journal.compensate(delete=_delete)
+            raise CredentialCompensationError(
+                "credential destination proved that delivery did not complete"
+            )
+        if disposition is CredentialDeliveryDisposition.AMBIGUOUS:
+            journal.mark_delivery_uncertain()
+            raise CredentialCompensationError(
+                "credential delivery remains ambiguous; created credentials were preserved"
+            )
+        journal.mark_delivery_uncertain()
+        raise CredentialCompensationError(
+            "credential delivery returned an invalid disposition; created credentials were preserved"
+        )
 
 
 def create_service_account_auth_public_key(
@@ -661,11 +902,7 @@ def service_account_auth_public_key_ids_by_description(
                 account_id = getattr(getattr(account, "service_account", None), "id", "")
                 key_description = str(getattr(spec, "description", "") or "")
                 key_id = str(getattr(metadata, "id", "") or "")
-                if (
-                    account_id == service_account_id
-                    and key_description == description
-                    and key_id
-                ):
+                if account_id == service_account_id and key_description == description and key_id:
                     matches.append(key_id)
             page_token = getattr(response, "next_page_token", "") or None
             if not page_token:
@@ -689,6 +926,8 @@ def issue_service_account_object_storage_access_key(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    compensation_scope: str,
+    delivery: CredentialDeliveryAdapter[ObjectStorageAccessKeyResult],
     allow_cli_token: bool = False,
 ) -> ObjectStorageAccessKeyResult:
     """Issue one Object Storage key for an existing service account."""
@@ -703,17 +942,39 @@ def issue_service_account_object_storage_access_key(
     try:
         from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
 
-        access_key_id, secret_access_key = _create_object_storage_access_key(
-            access_keys=AccessKeyServiceClient(sdk),
+        access_keys = AccessKeyServiceClient(sdk)
+
+        def _create(
+            journal: CredentialCompensationJournal, operation_id: str
+        ) -> ObjectStorageAccessKeyResult:
+            owned_description = _credential_description(description, operation_id)
+            journal.record_intent(
+                kind="access-key",
+                ownership_sha256=_credential_digest(owned_description),
+                service_account_id=service_account_id,
+            )
+            resource_id, access_key_id, secret_access_key = _create_object_storage_access_key(
+                access_keys=access_keys,
+                project_id=project_id,
+                service_account_id=service_account_id,
+                description=owned_description,
+            )
+            journal.record_created(kind="access-key", resource_id=resource_id)
+            return ObjectStorageAccessKeyResult(
+                project_id=project_id,
+                service_account_id=service_account_id,
+                s3_access_key_id=access_key_id,
+                s3_secret_access_key=secret_access_key,
+            )
+
+        return _run_compensated_credential_issue(
             project_id=project_id,
-            service_account_id=service_account_id,
-            description=description,
-        )
-        return ObjectStorageAccessKeyResult(
-            project_id=project_id,
-            service_account_id=service_account_id,
-            s3_access_key_id=access_key_id,
-            s3_secret_access_key=secret_access_key,
+            scope=compensation_scope,
+            auth_keys=None,
+            access_keys=access_keys,
+            static_keys=None,
+            create=_create,
+            delivery=delivery,
         )
     finally:
         _close_sdk(sdk)
@@ -730,6 +991,8 @@ def bootstrap_ci_service_account(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    compensation_scope: str,
+    delivery: CredentialDeliveryAdapter[CIBootstrapResult],
 ) -> CIBootstrapResult:
     """Ensure SA + role grants and create auth/access keys for CI usage."""
 
@@ -758,31 +1021,57 @@ def bootstrap_ci_service_account(
         auth_keys = AuthPublicKeyServiceClient(sdk)
         access_keys = AccessKeyServiceClient(sdk)
 
-        auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
+        def _create(journal: CredentialCompensationJournal, operation_id: str) -> CIBootstrapResult:
+            owned_auth_description = _credential_description(auth_key_description, operation_id)
+            journal.record_intent(
+                kind="auth-public-key",
+                ownership_sha256=_credential_digest(owned_auth_description),
+                service_account_id=identity.service_account_id,
+            )
+            auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
+                auth_keys=auth_keys,
+                project_id=identity.project_id,
+                service_account_id=identity.service_account_id,
+                description=owned_auth_description,
+            )
+            journal.record_created(kind="auth-public-key", resource_id=auth_public_key_id)
+
+            owned_access_description = _credential_description(access_key_description, operation_id)
+            journal.record_intent(
+                kind="access-key",
+                ownership_sha256=_credential_digest(owned_access_description),
+                service_account_id=identity.service_account_id,
+            )
+            access_key_resource_id, s3_access_key_id, s3_secret_access_key = (
+                _create_object_storage_access_key(
+                    access_keys=access_keys,
+                    project_id=identity.project_id,
+                    service_account_id=identity.service_account_id,
+                    description=owned_access_description,
+                )
+            )
+            journal.record_created(kind="access-key", resource_id=access_key_resource_id)
+            return CIBootstrapResult(
+                project_id=identity.project_id,
+                service_account_name=identity.service_account_name,
+                service_account_id=identity.service_account_id,
+                service_account_created=identity.service_account_created,
+                roles_created=identity.roles_created,
+                roles_already_present=identity.roles_already_present,
+                auth_public_key_id=auth_public_key_id,
+                auth_private_key_pem=auth_private_key_pem,
+                s3_access_key_id=s3_access_key_id,
+                s3_secret_access_key=s3_secret_access_key,
+            )
+
+        return _run_compensated_credential_issue(
+            project_id=identity.project_id,
+            scope=compensation_scope,
             auth_keys=auth_keys,
-            project_id=identity.project_id,
-            service_account_id=identity.service_account_id,
-            description=auth_key_description,
-        )
-
-        s3_access_key_id, s3_secret_access_key = _create_object_storage_access_key(
             access_keys=access_keys,
-            project_id=identity.project_id,
-            service_account_id=identity.service_account_id,
-            description=access_key_description,
-        )
-
-        return CIBootstrapResult(
-            project_id=identity.project_id,
-            service_account_name=identity.service_account_name,
-            service_account_id=identity.service_account_id,
-            service_account_created=identity.service_account_created,
-            roles_created=identity.roles_created,
-            roles_already_present=identity.roles_already_present,
-            auth_public_key_id=auth_public_key_id,
-            auth_private_key_pem=auth_private_key_pem,
-            s3_access_key_id=s3_access_key_id,
-            s3_secret_access_key=s3_secret_access_key,
+            static_keys=None,
+            create=_create,
+            delivery=delivery,
         )
     finally:
         _close_sdk(sdk)
@@ -798,6 +1087,8 @@ def bootstrap_service_account_auth_key(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    compensation_scope: str,
+    delivery: CredentialDeliveryAdapter[ServiceAccountAuthKeyResult],
     allow_cli_token: bool = False,
 ) -> ServiceAccountAuthKeyResult:
     """Ensure SA + role grants and create an auth key for non-S3 runtime usage."""
@@ -826,22 +1117,42 @@ def bootstrap_service_account_auth_key(
         from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
 
         auth_keys = AuthPublicKeyServiceClient(sdk)
-        auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
-            auth_keys=auth_keys,
-            project_id=identity.project_id,
-            service_account_id=identity.service_account_id,
-            description=auth_key_description,
-        )
 
-        return ServiceAccountAuthKeyResult(
+        def _create(
+            journal: CredentialCompensationJournal, operation_id: str
+        ) -> ServiceAccountAuthKeyResult:
+            owned_description = _credential_description(auth_key_description, operation_id)
+            journal.record_intent(
+                kind="auth-public-key",
+                ownership_sha256=_credential_digest(owned_description),
+                service_account_id=identity.service_account_id,
+            )
+            auth_public_key_id, auth_private_key_pem = _create_auth_public_key(
+                auth_keys=auth_keys,
+                project_id=identity.project_id,
+                service_account_id=identity.service_account_id,
+                description=owned_description,
+            )
+            journal.record_created(kind="auth-public-key", resource_id=auth_public_key_id)
+            return ServiceAccountAuthKeyResult(
+                project_id=identity.project_id,
+                service_account_name=identity.service_account_name,
+                service_account_id=identity.service_account_id,
+                service_account_created=identity.service_account_created,
+                roles_created=identity.roles_created,
+                roles_already_present=identity.roles_already_present,
+                auth_public_key_id=auth_public_key_id,
+                auth_private_key_pem=auth_private_key_pem,
+            )
+
+        return _run_compensated_credential_issue(
             project_id=identity.project_id,
-            service_account_name=identity.service_account_name,
-            service_account_id=identity.service_account_id,
-            service_account_created=identity.service_account_created,
-            roles_created=identity.roles_created,
-            roles_already_present=identity.roles_already_present,
-            auth_public_key_id=auth_public_key_id,
-            auth_private_key_pem=auth_private_key_pem,
+            scope=compensation_scope,
+            auth_keys=auth_keys,
+            access_keys=None,
+            static_keys=None,
+            create=_create,
+            delivery=delivery,
         )
     finally:
         _close_sdk(sdk)
@@ -857,6 +1168,8 @@ def issue_observability_static_key(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    compensation_scope: str,
+    delivery: CredentialDeliveryAdapter[StaticKeyIssueResult],
 ) -> StaticKeyIssueResult:
     """Ensure a viewer identity and issue a one-time Observability static key."""
     identity = ensure_ci_service_account_identity(
@@ -885,36 +1198,88 @@ def issue_observability_static_key(
         )
 
         static_keys = StaticKeyServiceClient(sdk)
-        response = static_keys.issue(
-            IssueStaticKeyRequest(
-                metadata=ResourceMetadata(parent_id=project_id, name=key_name),
-                spec=StaticKeySpec(
-                    account=_account_ref(identity.service_account_id),
-                    service=StaticKeySpec.ClientService.OBSERVABILITY,
-                ),
+
+        def _create(
+            journal: CredentialCompensationJournal, operation_id: str
+        ) -> StaticKeyIssueResult:
+            owned_name = _credential_name(key_name, operation_id)
+            journal.record_intent(
+                kind="static-key",
+                ownership_sha256=_credential_digest(owned_name),
+                service_account_id=identity.service_account_id,
             )
-        ).wait()
-        operation = getattr(response, "operation", None)
-        static_key_id = getattr(operation, "resource_id", "")
-        token = getattr(response, "token", "")
-        if not static_key_id:
-            raise RuntimeError("Observability static key was issued but key ID was not returned")
-        if not token:
-            raise RuntimeError("Observability static key was issued but token was not returned")
-        return StaticKeyIssueResult(
+            response = _credential_provider_result(
+                "iam-static-key-issue-failed",
+                lambda: static_keys.issue(
+                    IssueStaticKeyRequest(
+                        metadata=ResourceMetadata(parent_id=project_id, name=owned_name),
+                        spec=StaticKeySpec(
+                            account=_account_ref(identity.service_account_id),
+                            service=StaticKeySpec.ClientService.OBSERVABILITY,
+                        ),
+                    )
+                ).wait(),
+            )
+            operation = getattr(response, "operation", None)
+            static_key_id = getattr(operation, "resource_id", "")
+            token = getattr(response, "token", "")
+            if not static_key_id:
+                raise RuntimeError(
+                    "Observability static key was issued but key ID was not returned"
+                )
+            journal.record_created(kind="static-key", resource_id=static_key_id)
+            if not token:
+                raise RuntimeError("Observability static key was issued but token was not returned")
+            return StaticKeyIssueResult(
+                project_id=identity.project_id,
+                service_account_name=identity.service_account_name,
+                service_account_id=identity.service_account_id,
+                service_account_created=identity.service_account_created,
+                roles_created=identity.roles_created,
+                roles_already_present=identity.roles_already_present,
+                static_key_id=static_key_id,
+                token=token,
+            )
+
+        return _run_compensated_credential_issue(
             project_id=identity.project_id,
-            service_account_name=identity.service_account_name,
-            service_account_id=identity.service_account_id,
-            service_account_created=identity.service_account_created,
-            roles_created=identity.roles_created,
-            roles_already_present=identity.roles_already_present,
-            static_key_id=static_key_id,
-            token=token,
+            scope=compensation_scope,
+            auth_keys=None,
+            access_keys=None,
+            static_keys=static_keys,
+            create=_create,
+            delivery=delivery,
         )
+    finally:
+        _close_sdk(sdk)
+
+
+def delete_observability_static_key(
+    *,
+    static_key_id: str,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+) -> None:
+    """Delete one operation-scoped Observability static key by immutable ID."""
+
+    normalized_id = str(static_key_id or "").strip()
+    if not normalized_id:
+        raise ValueError("static_key_id is required")
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+    )
+    try:
+        from nebius.api.nebius.iam.v1 import DeleteStaticKeyRequest, StaticKeyServiceClient
+
+        StaticKeyServiceClient(sdk).delete(DeleteStaticKeyRequest(id=normalized_id)).wait()
     except Exception as exc:
-        if isinstance(exc, RuntimeError):
-            raise
-        raise RuntimeError(f"Failed to issue Observability static key '{key_name}': {exc}") from exc
+        if _is_not_found_error(exc):
+            return
+        raise CredentialProviderError("iam-static-key-delete-failed") from None
     finally:
         _close_sdk(sdk)
 

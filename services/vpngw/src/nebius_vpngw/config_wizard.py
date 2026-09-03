@@ -17,6 +17,7 @@ from rich.table import Table
 
 from .config_template import DEFAULT_CONFIG_TEMPLATE
 from .schema import DefaultsConfig, GatewayConfig, GatewayGroup, VPNGatewayConfig
+from .vm_ha_credentials import display_vm_ha_credential_path
 
 _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{4,}$")
@@ -173,9 +174,13 @@ def _validate_private_subnet(value: str) -> str:
     try:
         network = ipaddress.ip_network(value, strict=False)
     except ValueError as error:
-        raise ValueError("Enter a private IPv4 CIDR, or leave blank for automatic selection.") from error
+        raise ValueError(
+            "Enter a private IPv4 CIDR, or leave blank for automatic selection."
+        ) from error
     if network.version != 4 or not network.is_private or not 8 <= network.prefixlen <= 28:
-        raise ValueError("The gateway subnet must be private IPv4 with a prefix from /8 through /28.")
+        raise ValueError(
+            "The gateway subnet must be private IPv4 with a prefix from /8 through /28."
+        )
     return str(network)
 
 
@@ -195,11 +200,40 @@ def _validate_apipa_cidr(value: str) -> str:
 
 
 def _validate_env_name(value: str) -> str:
+    """Validate environment names used by the separate VM-HA conversion wizard."""
+
     if not _ENV_NAME_RE.fullmatch(value):
         raise ValueError(
             "Use at least five uppercase letters, digits, or underscores, starting with a letter or underscore."
         )
     return value
+
+
+def _validate_psk_input(value: str) -> str:
+    """Classify one hidden PSK answer without ever including it in an error."""
+
+    if _ENV_NAME_RE.fullmatch(value):
+        return "${" + value + "}"
+    if "${" in value:
+        raise ValueError(
+            "Literal PSKs cannot contain ${...}; use an environment variable name or edit "
+            "the generated YAML after the wizard finishes."
+        )
+    if len(value) < 8:
+        raise ValueError(
+            "Enter an uppercase environment variable name or a literal PSK with at least 8 characters."
+        )
+    return value
+
+
+def _format_validation_error(error: ValidationError) -> str:
+    """Render schema failures without Pydantic input values or secret-bearing context."""
+
+    messages: list[str] = []
+    for item in error.errors(include_url=False, include_context=False, include_input=False):
+        location = ".".join(str(part) for part in item.get("loc", ())) or "configuration"
+        messages.append(f"{location}: {item.get('msg', 'is invalid')}")
+    return "\n".join(messages) or "The configuration is invalid."
 
 
 def _validate_absolute_path(value: str) -> str:
@@ -261,7 +295,12 @@ def _base_candidate() -> dict[str, t.Any]:
     loaded = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE)
     if not isinstance(loaded, dict):  # pragma: no cover - embedded template invariant
         raise WizardValidationError("The embedded configuration template is invalid.")
-    return t.cast(dict[str, t.Any], copy.deepcopy(loaded))
+    candidate = t.cast(dict[str, t.Any], copy.deepcopy(loaded))
+    # The embedded template is a compatibility contract for non-interactive callers and
+    # intentionally retains its detailed example. Fresh interactive sessions must not
+    # inherit that provider-specific example as user input.
+    candidate["connections"] = []
+    return candidate
 
 
 def _project_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
@@ -280,7 +319,7 @@ def _project_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
         "Region ID",
         default=str(candidate.get("region_id") or "eu-north1").replace("${REGION_ID}", "")
         or "eu-north1",
-        help_text="A Nebius region such as eu-north1. The VM zone is selected separately.",
+        help_text="The Nebius region for network resources and gateway VMs, such as eu-north1.",
     )
 
 
@@ -315,24 +354,11 @@ def _vm_ha_config(prompt: _Prompter, group: dict[str, t.Any]) -> None:
             help_text=f"Stable identity for instance index {index}; its initial ownership role is {role}.",
             validator=_validate_name,
         )
-        nebius_credentials_path = prompt.ask(
-            f"Member {index} Nebius credential JSON path",
-            default=str(
-                existing.get("nebius_credentials_path")
-                or f"/operator-secrets/{node_id}/nebius-credentials.json"
-            ),
-            help_text=(
-                "Absolute operator-local mode-0600 credential JSON. Managed mTLS keys are "
-                "generated independently on each VM and never copied to the operator."
-            ),
-            validator=_validate_absolute_path,
-        )
         members.append(
             {
                 "node_id": node_id,
                 "instance_index": index,
                 "role": role,
-                "nebius_credentials_path": nebius_credentials_path,
             }
         )
     group["vm_ha"] = {"enabled": True, "cluster_id": cluster_id, "members": members}
@@ -355,13 +381,7 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
         maximum=10,
         help_text="Ordinary gateways may use 1-10 VMs. VM-HA, if explicitly enabled below, uses exactly 2.",
     )
-    region = str(candidate["region_id"])
-    default_zone = region if re.search(r"-[a-z]$", region) else f"{region}-a"
-    group["region"] = prompt.ask(
-        "Gateway VM zone",
-        default=str(group.get("region") or default_zone),
-        help_text="Nebius zone for the gateway VMs, for example eu-north1-a.",
-    )
+    group["region"] = str(candidate["region_id"])
 
     template = _base_candidate()
     template_group = t.cast(dict[str, t.Any], template["gateway_group"])
@@ -385,7 +405,7 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             "Compute platform",
             ("cpu-d3", "cpu-e2"),
             default=str(vm_spec.get("platform") or "cpu-d3"),
-            help_text="cpu-d3 is the current template default; choose a platform available in the selected zone.",
+            help_text="cpu-d3 is the current template default; choose a platform available in the selected region.",
         )
         vm_spec["preset"] = prompt.ask(
             "VM preset",
@@ -448,7 +468,11 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
     network_id = prompt.ask(
         "Existing VPC network ID (optional)",
         default=str(group.get("network_id") or ""),
-        help_text="Leave blank for the current supported network auto-discovery rules.",
+        help_text=(
+            "Enter the exact VPC ID when you know where the gateways belong. Leave blank "
+            "to use default-network, or the project's only network; multiple networks "
+            "require an explicit ID."
+        ),
         allow_empty=True,
     )
     if network_id:
@@ -465,52 +489,27 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
     subnet_cidr = prompt.ask(
         "Gateway subnet CIDR (optional)",
         default=str(subnet.get("cidr") or ""),
-        help_text="Leave blank to auto-carve a free private subnet during network preparation.",
+        help_text=(
+            "Leave blank to reuse an existing subnet with this exact name, or auto-carve "
+            "a free private subnet if the name does not exist during network preparation."
+        ),
         allow_empty=True,
         validator=_validate_private_subnet,
     )
     subnet["cidr"] = subnet_cidr or None
     subnet["prefix_length"] = prompt.ask_int(
-        "Automatic subnet prefix length",
+        "Automatic subnet prefix length (new subnet only)",
         default=int(subnet.get("prefix_length") or 24),
         minimum=8,
         maximum=28,
-        help_text="Used only when the explicit subnet CIDR is blank.",
+        help_text=(
+            "Used only when CIDR is blank and the named subnet does not exist; it sets "
+            "the size of the auto-created subnet. An explicit CIDR's /prefix always wins."
+        ),
     )
-    allocation = prompt.ask_choice(
-        "Public IP assignment",
-        ("auto", "existing"),
-        default="existing" if group.get("external_ips") else "auto",
-        help_text="auto lets prep-network reserve addresses; existing records one public IP per gateway VM.",
-    )
-    if allocation == "auto":
-        group["external_ips"] = []
-    else:
-        current_external_ips = group.get("external_ips") or []
-        assigned_ips: list[list[str]] = []
-        for index in range(int(group["instance_count"])):
-            current_ip = ""
-            if index < len(current_external_ips) and current_external_ips[index]:
-                current_ip = str(current_external_ips[index][0])
-            assigned_ips.append(
-                [
-                    prompt.ask(
-                        f"Public IP for gateway VM {index}",
-                        default=current_ip or None,
-                        help_text="An already assigned or desired public allocation address for NIC 0.",
-                        validator=_validate_ip,
-                    )
-                ]
-            )
-        group["external_ips"] = assigned_ips
-    gateway["local_asn"] = int(
-        prompt.ask(
-            "Local BGP ASN",
-            default=str(gateway.get("local_asn") or 65010),
-            help_text="The ASN advertised by the Nebius gateway for BGP connections.",
-            validator=_validate_asn,
-        )
-    )
+    # Public allocation discovery requires Nebius access. Keep authoring offline and let
+    # the separately confirmed prep-network flow select or reserve exact allocations.
+    group["external_ips"] = t.cast(list[list[str]], group.get("external_ips") or [])
     gateway["local_prefixes"] = _csv_values(
         prompt,
         "Local prefixes (comma-separated)",
@@ -524,7 +523,7 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
         GatewayConfig.model_validate(gateway)
         DefaultsConfig.model_validate(candidate["defaults"])
     except ValidationError as error:
-        raise WizardValidationError(str(error)) from error
+        raise WizardValidationError(_format_validation_error(error)) from error
 
 
 def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
@@ -545,13 +544,14 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
     )
     connections: list[dict[str, t.Any]] = []
     tunnel_number = 0
+    local_asn_prompted = False
     for connection_index in range(connection_count):
         old = previous[connection_index] if connection_index < len(previous) else {}
         old_tunnels = t.cast(list[dict[str, t.Any]], old.get("tunnels") or [])
         prompt.console.print(f"\n[bold]Connection {connection_index + 1}[/bold]")
         name = prompt.ask(
             "Connection name",
-            default=str(old.get("name") or f"peer-site-{connection_index + 1}"),
+            default=str(old.get("name") or f"site-{connection_index + 1}"),
             help_text="A unique lowercase name used as the prefix for generated tunnel names.",
             validator=_validate_name,
         )
@@ -568,6 +568,16 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             help_text="BGP learns peer routes dynamically; static requires explicit remote prefixes.",
         )
         if routing_mode == "bgp":
+            if not local_asn_prompted:
+                gateway["local_asn"] = int(
+                    prompt.ask(
+                        "Local BGP ASN",
+                        default=str(gateway.get("local_asn") or 65010),
+                        help_text="The ASN advertised by the Nebius gateway for BGP connections.",
+                        validator=_validate_asn,
+                    )
+                )
+                local_asn_prompted = True
             remote_asn = int(
                 prompt.ask(
                     "Peer BGP ASN",
@@ -610,7 +620,7 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             maximum=4,
             help_text=(
                 "The first path for each gateway VM is active; additional paths are passive. "
-                "Each path receives its own peer IP, PSK environment reference, and APIPA /30."
+                "Each path receives its own peer IP, PSK, and APIPA /30."
             ),
         )
         projected_tunnels = sum(len(connection["tunnels"]) for connection in connections)
@@ -626,9 +636,7 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             for path_index in range(paths_per_instance):
                 old_tunnel_index = instance_index * paths_per_instance + path_index
                 old_tunnel = (
-                    old_tunnels[old_tunnel_index]
-                    if old_tunnel_index < len(old_tunnels)
-                    else {}
+                    old_tunnels[old_tunnel_index] if old_tunnel_index < len(old_tunnels) else {}
                 )
                 default_name = f"{name}-gw{instance_index + 1}-tunnel{path_index + 1}"
                 tunnel_name = prompt.ask(
@@ -650,14 +658,16 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
                     if old_env_match
                     else re.sub(r"[^A-Z0-9_]", "_", tunnel_name.upper()) + "_PSK"
                 )
-                psk_env = prompt.ask(
-                    f"PSK environment variable for {tunnel_name}",
+                psk = prompt.ask(
+                    f"PSK or environment variable for {tunnel_name} [{env_default}]",
                     default=env_default,
                     help_text=(
-                        "Enter the variable name only. The YAML stores ${NAME}; the wizard never asks "
-                        "for, reads, or displays the secret value."
+                        "Enter an uppercase environment variable name to store ${NAME}, enter any "
+                        "other value of at least 8 characters to store a literal PSK, or press Enter "
+                        "to keep the generated variable and complete it later. Input is hidden."
                     ),
-                    validator=_validate_env_name,
+                    validator=_validate_psk_input,
+                    hide_input=True,
                 )
                 inner_cidr = prompt.ask(
                     f"APIPA /30 for {tunnel_name}",
@@ -682,7 +692,7 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
                         "local_public_ip_index": 0,
                         "ha_role": "active" if path_index == 0 else "passive",
                         "remote_public_ip": remote_ip,
-                        "psk": "${" + psk_env + "}",
+                        "psk": psk,
                         "inner_cidr": inner_cidr,
                         "inner_local_ip": str(local_ip),
                         "inner_remote_ip": str(remote_inner_ip),
@@ -710,7 +720,7 @@ def _validated_config(candidate: dict[str, t.Any]) -> dict[str, t.Any]:
     try:
         model = VPNGatewayConfig.model_validate(candidate)
     except ValidationError as error:
-        raise WizardValidationError(str(error)) from error
+        raise WizardValidationError(_format_validation_error(error)) from error
     return t.cast(dict[str, t.Any], model.model_dump(mode="json"))
 
 
@@ -728,9 +738,30 @@ def _review_phase(
     table.add_row("Gateway", f"{group['name']} ({group['instance_count']} VM(s))")
     table.add_row("Connections", str(len(connections)))
     table.add_row("Tunnels", str(sum(len(item["tunnels"]) for item in connections)))
-    table.add_row("VM-level HA", "enabled" if (group.get("vm_ha") or {}).get("enabled") else "disabled")
+    table.add_row(
+        "VM-level HA", "enabled" if (group.get("vm_ha") or {}).get("enabled") else "disabled"
+    )
+    if (group.get("vm_ha") or {}).get("enabled"):
+        table.add_row(
+            "VM-HA credentials",
+            "managed under "
+            + display_vm_ha_credential_path(
+                project_id=str(validated["project_id"]),
+                gateway_name=str(group["name"]),
+            ),
+        )
     table.add_row("Public IPs", "existing addresses" if group.get("external_ips") else "automatic")
-    table.add_row("PSKs", "environment references only; secret values not collected")
+    psks = [
+        str(tunnel["psk"])
+        for connection in connections
+        for tunnel in t.cast(list[dict[str, t.Any]], connection["tunnels"])
+    ]
+    environment_psks = sum(bool(re.fullmatch(r"\$\{[A-Z_][A-Z0-9_]*\}", psk)) for psk in psks)
+    literal_psks = len(psks) - environment_psks
+    table.add_row(
+        "PSKs",
+        f"{environment_psks} environment reference(s), {literal_psks} literal value(s)",
+    )
     prompt.console.print()
     prompt.console.print(table)
     if not prompt.ask_bool(
@@ -743,11 +774,12 @@ def _review_phase(
 
 
 def render_wizard_yaml(config: dict[str, t.Any]) -> str:
-    """Serialize a validated candidate in stable schema order without secret bytes."""
+    """Serialize a validated candidate in stable schema order."""
     body = yaml.safe_dump(config, sort_keys=False, default_flow_style=False, allow_unicode=False)
     return (
         "# Generated by nebius-vpngw create-config wizard.\n"
-        "# PSKs are environment-variable references; keep *.config.yaml out of git.\n"
+        "# PSKs may be ${ENVIRONMENT_VARIABLE} references or literal values.\n"
+        "# Keep *.config.yaml private and out of git.\n"
         f"{body}"
     )
 
@@ -759,7 +791,7 @@ def run_config_wizard(console: Console, destination: Path) -> str:
             "[bold cyan]Guided VPN gateway configuration[/bold cyan]\n\n"
             "The wizard builds the complete YAML in memory, validates it against schema v1, "
             "and writes nothing until the final confirmation.\n"
-            "PSK secret values are never requested.\n\n"
+            "PSKs may use environment references or hidden literal input.\n\n"
             f"[dim]{_CONTROL_HELP} Back restarts the previous section.[/dim]",
             title="Configuration Wizard",
             border_style="cyan",

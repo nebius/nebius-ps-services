@@ -18,37 +18,6 @@
         ]
       ],
       "tagPrefix": "nccl-test-chart"
-    },
-    {
-      "chartDir": "helm-charts/soperator",
-      "chartName": "soperator",
-      "lintTemplates": [
-        [
-          "--set",
-          "soperator-notifier.enabled=true"
-        ]
-      ],
-      "smokeTemplates": [
-        [
-          "--api-versions",
-          "k8up.io/v1/Schedule",
-          "--set",
-          "soperator-checks.enabled=true",
-          "--set",
-          "soperator-activechecks.enabled=true",
-          "--set",
-          "soperator-notifier.enabled=true",
-          "--set",
-          "soperator-backup-config.enabled=true",
-          "--set",
-          "soperator-backup-config.bucket.name=soperator-jail-backups",
-          "--set",
-          "soperator-backup-config.bucket.endpoint=https://object-storage.example",
-          "--set",
-          "soperator-dcgm-exporter.enabled=true"
-        ]
-      ],
-      "tagPrefix": "soperator-chart"
     }
   ]
 }

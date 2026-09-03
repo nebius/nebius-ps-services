@@ -63,6 +63,60 @@ def _empty_resources(plan: Any) -> dict[tuple[str, str], None]:
     return resources
 
 
+def _private_config_document(
+    plan: Any,
+    resources: dict[tuple[str, str], dict[str, Any] | None],
+) -> dict[str, Any]:
+    tunnels = []
+    for path in plan.paths:
+        address = resources[("addresses", path.address)]
+        assert address is not None
+        tunnels.append(
+            {
+                "name": path.tunnel,
+                "gateway_instance_index": path.vm_index,
+                "local_public_ip_index": 0,
+                "remote_public_ip": address["address"],
+                "inner_cidr": path.inner_cidr,
+                "inner_local_ip": path.inner_local_ip,
+                "inner_remote_ip": path.inner_remote_ip,
+                "psk": f"secret-{path.label}",
+            }
+        )
+    return {
+        "gateway_group": {
+            "instance_count": 2,
+            "external_ips": [[path.peer_public_ip] for path in plan.paths],
+            "vm_ha": {
+                "enabled": True,
+                "cluster_id": "test-vm-ha",
+                "members": [
+                    {
+                        "node_id": "gateway-a",
+                        "instance_index": 0,
+                        "role": "active",
+                    },
+                    {
+                        "node_id": "gateway-b",
+                        "instance_index": 1,
+                        "role": "passive",
+                    },
+                ],
+            },
+        },
+        "gateway": {"local_prefixes": list(plan.nebius_prefixes)},
+        "connections": [
+            {
+                "name": plan.connection,
+                "vendor": "gcp",
+                "routing_mode": "static",
+                "remote_prefixes": list(plan.gcp_prefixes),
+                "tunnels": tunnels,
+            }
+        ],
+    }
+
+
 def _resource_key(arguments: list[str]) -> tuple[str, str]:
     assert arguments[0] == "compute"
     assert arguments[2] == "create"
@@ -308,6 +362,397 @@ def test_missing_secrets_are_rejected_before_creation(monkeypatch: pytest.Monkey
         module._resolve_psks(plan, resources)
 
 
+def test_private_config_psks_are_bound_by_tunnel_name_for_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    resources = _complete_graph(plan)
+    config = tmp_path / "private.config.yaml"
+    document = _private_config_document(plan, resources)
+    document["connections"].insert(
+        0,
+        {
+            "name": "unrelated-site",
+            "tunnels": [{"name": "unrelated-tunnel", "psk": "unrelated-secret"}],
+        },
+    )
+    document["connections"][1]["tunnels"].reverse()
+    config.write_text(json.dumps(document), encoding="utf-8")
+    config.chmod(0o600)
+    for path in plan.paths:
+        monkeypatch.delenv(path.psk_env_name, raising=False)
+
+    resolved = module._resolve_psks(
+        plan,
+        resources,
+        source_config=str(config),
+        rotate_existing=True,
+    )
+
+    assert list(resolved) == [path.psk_env_name for path in plan.paths]
+    assert list(resolved.values()) == ["secret-a", "secret-b"]
+
+
+@pytest.mark.parametrize(
+    ("drift", "message"),
+    [
+        ("routing-mode", "must be static"),
+        ("vendor", "vendor gcp"),
+        ("remote-prefix", "remote_prefixes"),
+        ("local-prefix", "gateway.local_prefixes"),
+        ("vm-ha-missing", "two-member VM-HA"),
+        ("vm-ha-disabled", "two-member VM-HA"),
+        ("vm-ha-members", "two-member VM-HA"),
+        ("member-endpoint", "member public endpoints"),
+        ("member-binding", "planned member and inner link"),
+        ("inner-link", "planned member and inner link"),
+        ("peer-address", "observed GCP peer address"),
+    ],
+)
+def test_psk_source_config_rejects_topology_drift_before_rotation(
+    tmp_path: Path,
+    drift: str,
+    message: str,
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    resources = _complete_graph(plan)
+    document = _private_config_document(plan, resources)
+    connection = document["connections"][0]
+    if drift == "routing-mode":
+        connection["routing_mode"] = "bgp"
+    elif drift == "vendor":
+        connection["vendor"] = "generic"
+    elif drift == "remote-prefix":
+        connection["remote_prefixes"] = ["10.41.0.0/24"]
+    elif drift == "local-prefix":
+        document["gateway"]["local_prefixes"] = ["10.51.0.0/24"]
+    elif drift == "vm-ha-missing":
+        document["gateway_group"].pop("vm_ha")
+    elif drift == "vm-ha-disabled":
+        document["gateway_group"]["vm_ha"]["enabled"] = False
+    elif drift == "vm-ha-members":
+        document["gateway_group"]["vm_ha"]["members"] = [
+            document["gateway_group"]["vm_ha"]["members"][0]
+        ]
+    elif drift == "member-endpoint":
+        document["gateway_group"]["external_ips"][0] = ["203.0.113.99"]
+    elif drift == "member-binding":
+        connection["tunnels"][0]["gateway_instance_index"] = 1
+    elif drift == "inner-link":
+        connection["tunnels"][0]["inner_cidr"] = "169.254.241.0/30"
+    else:
+        connection["tunnels"][0]["remote_public_ip"] = "192.0.2.99"
+    config = tmp_path / "private.config.yaml"
+    config.write_text(json.dumps(document), encoding="utf-8")
+    config.chmod(0o600)
+
+    with pytest.raises(module.HelperError, match=message):
+        module._resolve_psks(
+            plan,
+            resources,
+            source_config=str(config),
+            rotate_existing=True,
+        )
+
+
+def test_psk_source_config_rejects_unsafe_permissions(tmp_path: Path) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    config = tmp_path / "public.config.yaml"
+    config.write_text("connections: []\n", encoding="utf-8")
+    config.chmod(0o644)
+
+    with pytest.raises(module.HelperError, match="group or other users"):
+        module._resolve_psks(
+            plan,
+            _complete_graph(plan),
+            source_config=str(config),
+            rotate_existing=True,
+        )
+
+
+def test_psk_source_config_rejects_symlink_swap_at_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    resources = _complete_graph(plan)
+    document = _private_config_document(plan, resources)
+    config = tmp_path / "private.config.yaml"
+    replacement = tmp_path / "replacement.config.yaml"
+    config.write_text(json.dumps(document), encoding="utf-8")
+    replacement.write_text(json.dumps(document), encoding="utf-8")
+    config.chmod(0o600)
+    replacement.chmod(0o600)
+    original_open = module.os.open
+    swapped = False
+
+    def swap_before_open(path: str | os.PathLike[str], flags: int) -> int:
+        nonlocal swapped
+        if Path(path) == config and not swapped:
+            swapped = True
+            config.unlink()
+            config.symlink_to(replacement)
+        return original_open(path, flags)
+
+    monkeypatch.setattr(module.os, "open", swap_before_open)
+
+    with pytest.raises(module.HelperError, match="regular non-symlink"):
+        module._resolve_psks(
+            plan,
+            resources,
+            source_config=str(config),
+            rotate_existing=True,
+        )
+
+
+def test_psk_source_config_rejects_environment_ambiguity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    config = tmp_path / "private.config.yaml"
+    config.write_text("connections: []\n", encoding="utf-8")
+    config.chmod(0o600)
+    monkeypatch.setenv(plan.paths[0].psk_env_name, "environment-secret")
+
+    with pytest.raises(module.HelperError, match="cannot be combined"):
+        module._resolve_psks(
+            plan,
+            _complete_graph(plan),
+            source_config=str(config),
+            rotate_existing=True,
+        )
+
+
+def test_psk_source_config_rejects_secret_environment_references(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    config = tmp_path / "private.config.yaml"
+    config.write_text(
+        "connections:\n"
+        f"  - name: {plan.connection}\n"
+        "    tunnels:\n"
+        f"      - name: {plan.paths[0].tunnel}\n"
+        "        psk: ${CUSTOM_CLASSIC_A_PSK}\n"
+        f"      - name: {plan.paths[1].tunnel}\n"
+        "        psk: ${CUSTOM_CLASSIC_B_PSK}\n",
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    monkeypatch.setenv("CUSTOM_CLASSIC_A_PSK", "secret-a")
+    monkeypatch.setenv("CUSTOM_CLASSIC_B_PSK", "secret-b")
+
+    with pytest.raises(module.HelperError, match="literal tunnel secrets"):
+        module._resolve_psks(
+            plan,
+            _complete_graph(plan),
+            source_config=str(config),
+            rotate_existing=True,
+        )
+
+
+def test_rotation_removes_routes_then_tunnels_and_restores_routes_last() -> None:
+    module = _load_helper()
+    plan = _plan(module, nebius_prefix=["10.50.0.0/24", "10.51.0.0/24"])
+    resources = _complete_graph(plan)
+    secrets = {path.psk_env_name: f"secret-{path.label}" for path in plan.paths}
+
+    class RecordingCloud:
+        def __init__(self) -> None:
+            self.calls: list[tuple[list[str], dict[str, Any]]] = []
+            self.template = _complete_graph(plan)
+            self.resources = {key: dict(value) for key, value in self.template.items()}
+
+        def describe(self, kind: str, name: str, *, regional: bool) -> dict[str, Any] | None:
+            del regional
+            return self.resources[(kind, name)]
+
+        def mutate(self, arguments: list[str], **options: Any) -> None:
+            self.calls.append((arguments, options))
+            kind, action, name = arguments[1:4]
+            key = (kind, name)
+            self.resources[key] = None if action == "delete" else dict(self.template[key])
+
+    cloud = RecordingCloud()
+    module._rotate(plan, cloud, resources, secrets)
+
+    actions = [arguments[1:4] for arguments, _ in cloud.calls]
+    route_count = sum(len(path.routes) for path in plan.paths)
+    assert all(action[:2] == ["routes", "delete"] for action in actions[:route_count])
+    assert all(
+        action[:2] == ["vpn-tunnels", "delete"] for action in actions[route_count : route_count + 2]
+    )
+    assert all(
+        action[:2] == ["vpn-tunnels", "create"]
+        for action in actions[route_count + 2 : route_count + 4]
+    )
+    assert all(action[:2] == ["routes", "create"] for action in actions[route_count + 4 :])
+    assert not any(
+        action[0] in {"addresses", "target-vpn-gateways", "forwarding-rules"} for action in actions
+    )
+    for arguments, options in cloud.calls:
+        assert all("secret-" not in argument for argument in arguments)
+        if arguments[1:3] == ["vpn-tunnels", "create"]:
+            assert set(options["secret_flags"]) == {"--shared-secret"}
+
+
+@pytest.mark.parametrize("failing_kind", ("route", "tunnel"))
+def test_rotation_delete_failure_removes_all_planned_routes_and_stops_recreation(
+    failing_kind: str,
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    resources = _complete_graph(plan)
+    secrets = {path.psk_env_name: f"secret-{path.label}" for path in plan.paths}
+
+    class FailingCloud:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+            self.resources = _complete_graph(plan)
+            self.failed = False
+
+        def describe(self, kind: str, name: str, *, regional: bool) -> dict[str, Any] | None:
+            del regional
+            return self.resources[(kind, name)]
+
+        def mutate(self, arguments: list[str], **options: Any) -> None:
+            del options
+            self.calls.append(arguments)
+            kind, action, name = arguments[1:4]
+            key = (kind, name)
+            failing_key = (
+                ("routes", plan.paths[1].routes[0].name)
+                if failing_kind == "route"
+                else ("vpn-tunnels", plan.paths[0].tunnel)
+            )
+            if action == "delete" and key == failing_key and not self.failed:
+                self.failed = True
+                raise module.HelperError("injected tunnel delete failure")
+            if action == "delete":
+                self.resources[key] = None
+
+    cloud = FailingCloud()
+    with pytest.raises(module.HelperError, match="all planned static routes were removed"):
+        module._rotate(plan, cloud, resources, secrets)
+
+    assert not any(arguments[1:3] == ["vpn-tunnels", "create"] for arguments in cloud.calls)
+    assert not any(arguments[1:3] == ["routes", "create"] for arguments in cloud.calls)
+    assert all(
+        cloud.resources[("routes", route.name)] is None
+        for path in plan.paths
+        for route in path.routes
+    )
+
+
+@pytest.mark.parametrize("failing_path_index", [0, 1])
+def test_rotation_route_restore_failure_removes_all_routes_and_retry_converges(
+    failing_path_index: int,
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    secrets = {path.psk_env_name: f"secret-{path.label}" for path in plan.paths}
+    failing_route = plan.paths[failing_path_index].routes[0].name
+
+    class StatefulCloud:
+        def __init__(self) -> None:
+            self.template = _complete_graph(plan)
+            self.resources = {key: dict(value) for key, value in self.template.items()}
+            self.calls: list[list[str]] = []
+            self.failed = False
+
+        def describe(self, kind: str, name: str, *, regional: bool) -> dict[str, Any] | None:
+            del regional
+            return self.resources[(kind, name)]
+
+        def mutate(self, arguments: list[str], **options: Any) -> None:
+            del options
+            self.calls.append(arguments)
+            kind, action, name = arguments[1:4]
+            key = (kind, name)
+            if action == "delete":
+                self.resources[key] = None
+                return
+            if kind == "routes" and name == failing_route and not self.failed:
+                self.failed = True
+                raise module.HelperError("injected route restoration failure")
+            self.resources[key] = dict(self.template[key])
+
+    cloud = StatefulCloud()
+    with pytest.raises(module.HelperError, match="all planned static routes were removed"):
+        module._rotate(plan, cloud, cloud.resources, secrets)
+
+    planned_route_keys = [("routes", route.name) for path in plan.paths for route in path.routes]
+    assert all(cloud.resources[key] is None for key in planned_route_keys)
+    assert any(
+        arguments[1:4] == ["routes", "delete", route.name]
+        for path in plan.paths
+        for route in path.routes
+        for arguments in cloud.calls
+        if route.name != failing_route
+    )
+
+    module._rotate(plan, cloud, cloud.resources, secrets)
+
+    assert all(cloud.resources[key] is not None for key in planned_route_keys)
+    assert all(cloud.resources[("vpn-tunnels", path.tunnel)] is not None for path in plan.paths)
+
+
+@pytest.mark.parametrize("final_failure", ("missing", "foreign"))
+def test_rotation_final_verification_failure_removes_all_planned_routes(
+    final_failure: str,
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    secrets = {path.psk_env_name: f"secret-{path.label}" for path in plan.paths}
+    failing_route = plan.paths[1].routes[0]
+
+    class StatefulCloud:
+        def __init__(self) -> None:
+            self.template = _complete_graph(plan)
+            self.resources = {key: dict(value) for key, value in self.template.items()}
+            self.reconstruction_complete = False
+            self.final_failure_injected = False
+
+        def describe(self, kind: str, name: str, *, regional: bool) -> dict[str, Any] | None:
+            del regional
+            key = (kind, name)
+            if (
+                self.reconstruction_complete
+                and key == ("routes", failing_route.name)
+                and not self.final_failure_injected
+            ):
+                self.final_failure_injected = True
+                if final_failure == "missing":
+                    return None
+                foreign = dict(self.resources[key] or {})
+                foreign["destRange"] = "192.0.2.0/24"
+                return foreign
+            return self.resources[key]
+
+        def mutate(self, arguments: list[str], **options: Any) -> None:
+            del options
+            kind, action, name = arguments[1:4]
+            key = (kind, name)
+            self.resources[key] = None if action == "delete" else dict(self.template[key])
+            if action == "create" and key == ("routes", failing_route.name):
+                self.reconstruction_complete = True
+
+    cloud = StatefulCloud()
+    with pytest.raises(module.HelperError, match="all planned static routes were removed"):
+        module._rotate(plan, cloud, cloud.resources, secrets)
+
+    assert all(
+        cloud.resources[("routes", route.name)] is None
+        for path in plan.paths
+        for route in path.routes
+    )
+
+
 def test_secret_flag_uses_anonymous_descriptor_and_scrubbed_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -500,6 +945,118 @@ def test_foreign_classic_tier_or_scheme_fails_before_any_mutation(
     assert mutation_calls == []
 
 
+@pytest.mark.parametrize("missing_kind", ("address", "gateway", "forwarding-rule"))
+def test_rotation_rejects_missing_retained_infrastructure_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    missing_kind: str,
+) -> None:
+    module = _load_helper()
+    mutation_calls: list[list[str]] = []
+
+    class Cloud:
+        def __init__(self, plan: Any, *, secret_values: tuple[str, ...] = ()) -> None:
+            del secret_values
+            self.resources: dict[tuple[str, str], dict[str, Any] | None] = _complete_graph(plan)
+            path = plan.paths[0]
+            if missing_kind == "address":
+                self.resources[("addresses", path.address)] = None
+                self.resources[("forwarding-rules", path.forwarding_esp)] = None
+                self.resources[("forwarding-rules", path.forwarding_udp500)] = None
+                self.resources[("forwarding-rules", path.forwarding_udp4500)] = None
+            elif missing_kind == "gateway":
+                self.resources[("target-vpn-gateways", path.gateway)] = None
+            else:
+                self.resources[("forwarding-rules", path.forwarding_esp)] = None
+
+        @staticmethod
+        def require_auth() -> None:
+            return None
+
+        def describe(self, kind: str, name: str, *, regional: bool) -> dict[str, Any] | None:
+            del regional
+            return self.resources[(kind, name)]
+
+        @staticmethod
+        def mutate(arguments: list[str], **options: Any) -> None:
+            del options
+            mutation_calls.append(arguments)
+
+    monkeypatch.setattr(module, "GCloud", Cloud)
+    result = module.main(
+        [
+            "--connection-name=site-static-ha",
+            "--gcp-project-id=gcp-test-project",
+            "--region=us-test1",
+            "--network=static-test-vpc",
+            "--nebius-active-public-ip=203.0.113.10",
+            "--nebius-passive-public-ip=203.0.113.11",
+            "--gcp-prefix=10.40.0.0/24",
+            "--nebius-prefix=10.50.0.0/24",
+            "--rotate-existing-tunnels",
+            "--yes",
+        ]
+    )
+
+    assert result == 1
+    assert mutation_calls == []
+    assert "retained Classic infrastructure is incomplete" in capsys.readouterr().err
+
+
+def test_rotation_revalidates_resource_identity_after_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_helper()
+    plan = _plan(module)
+    resources = _complete_graph(plan)
+    for index, resource in enumerate(resources.values(), start=1):
+        resource["id"] = str(index)
+    mutation_calls: list[list[str]] = []
+
+    class Cloud:
+        def __init__(self, runtime_plan: Any, *, secret_values: tuple[str, ...] = ()) -> None:
+            del runtime_plan, secret_values
+
+        @staticmethod
+        def require_auth() -> None:
+            return None
+
+        @staticmethod
+        def describe(kind: str, name: str, *, regional: bool) -> dict[str, Any] | None:
+            del regional
+            return resources[(kind, name)]
+
+        @staticmethod
+        def mutate(arguments: list[str], **options: Any) -> None:
+            del options
+            mutation_calls.append(arguments)
+
+    def confirm_and_replace(_prompt: str) -> str:
+        resources[("routes", plan.paths[0].routes[0].name)]["id"] = "replacement-id"
+        return "yes"
+
+    for path in plan.paths:
+        monkeypatch.setenv(path.psk_env_name, f"secret-{path.label}")
+    monkeypatch.setattr(module, "GCloud", Cloud)
+    monkeypatch.setattr("builtins.input", confirm_and_replace)
+    result = module.main(
+        [
+            "--connection-name=site-static-ha",
+            "--gcp-project-id=gcp-test-project",
+            "--region=us-test1",
+            "--network=static-test-vpc",
+            "--nebius-active-public-ip=203.0.113.10",
+            "--nebius-passive-public-ip=203.0.113.11",
+            "--gcp-prefix=10.40.0.0/24",
+            "--nebius-prefix=10.50.0.0/24",
+            "--rotate-existing-tunnels",
+        ]
+    )
+
+    assert result == 1
+    assert mutation_calls == []
+
+
 @pytest.mark.parametrize("mode", ("--status", "--dry-run"))
 def test_main_read_only_modes_never_mutate_missing_graph(
     monkeypatch: pytest.MonkeyPatch,
@@ -543,6 +1100,88 @@ def test_main_read_only_modes_never_mutate_missing_graph(
     assert result == 0
 
 
+def test_rotation_dry_run_previews_delete_and_recreate_without_reading_secrets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = _load_helper()
+
+    class Cloud:
+        def __init__(self, plan: Any, *, secret_values: tuple[str, ...] = ()) -> None:
+            del secret_values
+            self.resources = _complete_graph(plan)
+
+        @staticmethod
+        def require_auth() -> None:
+            return None
+
+        def describe(self, kind: str, name: str, *, regional: bool) -> dict[str, Any]:
+            del regional
+            return self.resources[(kind, name)]
+
+        @staticmethod
+        def mutate(arguments: list[str], **options: Any) -> None:
+            del arguments, options
+            raise AssertionError("Classic rotation dry-run must not mutate")
+
+    monkeypatch.setattr(module, "GCloud", Cloud)
+    result = module.main(
+        [
+            "--connection-name=site-static-ha",
+            "--gcp-project-id=gcp-test-project",
+            "--region=us-test1",
+            "--network=static-test-vpc",
+            "--nebius-active-public-ip=203.0.113.10",
+            "--nebius-passive-public-ip=203.0.113.11",
+            "--gcp-prefix=10.40.0.0/24",
+            "--nebius-prefix=10.50.0.0/24",
+            "--psk-source-config=/does/not/exist",
+            "--rotate-existing-tunnels",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    actions = [line for line in output.splitlines() if line.startswith("DRY-RUN")]
+    assert [line.split()[1:3] for line in actions] == [
+        ["delete", "routes:"],
+        ["delete", "routes:"],
+        ["delete", "vpn-tunnels:"],
+        ["delete", "vpn-tunnels:"],
+        ["create", "vpn-tunnels:"],
+        ["create", "vpn-tunnels:"],
+        ["create", "routes:"],
+        ["create", "routes:"],
+    ]
+
+
+def test_status_rejects_rotation_before_authentication(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_helper()
+
+    class RejectCloud:
+        def __init__(self, plan: Any, *, secret_values: tuple[str, ...] = ()) -> None:
+            del plan, secret_values
+            raise AssertionError("invalid read-only rotation must fail before authentication")
+
+    monkeypatch.setattr(module, "GCloud", RejectCloud)
+    result = module.main(
+        [
+            "--connection-name=site-static-ha",
+            "--gcp-project-id=gcp-test-project",
+            "--region=us-test1",
+            "--network=static-test-vpc",
+            "--nebius-active-public-ip=203.0.113.10",
+            "--nebius-passive-public-ip=203.0.113.11",
+            "--gcp-prefix=10.40.0.0/24",
+            "--nebius-prefix=10.50.0.0/24",
+            "--status",
+            "--rotate-existing-tunnels",
+        ]
+    )
+
+    assert result == 1
+
+
 def test_main_entrypoint_delegates_classic_help() -> None:
     result = subprocess.run(
         [str(ENTRYPOINT_PATH), "--classic-vm-ha-peer", "--help"],
@@ -555,3 +1194,5 @@ def test_main_entrypoint_delegates_classic_help() -> None:
 
     assert result.returncode == 0
     assert "two isolated one-to-one GCP Classic VPN paths" in result.stdout
+    assert "--psk-source-config" in result.stdout
+    assert "--rotate-existing-tunnels" in result.stdout

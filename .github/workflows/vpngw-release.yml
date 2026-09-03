@@ -129,7 +129,7 @@ jobs:
 
       - name: Lint
         if: steps.state.outputs.release_exists == 'false'
-        run: python -m ruff check src tests misc/gcp_vpngw_vm_ha.py misc/gcp_vpngw_classic_vm_ha.py
+        run: python -m ruff check src tests misc
 
       - name: Test
         if: steps.state.outputs.release_exists == 'false'

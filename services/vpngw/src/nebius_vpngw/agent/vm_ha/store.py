@@ -17,6 +17,7 @@ from typing import Any
 
 from .models import (
     GenerationRevision,
+    PeerHeartbeat,
     ReplayState,
     StalePeerStateError,
     StateValidationError,
@@ -26,6 +27,8 @@ from .models import (
 
 FaultHook = Callable[[str, Path], None]
 _PEER_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_PEER_HEARTBEAT_RESET_SCHEMA = "nebius-vpngw/vm-ha-peer-heartbeat-reset-v1"
 _ROUTE_RECEIPT_CONTEXT_KEYS = {
     "allocation_id",
     "bgp_policy_digest",
@@ -339,6 +342,114 @@ class AtomicGenerationStore:
                     )
             atomic_write_json(path, _envelope(state.to_dict()))
 
+    def save_accepted_peer_heartbeat(self, peer_node_id: str, heartbeat: PeerHeartbeat) -> None:
+        """Persist the last authenticated heartbeat behind its replay boundary."""
+
+        path = self._accepted_peer_heartbeat_path(peer_node_id)
+        with self._locked():
+            replay = self._load_replay_state_unlocked(self._replay_state_path(peer_node_id))
+            if not (
+                heartbeat.node_id == peer_node_id
+                and replay is not None
+                and replay.current_boot_id == heartbeat.boot_id
+                and replay.highest_sequence == heartbeat.sequence
+                and heartbeat.boot_id not in replay.retired_boot_ids
+            ):
+                raise StalePeerStateError(
+                    "accepted peer heartbeat is not covered by the replay boundary"
+                )
+            atomic_write_json(path, _envelope(heartbeat.to_dict()))
+
+    def load_accepted_peer_heartbeat(self, peer_node_id: str) -> PeerHeartbeat | None:
+        """Load checksum-valid authenticated parity evidence for restart recovery."""
+
+        path = self._accepted_peer_heartbeat_path(peer_node_id)
+        with self._locked():
+            if not path.exists():
+                return None
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                heartbeat = PeerHeartbeat.from_mapping(_unwrap(value))
+                replay = self._load_replay_state_unlocked(self._replay_state_path(peer_node_id))
+                if heartbeat.node_id != peer_node_id:
+                    raise CorruptStateError("accepted peer heartbeat has the wrong peer identity")
+                if not (
+                    replay is not None
+                    and replay.current_boot_id == heartbeat.boot_id
+                    and replay.highest_sequence == heartbeat.sequence
+                    and heartbeat.boot_id not in replay.retired_boot_ids
+                ):
+                    # Replay is persisted before this cache. A crash between
+                    # those writes leaves a checksum-valid but older cache.
+                    # Treat it as absent parity so startup remains able to
+                    # receive and persist a fresh authenticated heartbeat.
+                    return None
+                return heartbeat
+            except (OSError, json.JSONDecodeError, StateValidationError) as error:
+                raise CorruptStateError(
+                    f"invalid accepted heartbeat for {path.parent.name}: {error}"
+                ) from error
+
+    def request_accepted_peer_heartbeat_reset(
+        self,
+        peer_node_id: str,
+        *,
+        generation_id: str,
+    ) -> None:
+        """Durably request advisory-cache reset without resetting replay state."""
+
+        heartbeat_path = self._accepted_peer_heartbeat_path(peer_node_id)
+        reset_path = self._accepted_peer_heartbeat_reset_path(peer_node_id)
+        if _SHA256_RE.fullmatch(generation_id) is None:
+            raise StateValidationError("generation_id must be a lowercase SHA-256 digest")
+        with self._locked():
+            atomic_write_json(
+                reset_path,
+                _envelope(
+                    {
+                        "schema": _PEER_HEARTBEAT_RESET_SCHEMA,
+                        "peer_node_id": peer_node_id,
+                        "generation_id": generation_id,
+                    }
+                ),
+            )
+            if heartbeat_path.exists():
+                heartbeat_path.unlink()
+                _fsync_directory(heartbeat_path.parent)
+
+    def consume_accepted_peer_heartbeat_reset(
+        self,
+        peer_node_id: str,
+        *,
+        generation_id: str,
+    ) -> bool:
+        """Consume one exact activation reset after the previous writer stopped."""
+
+        heartbeat_path = self._accepted_peer_heartbeat_path(peer_node_id)
+        reset_path = self._accepted_peer_heartbeat_reset_path(peer_node_id)
+        if _SHA256_RE.fullmatch(generation_id) is None:
+            raise StateValidationError("generation_id must be a lowercase SHA-256 digest")
+        with self._locked():
+            if not reset_path.exists():
+                return False
+            try:
+                value = json.loads(reset_path.read_text(encoding="utf-8"))
+                payload = _unwrap(value)
+            except (OSError, json.JSONDecodeError, StateValidationError) as error:
+                raise CorruptStateError("accepted heartbeat reset is invalid") from error
+            if not (
+                set(payload) == {"schema", "peer_node_id", "generation_id"}
+                and payload.get("schema") == _PEER_HEARTBEAT_RESET_SCHEMA
+                and payload.get("peer_node_id") == peer_node_id
+                and payload.get("generation_id") == generation_id
+            ):
+                raise CorruptStateError("accepted heartbeat reset is stale or foreign")
+            if heartbeat_path.exists():
+                heartbeat_path.unlink()
+            reset_path.unlink()
+            _fsync_directory(reset_path.parent)
+            return True
+
     def load_replay_state(self, peer_node_id: str) -> ReplayState | None:
         with self._locked():
             return self._load_replay_state_unlocked(self._replay_state_path(peer_node_id))
@@ -375,6 +486,16 @@ class AtomicGenerationStore:
         if not _PEER_ID_RE.fullmatch(peer_node_id):
             raise StateValidationError("peer_node_id must be a stable identifier")
         return self.peers / peer_node_id / "replay.json"
+
+    def _accepted_peer_heartbeat_path(self, peer_node_id: str) -> Path:
+        if not _PEER_ID_RE.fullmatch(peer_node_id):
+            raise StateValidationError("peer_node_id must be a stable identifier")
+        return self.peers / peer_node_id / "accepted-heartbeat.json"
+
+    def _accepted_peer_heartbeat_reset_path(self, peer_node_id: str) -> Path:
+        if not _PEER_ID_RE.fullmatch(peer_node_id):
+            raise StateValidationError("peer_node_id must be a stable identifier")
+        return self.peers / peer_node_id / "accepted-heartbeat-reset.json"
 
     def _load_replay_state_unlocked(self, path: Path) -> ReplayState | None:
         if not path.exists():

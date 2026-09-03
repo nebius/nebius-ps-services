@@ -939,17 +939,17 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         ) -> dict[str, object]:
             if path.name == "remediation_attempt_guard.py":
                 return guard.evaluate(payload)
-            if path.name == "project_specs_lifecycle.py":
+            if path.name == "stop_sdlc_continue.py":
                 return {
                     "decision": "block",
-                    "reason": "Project reconciliation remains required.",
+                    "reason": "SDLC continuation remains required.",
                 }
             return {"continue": True}
 
         with patch.object(arbiter, "_run_delegate", side_effect=with_project_block):
             blocked = arbiter.evaluate(self.payload, hook_dir)
         self.assertEqual(blocked["decision"], "block")
-        self.assertIn("Project reconciliation", blocked["reason"])
+        self.assertIn("SDLC continuation", blocked["reason"])
         self.assertEqual(self.report_obligation_data()["status"], "active")
 
         def without_block(
@@ -993,7 +993,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             seen.append(path.name)
             if path.name == "remediation_attempt_guard.py":
                 return guard.evaluate(payload)
-            if path.name == "project_specs_lifecycle.py":
+            if path.name == "stop_sdlc_continue.py":
                 return terminal
             return {"continue": True}
 
@@ -1032,7 +1032,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 if payload.get(arbiter.REPORT_FINALIZE_FIELD):
                     return {"continue": True}
                 return {"continue": True, arbiter.REPORT_READY_FIELD: True}
-            if path.name == "project_specs_lifecycle.py":
+            if path.name == "stop_sdlc_continue.py":
                 return terminal
             return {"continue": True}
 
@@ -1102,7 +1102,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             seen.append(path.name)
             if path.name == "remediation_attempt_guard.py":
                 return guard.evaluate(payload)
-            if path.name == "project_specs_lifecycle.py":
+            if path.name == "stop_sdlc_continue.py":
                 return {
                     "continue": False,
                     "stopReason": "A later peer terminal must not replace the first.",
@@ -1801,8 +1801,46 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         pending = self.authorization_data()["pending"]
         assert isinstance(pending, dict)
         self.assertEqual(pending["mode"], "next_tranche")
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+        reason = denied["permissionDecisionReason"]
+        self.assertIn("*** Update File when it exists", reason)
+        self.assertIn("*** Add File only when it is absent", reason)
+        self.assertIn("Delete/Add replacement are denied", reason)
         state_file = guard.state_file_for_payload(self.payload)
         assert state_file is not None
+        self.payload.update(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": "\n".join(
+                        [
+                            "*** Begin Patch",
+                            f"*** Add File: {state_file}",
+                            "+replacement",
+                            "*** End Patch",
+                        ]
+                    )
+                },
+            }
+        )
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+
+        self.payload["tool_input"] = {
+            "command": "\n".join(
+                [
+                    "*** Begin Patch",
+                    f"*** Delete File: {state_file}",
+                    f"*** Add File: {state_file}",
+                    "+replacement",
+                    "*** End Patch",
+                ]
+            )
+        }
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+
         self.payload.update(
             {
                 "tool_name": "apply_patch",
@@ -1834,7 +1872,79 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertIsNone(authorization["pending"])
         self.assertIsNone(authorization["terminal"])
 
-    def test_resolved_marker_new_independent_blocker_promotes_pending_authorization(
+    def test_resolved_marker_explicit_profile_change_preserves_resolution(
+        self,
+    ) -> None:
+        recorded = [attempt(1, result="succeeded")]
+        self.write_state(state_data(attempts=recorded, status="resolved"))
+
+        output = self.evaluate_prompt(
+            "$troubleshoot --attempt-limit=10 --time-limit-minutes=180",
+            turn_id="resolved-resize",
+        )
+        self.assertIn(
+            "preserve its blocker, tranche, attempt ledger, counters",
+            output["hookSpecificOutput"]["additionalContext"],
+        )
+        pending = self.authorization_data()["pending"]
+        assert isinstance(pending, dict)
+        self.assertEqual(pending["mode"], "resize_active")
+
+        state_file = guard.state_file_for_payload(self.payload)
+        assert state_file is not None
+        self.payload.update(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": "\n".join(
+                        [
+                            "*** Begin Patch",
+                            f"*** Add File: {state_file}",
+                            "+replacement",
+                            "*** End Patch",
+                        ]
+                    )
+                },
+            }
+        )
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+
+        self.payload["tool_input"] = {
+            "command": "\n".join(
+                [
+                    "*** Begin Patch",
+                    f"*** Update File: {state_file}",
+                    "@@",
+                    "-old",
+                    "+new",
+                    "*** End Patch",
+                ]
+            )
+        }
+        self.assertEqual(self.evaluate_pre_tool(), {})
+
+        self.write_state(
+            state_data(
+                attempts=recorded,
+                status="resolved",
+                attempt_limit=10,
+                time_limit_minutes=180,
+                budget_authorization_id=pending["authorization_id"],
+            )
+        )
+        self.payload.update(
+            {"tool_name": "Bash", "tool_input": {"command": "run-check"}}
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
+        authorization = self.authorization_data()
+        self.assertIsNone(authorization["pending"])
+        self.assertEqual(
+            authorization["current"]["authorization_id"],
+            pending["authorization_id"],
+        )
+
+    def test_resolved_marker_new_investigation_does_not_preemptively_gate_tools(
         self,
     ) -> None:
         self.write_state(
@@ -1846,31 +1956,14 @@ class RemediationAttemptGuardTest(unittest.TestCase):
 
         output = self.evaluate_prompt("$troubleshoot", turn_id="resolved-next")
         context = output["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("prior terminal marker", context)
-        self.assertNotIn("exhausted marker", context)
-
-        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
-        self.assertEqual(denied["permissionDecision"], "deny")
-        self.assertIn("prior terminal marker", denied["permissionDecisionReason"])
-
-        pending = self.authorization_data()["pending"]
-        assert isinstance(pending, dict)
-        self.assertEqual(pending["mode"], "next_tranche")
-        self.write_state(
-            state_data(
-                blocker_key=(
-                    "other-component|other-operation|other-error|other-boundary"
-                ),
-                blocker_summary="A causally independent operation now fails.",
-                started_at="2026-01-02T00:00:00Z",
-                budget_authorization_id=pending["authorization_id"],
-            )
-        )
-
+        self.assertIn("Troubleshoot remediation profile", context)
+        self.assertNotIn("prior terminal marker", context)
+        self.assertNotIn("complete canonical fresh active marker", context)
         self.assertEqual(self.evaluate_pre_tool(), {})
-        authorization = self.authorization_data()
-        self.assertIsNone(authorization["pending"])
-        self.assertIsNone(authorization["terminal"])
+        self.assertEqual(
+            guard.load_authorization_state(self.payload).kind,
+            "missing",
+        )
 
     def test_ten_attempt_fallback_is_complete_and_self_validating(self) -> None:
         self.evaluate_prompt(
@@ -3296,17 +3389,17 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         ) -> dict[str, object]:
             if path.name == "remediation_attempt_guard.py":
                 return guard.evaluate(payload)
-            if path.name == "project_specs_lifecycle.py":
+            if path.name == "stop_sdlc_continue.py":
                 return {
                     "decision": "block",
-                    "reason": "Project reconciliation remains required.",
+                    "reason": "SDLC continuation remains required.",
                 }
             return {"continue": True}
 
         with patch.object(arbiter, "_run_delegate", side_effect=with_project_block):
             blocked = arbiter.evaluate(self.payload, hook_dir)
         self.assertEqual(blocked["decision"], "block")
-        self.assertIn("Project reconciliation", blocked["reason"])
+        self.assertIn("SDLC continuation", blocked["reason"])
 
         def without_block(
             path: Path,
@@ -3354,7 +3447,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         ) -> dict[str, object]:
             if path.name == "remediation_attempt_guard.py":
                 return guard.evaluate(payload)
-            if path.name == "project_specs_lifecycle.py":
+            if path.name == "stop_sdlc_continue.py":
                 return terminal
             return {"continue": True}
 

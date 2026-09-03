@@ -1,6 +1,6 @@
 ---
 name: project-agent-instructions
-description: "Use only when maintain-project-specs routes a current spec receipt to render, create, refresh, adopt, or retire selected-project AGENTS.md rules with deterministic ownership, sealing, and recovery."
+description: "Use only for an explicit project-instruction mutation request or a maintain-project-specs route with a current spec receipt; render, create, refresh, adopt, or retire selected-project AGENTS.md rules with deterministic ownership and recovery."
 ---
 
 # Project Agent Instructions
@@ -33,24 +33,27 @@ when determining whether a project-specific rule is redundant.
 
 ## Invocation Policy
 
-Use only when `maintain-project-specs` explicitly routes here with its current
-canonical receipt. Task Implementer and Agentic SDLC are outer consumers and
-must route through that owner instead of invoking this skill directly. Keep
+Use only when the user explicitly requests project-instruction mutation or
+`maintain-project-specs` explicitly routes here with its current canonical
+receipt. Task Implementer and Agentic SDLC only read already-effective
+instructions and may report advisory status; they never invoke, wait for, or
+seal this workflow. Keep
 `policy.allow_implicit_invocation: false` in `agents/openai.yaml`. Do not expose
 a standalone public workflow command.
 
 ## When To Use
 
 - `maintain-project-specs` has issued its current canonical receipt and routes
-  the selected project here before implementation opens.
-- Task Implementer or Agentic SDLC needs a project-instructions decision and
-  has routed through `maintain-project-specs` as the sole direct owner.
+  an explicit project-instruction decision here.
+- The user explicitly asks to create, refresh, adopt, or retire project
+  instructions and the canonical spec receipt is available.
 - Specs, selected-project identity, relevant evidence, effective Codex config,
   ancestor instructions, renderer, target, or prior decision changed.
 
 ## When Not To Use
 
-- Do not invoke directly outside `maintain-project-specs`.
+- Do not infer mutation authority from ordinary project work, Task Implementer,
+  Agentic SDLC, or hook observations.
 - Do not run from marker checks or unvalidated specification files.
 - Do not create generic guidance, task state, architecture prose, reusable
   procedures, or recursive instruction files.
@@ -81,8 +84,8 @@ a standalone public workflow command.
 ## Writes
 
 - Caller-authored `runtime-config.json` beside the workflow directory and
-  `decision.json` directly within it; the lifecycle hook admits only these
-  exact non-authoritative inputs for the current session.
+  `decision.json` directly within it; these are non-authoritative inputs for
+  the explicit project-instruction workflow.
 - Coordinator-authored manifest, render state, ownership receipt, and final
   state under the caller-owned workflow directory.
 - The managed tail region of `<selected-project-root>/AGENTS.md` only through
@@ -118,15 +121,25 @@ state must never be committed.
    private `decision.json` input. For `needed`,
    provide structured rules; the helper renders all Markdown deterministically.
    For the other dispositions, provide no rules.
-5. Use exact-digest `adopt` approval before taking ownership of an unreceipted
-   intact v3 region. The same approval may re-adopt an intact region when the
-   active receipt still binds the exact project, target, and body but another
-   authorized lifecycle refreshed only its portable marker projection. Any
-   subject or body mismatch remains an ownership conflict. Use exact-digest
-   `retire` approval before removing an intact managed region that is no longer
-   needed. Never migrate v1 or v2 markers automatically.
-6. Before implementation, run `render` and pass its exact private rules file
-   to `maintain-project-specs plan`. Do not mutate the repository yet. Render
+5. During `inspect`, let the helper carry exact active authority from the
+   locked workspace-private ownership registry. When that subject has no
+   entry, the helper may bootstrap it once only from unanimous exact active
+   sealed history; any retirement, mismatch, unsafe evidence, or ambiguity
+   publishes a durable blocked subject state. Later evidence removal does not
+   rescan that subject; only exact-digest adoption supersedes the block. One
+   exact completed apply awaiting registry publication becomes a pending
+   generation that no observer may import and only its receipt/state writer may
+   recover. A current-session receipt may continue marker-only
+   provenance drift when its subject and body still match, but imported
+   continuity must match the current whole-target digest. Otherwise use
+   exact-digest `adopt` approval before taking ownership of an unreceipted
+   intact v3 region. Use exact-digest `retire` approval before removing an
+   intact managed region that is no longer needed. Never infer ownership or
+   event order from instruction discovery, marker presence, session IDs,
+   timestamps, or filesystem metadata, and never migrate v1 or v2 markers
+   automatically.
+6. Run `render` to produce the exact private rules file without mutating the
+   repository. Render
    rejects a disposition that conflicts with the inspected target before it
    publishes evidence. If the current-session decision is revised, changed
    rules replace the prior private rules only under the private-bundle render
@@ -136,12 +149,13 @@ state must never be committed.
    but their matching state I/O publication did not complete. The equal-bytes
    retry re-syncs the private parent directory if replacement completed before
    its directory sync failed. Never delete or overwrite that evidence directly.
-7. After final requirements/design reconciliation, run `apply`, then `verify`
-   as the terminal seal mutation. Never write or delete `AGENTS.md` directly.
-8. If state reports `reload_required: true`, stop the current execution
-   boundary. Start a fresh Codex session, rerun inspection and verification,
-   and explicitly read the active selected-project instructions before any
-   planning, contract lock, auto-steering, or worker dispatch.
+7. Only after explicit mutation authorization and final requirements/design
+   reconciliation, run `apply`, then `verify` as this workflow's terminal
+   mutation. Never write or delete `AGENTS.md` directly.
+8. If state reports `reload_required: true`, stop only this instruction-
+   mutation workflow and recommend a fresh session before relying on the new
+   rules. Task Implementer and Agentic SDLC remain independent and may continue
+   under the instruction chain already loaded for their session.
 9. Return the outcome, decision fingerprint, target digest, evidence paths,
    reload status, file effect, and any blocker to the caller. For
    `not-needed`, state explicitly that no file was created or changed and that
@@ -199,6 +213,23 @@ state must never be committed.
 - The v3 tail marker binds the input manifest, decision, and rendered body
   digests. A separate private ownership receipt binds that exact region and
   project path; it does not claim the human-authored prefix.
+- Ordinary sessions continue exact managed-region ownership from one
+  serialized, monotonic workspace-private registry entry. A missing entry may
+  bootstrap once from unanimous digest-matched, owner-only sealed history;
+  unsafe, unsealed, stale, retired, mismatched, damaged, or conflicting
+  evidence confers no ownership and publishes a blocked subject state that is
+  not retried after evidence removal. The registry root appears atomically with
+  a valid generation-zero registry. An interrupted completed apply is bound as
+  pending to its exact receipt and state digest; only that writer may promote
+  it. Exact adoption may supersede a block; registry retirement is a durable
+  tombstone.
+- The same registry validator is the sole historical-retention authority.
+  Pending, absent-registry legacy, missing final manifest/decision, malformed,
+  or mismatched evidence stays protected; matching active, retired, or blocked
+  generation plus canonical registry digest snapshots may release the
+  historical bundle. Inspect, render, apply, and
+  verify hold the stable
+  workspace/session maintenance locks before render or ownership locks.
 - Human prefix edits remain allowed. Edits inside the managed tail transfer
   that region out of automation ownership immediately.
 - Any lock or backup artifact blocks inspect, create, refresh, adoption,
@@ -257,8 +288,8 @@ or remove recovery evidence automatically.
   missing file should have been created.
 - Any generated file is deterministic, concise, public-safe, evidence-backed,
   provenance-valid, and at the selected project root.
-- Verification passes and any required session reload finishes before the
-  coordinator continues.
+- Verification passes before this mutation workflow reports success. Any
+  reload recommendation is advisory to independent workflows.
 
 ## Learning Loop
 

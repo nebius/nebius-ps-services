@@ -819,30 +819,6 @@ class VMHAMemberConfig(BaseModel):
     )
     instance_index: int = Field(..., ge=0, le=1, description="Gateway VM index (0 or 1)")
     role: VMHARole = Field(..., description="Initial VM ownership role")
-    nebius_credentials_path: str = Field(
-        ...,
-        description=(
-            "Absolute operator-local Nebius service-account credential JSON path; "
-            "managed mTLS keys are generated on the VM"
-        ),
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_removed_tls_sources(cls, value: t.Any) -> t.Any:
-        if isinstance(value, dict) and "credential_sources" in value:
-            raise ValueError(
-                "vm_ha member credential_sources was removed; set the member's "
-                "nebius_credentials_path only because apply now manages mTLS on each VM"
-            )
-        return value
-
-    @field_validator("nebius_credentials_path")
-    @classmethod
-    def require_absolute_nebius_credentials_path(cls, value: str) -> str:
-        if not value.startswith("/"):
-            raise ValueError("VM-HA nebius_credentials_path must be an absolute path")
-        return value
 
 
 class VMHAConfig(BaseModel):
@@ -887,10 +863,6 @@ class VMHAConfig(BaseModel):
         if roles.count(VMHARole.ACTIVE) != 1 or roles.count(VMHARole.PASSIVE) != 1:
             raise ValueError("vm_ha members must define exactly one active and one passive role")
 
-        credential_paths = [member.nebius_credentials_path for member in self.members]
-        if len(set(credential_paths)) != 2:
-            raise ValueError("vm_ha member nebius_credentials_path values must be node-scoped")
-
         return self
 
 
@@ -905,12 +877,20 @@ class VMHARuntimeNodeBinding(BaseModel):
     network_interface_name: str
     peer_endpoint: str
     nebius_credentials_path: str = "/etc/nebius-vpngw/vm-ha/nebius-credentials.json"
+    nebius_credentials_sha256: str | None = None
 
     @field_validator("nebius_credentials_path")
     @classmethod
     def require_absolute_nebius_credentials_reference(cls, value: str) -> str:
         if not value.startswith("/"):
             raise ValueError("VM-HA Nebius credential reference must be an absolute path")
+        return value
+
+    @field_validator("nebius_credentials_sha256")
+    @classmethod
+    def require_credential_digest(cls, value: str | None) -> str | None:
+        if value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError("VM-HA Nebius credential digest must be lowercase SHA-256")
         return value
 
 
@@ -972,6 +952,9 @@ class VMHARuntimeBinding(BaseModel):
     configuration_digest: str
     static_routes_digest: str
     bgp_policy_digest: str
+    nebius_project_id: str | None = None
+    nebius_service_account_id: str | None = None
+    nebius_authorized_key_id: str | None = None
 
     @staticmethod
     def derive_route_runtime_id(
@@ -996,6 +979,36 @@ class VMHARuntimeBinding(BaseModel):
             raise ValueError("VM-HA runtime binding requires two distinct nodes")
         if len({node.compute_id for node in self.nodes}) != 2:
             raise ValueError("VM-HA runtime binding requires two distinct Compute identities")
+        identity_fields = (
+            self.nebius_project_id,
+            self.nebius_service_account_id,
+            self.nebius_authorized_key_id,
+        )
+        node_credential_digests = tuple(node.nebius_credentials_sha256 for node in self.nodes)
+        if any(identity_fields) != all(identity_fields):
+            raise ValueError("VM-HA runtime credential identity must be complete or legacy")
+        if any(node_credential_digests) != all(node_credential_digests):
+            raise ValueError("VM-HA node credential digests must be complete or legacy")
+        if all(identity_fields) != all(node_credential_digests):
+            raise ValueError("VM-HA runtime credential identity is partially bound")
+        if all(identity_fields):
+            if len(set(node_credential_digests)) != 1:
+                raise ValueError("VM-HA nodes must use one shared credential digest")
+            for value in identity_fields:
+                assert value is not None
+                if len(value) > 256 or any(char.isspace() for char in value):
+                    raise ValueError("VM-HA runtime credential identity is invalid")
+            from .vm_ha_credentials import installed_vm_ha_credential_path
+
+            for node in self.nodes:
+                assert node.nebius_credentials_sha256 is not None
+                expected_path = installed_vm_ha_credential_path(
+                    node_id=node.node_id,
+                    generation_id=self.generation_id,
+                    credential_sha256=node.nebius_credentials_sha256,
+                )
+                if node.nebius_credentials_path != expected_path:
+                    raise ValueError("VM-HA installed credential path is not identity-bound")
         if not self.shared_allocation_id:
             raise ValueError("VM-HA runtime binding requires a shared allocation identity")
         if not self.route_targets:
@@ -1163,7 +1176,7 @@ class VPNGatewayConfig(BaseModel):
     )
     tenant_id: str = Field(..., description="Nebius tenant ID")
     project_id: str = Field(..., description="Nebius project ID")
-    region_id: str = Field(..., description="Nebius region ID (e.g., 'eu-north1-a')")
+    region_id: str = Field(..., description="Nebius region ID (e.g., 'eu-north1')")
     gateway_group: GatewayGroup = Field(..., description="Gateway infrastructure specification")
     gateway: GatewayConfig = Field(..., description="Gateway-wide parameters")
     defaults: DefaultsConfig = Field(..., description="Global defaults for VPN behavior")

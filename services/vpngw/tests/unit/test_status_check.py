@@ -36,9 +36,7 @@ def test_check_routing_health_detects_exact_passive_hygiene_drift(
         outputs = {
             ("ip", "rule", "show"): rules,
             ("ip", "-j", "-4", "route", "show", "table", "all"): json.dumps(
-                []
-                if not table_220
-                else [{"table": 220, "dst": table_220.split()[0]}]
+                [] if not table_220 else [{"table": 220, "dst": table_220.split()[0]}]
             ),
             ("ip", "route", "show", "169.254.0.0/16"): broad_apipa,
             ("ip", "route", "show"): "",
@@ -51,9 +49,7 @@ def test_check_routing_health_detects_exact_passive_hygiene_drift(
 
     assert health["table_220_exists"] is expected_table
     assert health["broad_apipa_exists"] is expected_broad
-    assert health["overall_status"] == (
-        "error" if expected_table or expected_broad else "healthy"
-    )
+    assert health["overall_status"] == ("error" if expected_table or expected_broad else "healthy")
 
 
 def test_check_routing_health_fails_closed_when_hygiene_is_unobservable(
@@ -62,10 +58,7 @@ def test_check_routing_health_fails_closed_when_hygiene_is_unobservable(
     def run(argv, **_kwargs):
         return SimpleNamespace(
             returncode=(
-                1
-                if tuple(argv)
-                == ("ip", "-j", "-4", "route", "show", "table", "all")
-                else 0
+                1 if tuple(argv) == ("ip", "-j", "-4", "route", "show", "table", "all") else 0
             ),
             stdout="",
         )

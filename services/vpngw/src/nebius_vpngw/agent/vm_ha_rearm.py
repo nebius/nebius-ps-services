@@ -19,22 +19,51 @@ import yaml
 
 from nebius_vpngw.agent.vm_ha.runtime import (
     RenewableNebiusSDK,
+    begin_runtime_identity_preflight,
+    build_identity_bound_sdk,
+    record_runtime_identity_migration_required,
+    runtime_identity_binding_is_explicit,
     validate_installed_credential_bundle,
 )
 from nebius_vpngw.deploy.vm_ha_cloud import (
     AcceptedCloudOperation,
     AllocationObservation,
     AllocationOwner,
+    AmbiguousHACloudError,
     ComputeObservation,
     InstanceCloudState,
     NebiusSDKCloudClient,
+    PermanentHACloudError,
+    RetryableHACloudError,
     VMHACloudOperationJournal,
     allocation_observation,
     compute_observation,
 )
 from nebius_vpngw.schema import VMHARuntimeBinding, VMHARuntimeNodeBinding
 
+from .vm_ha.auto_healing import (
+    AutoHealingPolicyError,
+    AutoHealingPolicyPhase,
+    AutoHealingPolicyStore,
+    AutoHealingRecoveryPhase,
+    AutoHealingRecoveryReason,
+    AutoHealingRecoveryRecord,
+    AutoHealingRecoveryStore,
+    StandbyAutoHealing,
+    load_peer_policy_heartbeat,
+    peer_policy_agrees,
+)
+from .vm_ha.inhibition import standby_replacement_inhibition_operation_id
 from .vm_ha.mtls import ManagedMTLSStore
+from .vm_ha.restoration import (
+    RestorationPhase,
+    StandbyRestorationAuthorization,
+    StandbyRestorationError,
+    StandbyRestorationReason,
+    StandbyRestorationStore,
+    blocked_restoration_reason_code,
+    policy_authorizes_restoration,
+)
 
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
 ENABLED_PATH = Path("/etc/nebius-vpngw/vm-ha-enabled")
@@ -46,6 +75,14 @@ REARM_OPERATION_PATH = STATE_DIR / "rearm-cloud-operation.json"
 REARM_STATUS_PATH = STATE_DIR / "rearm-status.json"
 REARM_LOCK_PATH = STATE_DIR / "rearm.lock"
 APPLY_LOCK_PATH = STATE_DIR / "apply.lock"
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+
+
+def _boot_id() -> str:
+    value = BOOT_ID_PATH.read_text(encoding="utf-8").strip()
+    if not value:
+        raise RuntimeError("VM-HA current boot identity is unavailable")
+    return value
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
@@ -419,6 +456,7 @@ class RearmRuntime:
         state_dir: Path = STATE_DIR,
         enabled_path: Path = ENABLED_PATH,
         clock: Callable[[], float] = time.time,
+        auto_healing_inhibition_provider: Callable[[], str | None] | None = None,
     ) -> None:
         self.binding = binding
         self.local = local
@@ -427,6 +465,7 @@ class RearmRuntime:
         self.state_dir = state_dir
         self.enabled_path = enabled_path
         self.clock = clock
+        self.auto_healing_inhibition_provider = auto_healing_inhibition_provider
 
     def _status(
         self,
@@ -460,6 +499,195 @@ class RearmRuntime:
             is not None
         ):
             return "mtls-rotation-active"
+        if (
+            standby_replacement_inhibition_operation_id(
+                self.state_dir,
+                cluster_id=self.binding.cluster_id,
+                node_id=self.local.node_id,
+                generation_id=self.binding.generation_id,
+            )
+            is not None
+        ):
+            return "standby-replacement-active"
+        return None
+
+    def _auto_healing_inhibition_reason(self) -> str | None:
+        if self.auto_healing_inhibition_provider is not None:
+            return self.auto_healing_inhibition_provider()
+        try:
+            record = AutoHealingPolicyStore(self.state_dir).require_bound(
+                cluster_id=self.binding.cluster_id,
+                node_id=self.local.node_id,
+                peer_node_id=self.peer.node_id,
+                generation_id=self.binding.generation_id,
+            )
+            if record.phase is AutoHealingPolicyPhase.PREPARED:
+                return "standby-auto-healing-policy-transition"
+            if record.desired is StandbyAutoHealing.DISABLED:
+                return "standby-auto-healing-policy-disabled"
+            peer = load_peer_policy_heartbeat(
+                self.state_dir,
+                peer_node_id=self.peer.node_id,
+            )
+            if not peer_policy_agrees(record, peer, now=self.clock()):
+                return "standby-auto-healing-peer-policy-unavailable"
+        except AutoHealingPolicyError:
+            return "standby-auto-healing-policy-invalid"
+        return None
+
+    def _matching_policy_recovery(
+        self,
+        *,
+        receipt: PromotionReceipt,
+        target: ComputeObservation,
+        rearm_operation_id: str,
+    ) -> AutoHealingRecoveryRecord | None:
+        """Validate the one policy-owned exception to ordinary start admission."""
+
+        try:
+            recovery = AutoHealingRecoveryStore(self.state_dir).load()
+        except AutoHealingPolicyError as error:
+            raise AutoHealingPolicyError(AutoHealingRecoveryReason.INVALID.value) from error
+        if recovery is None or recovery.phase is AutoHealingRecoveryPhase.COMPLETED:
+            return None
+        if not (
+            recovery.cluster_id == self.binding.cluster_id
+            and recovery.node_id == self.local.node_id
+            and recovery.target_node_id == self.peer.node_id
+            and recovery.generation_id == self.binding.generation_id
+            and recovery.promotion_receipt_id == receipt.receipt_id
+            and recovery.allocation_id == receipt.allocation_id
+            and recovery.ownership_epoch == receipt.ownership_epoch
+            and (
+                (
+                    recovery.phase is AutoHealingRecoveryPhase.ARMED
+                    and recovery.stopped_revision == target.resource_version
+                )
+                or (
+                    recovery.phase is AutoHealingRecoveryPhase.CONSUMED
+                    and recovery.rearm_operation_id == rearm_operation_id
+                    and rearm_operation_id
+                    == _operation_id(
+                        receipt.receipt_id,
+                        self.peer.node_id,
+                        recovery.stopped_revision,
+                    )
+                )
+            )
+        ):
+            raise AutoHealingPolicyError(AutoHealingRecoveryReason.AUTHORITY_STALE_OR_FOREIGN.value)
+        try:
+            policy = AutoHealingPolicyStore(self.state_dir).require_bound(
+                cluster_id=self.binding.cluster_id,
+                node_id=self.local.node_id,
+                peer_node_id=self.peer.node_id,
+                generation_id=self.binding.generation_id,
+            )
+        except AutoHealingPolicyError as error:
+            raise AutoHealingPolicyError(
+                AutoHealingRecoveryReason.POLICY_UNAVAILABLE.value
+            ) from error
+        terminal_disabled = bool(
+            policy.phase is AutoHealingPolicyPhase.COMMITTED
+            and policy.desired is StandbyAutoHealing.DISABLED
+            and policy.peer_ack_digest == policy.decision_digest
+            and recovery.desired is StandbyAutoHealing.ENABLED
+            and recovery.policy_digest == policy.decision_digest
+            and recovery.predecessor_digest == policy.decision_digest
+        )
+        partial_same_operation = bool(
+            policy.operation_id == recovery.operation_id
+            and policy.desired is recovery.desired
+            and policy.phase in {AutoHealingPolicyPhase.PREPARED, AutoHealingPolicyPhase.COMMITTED}
+            and recovery.policy_digest == policy.decision_digest
+            and recovery.predecessor_digest == policy.predecessor_digest
+        )
+        if not (terminal_disabled or partial_same_operation):
+            raise AutoHealingPolicyError(AutoHealingRecoveryReason.POLICY_CHANGED.value)
+        return recovery
+
+    def _matching_restoration_authority(
+        self,
+        *,
+        receipt: PromotionReceipt,
+    ) -> StandbyRestorationAuthorization | None:
+        """Return only exact committed transfer-bound restoration authority."""
+
+        record = StandbyRestorationStore(self.state_dir).load()
+        if record is None or record.phase is RestorationPhase.COMPLETED:
+            return None
+        if not (
+            record.cluster_id == receipt.cluster_id
+            and record.owner_node_id == self.local.node_id == receipt.owner_node_id
+            and record.former_owner_node_id == self.peer.node_id == receipt.former_owner_node_id
+            and record.allocation_id == receipt.allocation_id
+            and record.generation_id == receipt.generation_id
+            and dict(record.digests) == dict(receipt.digests)
+            and record.promotion_receipt_id == receipt.receipt_id
+            and record.ownership_epoch == receipt.ownership_epoch
+            and record.route_operation_id == receipt.route_operation_id
+        ):
+            raise StandbyRestorationError(
+                "standby restoration authority is stale or foreign",
+                reason=StandbyRestorationReason.AUTHORITY_STALE_OR_FOREIGN,
+            )
+        try:
+            policy = AutoHealingPolicyStore(self.state_dir).require_bound(
+                cluster_id=self.binding.cluster_id,
+                node_id=self.local.node_id,
+                peer_node_id=self.peer.node_id,
+                generation_id=self.binding.generation_id,
+            )
+        except AutoHealingPolicyError as error:
+            raise StandbyRestorationError(
+                "standby restoration policy authority is unavailable",
+                reason=StandbyRestorationReason.POLICY_UNAVAILABLE,
+            ) from error
+        if not policy_authorizes_restoration(policy, record):
+            raise StandbyRestorationError(
+                "standby restoration policy authority changed",
+                reason=StandbyRestorationReason.POLICY_CHANGED,
+            )
+        if record.phase is RestorationPhase.BLOCKED:
+            raise StandbyRestorationError(
+                record.blocked_reason or "standby restoration is blocked",
+                reason=StandbyRestorationReason(
+                    blocked_restoration_reason_code(record.blocked_reason)
+                ),
+            )
+        if record.phase is RestorationPhase.ARMED:
+            raise StandbyRestorationError(
+                "standby restoration authority is not committed",
+                reason=StandbyRestorationReason.NOT_COMMITTED,
+            )
+        return record
+
+    def _policy_start_admission(
+        self,
+        *,
+        receipt: PromotionReceipt,
+        target: ComputeObservation,
+        rearm_operation_id: str,
+    ) -> AutoHealingRecoveryRecord | None:
+        # A promotion-committed authorization captures the fresh two-member
+        # agreement before the former owner is deliberately stopped.  It is
+        # the only path that may bypass the now-impossible live-heartbeat age
+        # check, and it remains bound to this exact receipt and generation.
+        try:
+            if self._matching_restoration_authority(receipt=receipt) is not None:
+                return None
+        except StandbyRestorationError as error:
+            raise AutoHealingPolicyError(error.reason_code) from error
+        recovery = self._matching_policy_recovery(
+            receipt=receipt,
+            target=target,
+            rearm_operation_id=rearm_operation_id,
+        )
+        if recovery is not None:
+            return recovery
+        inhibition = self._auto_healing_inhibition_reason()
+        if inhibition is not None:
+            raise AutoHealingPolicyError(inhibition)
         return None
 
     def _stable_owner_observation(
@@ -543,8 +771,7 @@ class RearmRuntime:
                     checkpoint is not None
                     and checkpoint.target_node_id == self.peer.node_id
                     and checkpoint.operation_id == accepted_operation.action_operation_id
-                    and checkpoint.phase
-                    in {"start-requested", "starting", "running", "blocked"}
+                    and checkpoint.phase in {"start-requested", "starting", "running", "blocked"}
                     and accepted_operation.kind == "start-instance"
                 ):
                     return self._status(
@@ -572,6 +799,25 @@ class RearmRuntime:
                         checkpoint=checkpoint,
                     )
             if target.state is InstanceCloudState.RUNNING:
+                if (
+                    checkpoint is not None
+                    and checkpoint.receipt_id == receipt.receipt_id
+                    and (
+                        checkpoint.target_node_id != self.peer.node_id
+                        or checkpoint.operation_id
+                        != _operation_id(
+                            receipt.receipt_id,
+                            self.peer.node_id,
+                            checkpoint.stopped_revision,
+                        )
+                    )
+                ):
+                    return self._status(
+                        "blocked",
+                        "rearm-checkpoint-invalid",
+                        receipt=receipt,
+                        checkpoint=checkpoint,
+                    )
                 if checkpoint is None or checkpoint.receipt_id != receipt.receipt_id:
                     checkpoint = RearmCheckpoint(
                         receipt_id=receipt.receipt_id,
@@ -594,6 +840,60 @@ class RearmRuntime:
                         }
                     )
                 _write_checkpoint(checkpoint_path, checkpoint)
+                try:
+                    restoration = self._matching_restoration_authority(receipt=receipt)
+                    if restoration is not None:
+                        restoration_store = StandbyRestorationStore(self.state_dir)
+                        if restoration.phase is RestorationPhase.COMMITTED:
+                            restoration = restoration_store.accept_start(
+                                receipt_id=receipt.receipt_id,
+                                stopped_revision=checkpoint.stopped_revision,
+                                rearm_operation_id=checkpoint.operation_id,
+                                updated_at=self.clock(),
+                            )
+                        if restoration.phase is RestorationPhase.START_ACCEPTED:
+                            restoration_store.mark_running(
+                                receipt_id=receipt.receipt_id,
+                                updated_at=self.clock(),
+                            )
+                            restoration = restoration_store.require_receipt(receipt.receipt_id)
+                        if restoration.phase is RestorationPhase.RUNNING:
+                            restoration_store.await_standby(
+                                receipt_id=receipt.receipt_id,
+                                updated_at=self.clock(),
+                            )
+                except StandbyRestorationError as error:
+                    return self._status(
+                        "blocked",
+                        error.reason_code,
+                        receipt=receipt,
+                        checkpoint=checkpoint,
+                    )
+                try:
+                    recovery = self._matching_policy_recovery(
+                        receipt=receipt,
+                        target=target,
+                        rearm_operation_id=checkpoint.operation_id,
+                    )
+                    if recovery is not None:
+                        recovery_store = AutoHealingRecoveryStore(self.state_dir)
+                        recovery_store.consume(
+                            operation_id=recovery.operation_id,
+                            rearm_operation_id=checkpoint.operation_id,
+                            updated_at=self.clock(),
+                        )
+                        recovery_store.complete(
+                            operation_id=recovery.operation_id,
+                            rearm_operation_id=checkpoint.operation_id,
+                            updated_at=self.clock(),
+                        )
+                except AutoHealingPolicyError:
+                    return self._status(
+                        "blocked",
+                        AutoHealingRecoveryReason.INVALID.value,
+                        receipt=receipt,
+                        checkpoint=checkpoint,
+                    )
                 if retry_request is not None:
                     try:
                         consumed = _consume_request(
@@ -625,6 +925,19 @@ class RearmRuntime:
                     and checkpoint.target_node_id == self.peer.node_id
                     and checkpoint.phase in {"start-requested", "starting"}
                 ):
+                    try:
+                        self._policy_start_admission(
+                            receipt=receipt,
+                            target=target,
+                            rearm_operation_id=checkpoint.operation_id,
+                        )
+                    except AutoHealingPolicyError as error:
+                        return self._status(
+                            "inhibited",
+                            str(error),
+                            receipt=receipt,
+                            checkpoint=checkpoint,
+                        )
                     inhibition = self._inhibition_reason()
                     if inhibition is not None:
                         return self._status(
@@ -633,29 +946,25 @@ class RearmRuntime:
                             receipt=receipt,
                             checkpoint=checkpoint,
                         )
-                    try:
-                        self.cloud.start_instance(self.peer.compute_id, checkpoint.operation_id)
-                    except Exception as error:
-                        blocked = RearmCheckpoint(
-                            **{
-                                **checkpoint.__dict__,
-                                "phase": "blocked",
-                                "failure_reason": type(error).__name__,
-                            }
-                        )
-                        _write_checkpoint(checkpoint_path, blocked)
-                        return self._status(
-                            "blocked",
-                            "compute-start-failed",
-                            receipt=receipt,
-                            checkpoint=blocked,
-                        )
                 return self._status("starting", None, receipt=receipt, checkpoint=checkpoint)
 
             assert target.state is InstanceCloudState.STOPPED
             operation_id = _operation_id(
                 receipt.receipt_id, self.peer.node_id, target.resource_version
             )
+            try:
+                recovery = self._policy_start_admission(
+                    receipt=receipt,
+                    target=target,
+                    rearm_operation_id=operation_id,
+                )
+            except AutoHealingPolicyError as error:
+                return self._status(
+                    "inhibited",
+                    str(error),
+                    receipt=receipt,
+                    checkpoint=checkpoint,
+                )
             matching = bool(
                 checkpoint is not None
                 and checkpoint.receipt_id == receipt.receipt_id
@@ -714,22 +1023,162 @@ class RearmRuntime:
                     checkpoint=checkpoint,
                 )
             try:
-                self.cloud.start_instance(self.peer.compute_id, checkpoint.operation_id)
-            except Exception as error:
+                recovery = self._policy_start_admission(
+                    receipt=receipt,
+                    target=target,
+                    rearm_operation_id=operation_id,
+                )
+            except AutoHealingPolicyError as error:
+                return self._status(
+                    "inhibited",
+                    str(error),
+                    receipt=receipt,
+                    checkpoint=checkpoint,
+                )
+            if recovery is not None:
+                try:
+                    AutoHealingRecoveryStore(self.state_dir).consume(
+                        operation_id=recovery.operation_id,
+                        rearm_operation_id=operation_id,
+                        updated_at=self.clock(),
+                    )
+                except AutoHealingPolicyError:
+                    return self._status(
+                        "blocked",
+                        AutoHealingRecoveryReason.CONSUME_FAILED.value,
+                        receipt=receipt,
+                        checkpoint=checkpoint,
+                    )
+            restoration_store = StandbyRestorationStore(self.state_dir)
+            try:
+                restoration = self._matching_restoration_authority(receipt=receipt)
+                if restoration is not None:
+                    if restoration.phase is RestorationPhase.COMMITTED:
+                        restoration = restoration_store.accept_start(
+                            receipt_id=receipt.receipt_id,
+                            stopped_revision=target.resource_version,
+                            rearm_operation_id=operation_id,
+                            updated_at=self.clock(),
+                        )
+                    elif not (
+                        restoration.phase is RestorationPhase.START_ACCEPTED
+                        and restoration.stopped_revision == target.resource_version
+                        and restoration.rearm_operation_id == operation_id
+                    ):
+                        raise StandbyRestorationError(
+                            "standby restoration start identity changed",
+                            reason=StandbyRestorationReason.START_IDENTITY_CHANGED,
+                        )
+                    if (
+                        restoration.next_attempt_at is not None
+                        and self.clock() < restoration.next_attempt_at
+                    ):
+                        return self._status(
+                            "starting",
+                            "compute-start-retry-scheduled",
+                            receipt=receipt,
+                            checkpoint=checkpoint,
+                        )
+            except StandbyRestorationError as error:
+                return self._status(
+                    "blocked",
+                    error.reason_code,
+                    receipt=receipt,
+                    checkpoint=checkpoint,
+                )
+            starting = RearmCheckpoint(**{**checkpoint.__dict__, "phase": "starting"})
+            _write_checkpoint(checkpoint_path, starting)
+            self._status("starting", None, receipt=receipt, checkpoint=starting)
+            try:
+                if restoration is not None:
+                    restoration_store.record_submission(
+                        receipt_id=receipt.receipt_id,
+                        updated_at=self.clock(),
+                    )
+                self.cloud.start_instance(self.peer.compute_id, starting.operation_id)
+            except PermanentHACloudError as error:
+                if restoration is not None:
+                    restoration_store.block(
+                        receipt_id=receipt.receipt_id,
+                        reason="compute-start-permanent-failure",
+                        updated_at=self.clock(),
+                    )
                 blocked = RearmCheckpoint(
                     **{
-                        **checkpoint.__dict__,
+                        **starting.__dict__,
                         "phase": "blocked",
                         "failure_reason": type(error).__name__,
                     }
                 )
                 _write_checkpoint(checkpoint_path, blocked)
-                self._status("blocked", "compute-start-failed", receipt=receipt, checkpoint=blocked)
-                raise
-            starting = RearmCheckpoint(**{**checkpoint.__dict__, "phase": "starting"})
-            _write_checkpoint(checkpoint_path, starting)
+                return self._status(
+                    "blocked",
+                    "compute-start-permanent-failure",
+                    receipt=receipt,
+                    checkpoint=blocked,
+                )
+            except (RetryableHACloudError, AmbiguousHACloudError) as error:
+                if restoration is None:
+                    raise
+                scheduled = restoration_store.schedule_retry(
+                    receipt_id=receipt.receipt_id,
+                    reason=type(error).__name__,
+                    updated_at=self.clock(),
+                )
+                retrying = RearmCheckpoint(
+                    **{
+                        **starting.__dict__,
+                        "phase": (
+                            "blocked"
+                            if scheduled.phase is RestorationPhase.BLOCKED
+                            else "start-requested"
+                        ),
+                        "failure_reason": type(error).__name__,
+                    }
+                )
+                _write_checkpoint(checkpoint_path, retrying)
+                return self._status(
+                    ("blocked" if scheduled.phase is RestorationPhase.BLOCKED else "starting"),
+                    (
+                        scheduled.blocked_reason
+                        if scheduled.phase is RestorationPhase.BLOCKED
+                        else "compute-start-retry-scheduled"
+                    ),
+                    receipt=receipt,
+                    checkpoint=retrying,
+                )
+            except Exception as error:
+                if restoration is not None:
+                    restoration_store.block(
+                        receipt_id=receipt.receipt_id,
+                        reason="compute-start-failed",
+                        updated_at=self.clock(),
+                    )
+                blocked = RearmCheckpoint(
+                    **{
+                        **starting.__dict__,
+                        "phase": "blocked",
+                        "failure_reason": type(error).__name__,
+                    }
+                )
+                _write_checkpoint(checkpoint_path, blocked)
+                return self._status(
+                    "blocked",
+                    "compute-start-failed",
+                    receipt=receipt,
+                    checkpoint=blocked,
+                )
             _owner, target = self._stable_owner_observation(receipt)
             if target.state is InstanceCloudState.RUNNING:
+                if restoration is not None:
+                    restoration_store.mark_running(
+                        receipt_id=receipt.receipt_id,
+                        updated_at=self.clock(),
+                    )
+                    restoration_store.await_standby(
+                        receipt_id=receipt.receipt_id,
+                        updated_at=self.clock(),
+                    )
                 running = RearmCheckpoint(
                     **{
                         **starting.__dict__,
@@ -738,6 +1187,20 @@ class RearmRuntime:
                     }
                 )
                 _write_checkpoint(checkpoint_path, running)
+                if recovery is not None:
+                    try:
+                        AutoHealingRecoveryStore(self.state_dir).complete(
+                            operation_id=recovery.operation_id,
+                            rearm_operation_id=operation_id,
+                            updated_at=self.clock(),
+                        )
+                    except AutoHealingPolicyError:
+                        return self._status(
+                            "blocked",
+                            AutoHealingRecoveryReason.COMPLETION_FAILED.value,
+                            receipt=receipt,
+                            checkpoint=running,
+                        )
                 return self._status("running", None, receipt=receipt, checkpoint=running)
             if target.state is not InstanceCloudState.TRANSITIONAL:
                 blocked = RearmCheckpoint(
@@ -785,24 +1248,37 @@ def build_default_rearm_runtime(
     sdk_factory: Callable[..., Any] | None = None,
     clock: Callable[[], float] = time.time,
 ) -> DefaultRearmRuntime:
+    current_boot_id = _boot_id()
+    begin_runtime_identity_preflight(state_dir=state_dir, boot_id=current_boot_id)
     config = _read_config(config_path)
     binding = VMHARuntimeBinding.model_validate(config.get("runtime_binding"))
     node = config.get("node") or {}
     local = next(item for item in binding.nodes if item.node_id == node.get("node_id"))
     peer = next(item for item in binding.nodes if item.node_id != local.node_id)
+    if not runtime_identity_binding_is_explicit(binding, local):
+        record_runtime_identity_migration_required(
+            state_dir=state_dir,
+            boot_id=current_boot_id,
+        )
+        raise RuntimeError("VM-HA runtime credential identity is migration-required")
     credential_bundle = validate_installed_credential_bundle(binding, local)
-    sdk = (
-        RenewableNebiusSDK(
-            local.nebius_credentials_path,
-            credential_check=credential_bundle.revalidate,
+    if sdk_factory is None:
+        sdk = build_identity_bound_sdk(
+            binding=binding,
+            local=local,
+            credential_bundle=credential_bundle,
+            state_dir=state_dir,
+            boot_id=current_boot_id,
         )
-        if sdk_factory is None
-        else RenewableNebiusSDK(
-            local.nebius_credentials_path,
+    else:
+        sdk = build_identity_bound_sdk(
+            binding=binding,
+            local=local,
+            credential_bundle=credential_bundle,
+            state_dir=state_dir,
+            boot_id=current_boot_id,
             factory=sdk_factory,
-            credential_check=credential_bundle.revalidate,
         )
-    )
     try:
         journal = VMHACloudOperationJournal(state_dir / REARM_OPERATION_PATH.name)
         cloud = SDKRearmCloudPort(sdk.client, journal=journal)
@@ -839,11 +1315,18 @@ def request_rearm_retry(
     try:
         if (state_dir / APPLY_LOCK_PATH.name).exists():
             raise RuntimeError("VM-HA rearm retry is inhibited by an apply lock")
+        if ManagedMTLSStore(state_dir / "mtls", create=False).inhibition_operation_id() is not None:
+            raise RuntimeError("VM-HA rearm retry is inhibited by mTLS rotation")
         if (
-            ManagedMTLSStore(state_dir / "mtls", create=False).inhibition_operation_id()
+            standby_replacement_inhibition_operation_id(
+                state_dir,
+                cluster_id=binding.cluster_id,
+                node_id=local.node_id,
+                generation_id=binding.generation_id,
+            )
             is not None
         ):
-            raise RuntimeError("VM-HA rearm retry is inhibited by mTLS rotation")
+            raise RuntimeError("VM-HA rearm retry is inhibited by standby replacement")
         receipt = _promotion_receipt(
             state_dir / PROMOTION_RECEIPT_PATH.name,
             binding=binding,
@@ -852,6 +1335,30 @@ def request_rearm_retry(
         )
         if receipt is None:
             raise RuntimeError("VM-HA rearm retry requires a committed promotion receipt")
+        restoration_store = StandbyRestorationStore(state_dir)
+        restoration = restoration_store.load()
+        if restoration is not None and restoration.phase is RestorationPhase.BLOCKED:
+            try:
+                policy = AutoHealingPolicyStore(state_dir).require_bound(
+                    cluster_id=binding.cluster_id,
+                    node_id=local.node_id,
+                    peer_node_id=peer.node_id,
+                    generation_id=binding.generation_id,
+                )
+            except AutoHealingPolicyError as error:
+                raise RuntimeError(
+                    "blocked standby restoration requires committed enabled policy"
+                ) from error
+            if not (
+                policy.phase is AutoHealingPolicyPhase.COMMITTED
+                and policy.desired is StandbyAutoHealing.ENABLED
+                and policy_authorizes_restoration(policy, restoration)
+            ):
+                raise RuntimeError("blocked standby restoration requires committed enabled policy")
+            restoration_store.restart_blocked(
+                receipt_id=receipt.receipt_id,
+                updated_at=time.time(),
+            )
         request_path = state_dir / REARM_REQUEST_PATH.name
         existing = _request_matches(
             request_path,
@@ -890,9 +1397,40 @@ def run_rearm_service(
     interval_seconds: float = 1.0,
 ) -> None:
     active = runtime or build_default_rearm_runtime()
+    last_transition: tuple[object, object, object, object] | None = None
     try:
         while True:
-            active.step()
+            status = active.step()
+            attempt_count: int | None = None
+            runtime_state_dir = getattr(getattr(active, "runtime", active), "state_dir", None)
+            if isinstance(runtime_state_dir, Path):
+                try:
+                    restoration = StandbyRestorationStore(runtime_state_dir).load()
+                except StandbyRestorationError:
+                    restoration = None
+                if restoration is not None:
+                    attempt_count = restoration.attempt_count
+            transition = (
+                status.get("phase"),
+                status.get("reason"),
+                status.get("operation_id"),
+                attempt_count,
+            )
+            if transition != last_transition:
+                print(
+                    "[VM-HA-REARM] "
+                    + json.dumps(
+                        {
+                            "attempt": transition[3],
+                            "phase": transition[0],
+                            "reason": transition[1],
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
+                last_transition = transition
             if once:
                 return
             time.sleep(interval_seconds)

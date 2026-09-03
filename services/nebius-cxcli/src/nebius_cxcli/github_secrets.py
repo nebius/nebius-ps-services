@@ -216,7 +216,8 @@ def _encrypt_secret_value(secret_value: str, public_key_b64: str) -> str:
         from nacl import encoding, public
     except Exception as exc:  # pragma: no cover - runtime integration
         raise RuntimeError(
-            'PyNaCl is required to write GitHub secrets. Install dependencies with `pip install -e ".[dev]"`.'
+            "PyNaCl is required to write GitHub secrets. "
+            "Reinstall nebius-cxcli with its declared dependencies."
         ) from exc
 
     key = public.PublicKey(public_key_b64.encode("utf-8"), encoding.Base64Encoder())

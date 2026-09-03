@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -14,6 +15,8 @@ from .mk8s_upgrade import (
     select_live_node_groups_for_node_template,
     sort_live_node_groups,
     source_node_groups_by_name,
+    validate_node_template_field_value,
+    validate_os_image_value,
 )
 from .provider_options import OptionChoice
 
@@ -87,6 +90,140 @@ def _finalize_upgrade_choices(
 
 def _choice_field(choice: CompatibilityChoice | Any, field: str) -> str:
     return _text(getattr(choice, field, None))
+
+
+def latest_provider_compatibility_value(values: Sequence[str], *, field: str) -> str:
+    """Select the newest provider value when its version ordering is unambiguous."""
+
+    unique = tuple(dict.fromkeys(_text(value) for value in values if _text(value)))
+    if not unique:
+        raise RuntimeError(f"The provider compatibility API returned no {field} choices.")
+    if len(unique) == 1:
+        return unique[0]
+    pattern = {
+        "OS": re.compile(r"^ubuntu(?P<major>[0-9]+)\.(?P<minor>[0-9]+)$", re.IGNORECASE),
+        "Nebius drivers preset": re.compile(
+            r"^cuda(?P<major>[0-9]+)\.(?P<minor>[0-9]+)$", re.IGNORECASE
+        ),
+    }.get(field)
+    parsed: list[tuple[tuple[int, int], str]] = []
+    for value in unique:
+        match = pattern.fullmatch(value) if pattern is not None else None
+        if match is None:
+            raise RuntimeError(
+                f"The provider compatibility API returned {field} identifiers whose "
+                f"version order is ambiguous: {', '.join(unique)}. Select an exact value."
+            )
+        parsed.append(((int(match.group("major")), int(match.group("minor"))), value))
+    return max(parsed)[1]
+
+
+def soperator_group_override(
+    overrides: Mapping[str, str],
+    group: LiveNodeGroup,
+) -> str:
+    """Resolve one group override through its source, provider-name, or provider-ID alias."""
+
+    aliases = [group.name, group.id]
+    if group.source is not None:
+        aliases.append(group.source.key)
+    return next((_text(overrides.get(alias)) for alias in aliases if overrides.get(alias)), "")
+
+
+def soperator_compatibility_choice_for_hop(
+    *,
+    group: LiveNodeGroup,
+    version: str,
+    choices: Sequence[Any],
+    os_selector: str,
+    gpu_selector: str,
+    gpu_selector_is_override: bool,
+    uses_nebius_gpu_image: bool,
+) -> Any:
+    """Resolve one exact provider-supported OS and drivers-preset tuple for a hop."""
+
+    candidates = [
+        choice
+        for choice in choices
+        if not _text(getattr(choice, "platform", None))
+        or _text(getattr(choice, "platform", None)) == group.platform
+    ]
+    if not candidates:
+        raise RuntimeError(
+            f"The provider compatibility API returned no choices for node group "
+            f"{group.name!r} ({group.platform}) at Kubernetes {version}."
+        )
+
+    normalized_gpu = gpu_selector.lower()
+    if not uses_nebius_gpu_image:
+        if gpu_selector_is_override and normalized_gpu not in {"", "auto", "keep"}:
+            raise ValueError(
+                f"Node group {group.name!r} is operator-managed/driverless and cannot "
+                "accept a Nebius drivers preset override."
+            )
+        requested_driver = ""
+    elif normalized_gpu == "keep":
+        requested_driver = group.drivers_preset
+    elif normalized_gpu == "auto":
+        requested_driver = None
+    else:
+        requested_driver = validate_node_template_field_value(
+            gpu_selector,
+            flag_name="--to-gpu-stack-preset",
+        )
+    if requested_driver is not None:
+        candidates = [
+            choice
+            for choice in candidates
+            if _text(getattr(choice, "drivers_preset", None)) == requested_driver
+        ]
+
+    normalized_os = os_selector.lower()
+    if normalized_os == "keep":
+        requested_os = validate_os_image_value(group.os)
+    elif normalized_os == "auto":
+        requested_os = None
+    else:
+        requested_os = validate_os_image_value(os_selector)
+    if requested_os is not None:
+        candidates = [
+            choice for choice in candidates if _text(getattr(choice, "os", None)) == requested_os
+        ]
+    if not candidates:
+        raise RuntimeError(
+            f"Provider compatibility blocks node group {group.name!r} at Kubernetes "
+            f"{version}: OS selector {os_selector}, Nebius drivers preset selector "
+            f"{gpu_selector or 'driverless/operator-managed'}."
+        )
+
+    selected_os = requested_os or latest_provider_compatibility_value(
+        [_text(getattr(choice, "os", None)) for choice in candidates],
+        field="OS",
+    )
+    candidates = [
+        choice for choice in candidates if _text(getattr(choice, "os", None)) == selected_os
+    ]
+    selected_driver = requested_driver
+    if selected_driver is None:
+        selected_driver = latest_provider_compatibility_value(
+            [_text(getattr(choice, "drivers_preset", None)) for choice in candidates],
+            field="Nebius drivers preset",
+        )
+    match = next(
+        (
+            choice
+            for choice in candidates
+            if _text(getattr(choice, "drivers_preset", None)) == selected_driver
+        ),
+        None,
+    )
+    if match is None:
+        raise RuntimeError(
+            f"Provider compatibility blocks node group {group.name!r} at Kubernetes "
+            f"{version}: OS {selected_os}, Nebius drivers preset "
+            f"{selected_driver or 'driverless/operator-managed'}."
+        )
+    return match
 
 
 def _common_ordered_values(value_sets: Sequence[Sequence[str]]) -> list[str]:
@@ -166,6 +303,7 @@ def node_template_os_choices(
         current_values=current_values,
         current_label="current on selected live node group",
     )
+
 
 def node_template_gpu_stack_choices(
     *,

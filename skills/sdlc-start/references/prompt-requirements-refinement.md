@@ -82,13 +82,13 @@ Do not set `ready` while any material question is open or reopened.
 
 ## Requirements Ownership
 
-`maintain-project-specs` is the sole semantic, schema, and validation owner of
-`docs/requirements.md`. Inside Agentic SDLC, only the routed
-`sdlc-create-requirements` authoring adapter writes its managed requirement
-records. Preserve stable `REQ-*` IDs, update existing IDs when product truth
+Inside Agentic SDLC, `sdlc-create-requirements` owns managed requirement
+transitions. Preserve stable `REQ-*` IDs, update existing IDs when product truth
 changes, and append IDs for genuinely new requirements. Do not delete accepted
 truth on omission alone. Other phase skills route requirements changes through
-the adapter and return validation to the shared owner.
+that adapter. The shared owner validates and transactionally publishes the
+complete canonical pair; its receipt is required project-truth evidence but
+not a workflow authority boundary.
 
 Design may begin only after the latest intent has a `ready` refinement ledger,
 `docs/requirements.md` reflects its compiled truth, and no material question or
@@ -101,8 +101,8 @@ requirement and design IDs; non-contract classifications use only
 `workflow_directive`, `duplicate`, or `clarification_context`.
 
 The verifier sends the claim, ready refinement, and current canonical specs to
-the pure validator owned by `maintain-project-specs`. The owner derives the
-aggregate effect and `retain_plan` or `replan_required`; matching requirements
+a pure shared validator, then persists an Agentic SDLC-owned receipt. The
+workflow derives the aggregate effect and `retain_plan` or `replan_required`; matching requirements
 bytes or a caller-authored `no_effect` label are not proof. It publishes an
 append-only private attempt and atomic ledger. Execution preparation settles a
 separate per-feature plan-basis receipt, and every later resource-creating,

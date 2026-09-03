@@ -103,8 +103,12 @@ def test_direct_pinned_self_signed_leaves_complete_mutual_tls(tmp_path: Path) ->
 
     _handshake(client, server)
 
-    assert first_snapshot.peers[0].certificate_fingerprint == second_snapshot.certificate_fingerprint
-    assert second_snapshot.peers[0].certificate_fingerprint == first_snapshot.certificate_fingerprint
+    assert (
+        first_snapshot.peers[0].certificate_fingerprint == second_snapshot.certificate_fingerprint
+    )
+    assert (
+        second_snapshot.peers[0].certificate_fingerprint == first_snapshot.certificate_fingerprint
+    )
 
 
 def test_managed_certificate_is_fixed_to_year_9999_and_validates_without_ca() -> None:

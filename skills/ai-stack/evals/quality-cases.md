@@ -25,10 +25,14 @@ For canonical positive cases, verify that the result:
 - freezes workloads, the current baseline, acceptance gates, and decision-
   changing unknowns before recommending products;
 - begins with no new component and applies explicit escalation triggers;
-- classifies every AI-enabled capability as a direct model call,
-  deterministic workflow containing model calls, or agent before selecting a
-  framework, and rejects agents when code owns every transition or
-  continuation condition even if the iteration count is unknown;
+- consumes every AI-enabled capability's frozen classification as deterministic
+  code, a direct model call, a deterministic workflow containing model calls,
+  or an agent before selecting a framework; a direct stack-only classification
+  is explicitly provisional and disputed behavior or policy routes to
+  `ai-agent-design`, which returns the frozen contract without initiating a
+  nested stack-selection handoff, so `ai-stack` selects components once;
+- rejects agents when code owns every transition or continuation condition even
+  if the iteration count is unknown;
 - keeps one-request behavior classified as a direct model call while choosing
   Pydantic AI's low-level direct API for `ModelResponse` control or a no-tools
   single-request `Agent` for typed parsing, validation retries, or typed

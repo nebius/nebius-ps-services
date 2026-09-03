@@ -36,24 +36,23 @@ def test_create_config_no_interactive_explicitly_writes_same_template(tmp_path: 
     assert "Configuration Wizard" not in result.output
 
 
-def test_configure_vm_ha_help_documents_two_phase_safe_handoff() -> None:
-    result = CliRunner().invoke(app, ["configure-vm-ha", "--help"])
+def test_vm_ha_help_exposes_idempotent_convergence_contract() -> None:
+    result = CliRunner().invoke(app, ["vm-ha", "--help"])
 
     assert result.exit_code == 0, result.output
     assert "--local-config-file" in result.output
     assert "--output" in result.output
-    assert "source is never modified" in result.output.lower()
-    assert "Phase 1" in result.output
-    assert "Phase 2" in result.output
-
-
-def test_set_vm_ha_mtls_help_exposes_digest_approval_without_target() -> None:
-    result = CliRunner().invoke(app, ["set-vm-ha-mtls", "--help"])
-
-    assert result.exit_code == 0, result.output
+    assert "--force" in result.output
+    assert "--region" in result.output
+    assert "--zone" not in result.output
     assert "--dry-run" in result.output
     assert "--approve" in result.output
+    assert "--output-format" in result.output
+    assert "--rotate-mtls" in result.output
     assert "--target" not in result.output
+    assert "idempotently" in result.output
+    assert "default-No" in result.output
+    assert "stderr" in result.output
     assert "Examples:" in result.output
 
 
@@ -77,6 +76,25 @@ def test_resource_scoped_transfer_help_smoke(arguments: tuple[str, ...]) -> None
 
 
 @pytest.mark.parametrize(
+    ("arguments", "routing_contract"),
+    (
+        (("restart-tunnel", "--help"), "matching BGP neighbor when the tunnel uses BGP"),
+        (("failover", "tunnel", "--help"), "using BGP, not Static routing"),
+        (("failback", "tunnel", "--help"), "using BGP, not Static routing"),
+    ),
+)
+def test_tunnel_operator_help_identifies_regular_non_ha_gateways(
+    arguments: tuple[str, ...], routing_contract: str
+) -> None:
+    result = CliRunner().invoke(app, list(arguments))
+
+    assert result.exit_code == 0, result.output
+    normalized_output = " ".join(result.output.split())
+    assert "supported only on regular gateways (non-HA)" in normalized_output
+    assert routing_contract in normalized_output
+
+
+@pytest.mark.parametrize(
     "arguments",
     (
         ("vm-ha-failover",),
@@ -84,6 +102,9 @@ def test_resource_scoped_transfer_help_smoke(arguments: tuple[str, ...]) -> None
         ("vm-ha-recover",),
         ("vm-ha-status",),
         ("vm-ha-state",),
+        ("configure-vm-ha",),
+        ("vm-ha-rearm",),
+        ("set-vm-ha-mtls",),
         ("status", "--vm-ha-only"),
         ("failover", "legacy-tunnel"),
         ("failback", "legacy-tunnel"),
@@ -107,14 +128,11 @@ def _static_wizard_input() -> str:
         "eu-north1",
         "",  # gateway name
         "",  # instance count
-        "",  # zone
         "no",  # advanced settings
         "",  # network ID
         "",  # subnet name
         "",  # subnet CIDR
         "",  # subnet prefix
-        "auto",
-        "",  # local ASN
         "10.20.0.0/16",
         "1",  # connection count
         "onprem-static",
@@ -140,7 +158,6 @@ def _vm_ha_wizard_input() -> str:
         "eu-north1",
         "",  # gateway name
         "",  # initial instance count
-        "",  # zone
         "yes",  # advanced settings
         "",  # platform
         "",  # preset
@@ -161,8 +178,6 @@ def _vm_ha_wizard_input() -> str:
         "",  # subnet name
         "",  # subnet CIDR
         "",  # subnet prefix
-        "auto",
-        "",  # local ASN
         "10.30.0.0/16",
         "1",  # connection count
         "ha-static",

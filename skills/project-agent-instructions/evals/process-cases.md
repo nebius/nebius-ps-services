@@ -39,3 +39,24 @@ output assertions; canonical CSV validation does not replace them.
 - A selected nested project has no local `.git`, but its enclosing repository
   root has the effective marker. Use that ancestor as the discovery root while
   retaining the nested project as the decision and target scope.
+- A new session inspects an intact managed target whose exact digest and active
+  receipt are bound by the workspace-private ownership registry. Import that
+  receipt into the current private bundle and continue without asking the user
+  to adopt the same digest again.
+- A workspace has no entry but its relevant safe sealed history unanimously
+  proves the same exact active target and receipt. Bootstrap one registry entry
+  without using session or filesystem ordering, then import the receipt.
+- A first bootstrap is blocked by conflicting history. Persist a blocked
+  subject generation; deleting the conflict later must not resurrect the older
+  active receipt. Require exact-digest adoption to publish a new active
+  generation.
+- A created apply writes its exact ownership and state but registry publication
+  fails. If another session inspects first, bind a pending generation to the
+  interrupted writer's exact receipt and state digest. The observer remains
+  unproven; the matching writer can recover to active without re-adoption.
+- A managed marker is discoverable, but the registry is retired or mismatched,
+  or legacy evidence is absent, unsealed, unsafe, stale, damaged, retired,
+  mismatched, or conflicting. Treat discovery as behavioral authority only,
+  report unproven ownership continuity, and keep exact-digest adoption approval
+  mandatory before mutation. An unsafe or malformed existing registry is a
+  structured ownership conflict and never falls back to history.

@@ -1545,6 +1545,12 @@ _CXCLI_CLUSTER_METRIC_JOB_NAMES = {
     "cxcli-kubernetes-nodes-cadvisor",
     "cxcli-hubble",
 }
+_SOPERATOR_OWNED_OBSERVABILITY_NAMESPACES = (
+    "soperator",
+    "soperator-system",
+    "monitoring-system",
+    "logs-system",
+)
 _GRAFANA_MANAGED_VALUE_PATHS = (
     "values.admin",
     "values.dashboardProviders",
@@ -1600,14 +1606,37 @@ def _collector_managed_values(
     # is fragile on NFD-labeled GPU clusters and can make the read endpoint reject
     # otherwise valid container metrics.
     chart_collect_k8s_cluster_metrics = False
+    logs_excluded = list(settings.logs_excluded_namespaces)
+    metrics_excluded = list(settings.metrics_excluded_namespaces)
+    target_refs = enabled_cluster_target_refs(payload)
+    soperator_for_target = any(
+        isinstance(row, Mapping)
+        and component_type_id(row) == "soperator"
+        and bool(row.get("enabled", False))
+        and (
+            app_chart_target_ref(row) == target_ref
+            or (
+                not app_chart_target_ref(row)
+                and len(target_refs) == 1
+                and (not target_ref or target_ref in target_refs)
+            )
+        )
+        for row in _app_chart_rows(payload)
+    )
+    if soperator_for_target:
+        for namespace in _SOPERATOR_OWNED_OBSERVABILITY_NAMESPACES:
+            if namespace not in logs_excluded:
+                logs_excluded.append(namespace)
+            if namespace not in metrics_excluded:
+                metrics_excluded.append(namespace)
     return {
         "values.config.logs.enabled": settings.logs_enabled,
         "values.config.logs.collectAgentLogs": settings.logs_collect_agent_logs,
-        "values.config.logs.excludedNamespaces": list(settings.logs_excluded_namespaces),
+        "values.config.logs.excludedNamespaces": logs_excluded,
         "values.config.metrics.enabled": settings.metrics_enabled,
         "values.config.metrics.collectAgentMetrics": settings.metrics_collect_agent_metrics,
         "values.config.metrics.collectK8sClusterMetrics": chart_collect_k8s_cluster_metrics,
-        "values.config.metrics.excludedNamespaces": list(settings.metrics_excluded_namespaces),
+        "values.config.metrics.excludedNamespaces": metrics_excluded,
         "values.config.traces.enabled": settings.traces_enabled,
     }
 

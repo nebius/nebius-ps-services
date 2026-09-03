@@ -21,6 +21,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
 import nebius_vpngw.agent.frr_renderer as frr_module
 import nebius_vpngw.agent.main as agent_main
 import nebius_vpngw.agent.strongswan_renderer as strongswan_module
+import nebius_vpngw.agent.vm_ha.runtime as runtime_module
 from nebius_vpngw.agent.vm_ha.models import DigestSet
 from nebius_vpngw.agent.vm_ha.runtime import build_runtime_ports
 from nebius_vpngw.agent.vm_ha_controller import (
@@ -35,8 +36,118 @@ from nebius_vpngw.agent.vm_ha_controller import (
     RouteReconciliationContext,
     VMHAController,
 )
+from nebius_vpngw.vm_ha_credentials import installed_vm_ha_credential_path
 
 pytestmark = pytest.mark.integration
+
+
+def test_production_identity_gate_precedes_runtime_port_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _runtime_config(tmp_path)
+    runtime_binding = dict(config["runtime_binding"])  # type: ignore[arg-type]
+    runtime_binding.update(
+        nebius_project_id="project-a",
+        nebius_service_account_id="service-account-a",
+        nebius_authorized_key_id="authorized-key-a",
+    )
+    nodes = []
+    for raw_node in runtime_binding["nodes"]:  # type: ignore[index]
+        node = dict(raw_node)
+        digest = "d" * 64
+        node["nebius_credentials_sha256"] = digest
+        node["nebius_credentials_path"] = installed_vm_ha_credential_path(
+            node_id=str(node["node_id"]),
+            generation_id="a" * 64,
+            credential_sha256=digest,
+        )
+        nodes.append(node)
+    runtime_binding["nodes"] = nodes
+    config["runtime_binding"] = runtime_binding
+    local_credentials = tmp_path / "installed-credentials.json"
+    local_credentials.write_text("{}", encoding="utf-8")
+    local_credentials.chmod(0o600)
+    monkeypatch.setattr(
+        runtime_module,
+        "_credential_file",
+        lambda _path, _name: local_credentials,
+    )
+    events: list[str] = []
+
+    class CredentialBundle:
+        def revalidate(self) -> tuple[str, str]:
+            events.append("credential-bundle")
+            return "service-account-a", "authorized-key-a"
+
+    class IdentitySDK(FakeSDK):
+        def whoami(self, **_kwargs: object) -> SimpleNamespace:
+            events.append("whoami")
+            profile = SimpleNamespace(
+                service_account_profile=SimpleNamespace(
+                    info=SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id="service-account-a",
+                            parent_id="project-a",
+                            name="gateway-ha",
+                        )
+                    )
+                )
+            )
+            return SimpleNamespace(wait=lambda: profile)
+
+    def sdk_factory(**_kwargs: object) -> IdentitySDK:
+        events.append("sdk")
+        return IdentitySDK()
+
+    def route_backend_factory(_sdk: object) -> FakeRouteBackend:
+        events.append("routes")
+        return FakeRouteBackend()
+
+    def data_plane_factory(**kwargs: object) -> FakeDataPlane:
+        events.append("data-plane")
+        return FakeDataPlane(**kwargs)
+
+    state_dir = tmp_path / "state"
+    ports = build_runtime_ports(
+        config,
+        state_dir=state_dir,
+        replay_store=MemoryReplayStore(),
+        sdk_factory=sdk_factory,
+        credential_bundle_factory=lambda _binding, _node: CredentialBundle(),
+        route_backend_factory=route_backend_factory,
+        data_plane_factory=data_plane_factory,
+        boot_id="boot-a",
+        identity_proof_mode="systemd-preflight",
+        systemd_invocation_id="1" * 32,
+        clock=lambda: 100.0,
+    )
+
+    assert events[:3] == ["credential-bundle", "sdk", "whoami"]
+    assert events.index("whoami") < events.index("routes")
+    assert events.index("whoami") < events.index("data-plane")
+    ports.close()
+    events.clear()
+
+    controller_ports = build_runtime_ports(
+        config,
+        state_dir=state_dir,
+        replay_store=MemoryReplayStore(),
+        sdk_factory=sdk_factory,
+        credential_bundle_factory=lambda _binding, _node: CredentialBundle(),
+        route_backend_factory=route_backend_factory,
+        data_plane_factory=data_plane_factory,
+        boot_id="boot-a",
+        identity_proof_mode="systemd-controller",
+        systemd_invocation_id="1" * 32,
+        clock=lambda: 101.0,
+    )
+
+    assert events[:2] == ["credential-bundle", "sdk"]
+    assert "whoami" not in events
+    assert "routes" in events
+    assert "data-plane" in events
+    controller_ports.close()
 
 
 def test_two_node_takeover_effects_are_ordered_and_crash_replay_is_idempotent(

@@ -7,8 +7,10 @@ raises instead of falling back to the ordinary provisioning scaffold path.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 import typing as t
@@ -21,6 +23,7 @@ VM_HA_PER_RETRY_TIMEOUT_SECONDS = 10.0
 VM_HA_REQUEST_RETRIES = 3
 VM_HA_OPERATION_TIMEOUT_SECONDS = 300.0
 VM_HA_OPERATION_POLL_INTERVAL_SECONDS = 1.0
+_VM_HA_IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9-]+", flags=re.ASCII)
 
 
 def nebius_request_error_code_is(error: BaseException, code_name: str) -> bool:
@@ -40,6 +43,14 @@ def operation_status_lookup_unsupported(error: BaseException) -> bool:
     return nebius_request_error_code_is(error, "UNIMPLEMENTED")
 
 
+def vm_ha_idempotency_key(operation_id: str) -> str:
+    """Map one durable action ID to a replay-stable Nebius request key."""
+
+    if _VM_HA_IDEMPOTENCY_KEY.fullmatch(operation_id):
+        return operation_id
+    return hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
+
+
 def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
     value: dict[str, t.Any] = {
         "timeout": VM_HA_REQUEST_TIMEOUT_SECONDS,
@@ -48,7 +59,7 @@ def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
         "retries": VM_HA_REQUEST_RETRIES,
     }
     if operation_id:
-        value["metadata"] = (("x-idempotency-key", operation_id),)
+        value["metadata"] = (("x-idempotency-key", vm_ha_idempotency_key(operation_id)),)
     return value
 
 
@@ -177,6 +188,10 @@ class RetryableHACloudError(HACloudError):
 
 class PermanentHACloudError(HACloudError):
     """The request or observed resource conflicts with the HA contract."""
+
+
+class MissingHAComputeError(PermanentHACloudError):
+    """One exact Compute read proved that the requested resource is absent."""
 
 
 class AmbiguousHACloudError(HACloudError):
@@ -767,10 +782,11 @@ class VMHACloudAdapter:
                 "UNAVAILABLE",
             }:
                 raise RetryableHACloudError(f"{description}: {exc}") from exc
+            if code_name == "NOT_FOUND" or nebius_request_error_code_is(exc, "NOT_FOUND"):
+                raise MissingHAComputeError(f"{description}: {exc}") from exc
             if isinstance(exc, PermissionError) or code_name in {
                 "FAILED_PRECONDITION",
                 "INVALID_ARGUMENT",
-                "NOT_FOUND",
                 "PERMISSION_DENIED",
                 "UNAUTHENTICATED",
             }:
@@ -801,16 +817,34 @@ class VMHACloudAdapter:
         allocation_id: str,
         former_owner: AllocationOwner,
         candidate: AllocationOwner,
+        allow_missing_former: bool = False,
     ) -> ClusterCloudObservation:
         """Read exact two-sided ownership, rejecting a changing allocation."""
 
         before = self._read_allocation(allocation_id)
-        former = self._read_instance(former_owner.instance_id)
+        former_missing = False
+        try:
+            former = self._read_instance(former_owner.instance_id)
+        except MissingHAComputeError:
+            if not allow_missing_former:
+                raise
+            former_missing = True
+            former = ComputeObservation(
+                instance_id=former_owner.instance_id,
+                state=InstanceCloudState.STOPPED,
+                resource_version="0",
+                nic_allocations=((former_owner.network_interface_name, ""),),
+                nic_alias_allocations=((former_owner.network_interface_name, ()),),
+            )
         current = self._read_instance(candidate.instance_id)
         after = self._read_allocation(allocation_id)
         if before != after:
             raise AmbiguousHACloudError(
                 f"allocation {allocation_id} ownership changed during observation"
+            )
+        if former_missing and after.owner != candidate:
+            raise PermanentHACloudError(
+                "missing former Compute is not bound to exact candidate ownership"
             )
         return ClusterCloudObservation(
             allocation=after,

@@ -1026,7 +1026,7 @@ def test_assess_live_quota_requirements_reports_explicit_sufficiency_and_shortag
 ) -> None:
     class _Session:
         def __init__(self, *, context: str, project_id: str) -> None:
-            assert context == "external soperator upgrade quota preflight"
+            assert context == "onboarded soperator upgrade quota preflight"
             assert project_id == "project-1"
             self.closed = False
 
@@ -1068,12 +1068,12 @@ def test_assess_live_quota_requirements_reports_explicit_sufficiency_and_shortag
         tenant_id="tenant-1",
         project_id="project-1",
         region_id="eu-north1",
-        context="external soperator upgrade quota preflight",
+        context="onboarded soperator upgrade quota preflight",
         requirements=[
             QuotaRequirement(
                 component_id="mk8s",
-                instance_id="external",
-                component_label="external worker remediation",
+                instance_id="onboarded",
+                component_label="onboarded worker remediation",
                 quota_name="compute.instance.count",
                 region="eu-north1",
                 required=4,

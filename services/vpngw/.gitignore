@@ -85,6 +85,8 @@ last-applied.json
 .nebius-vpngw-rollbacks/
 *.vm-ha-lifecycle.json
 *.vm-ha-lifecycle.json.write.lock
+*.destroy-lifecycle.json
+.*.destroy-lifecycle.json.write.lock
 
 # StrongSwan & FRR runtime configs (if pulled locally—avoid accidental commit)
 ipsec.conf

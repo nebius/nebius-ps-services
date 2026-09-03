@@ -24,6 +24,21 @@ from nebius_cxcli.component_sources import (
     ObservabilityGrafanaSettings,
     TFModuleSource,
 )
+from nebius_cxcli.credential_compensation import CredentialDeliveryDisposition
+from nebius_cxcli.iam_bootstrap import StaticKeyIssueResult
+
+
+def _static_key_result(token: str = "one-time-token") -> StaticKeyIssueResult:
+    return StaticKeyIssueResult(
+        project_id="project-a",
+        service_account_name="cxcli-observability-read",
+        service_account_id="serviceaccount-a",
+        service_account_created=False,
+        roles_created=[],
+        roles_already_present=["viewer"],
+        static_key_id="static-key-id",
+        token=token,
+    )
 
 
 def test_run_kubectl_uses_explicit_target_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,6 +77,100 @@ def test_run_kubectl_uses_explicit_target_context(monkeypatch: pytest.MonkeyPatc
             "json",
         ]
     ]
+
+
+def test_grafana_delivery_probe_treats_missing_secret_as_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = grafana_runtime._grafana_secret_delivery_adapter(
+        namespace="observability",
+        name="grafana-read",
+        key="token",
+        extra_env=None,
+    )
+    intent = adapter.prepare(
+        _static_key_result(),
+        operation_id="a" * 32,
+        credentials=(("static-key", "static-key-id"),),
+    )
+    monkeypatch.setattr(
+        grafana_runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "Error from server (NotFound)"},
+        )(),
+    )
+
+    assert adapter.probe(intent) is CredentialDeliveryDisposition.AMBIGUOUS
+
+
+def test_grafana_prometheus_parity_uses_configured_proxy_and_fresh_sample(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = grafana_runtime.GrafanaReleaseSpec(
+        target_ref="cluster2",
+        namespace="observability",
+        release_name="grafana",
+        service_name="grafana",
+        admin_secret_name="grafana-admin",
+        admin_user="admin",
+        admin_user_key="admin-user",
+        admin_password_key="admin-password",
+        token_secret_name="grafana-read",
+        token_key="token",
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "grafana_release_specs",
+        lambda *_args, **_kwargs: (spec,),
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_cli_settings",
+        lambda: GrafanaCliSettings(
+            datasources=(
+                GrafanaDatasourceSpec(
+                    key="user-metrics",
+                    name="Nebius User Metrics",
+                    uid="nebius-user-metrics",
+                    datasource_type="prometheus",
+                    read_endpoint="metrics_user_read",
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_base_url",
+        lambda *_args, **_kwargs: "https://grafana.example/",
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_admin_credentials",
+        lambda *_args, **_kwargs: ("admin", "password"),
+    )
+    captured: dict[str, object] = {}
+
+    def _get(base_url: str, path: str, **kwargs: object):
+        captured.update({"base_url": base_url, "path": path, **kwargs})
+        return {"data": {"result": [{"value": [1001.0, "1"]}]}}
+
+    monkeypatch.setattr(grafana_runtime, "_get_grafana_json", _get)
+
+    assert grafana_runtime.grafana_prometheus_has_fresh_series(
+        {},
+        target_ref="cluster2",
+        query='slurm_node_info{mk8s_cluster_id="mk8scluster-123"}',
+        not_before=1000.0,
+        extra_env={},
+    )
+    assert captured["path"] == ("api/datasources/proxy/uid/nebius-user-metrics/api/v1/query")
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["query"] == 'slurm_node_info{mk8s_cluster_id="mk8scluster-123"}'
+    assert str(params["time"]).isdigit()
 
 
 def _grafana_payload() -> dict[str, Any]:
@@ -317,22 +426,35 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
     monkeypatch.setattr(
         grafana_runtime,
         "_observability_read_token_status",
-        lambda _payload, token: token != "old-token",
+        lambda _payload, token, **_kwargs: token != "old-token",
     )
     monkeypatch.setattr(
         grafana_runtime,
         "_issue_read_token",
-        lambda _payload, *, target_ref: "new-token",
+        lambda _payload, *, target_ref, purpose, delivery: (
+            delivery.deliver(
+                _static_key_result("new-token"),
+                delivery.prepare(
+                    _static_key_result("new-token"),
+                    operation_id="c" * 32,
+                    credentials=(("static-key", "static-key-id"),),
+                ),
+            )
+            or "new-token"
+        ),
     )
     monkeypatch.setattr(
         grafana_runtime,
         "_apply_secret",
-        lambda *, namespace, name, string_data, extra_env: applied.append(
-            {
-                "namespace": namespace,
-                "name": name,
-                "string_data": dict(string_data),
-            }
+        lambda *, namespace, name, string_data, extra_env, **kwargs: (
+            applied.append(
+                {
+                    "namespace": namespace,
+                    "name": name,
+                    "string_data": dict(string_data),
+                    "static_key_id": kwargs.get("observability_static_key_id"),
+                }
+            )
         ),
     )
 
@@ -348,29 +470,192 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
             "namespace": "observability",
             "name": "nebius-cxcli-grafana-observability-read",
             "string_data": {"token": "new-token"},
+            "static_key_id": "static-key-id",
         }
     ]
     assert emitted == [
-        "Refreshed Grafana Observability read-token secret "
+        "Refreshed Observability read-token secret "
         "`nebius-cxcli-grafana-observability-read`."
     ]
 
 
-def test_observability_read_token_status_refuses_plain_http_probe(
+def test_cleanup_observability_read_token_deletes_provider_key_before_secret(
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    payload = {
+        "metadata": {
+            "annotations": {
+                grafana_runtime._OBSERVABILITY_STATIC_KEY_ID_ANNOTATION: "static-key-id"
+            }
+        },
+        "data": {"token": "c2VjcmV0"},
+    }
+    monkeypatch.setattr(
+        grafana_runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
+        )(),
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "delete_observability_static_key",
+        lambda **kwargs: calls.append(("provider", kwargs["static_key_id"])),
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_run_kubectl",
+        lambda args, **_kwargs: calls.append(("secret", tuple(args))),
+    )
+
+    assert grafana_runtime.cleanup_observability_read_token_secret(
+        namespace="soperator-system",
+        name="soperator-telemetry-read",
+        key="token",
+        extra_env={},
+    )
+    assert calls == [
+        ("provider", "static-key-id"),
+        (
+            "secret",
+            (
+                "-n",
+                "soperator-system",
+                "delete",
+                "secret",
+                "soperator-telemetry-read",
+                "--ignore-not-found=true",
+            ),
+        ),
+    ]
+
+
+def test_cleanup_observability_read_token_fails_closed_without_key_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        grafana_runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps({"metadata": {}, "data": {"token": "c2VjcmV0"}}),
+                "stderr": "",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "delete_observability_static_key",
+        lambda **_kwargs: pytest.fail("unbound provider key must not be deleted"),
+    )
+
+    with pytest.raises(RuntimeError, match="no complete cxcli-owned credential lifecycle"):
+        grafana_runtime.cleanup_observability_read_token_secret(
+            namespace="soperator-system",
+            name="soperator-telemetry-read",
+            key="token",
+            extra_env={},
+        )
+
+
+def test_cleanup_observability_read_token_is_noop_when_secret_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        grafana_runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Completed",
+            (),
+            {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "Error from server (NotFound)",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "delete_observability_static_key",
+        lambda **_kwargs: pytest.fail("absent Secret must not delete a provider key"),
+    )
+
+    assert not grafana_runtime.cleanup_observability_read_token_secret(
+        namespace="soperator-system",
+        name="soperator-telemetry-read",
+        key="token",
+        extra_env={},
+    )
+
+
+@pytest.mark.parametrize(
+    "probe_url",
+    [
+        "http://read.monitoring.api.nebius.cloud/api/v1/query?query=1",
+        "https://observability.example.invalid/api/v1/query?query=1",
+    ],
+)
+def test_observability_read_token_status_refuses_unsafe_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    probe_url: str,
 ) -> None:
     monkeypatch.setattr(
         grafana_runtime,
         "_read_token_probe_url",
-        lambda _payload: "http://observability.example.invalid/api/v1/query?query=1",
+        lambda _payload: probe_url,
     )
     monkeypatch.setattr(
         grafana_runtime,
         "urlopen",
-        lambda *_args, **_kwargs: pytest.fail("plain HTTP token probe must not run"),
+        lambda *_args, **_kwargs: pytest.fail("unsafe token probe must not run"),
     )
 
     assert grafana_runtime._observability_read_token_status({}, "viewer-token") is None
+
+
+def test_soperator_read_token_refuses_automatic_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(grafana_runtime, "_ensure_namespace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(grafana_runtime, "_secret_has_keys", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_secret_data_values",
+        lambda **_kwargs: {"token": "rejected-token"},
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_observability_read_token_status",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_issue_read_token",
+        lambda *_args, **_kwargs: pytest.fail("credential rotation must not run"),
+    )
+
+    with pytest.raises(RuntimeError, match="refusing automatic credential rotation"):
+        grafana_runtime.ensure_observability_read_token_secret(
+            _grafana_payload(),
+            namespace="soperator-system",
+            name="soperator-telemetry-read",
+            key="token",
+            purpose="soperator",
+            extra_env={},
+            target_ref="cluster2",
+            emit=None,
+            probe_url=(
+                "https://read.monitoring.api.nebius.cloud/projects/project-123/"
+                "prometheus/api/v1/query?query=1"
+            ),
+            refresh_rejected=False,
+        )
 
 
 def test_grafana_dashboard_url_rewrites_to_public_base(

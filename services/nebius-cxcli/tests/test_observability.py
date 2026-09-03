@@ -640,10 +640,28 @@ def test_materialize_observability_agent_values_from_target_contract() -> None:
         relabel_configs = target["relabel_configs"]
         assert not any(item.get("action") == "labelmap" for item in relabel_configs)
         assert {
-            item.get("target_label")
-            for item in relabel_configs
-            if isinstance(item, dict)
+            item.get("target_label") for item in relabel_configs if isinstance(item, dict)
         }.issuperset({"node", "kubernetes_io_hostname", "__address__", "__metrics_path__"})
+
+
+def test_soperator_owns_its_observability_namespaces_without_double_collection() -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("nebius-observability-agent", "soperator"),
+    )
+
+    materialize_observability_app_values(payload)
+    chart = _chart_row(payload, "nebius-observability-agent")
+
+    expected = [
+        "kube-system",
+        "soperator",
+        "soperator-system",
+        "monitoring-system",
+        "logs-system",
+    ]
+    assert chart["values"]["config"]["logs"]["excludedNamespaces"] == expected
+    assert chart["values"]["config"]["metrics"]["excludedNamespaces"] == expected
 
 
 def test_materialize_observability_agent_values_preserves_customer_metric_targets() -> None:
@@ -663,7 +681,7 @@ def test_materialize_observability_agent_values_preserves_customer_metric_target
                     {
                         "job_name": "cxcli-nvidia-dcgm-exporter",
                         "kubernetes_sd_configs": [{"role": "endpoints"}],
-                    }
+                    },
                 ]
             }
         }
@@ -903,8 +921,7 @@ def test_materialize_observability_agent_values_for_each_target_row() -> None:
         assert chart["values"]["config"]["metrics"]["enabled"] is True
         assert chart["values"]["config"]["metrics"]["collectK8sClusterMetrics"] is False
         assert [
-            item["job_name"]
-            for item in chart["values"]["config"]["metrics"]["additionalTargets"]
+            item["job_name"] for item in chart["values"]["config"]["metrics"]["additionalTargets"]
         ] == [
             "cxcli-kubernetes-apiservers",
             "cxcli-kubernetes-nodes",
@@ -953,9 +970,9 @@ def test_observability_gpu_node_label_reconciliation_skips_operator_managed_stac
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
-    payload["infra"]["components"][0]["inputs"]["node_groups"]["worker"][
-        "gpu_stack_source"
-    ] = "operator_managed"
+    payload["infra"]["components"][0]["inputs"]["node_groups"]["worker"]["gpu_stack_source"] = (
+        "operator_managed"
+    )
 
     policy = observability_gpu_node_label_reconciliation(payload)
     changed = materialize_observability_infra_values(payload)
@@ -1047,9 +1064,7 @@ def test_materialize_observability_infra_values_sets_vm_journald_label_for_all_u
     )
     payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
     payload["deploy"]["observability"]["vm"]["logs"]["systemd_units"] = []
-    payload["infra"]["components"][1]["inputs"]["labels"] = {
-        "example.com/owner": "platform"
-    }
+    payload["infra"]["components"][1]["inputs"]["labels"] = {"example.com/owner": "platform"}
 
     changed = materialize_observability_infra_values(payload)
 

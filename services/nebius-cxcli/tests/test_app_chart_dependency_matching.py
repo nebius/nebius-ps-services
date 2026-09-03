@@ -6,7 +6,7 @@ import pytest
 
 from nebius_cxcli.cli import _resolve_apps_chart_dependencies
 from nebius_cxcli.component_sources import SourceProfile
-from nebius_cxcli.components import ComponentEntry, component_entries
+from nebius_cxcli.components import ComponentEntry, component_entries, soperator_install_entry
 
 
 def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> None:
@@ -56,10 +56,10 @@ def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> N
     assert warnings == ()
 
 
-def test_soperator_family_exposes_only_parent_app_entry() -> None:
+def test_soperator_family_is_absent_from_generic_app_catalog() -> None:
     app_ids = {entry.id for entry in component_entries("apps", source_profile=SourceProfile.LOCAL)}
 
-    assert "soperator" in app_ids
+    assert "soperator" not in app_ids
     assert {
         "soperator-activechecks",
         "soperator-backup-config",
@@ -68,6 +68,7 @@ def test_soperator_family_exposes_only_parent_app_entry() -> None:
         "soperator-notifier",
         "k8up",
     }.isdisjoint(app_ids)
+    assert soperator_install_entry("4.1.7").id == "soperator"
 
 
 def test_apps_dependency_resolution_uses_source_chart_name_fallback(monkeypatch) -> None:

@@ -1,109 +1,146 @@
 # Maintain Project Specs
 
-This skill owns the canonical `docs/requirements.md` and `docs/design.md`
-contract used by ordinary project work, Task Implementer, and Agentic SDLC. It
-also coordinates the timing of conditional project `AGENTS.md` decisions.
+`maintain-project-specs` owns the canonical requirements/design contract for
+ordinary root-agent sessions, Task Implementer, and Agentic SDLC. Every direct
+root-user prompt is classified at statement level. Durable product intent is
+recorded before implementation, and proven implementation/verification
+evidence is recorded afterward. Unrelated requests leave the specs unchanged.
 
-The lifecycle hooks are guardrails: they bind the selected project, require a
-current spec receipt before implementation, mark material changes for
-reconciliation, inject exact pending project rules, and route unfinished work
-through one Stop arbiter. A planned state always carries verified render
-evidence, including an authoritative empty `not-needed` result. Semantic
-requirements, design, and project-rule decisions remain skill-owned.
-The same owner exposes an internal pure prompt-impact validator for Task
-Implementer and Agentic SDLC. It reparses the canonical specs, requires one
-bounded disposition for every extracted statement occurrence, verifies active
-requirement/design mappings, and derives retain/replan without storing prompt
-text or trusting a workflow-authored aggregate. Workflow adapters own only
-private append-only persistence and progression gates.
-PostToolUse accounting is silent for routine successful project writes; it
-keeps the write epoch current, including across concurrent recorder races,
-and invalidates a plan or seal if an earlier admitted write reports completion
-late. Canonical spec reconciliation remains epoch-neutral. Stop requests one
-accumulated semantic review. An initial Stop from `implementation-open`
-atomically enters `reconciliation-required` and clears stale planning bindings
-before generating that continuation, so reconciliation never depends on a
-synthetic turn firing `UserPromptSubmit`. Ordinary
-implementation-only or reverted changes may keep both specs byte-identical
-after validation at the latest epoch.
-An apply command that cannot produce independently verified final instruction
-state also invalidates its plan and reopens reconciliation, so a blocked or
-partially applied decision can be corrected without a new user prompt.
+Hooks remain advisory because a hook cannot safely make the semantic decision
+or perform a repository transaction on behalf of the active workflow. They
+only observe the actual documents and stage metadata-only intake. The root
+agent performs classification and calls the canonical owner.
 
-The terminal project-instructions step decides whether repository instructions
-are actually needed. A verified `not-needed` outcome is successful and leaves
-a missing project `AGENTS.md` absent; only a `needed` outcome can create one.
-Hook and completion wording reports that distinction explicitly.
-Plain-language intent that existing users rely on stable behavior is explicit
-compatibility intent without requiring `GA` or another keyword. The owner
-captures the supported public API, CLI, configuration, persisted-format, and
-upgrade-path contract in the specs, injects matching rules before the current
-implementation, and persists them at terminal seal unless active project
-instructions are already sufficient. Personal global defaults are never copied
-or used to suppress that project rule.
-Lifecycle-owned project-instructions commands are bound to the canonical
-current-session private bundle. The sole alternate bundle admits exact
-Task Implementer inspect and render commands for the active prepared run during
-implementation-open or reconciliation-required after the canonical adapter
-attests the integration checkout and every run-owned path; apply and verify remain on the current-session terminal seal path. Every
-other alternate same-project bundle and malformed coordinator-shaped command
-fails closed. Delegated worker commits retain their command-derived worker
-session after the adapter matches it to the running task plane and canonical
-evidence, while direct commits remain bound to the outer hook payload session.
-The resulting `task-worker-delegated` waiver is a valid terminal worker state;
-a later prompt in that same session reopens normal project planning instead of
-being rejected as malformed lifecycle state.
-An attested delegated command may use either the hook runtime or an exact
-PATH-canonical executable named `python3` or `python3.N`. A different canonical
-Python version is therefore valid, while arbitrary same-name paths, wrappers,
-alternate helpers, and mismatched sessions remain denied.
-The adapter also owns one narrow integration-review recovery: an exact
-completed-follow-up run whose private receipt matches the rejected candidate,
-findings digest, and unchanged lane/source heads may reopen the current
-zero-write `non-project` promotion waiver as `reconciliation-required`.
-Ordinary, written, or unrelated waivers remain terminal.
-Inspection uses one uncomposed canonical command with the active
-Codex home declared explicitly and every receipt, runtime, private-root, and
-output path absolute within the owning bundle.
-Nested selected projects use the nearest effective root-marker ancestor within
-the enclosing Git worktree for instruction discovery while keeping the exact
-selected project as the lifecycle and `AGENTS.md` target.
+## What Advisory Means
 
-Installed hooks resolve their coordinators from the same canonical
-`~/.agents/skills` root used by Codex and `install-skills.sh`. They admit
-ordinary investigation, quoted search patterns, read-only `find -exec stat`,
-exact `git branch --show-current`, proven effects wholly outside the selected
-project, and exact current-session private inputs without turning the lifecycle
-into a general command allowlist. Exact selected-project
-intent-to-add and mode-`0600` private-input normalization break first-use
-bootstrap cycles without allowing general staging or permission changes.
-Mixed, dynamic, ambiguous, or authoritative control-plane writes stay denied;
-the authoritative control plane is only lifecycle-owned `project-specs`
-state, whose receipts and state remain coordinator-owned. Fixed external
-config, hooks, task state, installed skills, credentials, and other user files
-pass through this selected-project hook to their actual permission and policy
-owners. Receipt persistence is limited to the hook-bound session's canonical
-`spec-receipt.json`. Exact task-owned temporary-tree cleanup is classified as
-external only for one literal absolute system-temp descendant in the form
-`find /tmp/<task-owned-tree> -depth -delete`; temporary roots, variables,
-globs, multiple roots, symlinks, and alternate `find` actions remain denied by
-this lifecycle, while destructive-action policy still owns deletion approval.
-Bounded `commit-push` remote operations are classified by Git semantics rather
-than cwd: only a single fixed-network `origin`, literal current-branch tracking
-fetch, and non-force same-branch push with no active pre-push or
-reference-transaction hook pass through. Broader remote commands and raw Git
-mutation remain denied.
+- SessionStart uses bounded, no-follow, owner-controlled regular-file reads. It
+  is silent for a current v2 pair and may report `CONTRACT_PENDING`,
+  `CONTRACT_INVALID`, or `CONTRACT_MIGRATION_REQUIRED` based on the actual
+  document markers.
+- UserPromptSubmit stages only prompt/session/turn digests and an unclassified
+  intent record, then injects bounded classification guidance. Raw prompt text
+  is never persisted.
+- Subagents, workers, generated continuations, system/compaction turns, Stop
+  turns, and secret-bearing prompts are excluded from intake.
+- Project-spec PreToolUse, PostToolUse, and Stop registrations do not exist;
+  the project-spec delegate is absent from shared Stop arbiters.
+- Missing state, unsafe paths, or internal exceptions degrade to
+  advisory/neutral behavior and never recreate the old
+  `ADVISORY_UNAVAILABLE` lifecycle-state warning.
+- Task Implementer and Agentic SDLC keep their own execution and safety gates.
+- Project-instruction changes require a separate explicit workflow and are not
+  part of automatic lifecycle maintenance.
 
-Missing files start from the canonical draft templates under
-`assets/templates/`; the agent replaces every placeholder from focused README,
-documentation, code, and test evidence before the shared validator may issue a
-current receipt. A policy file can disable automation only when it is safe and
-exactly matches its committed Git blob.
+Existing repository instructions still apply. Advisory lifecycle status does
+not bypass security, destructive-action, Git, external-write, or workflow-owned
+controls.
 
-See [SKILL.md](SKILL.md) for the workflow,
-[references/lifecycle.md](references/lifecycle.md) for state and hook behavior,
-and [references/migration.md](references/migration.md) for legacy conversion.
+## Canonical Documents
 
-Source validation, hook installation, installed parity, and live activation
-are separate gates. Installing or registering the hook bundle requires an
-explicit mutating installation action, a Codex restart, and `/hooks` review.
+The skill understands canonical managed regions in:
+
+- `docs/requirements.md`
+- `docs/design.md`
+
+Schema v2 separates requirement state (`draft`, `active`, `blocked`,
+`satisfied`, `superseded`), design readiness (`draft`, `ready`, `blocked`,
+`stale`, `superseded`), and delivery (`unassessed`, `not-started`,
+`implemented`, `verified`). A ready design may be not started; a satisfied
+requirement must have verified delivery. The owner preserves human-owned bytes
+outside managed regions, stable record IDs, status-aware traceability, and
+marker/body agreement.
+
+The paired publisher validates both documents and compare-and-set checks Git
+`HEAD` plus both prior document digests before writing either file. Publication
+holds verified no-follow project/docs directory descriptors, rechecks the Git
+and file boundary after each replacement, and never follows a swapped `docs`
+path. It journals digest-only recovery metadata, restores only bytes still
+equal to its candidate if a later step fails, and safely completes a
+digest-proven before/after split on an exact operation replay. Owner-aware
+inspection uses the same shared lock and therefore observes one complete pair;
+ad hoc direct reads of the two files are not a transaction API. It never stores
+prompt text, transcripts, repository content, secrets, customer data, or raw
+logs in private lifecycle state.
+
+## Helper Commands
+
+```text
+python3 scripts/project_specs.py inspect --project-root <path>
+python3 scripts/project_specs.py validate --project-root <path>
+python3 scripts/project_specs.py publish --project-root <path> \
+  --requirements-candidate <path> --design-candidate <path> \
+  --expected-head <sha> \
+  --expected-requirements-sha256 <sha-or-absent> \
+  --expected-design-sha256 <sha-or-absent> --operation-id <id>
+python3 scripts/project_specs.py migrate --project-root <path>
+python3 scripts/project_specs.py recover --project-root <path>
+```
+
+Inspection and validation are advisory. `publish` is the normal paired
+compare-and-set write path. Migration and recovery are explicit mutating
+operations with journal/backup safety. Lifecycle state-transition commands
+(`start-prompt`, `plan`, `open`, `seal`, and `waive`) are retired.
+
+## Hook Sources
+
+The optional source bundle lives under `assets/hooks/`:
+
+- `project_specs_lifecycle.py`: document observer and metadata-only prompt
+  intake for root-agent classification.
+- `project_specs_maintenance.py`: private retention and pressure housekeeping.
+- `stop_lifecycle_arbiter.py`: peer Stop arbitration without a project-spec
+  delegate.
+
+Source edits are not live activation proof. Validate source behavior, install
+into a disposable Codex home, start a fresh process/session, and verify neutral
+hook behavior separately.
+
+## Retention
+
+Private retention remains fail-safe and non-authoritative:
+
+- current-session bytes count toward aggregate pressure but the current session
+  cannot be deleted;
+- valid terminal state is retained for 30 days;
+- abandoned resumable state is retained for 90 days;
+- pressure cleanup uses 1 GiB/768 MiB allocated-storage hysteresis only when
+  registry and aggregate evidence are complete;
+- SessionStart resolves only the exact source-sibling or canonical installed
+  ownership classifier, validates the complete owner-controlled package path
+  and source set, copies only snapshotted bytes into an owner-only temporary
+  tree, verifies source identity and digests before and after an isolated
+  bounded invocation, and accepts only its exact read-only result schema;
+- incomplete, malformed, foreign, digest-mismatched, pending, or unsafe state
+  disables pressure deletion, and any missing, spoofed, failed, timed-out, or
+  malformed classifier result—or classifier tree changed during execution—is
+  treated as `unsafe`;
+- lock order, owner-only modes, rename journaling, and no-follow deletion remain
+  strict.
+
+## Workflow Independence
+
+Task Implementer and Agentic SDLC use the same v2 parser, pair validator,
+publisher, and receipt. Their prompt-impact schemas, plan bases, dispatch,
+cleanup, finalization, recovery, and Stop behavior remain workflow-owned. Root
+coordinators bind the accepted intent and exact spec receipt before dispatch.
+Workers inherit that evidence, never reclassify user intent or write canonical
+specs, and report typed `spec_gaps` to the coordinator for reconciliation.
+
+## Validation
+
+Focused tests cover:
+
+- current, pending, invalid, migration-required, and failure-safe hook behavior;
+- metadata-only/idempotent direct-prompt intake and worker/generated/secret
+  exclusions, including serialized concurrent delivery of one turn;
+- absence of project-spec PreToolUse, PostToolUse, and Stop registrations;
+- absence of the project-spec Stop delegate;
+- current-session allocated-byte accounting and retention protection;
+- real SessionStart reachability of ownership-safe age cleanup and fail-safe
+  classifier degradation, including writable ancestry, source replacement,
+  and partial registry proof;
+- foreign project-scope evidence isolation;
+- canonical v2 pair validation, directory-swap-safe compare-and-set
+  publication, owner-aware reader serialization, guarded rollback, and explicit
+  v1/legacy migration recovery;
+- Task Implementer and Agentic SDLC adapter parity and workflow independence.

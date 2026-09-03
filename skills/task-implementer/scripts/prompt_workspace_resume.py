@@ -25,14 +25,6 @@ from prompt_workspace_core import (
     stable_json,
     write_atomic,
 )
-from prompt_workspace_contract_delta import (
-    contract_delta_active,
-    terminal_lifecycle_seal,
-    terminal_lifecycle_seal_active,
-    terminal_lifecycle_seal_promoted,
-    terminal_lifecycle_recovery,
-    terminal_lifecycle_recovery_promoted,
-)
 from prompt_workspace_execution import (
     RESULT_SCHEMA,
     WORKER_START_SECONDS,
@@ -49,6 +41,7 @@ from prompt_workspace_specs import verify_prompt_impact_plan
 from prompt_workspace_waves import (
     _assignment_path,
     _incoming_handoff_path,
+    _valid_spec_gaps,
     _load_task_plane,
     _load_wave,
     _result_path,
@@ -260,6 +253,7 @@ def _validate_result(
         "summary",
         "decisions",
         "open_risks",
+        "spec_gaps",
         "validation",
         "end_to_end_validation",
         "code_review",
@@ -279,6 +273,7 @@ def _validate_result(
         or not str(result["summary"]).strip()
         or not isinstance(result.get("decisions"), list)
         or not isinstance(result.get("open_risks"), list)
+        or not _valid_spec_gaps(result.get("spec_gaps"))
         or any(
             not isinstance(item, str) or not item.strip()
             for item in [*result["decisions"], *result["open_risks"]]
@@ -476,47 +471,12 @@ def _machine_observation(
     interop = load_interop(run_dir, required=False)
     lease: dict[str, object] | None = None
     repairs: dict[str, object] = {}
-    terminal_wave_id: str | None = None
-    if coordinator is not None and isinstance(coordinator.get("active_wave"), str):
-        terminal_wave_id = str(coordinator["active_wave"])
-    elif coordinator is not None and coordinator.get("status") == "done" and waves:
-        terminal_wave_id = str(waves[-1]["wave_id"])
-    terminal_seal = (
-        terminal_lifecycle_seal(run_dir, terminal_wave_id)
-        if terminal_wave_id is not None
-        else None
-    )
-    terminal_recovery = terminal_lifecycle_recovery(run_dir)
-    terminal_seal_active = False
-    terminal_seal_promoted = False
-    terminal_recovery_promoted = False
     if interop is not None and managed(interop) and observe_external:
-        active_contract_delta = False
-        if coordinator is not None and isinstance(coordinator.get("active_wave"), str):
-            active_wave = next(
-                item for item in waves if item["wave_id"] == coordinator["active_wave"]
-            )
-            active_contract_delta = contract_delta_active(
-                workspace, run_dir, coordinator, active_wave
-            )
-            terminal_seal_active = terminal_lifecycle_seal_active(
-                workspace, run_dir, coordinator, active_wave
-            )
-            terminal_seal_promoted = terminal_lifecycle_seal_promoted(
-                workspace, run_dir, coordinator, active_wave
-            )
-        elif coordinator is not None and coordinator.get("status") == "done" and waves:
-            terminal_seal_promoted = terminal_lifecycle_seal_promoted(
-                workspace, run_dir, coordinator, waves[-1]
-            )
-            terminal_recovery_promoted = terminal_lifecycle_recovery_promoted(
-                workspace, run_dir, coordinator, waves[-1]
-            )
         observed = observe_managed_state(
             workspace,
             run_dir,
             interop,
-            allow_outer_dirty=active_contract_delta or terminal_seal_active,
+            allow_outer_dirty=False,
         )
         lease = dict(observed["lease"])
         repairs = dict(observed["repairs"])
@@ -555,11 +515,6 @@ def _machine_observation(
         "interop": interop,
         "lease": lease,
         "interop_repairs": repairs,
-        "terminal_lifecycle_seal": terminal_seal,
-        "terminal_lifecycle_seal_active": terminal_seal_active,
-        "terminal_lifecycle_seal_promoted": terminal_seal_promoted,
-        "terminal_lifecycle_recovery": terminal_recovery,
-        "terminal_lifecycle_recovery_promoted": terminal_recovery_promoted,
         "git": git,
         "journals": journals,
         "pending_unindexed_tasks": pending_unindexed_tasks,
@@ -835,24 +790,11 @@ def _choose_transition(
             interop.get("released") is True
             and projected_done
             and finalization_phase in {None, "complete"}
-            and (
-                observation.get("terminal_lifecycle_seal_promoted") is True
-                or observation.get("terminal_lifecycle_recovery_promoted") is True
-            )
         ):
             return _transition(
                 "complete",
                 next_transition=None,
                 reason="the coordinator, generation, and terminal projection are complete",
-            )
-        if interop.get("released") is True and not (
-            observation.get("terminal_lifecycle_seal_promoted") is True
-            or observation.get("terminal_lifecycle_recovery_promoted") is True
-        ):
-            return _transition(
-                "blocked",
-                next_transition=None,
-                reason="the released generation has no exact terminal lifecycle seal",
             )
         alignment = requested_arguments.get("alignment")
         if alignment is not None:
@@ -1093,24 +1035,6 @@ def _choose_transition(
             },
         )
     if status == "promoted":
-        indexed = [
-            item.get("wave_id")
-            for item in coordinator.get("waves", [])
-            if isinstance(item, dict)
-        ]
-        if (
-            indexed
-            and indexed[-1] == active_wave
-            and not (
-                observation.get("terminal_lifecycle_seal_active") is True
-                or observation.get("terminal_lifecycle_seal_promoted") is True
-            )
-        ):
-            return _transition(
-                "blocked",
-                next_transition=None,
-                reason="the final promoted wave awaits its exact terminal lifecycle seal",
-            )
         return _transition(
             "execute",
             next_transition="wave-cleanup",

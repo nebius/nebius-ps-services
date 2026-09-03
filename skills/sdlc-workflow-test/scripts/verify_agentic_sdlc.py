@@ -34,7 +34,6 @@ three_tier_semantics = importlib.util.module_from_spec(SEMANTICS_SPEC)
 SEMANTICS_SPEC.loader.exec_module(three_tier_semantics)
 
 REQUIRED_SDLC_SKILLS = (
-    "sdlc-align-specs",
     "sdlc-auto-steering",
     "sdlc-classify-failure",
     "sdlc-commit",
@@ -56,10 +55,9 @@ REQUIRED_SDLC_SKILLS = (
     "sdlc-validate-codes",
 )
 REQUIRED_RUNTIME_SUPPORT_SKILLS = (
-    "maintain-project-specs",
+    "align",
     "worktree",
     "nebius-grafana-query",
-    "project-agent-instructions",
     "troubleshoot",
 )
 SOURCE_PARITY_SKILLS = (
@@ -137,7 +135,7 @@ DESIGN_REQUIRED_TERMS = (
     "predefined runtime operational criterion",
     "non-Grafana provenance",
     "installed `nebius-grafana-query`",
-    "installed\n  `project-agent-instructions`",
+    "project lifecycle evidence is advisory",
     "publication-only mode",
     "findings-and-readiness-only mode",
     'phase: "create-pr"',
@@ -169,7 +167,6 @@ GOLDEN_PHASE_SEQUENCE = (
     "sdlc-start",
     "sdlc-gather-context",
     "sdlc-create-design",
-    "project-agent-instructions",
     "sdlc-auto-steering",
     "sdlc-create-plan",
     "sdlc-prepare-execution",
@@ -179,7 +176,7 @@ GOLDEN_PHASE_SEQUENCE = (
     "sdlc-unit-tests",
     "sdlc-evaluate",
     "sdlc-update-documents",
-    "sdlc-align-specs",
+    "align",
     "sdlc-commit",
     "sdlc-uat-tests",
 )
@@ -237,7 +234,7 @@ LIVE_LANE_REQUIRED_ASSERTIONS = {
 SKILL_EVIDENCE_BASES = {skill: "live" for skill in REQUIRED_SDLC_SKILLS}
 SKILL_EVIDENCE_BASES.update(
     {
-        "project-agent-instructions": "live",
+        "align": "live",
         "sdlc-start": "deterministic",
         "sdlc-prepare-execution": "deterministic",
         "sdlc-implement-plan": "deterministic",
@@ -246,7 +243,7 @@ SKILL_EVIDENCE_BASES.update(
 )
 REQUIRED_EVIDENCE_SKILLS = tuple(SKILL_EVIDENCE_BASES)
 SKILL_REQUIRED_ASSERTIONS = {
-    "sdlc-align-specs": [
+    "align": [
         "requirements_design_traceability",
         "implemented_behavior_alignment",
     ],
@@ -272,10 +269,6 @@ SKILL_REQUIRED_ASSERTIONS = {
     "sdlc-implement-plan": ["worker_contract_tests", "scoped_integration"],
     "sdlc-merge-pr": ["merge_guardrails_tested", "no_real_merge_performed"],
     "sdlc-prepare-execution": ["execution_scheduler_tests", "recovery_contract_tests"],
-    "project-agent-instructions": [
-        "conditional_decision_recorded",
-        "instruction_ownership_preserved",
-    ],
     "sdlc-start": ["two_command_surface_tests", "prompt_bound_state_tests"],
     "sdlc-tdd": ["tests_preceded_implementation", "slice_contract_covered"],
     "sdlc-tui-test": ["disposable_tui_smoke", "terminal_state_asserted"],
@@ -349,7 +342,7 @@ SKILL_LANE_REQUIREMENTS.update(
         "sdlc-auto-steering": {"auto-steering"},
         "sdlc-classify-failure": {"failure-routing"},
         "sdlc-update-documents": {"documentation-update"},
-        "sdlc-align-specs": {"golden-path", "documentation-update"},
+        "align": {"golden-path", "documentation-update"},
         "sdlc-tui-test": {"golden-path"},
     }
 )
@@ -994,7 +987,7 @@ def check_spec_ownership_contract(ctx: Context) -> None:
     design_terms = (
         "`maintain-project-specs` is the single semantic, schema, template, validation, and receipt owner",
         "`sdlc-create-requirements` and `sdlc-create-design` are routed authoring adapters",
-        "adapter invokes that shared validator; it does not define a second spec schema or receipt authority",
+        "adapter invokes that shared validator only to produce an advisory snapshot",
     )
     for term in design_terms:
         if term not in design:
@@ -1025,16 +1018,15 @@ def check_spec_ownership_contract(ctx: Context) -> None:
 
     start = normalized(ctx.skills_root / "sdlc-start" / "SKILL.md")
     if (
-        "`maintain-project-specs` owns both canonical specs" not in start
+        "`maintain-project-specs` is the sole semantic, schema, and validation owner" not in start
         or "write only as its Agentic SDLC adapters" not in start
     ):
         problems.append("sdlc-start: shared-owner coordinator invariant is missing")
 
     owner = normalized(ctx.skills_root / "maintain-project-specs" / "SKILL.md")
     if (
-        "This is the only semantic owner of project specs" not in owner
-        or "This skill exclusively owns the canonical spec schemas and validator"
-        not in owner
+        "It is the only semantic owner of project spec schemas" not in owner
+        or "traceability rules, and the strict validator" not in owner
     ):
         problems.append("maintain-project-specs: authoritative owner contract is missing")
 
@@ -1042,20 +1034,18 @@ def check_spec_ownership_contract(ctx: Context) -> None:
         ctx.skills_root / "sdlc-start" / "scripts" / "validate_project_specs.py"
     )
     if (
-        "Agentic SDLC adapter for the shared project-spec validator" not in adapter
+        "Advisory Agentic SDLC adapter for project-spec inspection" not in adapter
         or '"maintain-project-specs" / "scripts"' not in adapter
-        or "return validate_project(project_root)" not in adapter
+        or "except ProjectSpecError as error" not in adapter
+        or '"status": "advisory"' not in adapter
     ):
         problems.append("sdlc-start: shared project-spec validator adapter is invalid")
 
     workflow_test = normalized(ctx.skills_root / "sdlc-workflow-test" / "SKILL.md")
-    workflow_sequence = (
-        "`sdlc-create-design`, `project-agent-instructions`, "
-        "`sdlc-auto-steering`"
-    )
+    workflow_sequence = "`sdlc-create-design`, `sdlc-auto-steering`"
     if workflow_sequence not in workflow_test:
         problems.append(
-            "sdlc-workflow-test: project-agent-instructions is missing after design"
+            "sdlc-workflow-test: auto-steering is missing after design"
         )
 
     readme = read_text(ctx.skills_root / "sdlc-create-requirements" / "README.md")
@@ -1319,12 +1309,12 @@ def check_vertical_slice_contract(ctx: Context) -> None:
                 "Source evidence",
             ],
         ),
-        "sdlc-align-specs skill": (
-            ctx.skills_root / "sdlc-align-specs" / "SKILL.md",
+        "align skill": (
+            ctx.skills_root / "align" / "SKILL.md",
             [
-                "end-to-end slice evidence",
-                "Vertical flow, layer map, locked slice",
-                "Slice mismatch maps to the earliest owner",
+                "requirements, architecture/design, implementation",
+                "Review alignment and build the smallest repair set",
+                "Run focused validators, tests, linters",
             ],
         ),
     }
@@ -1506,7 +1496,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
                 "coordinator schema v1 through v6",
-                "sdlc-update-documents, then sdlc-align-specs",
+                "sdlc-update-documents, then align",
             ],
         ),
     }
@@ -1681,9 +1671,9 @@ def check_skill_discovery(ctx: Context) -> None:
         )
 
     support_checks = {
-        "maintain-project-specs": (
-            "Canonical project-spec owner runtime dependency",
-            "runtime.project-spec-owner-dependency",
+        "align": (
+            "General alignment runtime dependency",
+            "runtime.align-dependency",
         ),
         "worktree": (
             "Managed worktree runtime dependency",
@@ -1696,10 +1686,6 @@ def check_skill_discovery(ctx: Context) -> None:
         "troubleshoot": (
             "Conditional diagnosis runtime dependency",
             "runtime.troubleshoot-dependency",
-        ),
-        "project-agent-instructions": (
-            "Project agent instructions runtime dependency",
-            "runtime.project-agent-instructions-dependency",
         ),
     }
     for support_name in REQUIRED_RUNTIME_SUPPORT_SKILLS:
@@ -2775,7 +2761,7 @@ def check_capability_regressions(ctx: Context) -> None:
             (
                 (
                     "prompt",
-                    "test_valid_specs_emit_full_file_and_traceability_receipt",
+                    "test_valid_specs_emit_current_advisory_snapshot",
                 ),
                 ("prompt", "test_ready_feature_with_placeholder_is_rejected"),
                 ("prompt", "test_unknown_requirement_mapping_is_rejected"),

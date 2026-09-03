@@ -8,6 +8,9 @@ project folder.
 
 ### Changed
 
+- Added path-scoped CI for the reusable project-spec lifecycle and its ordinary
+  session, Task Implementer, Agentic SDLC, hook installer, and project
+  instruction adapters.
 - Updated the root README description from Nebius Public Services to Nebius
   Platform Services and aligned it with the repository's reusable AI/ML
   deployment building-block focus.
@@ -17,8 +20,9 @@ project folder.
 - Helm chart publication now seeds a temporary Helm repository config from
   remote `Chart.yaml` dependencies before building locked dependencies on
   clean runners.
-- Removed the obsolete Soperator in-cluster NFS child chart from Soperator
-  upstream-sync and Helm publish validation surfaces.
+- Retired the downstream Soperator Helm chart family, its upstream verifier
+  workflow, and its Helm publication entry now that cxcli consumes official
+  upstream Soperator release artifacts directly.
 - Reorganized the root README and changelog around monorepo ownership: root
   docs now describe repository layout and cross-project policy, while
   project-specific release notes live in project-local changelogs. The root

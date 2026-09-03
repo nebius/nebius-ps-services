@@ -209,7 +209,7 @@
   <rect x="55" y="225" width="1810" height="66" rx="24" fill="#3154b8"/>
   <rect x="55" y="258" width="1810" height="33" fill="#3154b8"/>
   <text x="82" y="269" class="section">1 · DEFINE AND PLAN</text>
-  <text x="1545" y="268" class="section-note">Tasks 01–06</text>
+  <text x="1545" y="268" class="section-note">Tasks 01–05</text>
 
   <g>
     <rect x="85" y="325" width="280" height="330" rx="18" class="card"/>
@@ -260,14 +260,14 @@
     <rect x="967" y="325" width="280" height="330" rx="18" class="card"/>
     <rect x="967" y="325" width="280" height="70" rx="18" fill="#e0e7ff"/>
     <rect x="967" y="370" width="280" height="25" fill="#e0e7ff"/>
-    <text x="989" y="354" class="card-number">TASK 04</text>
-    <text x="989" y="383" class="card-title">Project rules</text>
-    <text x="989" y="426" class="skill-label">OWNING SKILL</text>
+    <text x="989" y="354" class="card-number">ADVISORY SIDECAR</text>
+    <text x="989" y="383" class="card-title">Project lifecycle</text>
+    <text x="989" y="426" class="skill-label">NO PHASE OR GATE</text>
     <rect x="987" y="442" width="240" height="50" rx="14" class="pill"/>
-    <text x="994" y="474" class="skill-small">project-agent-instructions</text>
+    <text x="1015" y="474" class="skill-small">bounded status only</text>
     <text x="989" y="534" class="copy-small">
-      <tspan x="989" dy="0">Create AGENTS.md only</tspan>
-      <tspan x="989" dy="27">when distinct rules exist.</tspan>
+      <tspan x="989" dy="0">Observe and recommend;</tspan>
+      <tspan x="989" dy="27">never stop the workflow.</tspan>
     </text>
   </g>
 
@@ -275,7 +275,7 @@
     <rect x="1261" y="325" width="280" height="330" rx="18" class="card"/>
     <rect x="1261" y="325" width="280" height="70" rx="18" fill="#ede9fe"/>
     <rect x="1261" y="370" width="280" height="25" fill="#ede9fe"/>
-    <text x="1283" y="354" class="card-number">TASK 05</text>
+    <text x="1283" y="354" class="card-number">TASK 04</text>
     <text x="1283" y="383" class="card-title">Steering</text>
     <text x="1283" y="426" class="skill-label">OWNING SKILL</text>
     <rect x="1281" y="442" width="240" height="50" rx="14" class="pill"/>
@@ -290,7 +290,7 @@
     <rect x="1555" y="325" width="280" height="330" rx="18" class="card"/>
     <rect x="1555" y="325" width="280" height="70" rx="18" fill="#fef3c7"/>
     <rect x="1555" y="370" width="280" height="25" fill="#fef3c7"/>
-    <text x="1577" y="354" class="card-number">TASK 06</text>
+    <text x="1577" y="354" class="card-number">TASK 05</text>
     <text x="1577" y="383" class="card-title">Locked plan</text>
     <text x="1577" y="426" class="skill-label">OWNING SKILL</text>
     <rect x="1575" y="442" width="240" height="50" rx="14" class="pill"/>
@@ -303,8 +303,7 @@
 
   <path d="M365 500 H379" class="arrow"/>
   <path d="M659 500 H673" class="arrow"/>
-  <path d="M953 500 H967" class="arrow"/>
-  <path d="M1247 500 H1261" class="arrow"/>
+  <path d="M953 500 V305 H1261 V500" class="arrow"/>
   <path d="M1541 500 H1555" class="arrow"/>
 
   <!-- Section-to-section arrow: tip lands on the next panel. -->
@@ -315,13 +314,13 @@
   <rect x="55" y="765" width="1810" height="66" rx="24" fill="#5b3fc5"/>
   <rect x="55" y="798" width="1810" height="33" fill="#5b3fc5"/>
   <text x="82" y="809" class="section">2 · EXECUTE IN ISOLATION</text>
-  <text x="1545" y="808" class="section-note">Tasks 07–09</text>
+  <text x="1545" y="808" class="section-note">Tasks 06–08</text>
 
   <g>
     <rect x="85" y="865" width="520" height="240" rx="18" class="card"/>
     <rect x="85" y="865" width="520" height="66" rx="18" fill="#ede9fe"/>
     <rect x="85" y="907" width="520" height="24" fill="#ede9fe"/>
-    <text x="111" y="895" class="card-number">TASK 07</text>
+    <text x="111" y="895" class="card-number">TASK 06</text>
     <text x="111" y="922" class="card-title">Prepare execution</text>
     <rect x="111" y="956" width="468" height="48" rx="14" class="pill"/>
     <text x="132" y="987" class="skill">sdlc-prepare-execution</text>
@@ -332,7 +331,7 @@
     <rect x="700" y="865" width="520" height="240" rx="18" class="card"/>
     <rect x="700" y="865" width="520" height="66" rx="18" fill="#fee2e2"/>
     <rect x="700" y="907" width="520" height="24" fill="#fee2e2"/>
-    <text x="726" y="895" class="card-number">TASK 08</text>
+    <text x="726" y="895" class="card-number">TASK 07</text>
     <text x="726" y="922" class="card-title">Test-first contract</text>
     <rect x="726" y="956" width="468" height="48" rx="14" class="pill"/>
     <text x="747" y="987" class="skill">sdlc-tdd</text>
@@ -343,7 +342,7 @@
     <rect x="1315" y="865" width="520" height="240" rx="18" class="card"/>
     <rect x="1315" y="865" width="520" height="66" rx="18" fill="#dcfce7"/>
     <rect x="1315" y="907" width="520" height="24" fill="#dcfce7"/>
-    <text x="1341" y="895" class="card-number">TASK 09</text>
+    <text x="1341" y="895" class="card-number">TASK 08</text>
     <text x="1341" y="922" class="card-title">Implement task waves</text>
     <rect x="1341" y="956" width="468" height="48" rx="14" class="pill"/>
     <text x="1362" y="987" class="skill">sdlc-implement-plan</text>
@@ -359,13 +358,13 @@
   <rect x="55" y="1215" width="1810" height="66" rx="24" fill="#15803d"/>
   <rect x="55" y="1248" width="1810" height="33" fill="#15803d"/>
   <text x="82" y="1259" class="section">3 · PROVE, DOCUMENT, AND SEAL</text>
-  <text x="1545" y="1258" class="section-note">Tasks 10–15</text>
+  <text x="1545" y="1258" class="section-note">Tasks 09–14</text>
 
   <g>
     <rect x="85" y="1315" width="520" height="240" rx="18" class="card"/>
     <rect x="85" y="1315" width="520" height="66" rx="18" fill="#dcfce7"/>
     <rect x="85" y="1357" width="520" height="24" fill="#dcfce7"/>
-    <text x="111" y="1345" class="card-number">TASK 10</text>
+    <text x="111" y="1345" class="card-number">TASK 09</text>
     <text x="111" y="1372" class="card-title">Validate code</text>
     <rect x="111" y="1406" width="468" height="48" rx="14" class="pill"/>
     <text x="132" y="1437" class="skill">sdlc-validate-codes</text>
@@ -376,7 +375,7 @@
     <rect x="700" y="1315" width="520" height="240" rx="18" class="card"/>
     <rect x="700" y="1315" width="520" height="66" rx="18" fill="#dcfce7"/>
     <rect x="700" y="1357" width="520" height="24" fill="#dcfce7"/>
-    <text x="726" y="1345" class="card-number">TASK 11</text>
+    <text x="726" y="1345" class="card-number">TASK 10</text>
     <text x="726" y="1372" class="card-title">Run product tests</text>
     <rect x="726" y="1406" width="468" height="48" rx="14" class="pill"/>
     <text x="747" y="1437" class="skill">sdlc-unit-tests</text>
@@ -390,7 +389,7 @@
     <rect x="1315" y="1315" width="520" height="240" rx="18" class="card"/>
     <rect x="1315" y="1315" width="520" height="66" rx="18" fill="#cffafe"/>
     <rect x="1315" y="1357" width="520" height="24" fill="#cffafe"/>
-    <text x="1341" y="1345" class="card-number">TASK 12</text>
+    <text x="1341" y="1345" class="card-number">TASK 11</text>
     <text x="1341" y="1372" class="card-title">Evaluate acceptance</text>
     <rect x="1341" y="1398" width="468" height="38" rx="13" class="pill"/>
     <text x="1362" y="1424" class="skill-small">sdlc-evaluate</text>
@@ -407,7 +406,7 @@
     <rect x="1315" y="1605" width="520" height="240" rx="18" class="card"/>
     <rect x="1315" y="1605" width="520" height="66" rx="18" fill="#fef3c7"/>
     <rect x="1315" y="1647" width="520" height="24" fill="#fef3c7"/>
-    <text x="1341" y="1635" class="card-number">TASK 13</text>
+    <text x="1341" y="1635" class="card-number">TASK 12</text>
     <text x="1341" y="1662" class="card-title">Update documents</text>
     <rect x="1341" y="1696" width="468" height="48" rx="14" class="pill"/>
     <text x="1362" y="1727" class="skill">sdlc-update-documents</text>
@@ -418,10 +417,10 @@
     <rect x="700" y="1605" width="520" height="240" rx="18" class="card"/>
     <rect x="700" y="1605" width="520" height="66" rx="18" fill="#fef3c7"/>
     <rect x="700" y="1647" width="520" height="24" fill="#fef3c7"/>
-    <text x="726" y="1635" class="card-number">TASK 14</text>
+    <text x="726" y="1635" class="card-number">TASK 13</text>
     <text x="726" y="1662" class="card-title">Align product truth</text>
     <rect x="726" y="1696" width="468" height="48" rx="14" class="pill"/>
-    <text x="747" y="1727" class="skill">sdlc-align-specs</text>
+    <text x="747" y="1727" class="skill">align</text>
     <text x="726" y="1788" class="copy">Reconcile requirements, design, code, and proof.</text>
   </g>
 
@@ -429,7 +428,7 @@
     <rect x="85" y="1605" width="520" height="240" rx="18" class="card"/>
     <rect x="85" y="1605" width="520" height="66" rx="18" fill="#fee2e2"/>
     <rect x="85" y="1647" width="520" height="24" fill="#fee2e2"/>
-    <text x="111" y="1635" class="card-number">TASK 15</text>
+    <text x="111" y="1635" class="card-number">TASK 14</text>
     <text x="111" y="1662" class="card-title">Seal and promote</text>
     <rect x="111" y="1696" width="468" height="48" rx="14" class="pill"/>
     <text x="132" y="1727" class="skill">sdlc-commit</text>
@@ -445,13 +444,13 @@
   <rect x="55" y="1945" width="1810" height="66" rx="24" fill="#b45309"/>
   <rect x="55" y="1978" width="1810" height="33" fill="#b45309"/>
   <text x="82" y="1989" class="section">4 · VERIFY AND RELEASE THE EXACT PROMOTED HEAD</text>
-  <text x="1545" y="1988" class="section-note">Tasks 16–19</text>
+  <text x="1545" y="1988" class="section-note">Tasks 15–18</text>
 
   <g>
     <rect x="85" y="2045" width="400" height="250" rx="18" class="card"/>
     <rect x="85" y="2045" width="400" height="66" rx="18" fill="#ffedd5"/>
     <rect x="85" y="2087" width="400" height="24" fill="#ffedd5"/>
-    <text x="111" y="2075" class="card-number">TASK 16</text>
+    <text x="111" y="2075" class="card-number">TASK 15</text>
     <text x="111" y="2102" class="card-title">User acceptance</text>
     <rect x="111" y="2137" width="348" height="48" rx="14" class="pill"/>
     <text x="132" y="2168" class="skill">sdlc-uat-tests</text>
@@ -465,7 +464,7 @@
     <rect x="535" y="2045" width="400" height="250" rx="18" class="card"/>
     <rect x="535" y="2045" width="400" height="66" rx="18" fill="#ffedd5"/>
     <rect x="535" y="2087" width="400" height="24" fill="#ffedd5"/>
-    <text x="561" y="2075" class="card-number">TASK 17</text>
+    <text x="561" y="2075" class="card-number">TASK 16</text>
     <text x="561" y="2102" class="card-title">Publish PR</text>
     <rect x="561" y="2137" width="348" height="48" rx="14" class="pill"/>
     <text x="582" y="2168" class="skill">create-pr</text>
@@ -479,7 +478,7 @@
     <rect x="985" y="2045" width="400" height="250" rx="18" class="card"/>
     <rect x="985" y="2045" width="400" height="66" rx="18" fill="#ffedd5"/>
     <rect x="985" y="2087" width="400" height="24" fill="#ffedd5"/>
-    <text x="1011" y="2075" class="card-number">TASK 18</text>
+    <text x="1011" y="2075" class="card-number">TASK 17</text>
     <text x="1011" y="2102" class="card-title">Review readiness</text>
     <rect x="1011" y="2137" width="348" height="48" rx="14" class="pill"/>
     <text x="1032" y="2168" class="skill">review-pr</text>
@@ -493,7 +492,7 @@
     <rect x="1435" y="2045" width="400" height="250" rx="18" class="card"/>
     <rect x="1435" y="2045" width="400" height="66" rx="18" fill="#fee2e2"/>
     <rect x="1435" y="2087" width="400" height="24" fill="#fee2e2"/>
-    <text x="1461" y="2075" class="card-number">TASK 19</text>
+    <text x="1461" y="2075" class="card-number">TASK 18</text>
     <text x="1461" y="2102" class="card-title">Merge explicitly</text>
     <rect x="1461" y="2137" width="348" height="48" rx="14" class="pill"/>
     <text x="1482" y="2168" class="skill">sdlc-merge-pr</text>

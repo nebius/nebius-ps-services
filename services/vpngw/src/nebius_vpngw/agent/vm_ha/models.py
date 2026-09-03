@@ -230,6 +230,8 @@ class PeerHeartbeat:
     service_healthy: bool
     route_ready: bool
     promotion_ready: bool
+    auto_healing_policy_state: str
+    auto_healing_policy_digest: str
 
     def __post_init__(self) -> None:
         _require_identifier("cluster_id", self.cluster_id)
@@ -262,10 +264,20 @@ class PeerHeartbeat:
         _require_bool("service_healthy", self.service_healthy)
         _require_bool("route_ready", self.route_ready)
         _require_bool("promotion_ready", self.promotion_ready)
+        if self.auto_healing_policy_state not in {
+            "enabled",
+            "disabled",
+            "transitioning",
+            "blocked",
+        }:
+            raise StateValidationError("auto_healing_policy_state is invalid")
+        _require_sha256("auto_healing_policy_digest", self.auto_healing_policy_digest)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "boot_id": self.boot_id,
+            "auto_healing_policy_digest": self.auto_healing_policy_digest,
+            "auto_healing_policy_state": self.auto_healing_policy_state,
             "cluster_id": self.cluster_id,
             "configured_role": self.configured_role,
             "digests": self.digests.to_dict(),
@@ -276,7 +288,7 @@ class PeerHeartbeat:
             "observed_owner_id": self.observed_owner_id,
             "promotion_ready": self.promotion_ready,
             "route_ready": self.route_ready,
-            "schema": "nebius-vpngw/vm-ha-heartbeat-v2",
+            "schema": "nebius-vpngw/vm-ha-heartbeat-v3",
             "sent_at": self.sent_at,
             "sequence": self.sequence,
             "service_healthy": self.service_healthy,
@@ -293,6 +305,8 @@ class PeerHeartbeat:
                 "cluster_id",
                 "node_id",
                 "boot_id",
+                "auto_healing_policy_digest",
+                "auto_healing_policy_state",
                 "sequence",
                 "sent_at",
                 "configured_role",
@@ -307,7 +321,7 @@ class PeerHeartbeat:
             },
             "peer heartbeat",
         )
-        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v2":
+        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v3":
             raise StateValidationError("unsupported peer heartbeat schema")
         sequence = value["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -332,6 +346,10 @@ class PeerHeartbeat:
             service_healthy=_require_bool("service_healthy", value["service_healthy"]),
             route_ready=_require_bool("route_ready", value["route_ready"]),
             promotion_ready=_require_bool("promotion_ready", value["promotion_ready"]),
+            auto_healing_policy_state=str(value["auto_healing_policy_state"]),
+            auto_healing_policy_digest=_require_sha256(
+                "auto_healing_policy_digest", value["auto_healing_policy_digest"]
+            ),
         )
 
 
@@ -410,8 +428,7 @@ class PeerReplayGuard:
         if heartbeat.cluster_id != expected_cluster_id or heartbeat.node_id != expected_node_id:
             raise StateValidationError("heartbeat is outside the expected cluster or peer identity")
         if (
-            heartbeat.certificate_fingerprint
-            != authenticated_certificate_fingerprint
+            heartbeat.certificate_fingerprint != authenticated_certificate_fingerprint
             or heartbeat.mtls_epoch != authenticated_mtls_epoch
         ):
             raise StateValidationError(

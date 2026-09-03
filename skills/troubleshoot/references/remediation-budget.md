@@ -19,10 +19,14 @@ user a complete handoff before more time is spent.
 - The profile persists for the session. A bare `$troubleshoot` keeps it. One
   flag changes only that field. Explicit `--attempt-limit=5` and
   `--time-limit-minutes=120` reset the defaults.
+- A valid `resolved` marker is completed evidence, not an exhausted lock. A
+  later bare invocation keeps the profile and admits discovery without a
+  pending marker replacement. Explicit profile flags use the profile-only
+  handshake and preserve every non-profile resolved field.
 - A current-task user instruction may require an earlier workflow stop. Honor
   it in prose without changing marker limits or using `override_summary` to
   encode it.
-- A profile change applies immediately to active state only when its resulting
+- A profile change applies to active or resolved state only when its resulting
   attempt limit is strictly greater than the completed-attempt count and its
   resulting time limit in seconds is strictly greater than `active_seconds`.
   Reject a smaller or equal limit without changing or exhausting the tranche.
@@ -298,9 +302,12 @@ Git-root containment policy as ordinary reports, normalize contained local
 targets to repository-relative form, and replace outside-root, unsafe, or
 symlink-escaping references with generic summaries. Process termination
 before Stop remains reportable only after a same-session resume.
-For an active resize, the hook records a pending authorization and admits only
-the exact `current.md` patch until the marker matches it while preserving the
-blocker, tranche, attempt ledger, counters, lifecycle, and timestamps. It then
+For an active or resolved-state profile change, the hook records a pending
+authorization and admits only one exact `apply_patch` targeting the advertised
+`current.md` until the marker matches it: `*** Update File` when the file exists
+or `*** Add File` only when it is absent. `*** Delete File`, delete/add
+replacement, shell rewrites, and every other tool remain denied. The marker
+must preserve the blocker, tranche, attempt ledger, counters, lifecycle, and timestamps. It then
 promotes the pending profile atomically. If that marker is invalid, feedback
 requires atomic restoration of every non-profile field plus the authorized
 profile fields. If it is missing, the hook states that bounded authorization
@@ -315,8 +322,9 @@ reason, and re-evaluates the repaired marker; invalidity alone does not require
 an exhaustion report. A pending authorization never masks a missing or invalid
 marker or an invalid pending transition: UserPromptSubmit, PreToolUse, and Stop
 all report the precise bounded reason followed by complete pending-repair
-guidance. Fresh-state guidance refers to the prior terminal marker because the
-handoff may follow either resolved or exhausted state. For an incomplete
+guidance. Fresh-state guidance refers to the prior terminal marker only for a
+post-exhaustion handoff. A resolved marker does not pre-authorize or require a
+fresh tranche before later discovery. For an incomplete
 attempt, it reports all missing canonical fields together and directs the parent
 to remove unverified progress or complete the verified record atomically instead
 of repairing one field at a time. It verifies that every canonical attempt is

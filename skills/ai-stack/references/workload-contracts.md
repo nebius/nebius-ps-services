@@ -132,8 +132,10 @@ validation, rollback, and deletion behavior.
 
 Capture:
 
-- Task boundaries and the selected behavior level: direct model call,
-  deterministic workflow containing model calls, or agent.
+- Task boundaries and the selected behavior class frozen by `ai-agent-design`
+  when applicable: deterministic code, direct model call, deterministic
+  workflow containing model calls, or agent. A direct stack-only request may
+  mark the minimum local classification provisional.
 - Whether one request is sufficient, application code knows the exact
   sequence and continuation rules, or the model must choose tools, continuation,
   or next steps from prior results and run a model-driven

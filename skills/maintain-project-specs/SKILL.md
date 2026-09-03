@@ -1,6 +1,6 @@
 ---
 name: maintain-project-specs
-description: "Maintain canonical requirements, design, and conditional AGENTS.md lifecycle when specs are missing, intent/implementation changes, ownership migrates, or hooks require planning/sealing. Sole spec owner; waive read-only work and honor disabled policy."
+description: "Maintain canonical requirements and design when direct root-user intent or proven delivery changes project truth, across ordinary sessions, Task Implementer, and Agentic SDLC. Hooks never gate tools, Stop, or workflow completion."
 ---
 
 # Maintain Project Specs
@@ -21,419 +21,274 @@ help as workflow authorization.
 
 ## Purpose
 
-Keep `docs/requirements.md`, `docs/design.md`, and conditional project-root
-`AGENTS.md` current without making hooks semantic document writers. Bind one
-selected project, preserve human documentation outside canonical managed
-regions, and issue one authoritative receipt before implementation and at
-completion.
+Keep canonical `docs/requirements.md` and `docs/design.md` useful and current
+for ordinary root-agent sessions, Task Implementer, and Agentic SDLC. The root
+agent classifies every direct user prompt at statement level. Durable product
+intent is reconciled into requirements and a ready design before
+implementation; implementation and verification evidence are reconciled after
+the work. Non-lifecycle requests leave both documents unchanged.
+
+This skill is the only semantic owner of project-spec schemas, templates,
+stable IDs, traceability, paired publication, and strict validation. Its hooks
+observe document state and stage metadata-only intake; the active root agent,
+not a hook, performs semantic classification and repository writes.
+
+## Advisory Authority Boundary
+
+- Spec status never denies a tool, injects a required continuation,
+  returns `continue:false`, blocks Stop, or prevents session completion.
+- Missing, stale, malformed, contended, locked, unsafe, or unavailable private
+  lifecycle state produces at most a bounded advisory message.
+- Task Implementer and Agentic SDLC own their prompt-impact, plan, execution,
+  cleanup, finalization, and recovery gates. Their root coordinators use this
+  owner contract for canonical spec parsing, paired publication, and receipts;
+  those receipts describe project truth but never authorize workflow actions.
+- Project-instruction creation or mutation is a separate explicit workflow. It
+  is never automatically rendered, applied, verified, reloaded, or sealed by
+  this skill or its hooks.
+- Existing applicable `AGENTS.md` files remain authoritative instructions for
+  the current session. This skill never weakens them and never writes
+  `AGENTS.override.md`.
+- Hooks are intake and observation guardrails only, never project
+  authorization or repository writers.
+- Personal global instructions are conflict context only and are never copied
+  into committed project files.
+- Historical lifecycle bundles may remain readable for diagnostics and bounded
+  retention. They are not migrated into active authority.
 
 ## When To Use
 
-- The selected project is missing canonical requirements or design.
-- A new user prompt changes accepted project intent.
-- Implementation changed a documented boundary or invalidated design evidence.
-- A former Task Implementer or Agentic SDLC spec pair needs one-time migration.
-- The lifecycle hooks route planning, reconciliation, or sealing here.
+- Requirements or design are missing or visibly stale.
+- Accepted user intent or implementation changes the documented contract.
+- A direct root-user prompt contains durable product behavior, constraints,
+  non-goals, compatibility promises, architecture, interfaces, data ownership,
+  security boundaries, rollout, or acceptance changes.
+- A completed implementation supplies evidence needed to advance design
+  delivery state or satisfy a requirement.
+- A user explicitly requests reconciliation, validation, or legacy migration.
+- A hook advisory says spec review may be useful.
 
 ## When Not To Use
 
-- Do not use when the committed project policy is `mode: disabled`.
-- Do not change specs for a genuinely read-only turn after recording the
-  narrow matching waiver.
-- Do not use hooks as semantic document authors.
-- Do not create parallel requirements/design owners in Task Implementer,
-  Agentic SDLC, or project-specific automation.
+- Do not mutate specs for explanations, brainstorming, status checks,
+  read-only/report-only requests, execution control, one-off operational work,
+  formatting-only edits, or implementation that restores already-documented
+  behavior without changing the contract.
+- Do not infer that an advisory hook message authorizes repository changes.
+- Do not create a parallel prompt-impact or plan owner inside Task Implementer
+  or Agentic SDLC.
+- Honor committed `mode: disabled` policy by skipping lifecycle observation and
+  automatic spec maintenance.
 
 ## Inputs
 
-- Exact selected-project root and enclosing Git root.
-- Current user intent and accepted steering relevant to that project.
-- Existing canonical or legacy spec pair, repository documentation, focused
-  source evidence, and tests.
-- Optional committed `.codex/project-specs.json` policy.
-- Current private lifecycle and project-instruction receipts when present.
+- Exact selected-project and enclosing Git roots.
+- Current canonical requirements and design when present.
+- The complete direct root-user prompt, classified statement by statement,
+  plus focused implementation, test, and documentation evidence needed to
+  classify contract drift. Never treat generated continuation text or worker
+  prompts as new user intent.
+- Optional committed `.codex/project-specs.json` policy and passive historical
+  private evidence when inspection or retention needs it.
 
 ## Required Reads
 
-- Read [references/lifecycle.md](references/lifecycle.md) before changing files.
-- Read [references/migration.md](references/migration.md) when either document
-  has a former Task Implementer or Agentic SDLC owner.
-- For missing specs, read the matching file under `assets/templates/` and
-  replace every placeholder from repository evidence before changing a record
-  from `draft` to a current status.
-- Read every applicable repository instruction file and both canonical specs
-  when present.
-- Read only the repository documentation, source, and tests needed to establish
-  or reconcile the current contract.
+- Read `references/lifecycle.md` for the advisory hook and private-state model.
+- Read `references/migration.md` before changing legacy managed regions.
+- Read applicable repository instructions and both canonical specs when present.
+- Read only the repository docs, source, tests, and accepted intent needed to
+  establish the current contract.
+- For missing specs, use the matching template under `assets/templates/` and
+  replace every placeholder from evidence.
 
 ## Writes
 
-- Canonical managed regions in `docs/requirements.md` and `docs/design.md`.
-- Optional committed `.codex/project-specs.json` only when the project chooses
-  an explicit policy.
-- Private lifecycle state, receipts, exact rendered rules, locks, journals, and
-  recoverable backups outside Git.
-- Conditional project `AGENTS.md` only through `project-agent-instructions` at
-  the terminal seal boundary.
+- Canonical managed regions in `docs/requirements.md` and `docs/design.md` only
+  when accepted durable intent or proven delivery evidence changes project
+  truth. Publish the pair through the owner transaction even if only one
+  managed region changes.
+- Owner-only intake metadata, journals, and validation receipts under the
+  exact private session root. Intake stores digests and classification state,
+  never raw prompt text.
+- Paired migration journals and recoverable backups only for explicit legacy
+  migration or recovery.
+- Never project instructions, lifecycle phases, workflow state, or
+  `AGENTS.override.md`.
 
-## Invariants
+## Public Helper Surface
 
-- This skill exclusively owns the canonical spec schemas and validator.
-- Hooks detect, gate, inject exact pending rules, record impact, and arbitrate
-  completion. They never infer requirements or design decisions.
-- Routine PostToolUse accounting is silent. It advances the write epoch after
-  each successful material selected-project write, retries concurrent
-  compare-and-swap races from current state, and invalidates a concurrently
-  completed plan, armed seal, or seal instead of losing a late successful
-  write. Canonical spec reconciliation admitted during planning or
-  reconciliation is epoch-neutral. Stop owns the single accumulated
-  reconciliation request. Before an initial Stop continuation leaves
-  `implementation-open`, the lifecycle owner atomically enters
-  `reconciliation-required` and clears stale planning bindings; never depend on
-  that synthetic continuation emitting `UserPromptSubmit`.
-- Bind one explicit selected-project root. Do not infer multiple project scopes
-  from one write; split the work or request an exact scope.
-- Preserve stable `REQ-*`, `FEAT-*`, `TI-REQ-*`, and `TI-DES-*` IDs. Never
-  renumber existing records during migration or reconciliation.
+`scripts/project_specs.py` exposes:
+
+```text
+inspect  --project-root <path>
+validate --project-root <path> [--output <private-path>]
+publish  --project-root <path> --requirements-candidate <path> \
+  --design-candidate <path> --expected-head <sha> \
+  --expected-requirements-sha256 <sha-or-absent> \
+  --expected-design-sha256 <sha-or-absent> --operation-id <id>
+migrate  --project-root <path>
+recover  --project-root <path>
+```
+
+- `inspect` and `validate` are advisory and return structured observations.
+  Validation findings do not create lifecycle authority.
+- `publish` is the only normal repository-write path. It validates the complete
+  candidate pair and compare-and-set checks Git plus both predecessor digests.
+- `migrate` and `recover` are explicit repository-mutating operations and keep
+  their existing safety, ownership, and rollback checks.
+- `start-prompt`, `plan`, `open`, `seal`, and `waive` are retired. Do not add
+  no-op compatibility aliases.
+
+## Canonical Spec Contract
+
+- Schema v2 requirements use `draft`, `active`, `blocked`, `satisfied`, or
+  `superseded`; designs use readiness `draft`, `ready`, `blocked`, `stale`, or
+  `superseded` independently from delivery `unassessed`, `not-started`,
+  `implemented`, or `verified`.
+- Preserve stable `REQ-*`, `FEAT-*`, `TI-REQ-*`, and `TI-DES-*` IDs. New
+  records use canonical `REQ-*` and `FEAT-*`; legacy `TI-*` IDs remain stable
+  only after explicit migration.
+- Update accepted records in place; append genuinely new IDs; mark obsolete
+  records `superseded` instead of silently deleting truth.
+- Every active or satisfied requirement maps to at least one current design
+  record. Each design record's marker mapping and body mapping agree.
 - Preserve every byte outside canonical managed regions.
-- Never persist raw prompts, transcripts, secrets, customer data, or repository
-  file contents in lifecycle state. Persist only bounded identifiers, relative
-  paths, versions, digests, and status.
-- Do not write `AGENTS.override.md`.
-- Render and inject any needed project rules before implementation. Apply the
-  explicit project-instructions decision only after final spec reconciliation
-  as the terminal seal mutation. A verified `not-needed` decision leaves a
-  missing project `AGENTS.md` absent; only a needed transition creates or
-  updates repository instructions. A fresh session is still required before
-  changed repository instructions become loaded authority.
-- Interpret user intent semantically. A clear statement that existing users
-  depend on the project and future code or interface changes must not break
-  them is explicit compatibility intent even without `GA`, `backward
-  compatibility`, or another prescribed phrase. Capture it in requirements and
-  design before implementation so the current rendered rules and future
-  project instructions share one contract.
-- Bind lifecycle-owned project-instructions inspect, render, plan, apply,
-  verify, and seal inputs to the exact current-session private bundle. Deny a
-  coordinator-shaped command when its action or evidence paths are
-  malformed instead of letting it fall through as an ordinary Python read.
-  The only alternate bundle is an exact Task Implementer run-owned inspect or
-  render for its active prepared integration checkout, authenticated by a
-  canonical installed or exact sibling-source Task helper during
-  implementation-open or reconciliation-required. Apply and verify remain on
-  the ordinary terminal seal path. An exact delegated worker commit uses the
-  Task adapter's command-derived worker session after the adapter binds it to
-  the running plane and canonical evidence; the outer payload session remains
-  authoritative for direct commits and lifecycle state. Delegated commit
-  interpreters are restricted to the hook runtime or an exact PATH-canonical
-  executable named `python3` or `python3.N`; arbitrary same-name paths remain
-  denied. The lifecycle hook still owns helper trust, selected-lane phase
-  policy, submitted-command digest verification, and checkpoint accounting.
-- Hooks are guardrails, not an absolute filesystem boundary. Proven material
-  effects wholly outside the selected project pass through this lifecycle and
-  remain subject to operating-system, Codex, destructive-action, and peer-hook
-  policies. The exact non-forced cleanup form
-  `find /tmp/<task-owned-tree> -depth -delete` is external only when its sole
-  submitted root is a literal absolute descendant of a recognized system
-  temporary root; task ownership and deletion safety remain separate policy
-  decisions. Reject mixed, dynamic, ambiguous, detached, or authoritative
-  control-plane writes and audit unfinished state on the next session.
-  Exact `commit-push` remote queries, constrained current-branch tracking-ref
-  fetch, and non-force same-branch push are external only when `origin` is a
-  single fixed network target and no active pre-push or reference-transaction
-  hook can hide project effects. Raw Git mutation and every broader remote
-  shape remain denied.
+- Keep requirements focused on durable product truth and acceptance methods.
+- Keep design focused on selected behavior, boundaries, state, alternatives,
+  validation, evaluation, rollout, and separate implementation and
+  verification evidence. A satisfied requirement requires verified delivery.
+- Never store prompts, transcripts, secrets, customer data, private endpoints,
+  repository file contents, or raw logs in lifecycle state or canonical specs.
+- Interpret compatibility intent semantically even without `GA`, `backward
+  compatibility`, or another prescribed phrase; record explicit supported-user
+  promises in requirements and design before changing the contract.
 
 ## Process
 
-### 1. Bind scope and policy
+1. Resolve the exact selected project and Git root. Explicit scope supplied by
+   the current user wins; otherwise use the startup cwd. If multiple plausible
+   projects remain, ask before any spec write. Read applicable instructions
+   and optional `.codex/project-specs.json` policy.
+2. Inspect existing documents and ownership markers. If legacy ownership is
+   detected, stop ordinary reconciliation and use the explicit migration
+   contract.
+3. Classify each statement in the direct root-user prompt as durable
+   requirement intent or non-lifecycle. Redact sensitive content from all
+   private/public lifecycle artifacts; if safe classification cannot be
+   persisted, continue the user task and report the limitation.
+4. Before implementation, reconcile durable requirements and a covering ready
+   design. A ready design may legitimately have delivery `not-started`.
+5. Publish the complete pair with compare-and-set checks over Git `HEAD` and
+   both prior file digests. Preserve human-owned prefixes and suffixes exactly;
+   roll back a split write from the private journal.
+6. After implementation and focused verification, reconcile the same records
+   with implementation and verification evidence. Advance a requirement to
+   `satisfied` only when its covering delivery is `verified`.
+7. Validate schema, stable IDs, independent readiness/delivery statuses,
+   marker/body agreement, total traceability, and bounded content. Report
+   current or pending findings plus exact files changed and focused proof.
+8. If an explicit project-instruction mutation is separately requested, hand
+   off to `project-agent-instructions`; it owns its own decision, provenance,
+   conflict, apply, verify, and reload safety.
 
-Resolve the exact project root and Git root. Read applicable instructions and
-the optional committed `.codex/project-specs.json`.
+## Hook Contract
 
-- Missing policy means `managed`.
-- `mode: disabled` is the durable project opt-out.
-- If the work is genuinely read-only, documentation-only with no contract
-  impact, or outside the selected project, use the `waive` lifecycle command
-  with the narrow matching reason.
-- A zero-write `non-project` waiver created for Task Implementer public
-  integration may reopen only when the canonical Task adapter authenticates a
-  review-correction receipt bound to the unchanged source/lane heads and exact
-  completed-follow-up run. That transition enters `reconciliation-required`;
-  never reopen another waiver or accept caller-authored correction evidence.
-- If one command would mutate more than one project scope, stop before mutation
-  and split or clarify the scopes.
+- `SessionStart` reads the actual canonical document markers through bounded,
+  no-follow, owner-controlled regular-file reads. It is silent for a current
+  v2 pair and may emit one bounded `CONTRACT_PENDING`, `CONTRACT_INVALID`, or
+  `CONTRACT_MIGRATION_REQUIRED` observation. It never derives project status
+  from a missing private `lifecycle.json`.
+- `UserPromptSubmit` stages only bounded owner-private intent metadata and
+  injects root-agent classification guidance. It skips subagents, generated
+  continuations, system/compaction turns, Stop turns, and secret-bearing input.
+- Project-spec `PreToolUse`, `PostToolUse`, and `Stop` registrations do not
+  exist. The project-spec delegate is absent from shared Stop arbiters.
+- Peer delegates such as Agentic SDLC or troubleshooting retain their own
+  authority.
+- Hook exceptions and unsafe/private-state failures degrade to
+  neutral/advisory behavior; they never fail closed on project lifecycle
+  grounds.
+- Hook source changes do not prove activation. Verify source, installed parity
+  in a disposable Codex home, fresh-process loading, and neutral hook behavior
+  separately.
 
-### 2. Inspect or migrate
+## Private Retention
 
-Run:
+Retention is housekeeping, not authority:
 
-```bash
-python3 maintain-project-specs/scripts/project_specs.py inspect \
-  --project-root <selected-project>
-```
-
-If the result is `SPEC_MIGRATION_REQUIRED`, run the paired migration once:
-
-```bash
-python3 maintain-project-specs/scripts/project_specs.py migrate \
-  --project-root <selected-project>
-```
-
-Never hand-convert one file. If migration recovery artifacts exist, run
-`recover` before retrying.
-
-### 3. Establish or update requirements
-
-For missing canonical documents, scan only the relevant portions of:
-
-- repository and selected-project README files;
-- existing architecture, ADR, API, operational, and user documentation;
-- source entrypoints, public interfaces, configuration, and tests relevant to
-  the requested behavior;
-- the current user prompt and accepted steering.
-
-Create the canonical requirements region. Record observable outcomes,
-constraints, non-goals, acceptance criteria, and verification. For a new
-prompt, update or append stable records and the change log. Mark replaced
-requirements `superseded`; do not delete history.
-
-When Task Implementer or Agentic SDLC requests prompt-impact validation, act as
-the only semantic owner: reparse the exact canonical pair, enumerate the
-refinement's statement occurrences, validate complete bounded dispositions and
-active requirement/design mappings, then derive the aggregate effect and plan
-action. Do not accept caller-authored aggregate claims, mutate specs from this
-validator, store raw prompt text, or expose content-derived identities. The
-workflow adapter owns append-only private publication and downstream plan-basis
-checks.
-
-When the user says real users depend on existing behavior and future changes
-must remain safe, record compatibility as an accepted constraint. By default it
-covers supported APIs and public import paths, CLI commands, flags, output and
-exit behavior, configuration schemas and defaults, persisted formats, and
-upgrade paths. Breaking a supported surface requires explicit approval, a
-deprecation or migration plan, and regression coverage. Do not turn that
-public contract into parallel internal paths; private internals retain one
-canonical implementation.
-
-### 4. Establish or update design
-
-Map every applicable requirement to at least one current design record. Record
-the selected approach, affected boundaries and interfaces, alternatives,
-validation, rollout or rollback, and implementation evidence. On brownfield
-projects, describe current behavior from code evidence before proposing a
-change. Do not fabricate behavior when evidence is missing; record a bounded
-open question.
-
-Use `system-design-rules` for material architecture choices. Use `research`,
-`app-stack`, or `ai-stack` only when their due-diligence boundary is actually
-triggered.
-
-### 5. Validate and prepare project instructions
-
-Validate the tracked pair and atomically store the owner receipt under the
-current `${CODEX_HOME}/project-specs` workflow directory:
-
-```bash
-python3 maintain-project-specs/scripts/project_specs.py validate \
-  --project-root <selected-project> \
-  --session-id <hook-session-id> \
-  --output <private-workflow-dir>/spec-receipt.json
-```
-
-The coordinator constrains `--output` to the exact current-session
-`spec-receipt.json` and writes mode `0600`; do not use shell redirection or
-hand-author a receipt. Route it with one uncomposed canonical command; every
-private path is absolute and belongs to the current lifecycle session:
-
-```bash
-python3 <canonical-project-agent-instructions-helper> inspect \
-  --project-root <selected-project> \
-  --spec-owner maintain-project-specs \
-  --requirements docs/requirements.md \
-  --design docs/design.md \
-  --spec-receipt <private-workflow-dir>/spec-receipt.json \
-  --runtime-config <private-workflow-dir>/runtime-config.json \
-  --codex-home <codex-home> \
-  --private-root <private-workflow-dir>/project-instructions \
-  --output <private-workflow-dir>/project-instructions/manifest.json
-```
-
-The lifecycle hook requires the explicit active `--codex-home`; environment
-fallback is not a valid coordinator binding. A relative output, another
-session's bundle, a different interpreter, or a composed coordinator command
-fails closed. The canonical helper is the installed
-`project-agent-instructions` coordinator under the user skills root recognized
-by the hook; do not substitute a checkout or basename-matching script.
-Decide whether project rules are needed. A missing `AGENTS.md` is not itself
-evidence that rules are needed. Record `not-needed` explicitly when no durable,
-project-specific rule remains; its empty render is a successful decision and
-does not create a file. Use `render` before implementation and pass the exact
-rendered file, render state, and project-instructions private root to lifecycle
-`plan`; the lifecycle reruns the authoritative renderer before injecting those
-rules. For a managed lifecycle, these are the canonical current-session
-`project-instructions/rules.md`, `project-instructions/render-state.json`, and
-`project-instructions/` paths. Task Implementer supplies its separately owned
-run paths only through the authenticated adapter above; agents never copy its
-receipt into the current-session bundle or substitute an arbitrary same-project
-bundle. Do not run `apply` yet.
-
-Explicit compatibility intent is durable and project-specific. Choose `needed`
-with the default compatibility rules unless active same-directory project
-instructions already provide an equivalent contract, in which case choose
-`existing-sufficient`. Personal global instructions are conflict context only:
-do not copy them and do not let a global no-compatibility default suppress the
-project rule. If a same-directory override is active and lacks a necessary
-rule, return the fail-closed instructions-gap blocker instead of creating a
-dormant file behind it.
-
-The canonical pair must be tracked before validation. For a newly created
-file, use only the hook-admitted intent-only transition, bound to the selected
-project and one or both exact spec paths:
-
-```bash
-git -C <selected-project> add -N -- docs/requirements.md docs/design.md
-```
-
-This records no file contents and does not advance the lifecycle write epoch.
-General staging and arbitrary index mutation remain outside this exception.
-If a caller-authored runtime declaration or decision input has a broader mode,
-the hook similarly admits only an uncomposed numeric mode-`0600` transition for
-one exact current-session input.
-
-### 6. Open implementation
-
-Run lifecycle `plan`, then `open`, with the current hook-provided session ID and
-opaque `--turn-token`. The hook injects both values and verifies them before
-allowing a coordinator transition; agents do not need the raw turn ID. The
-transition is:
-
-`planned -> implementation-open -> reconciliation-required -> planned -> seal-armed -> sealed`.
-
-Multiple declared-scope edits remain allowed after the first write. Direct
-spec and project-instruction edits remain coordinator-owned.
-A successful material tool admitted before a concurrent plan or terminal
-transition may report completion afterward. Its PostToolUse accounting returns
-the lifecycle to `reconciliation-required`, advances the epoch, and invalidates
-the later evidence; reconcile and plan again rather than bypassing that state.
-An apply action that does not produce independently verified final
-project-instructions state follows the same conservative recovery: invalidate
-the plan and return to reconciliation so the decision input can be corrected
-in the same run. Never leave an unverified apply terminally stuck in `planned`.
-An initial Stop from `implementation-open` performs the same owner-controlled
-reconciliation opening without advancing the write epoch, so its generated
-continuation can reconcile the canonical specs immediately even when no new
-prompt event fires.
-
-### 7. Reconcile and seal
-
-At the terminal Stop boundary, review the accumulated selected-project Git
-status, staged and unstaged diff, untracked implementation files, current task
-context, and accepted user intent once. Classify the final delta as follows:
-
-- update requirements only for accepted observable behavior, project intent,
-  constraints, non-goals, or acceptance-criteria changes;
-- update design for component boundaries, interfaces, data or control flow,
-  failure handling, security, operations, rollout, or meaningful implemented
-  evidence changes;
-- update both when an accepted intent change also changes its implementation
-  design;
-- leave both documents byte-identical for refactors, formatting, test-only
-  edits, reverted changes, or bug fixes that restore the existing documented
-  contract without changing design;
-- when impact remains ambiguous, inspect further or request a decision and
-  leave the lifecycle unsealed.
-
-Hooks record only the bounded write epoch and never make this semantic
-classification or persist a per-edit content journal. Even when neither spec
-changes, validate again at the latest write epoch, rerender the conditional
-project instruction decision, and then:
-
-1. run `project-agent-instructions apply` exactly once to materialize the
-   final decision state; missing plus `not-needed` writes only verified private
-   state, while repository `AGENTS.md` changes only for creation, attachment,
-   refresh, adoption, or retirement outcomes;
-2. independently run `project-agent-instructions verify`;
-3. run lifecycle `seal` with the verified state and its private root; sealing
-   accepts and records the exact `reload_required` result only when the specs
-   still match the final planned receipt and write epoch;
-4. report the exact project-instructions outcome and whether a file was
-   created, changed, left absent, or already sufficient; require a fresh
-   session only when project instruction bytes changed.
-
-Do not perform repository writes after sealing. A new user prompt starts a new
-lifecycle.
-
-## Task Implementer and Agentic SDLC
-
-- Task Implementer may refine intent and author `TI-REQ-*` / `TI-DES-*`
-  records, but it invokes this validator and emits this owner receipt.
-- Agentic SDLC requirement and design phases may author rich `REQ-*` /
-  `FEAT-*` records, but their templates use the canonical managed schemas and
-  validator.
-- Neither workflow may emit an independently authoritative legacy receipt.
-- Existing legacy pairs must migrate before either workflow proceeds.
-
-## Verification
-
-Run the focused owner, hook, adapter, and project-instruction tests. Then use
-`$code-review` for changed-scope correctness, `$linter` for Python/Markdown/
-Shell surfaces, `$apply-security` for hook, path, receipt, and private-state
-controls, and `$align` for cross-skill docs, tests, installer, and changelog
-alignment.
-
-Source validation does not prove installation or live activation. Installation,
-installed parity, Codex restart, hook trust, and a fresh-session behavior test
-are separate gates.
+- Count current-session allocated bytes in aggregate pressure calculations but
+  never delete the current session.
+- Retain valid terminal state for 30 days and abandoned resumable state for 90
+  days.
+- Use 1 GiB/768 MiB allocated-storage hysteresis only with complete trustworthy
+  aggregate and registry evidence.
+- Incomplete, malformed, digest-mismatched, foreign, pending-publication, or
+  unsafe evidence disables pressure deletion.
+- Preserve stable workspace/session lock ordering, owner-only modes,
+  same-device rename journals, directory-relative no-follow deletion, and
+  exact current-session protection.
+- A foreign project scope is not pending evidence for the selected workspace.
 
 ## Idempotency
 
 - Repeated inspection and validation of unchanged tracked specs return the same
-  receipt and do not write repository files.
-- Repeated lifecycle events preserve the same phase unless an authorized
-  transition or relevant digest changes.
-- Migration is one-shot and returns unchanged for a canonical pair; it rejects
-  mixed-owner or partially migrated pairs instead of creating a second
-  representation.
-- Project-instruction rendering is deterministic; unchanged owned regions and
-  human prefixes remain byte-identical.
-
-## Failure Handling
-
-- Stop on ambiguous project scope, mixed spec ownership, stale receipts,
-  malformed policy, unsafe paths, mixed project/external effects, dynamic or
-  detached writers, authoritative lifecycle-owned project-specs targets, or
-  concurrent mutation. Do not treat config, hooks, task state, installed
-  skills, credentials, or other fixed external user files as this selected
-  project's control plane; pass them to their actual policy owners.
-- Preserve migration journals, locks, and backups for explicit `recover` after
-  an interrupted paired transition.
-- Leave lifecycle state unsealed when requirements, design, project rules, or
-  implementation evidence still need reconciliation.
-- Report hook coverage limits honestly; do not treat a hook allow decision as
-  proof that no other filesystem writer exists.
+  semantic receipt and do not modify repository files.
+- Reconciliation preserves stable IDs and human-owned bytes; rerunning it on
+  current documents is byte-identical.
+- Replaying one publication operation returns the same receipt when both
+  candidates are already present and completes only a digest-proven
+  before/after split left by interruption; unknown bytes fail closed.
+- Publication retains no-follow project/docs directory descriptors, rechecks
+  Git and both document byte states at every replacement boundary, and rolls
+  back only candidate bytes that remain unchanged. Canonical inspection takes
+  the matching shared lock so it cannot observe an in-process split pair.
+- Migration and recovery replay only their exact journaled transition and never
+  create a second owner representation.
+- Retention retries reclassify exact restored evidence and never treat a prior
+  failed or ambiguous classification as deletion authority.
 
 ## Must Not
 
-- Do not store prompts, transcripts, secrets, customer data, repository file
-  contents, private endpoints, or absolute private-state paths in public docs
-  or lifecycle state.
-- Do not create `AGENTS.override.md`, duplicate spec files, compatibility
-  shims, or an independent coordinator receipt.
-- Do not renumber stable records, silently migrate only one document, bypass a
-  stale receipt, or seal before final reconciliation.
-- Do not install, register, trust, or activate hooks as part of ordinary source
-  validation.
+- Do not expose, recreate, or alias retired lifecycle transition commands or
+  importable transition functions.
+- Do not make receipts, private state, project instructions, or helper
+  availability authorize ordinary work or workflow completion.
+- Do not store prompts, transcripts, secrets, private endpoints, customer data,
+  repository contents, raw logs, or absolute private paths in reusable output.
+- Do not renumber stable records, hand-convert one legacy document, bypass
+  migration journals, or mutate project instructions from this skill.
+
+## Failure Handling
+
+- Validation or inspection failure returns a sanitized advisory with the exact
+  code and next manual action.
+- Explicit migration/recovery failure remains blocked and preserves backups or
+  journals for safe retry.
+- Ambiguous project scope, unsafe managed markers, mixed ownership, or
+  irreconcilable active records stop repository mutation but never stop the
+  agent session.
+- Do not bypass repository instructions, security policy, destructive-action
+  rules, or another workflow's own gates.
 
 ## Completion Criteria
 
-- The exact selected project has a canonical, tracked, current requirements and
-  design pair or a committed disabled policy.
-- Every active requirement has current design coverage and the shared validator
-  emits an exact Git-bound v3 receipt.
-- Any necessary project rules were rendered before implementation and applied
-  and verified only at terminal sealing.
-- Lifecycle state is sealed with no later repository write, or the precise
-  blocker and recovery action are reported.
+- Every direct root-user statement was classified, and canonical
+  requirements/design accurately reflect durable intent plus proven delivery
+  evidence, or the exact advisory limitation is reported without blocking the
+  session.
+- Stable IDs, ownership markers, traceability, and managed-region preservation
+  validate.
+- No automatic project-instruction mutation or reload occurred.
+- Hook surfaces remain nonblocking, the manifest contains only `SessionStart`
+  and `UserPromptSubmit`, and the project-spec Stop delegate remains absent.
+- Focused tests cover advisory hooks, retention accounting, migration safety,
+  and workflow independence.
+
+## Output Contract
+
+Return scope, observed spec status, changed files, validation performed,
+advisory findings, and any explicit migration blocker. Never claim that a
+lifecycle phase authorizes or prevents further work.
 
 ## Learning Loop
 
@@ -444,15 +299,9 @@ evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
 edit skill sources; report that it was skipped. Do not capture secrets, private
 URLs, customer data, raw logs, or one-off local state.
 
-Prioritize schema or hook edge cases, migration failures, validation gaps, and
-false-block patterns. Keep project facts in project docs and transient task
-facts in private task state.
+## References
 
-## Output Contract
-
-Return the selected project and policy, lifecycle phase, canonical spec paths
-and receipt digest, requirement/design coverage status, project-instruction
-render/apply outcome, explicit `AGENTS.md` file effect, validation performed,
-reload requirement, and any exact blocker or recovery action. For
-`not-needed`, say that no file was created or changed and that a missing target
-remains absent. Do not print raw prompts or private state.
+- `references/lifecycle.md`
+- `references/migration.md`
+- `assets/templates/requirements.md.template`
+- `assets/templates/design.md.template`

@@ -13,7 +13,6 @@ from typing import Any
 
 DELEGATES = (
     "remediation_attempt_guard.py",
-    "project_specs_lifecycle.py",
     "stop_sdlc_continue.py",
     "stop_prompt_session_intake.py",
 )

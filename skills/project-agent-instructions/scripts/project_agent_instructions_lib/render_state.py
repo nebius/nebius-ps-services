@@ -45,10 +45,15 @@ _RENDER_STATE_FIELDS = {
 
 
 @contextmanager
-def render_lock(private_root: Path) -> Iterator[None]:
-    """Serialize render and state publication within one private bundle."""
+def render_lock(
+    private_root: Path,
+    *,
+    lock_name: str = ".render.lock",
+    label: str = "render",
+) -> Iterator[None]:
+    """Serialize one private-state operation under an exact owned lock."""
 
-    lock_path = private_root / ".render.lock"
+    lock_path = private_root / lock_name
     flags = os.O_RDWR
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -61,11 +66,11 @@ def render_lock(private_root: Path) -> Iterator[None]:
             descriptor = os.open(lock_path, flags)
         except OSError as error:
             raise ProjectInstructionsError(
-                "UNSAFE_TARGET", "render lock could not be opened safely"
+                "UNSAFE_TARGET", f"{label} lock could not be opened safely"
             ) from error
     except OSError as error:
         raise ProjectInstructionsError(
-            "UNSAFE_TARGET", "render lock could not be created safely"
+            "UNSAFE_TARGET", f"{label} lock could not be created safely"
         ) from error
     try:
         if created:
@@ -81,17 +86,17 @@ def render_lock(private_root: Path) -> Iterator[None]:
             or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
         ):
             raise ProjectInstructionsError(
-                "UNSAFE_TARGET", "render lock is not an exact owned file"
+                "UNSAFE_TARGET", f"{label} lock is not an exact owned file"
             )
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
             if error.errno in {errno.EACCES, errno.EAGAIN}:
                 raise ProjectInstructionsError(
-                    "CONCURRENT_MODIFICATION", "another render is already active"
+                    "CONCURRENT_MODIFICATION", f"another {label} is already active"
                 ) from error
             raise ProjectInstructionsError(
-                "UNSAFE_TARGET", "render lock could not be acquired safely"
+                "UNSAFE_TARGET", f"{label} lock could not be acquired safely"
             ) from error
         locked = _lstat_optional(lock_path)
         if (
@@ -101,12 +106,13 @@ def render_lock(private_root: Path) -> Iterator[None]:
             or stat.S_IMODE(locked.st_mode) != 0o600
         ):
             raise ProjectInstructionsError(
-                "CONCURRENT_MODIFICATION", "render lock changed during acquisition"
+                "CONCURRENT_MODIFICATION",
+                f"{label} lock changed during acquisition",
             )
         yield
     except OSError as error:
         raise ProjectInstructionsError(
-            "UNSAFE_TARGET", "render lock could not be used safely"
+            "UNSAFE_TARGET", f"{label} lock could not be used safely"
         ) from error
     finally:
         try:

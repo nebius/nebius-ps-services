@@ -23,7 +23,12 @@ from nebius_cxcli.component_sources import (
     set_component_sources_file_override,
     set_component_sources_profile_override,
 )
+from nebius_cxcli.components import component_entries, soperator_install_entry
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
+from nebius_cxcli.soperator_wizard import (
+    parse_soperator_wizard_payload,
+    soperator_wizard_settings,
+)
 
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
@@ -66,6 +71,16 @@ def _repo_component_sources_payload() -> dict:
 def _repo_component_cli_settings_payload() -> dict:
     payload = yaml.safe_load(
         (_repo_root() / "component_cli_settings.yaml").read_text(encoding="utf-8")
+    )
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _repo_soperator_wizard_payload() -> dict:
+    payload = yaml.safe_load(
+        (_repo_root() / "src" / "nebius_cxcli" / "soperator_wizard.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert isinstance(payload, dict)
     return payload
@@ -270,13 +285,13 @@ def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[
     return {"portable": portable}
 
 
-def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
+def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> None:
     sources = load_component_sources(source_profile=SourceProfile.LOCAL)
     catalog = _repo_component_sources_payload()
     raw_apps = catalog["components"]["apps"]
-    raw_soperator = raw_apps["soperator"]
-    assert raw_soperator["wizard_profile"] == "soperator"
-    assert "wizard" not in raw_soperator
+    assert "soperator" not in raw_apps
+    assert "soperator" not in _repo_component_cli_settings_payload()["components"]["apps"]
+    assert "soperator" not in {entry.id for entry in component_entries("apps")}
 
     vpc = next(module for module in sources.tf_modules if module.module == "vpc")
     assert vpc.local_source is not None
@@ -445,46 +460,22 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         == "${pvc.metadata.namespace}/${pvc.metadata.name}"
     )
 
-    soperator = next(chart for chart in sources.helm_charts if chart.name == "soperator")
-    raw_soperator_source = raw_soperator["source"]
-    raw_soperator_portable = raw_soperator_source["portable"]
-    soperator_source_path = _required(soperator.source.path)
-    soperator_chart = yaml.safe_load(
-        (Path(soperator_source_path) / "Chart.yaml").read_text(encoding="utf-8")
+    soperator_settings = soperator_wizard_settings()
+    soperator = soperator_install_entry("4.1.7")
+    assert soperator.source == (
+        "oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd"
     )
-    assert isinstance(soperator_chart, dict)
-    soperator_local_version = str(soperator_chart["version"])
-    assert soperator_source_path.endswith("helm-charts/soperator")
-    assert soperator.version == soperator_local_version
-    assert soperator.local_source.version == soperator_local_version
-    assert soperator.portable_source.version == raw_soperator_portable["version"]
-    assert soperator.portable_source.repo == raw_soperator_portable["repo"]
-    assert soperator.namespace == raw_soperator["release"]["namespace"]
-    assert soperator.release_name == raw_soperator["release"]["name"]
-    assert soperator.release_timeout == raw_soperator["release"]["timeout"]
-    assert soperator.release_install_after == ()
-    soperator_wizard_fields = _required(soperator.wizard_fields)
+    assert soperator.chart_repo == soperator.source
+    assert soperator.chart_name == "helm-soperator-fluxcd"
+    assert soperator.version == "4.1.7"
+    assert soperator.default_namespace == "flux-system"
+    assert soperator.default_release_name == "soperator-fluxcd"
+    assert soperator.default_release_timeout == "90m"
+    soperator_wizard_fields = soperator.wizard_fields
     assert soperator_wizard_fields["namespace"] == {"prompt": False}
     assert soperator_wizard_fields["release-name"] == {"prompt": False}
     assert soperator_wizard_fields["values"] == {"prompt": False}
-    assert soperator_wizard_fields["install_mode"] == {
-        "default": "production-cluster",
-        "write_default_to_config": True,
-        "type_hint": "string",
-        "sources": [
-            {
-                "source": "static",
-                "values": [
-                    {
-                        "value": "production-cluster",
-                        "label": (
-                            "Create complete production Soperator cluster (MK8s + SFS + Soperator)"
-                        ),
-                    }
-                ],
-            }
-        ],
-    }
+    assert "install_mode" not in soperator_wizard_fields
     assert soperator_wizard_fields["profile"]["default"] == "nebius-gpu-v1"
     assert soperator_wizard_fields["profile"]["write_default_to_config"] is True
     assert soperator_wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
@@ -520,11 +511,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert soperator_wizard_fields["values.qosConfiguration.enabled"] == {
-        "default": False,
-        "write_default_to_config": True,
-        "type_hint": "bool",
-    }
+    assert "values.qosConfiguration.enabled" not in soperator_wizard_fields
     assert "values.rebooter.enabled" not in soperator_wizard_fields
     assert soperator_wizard_fields["values.sssd.enabled"] == {
         "default": False,
@@ -556,7 +543,9 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
                 },
                 {
                     "value": "mysterybox",
-                    "label": "Use existing Nebius MysteryBox Secret ID",
+                    "label": (
+                        "Use existing Nebius SecretStash Secret ID (service identifier: mysterybox)"
+                    ),
                 },
             ],
         }
@@ -565,20 +554,20 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         soperator_wizard_fields["values.soperator-backup-config.secret.name"]["default"]
         == "jail-backup"
     )
-    assert soperator.mk8s_gpu.install_after == (
+    assert soperator_settings.mk8s_gpu.install_after == (
         "cert-manager",
         "nvidia-network-operator",
         "nvidia-gpu-operator",
     )
-    assert soperator.mk8s_gpu.disable_target_validations == ()
-    assert soperator.soperator_nodesets.default == "nebius-gpu-v1"
-    assert set(soperator.soperator_nodesets.profiles) >= {
+    assert soperator_settings.mk8s_gpu.disable_target_validations == ()
+    assert soperator_settings.nodesets.default == "nebius-gpu-v1"
+    assert set(soperator_settings.nodesets.profiles) == {
         "nebius-cpu-v1",
         "nebius-gpu-v1",
         "nebius-mixed-v1",
     }
     for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1"):
-        profile = soperator.soperator_nodesets.profiles[profile_name]
+        profile = soperator_settings.nodesets.profiles[profile_name]
         assert profile["mk8s"]["inputs"]["node_group_defaults"]["cpu"] == {
             "platform": "cpu-d3",
             "preset": "32vcpu-128gb",
@@ -590,7 +579,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             assert profile["mk8s"]["node_groups"][role]["autoscaling_input"] == (
                 f"soperator.{role}_autoscaling"
             )
-    cpu_profile = soperator.soperator_nodesets.profiles["nebius-cpu-v1"]
+    cpu_profile = soperator_settings.nodesets.profiles["nebius-cpu-v1"]
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["total_nodes_input"] == (
         "soperator.worker_cpu_total_nodes"
     )
@@ -606,31 +595,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         ]
         is False
     )
-    activechecks_values_path = (
-        Path(__file__).resolve().parents[3]
-        / "helm-charts"
-        / "soperator-activechecks"
-        / "values.yaml"
-    )
-    activechecks_defaults = yaml.safe_load(activechecks_values_path.read_text(encoding="utf-8"))
-    cpu_activechecks_values = _deep_merge_mapping(
-        activechecks_defaults,
-        cpu_profile["chart"]["values"]["soperator-activechecks"],
-    )
-    disabled_checks = {
-        name
-        for name, check in cpu_activechecks_values["checks"].items()
-        if check.get("enabled") is False
-    }
-    missing_dependencies = {
-        name: [
-            dependency for dependency in check.get("dependsOn", []) if dependency in disabled_checks
-        ]
-        for name, check in cpu_activechecks_values["checks"].items()
-        if check.get("enabled") is not False
-    }
-    assert {name: deps for name, deps in missing_dependencies.items() if deps} == {}
-    profile = soperator.soperator_nodesets.profiles["nebius-gpu-v1"]
+    profile = soperator_settings.nodesets.profiles["nebius-gpu-v1"]
     assert profile["chart"]["activechecks"]["srunReadyPartition"] == "hidden"
     assert profile["placements"]["worker"]["kind"] == "slurm-worker-nodeset"
     assert profile["placements"]["worker"]["default_node_group_kind"] == "gpu"
@@ -667,6 +632,9 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert profile["chart"]["topology_profiles"]["disabled"]["wizard"]["label"].startswith(
         "Disabled"
     )
+    assert profile["chart"]["topology_profiles"]["disabled"]["values"] == {
+        "slurmConfig": {"topologyPlugin": ""}
+    }
     topology_values = profile["chart"]["topology_profiles"]["nebius-tiered-tree-v1"]["values"]
     assert topology_values["slurmConfig"] == {
         "topologyPlugin": "topology/tree",
@@ -677,29 +645,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         == "topology.nebius.com"
     )
     assert "with-debug-long" in profile["chart"]["partition_profiles"]
-    qos_profile = profile["chart"]["partition_profiles"]["with-qos-preemption"]
-    qos_scheduling = qos_profile["values"]["schedulingConfig"]
-    assert qos_profile["values"].get("customSlurmConfig") is None
-    assert qos_scheduling["accountingStorageEnforce"] == ["associations", "limits", "qos"]
-    assert qos_scheduling["enforcePartLimits"] == "ANY"
-    assert qos_scheduling["preemptType"] == "preempt/qos"
-    assert qos_scheduling["preemptMode"] == "REQUEUE"
-    assert "send_user_signal" in qos_scheduling["preemptParameters"]
-    assert qos_profile["values"]["qosConfiguration"]["enabled"] is True
-    assert [qos["name"] for qos in qos_profile["values"]["qosConfiguration"]["qos"]] == [
-        "debug",
-        "eval",
-        "train",
-        "data",
-    ]
-    assert [
-        partition["name"]
-        for partition in qos_profile["values"]["partitionConfiguration"]["partitions"]
-    ] == ["gpu", "debug", "eval", "train", "data"]
-    assert qos_profile["values"]["partitionConfiguration"]["partitions"][-1]["policy"][
-        "allowQos"
-    ] == ["data"]
-    mixed_profile = soperator.soperator_nodesets.profiles["nebius-mixed-v1"]
+    mixed_profile = soperator_settings.nodesets.profiles["nebius-mixed-v1"]
     assert "Mixed CPU+GPU workers" in mixed_profile["wizard"]["label"]
     assert [worker["nodeset_name"] for worker in mixed_profile["mk8s"]["worker_nodesets"]] == [
         "worker-cpu",
@@ -733,7 +679,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     all_worker_inputs = {
         value
         for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1")
-        for worker in soperator.soperator_nodesets.profiles[profile_name]["mk8s"]["worker_nodesets"]
+        for worker in soperator_settings.nodesets.profiles[profile_name]["mk8s"]["worker_nodesets"]
         for value in (
             worker["total_nodes_input"],
             worker["nodes_per_group_input"],
@@ -753,9 +699,9 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "worker-gpu",
     ]
     assert "with-debug-long" in mixed_profile["chart"]["partition_profiles"]
-    assert "with-qos-preemption" in mixed_profile["chart"]["partition_profiles"]
+    assert "with-qos-preemption" not in mixed_profile["chart"]["partition_profiles"]
     assert "with-h100-infiniband-debug-long" in mixed_profile["chart"]["partition_profiles"]
-    assert "with-qos-preemption" in cpu_profile["chart"]["partition_profiles"]
+    assert "with-qos-preemption" not in cpu_profile["chart"]["partition_profiles"]
     assert "nfs" not in profile["mk8s"]["node_groups"]
 
     soperator_family = {
@@ -782,122 +728,6 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert soperator_defaults["values.soperator-backup-config.enabled"] is False
     assert soperator_defaults["values.soperator-backup-config.secret.name"] == "jail-backup"
     assert soperator_defaults["values.soperator-dcgm-exporter.enabled"] is False
-
-
-def test_soperator_parent_dependencies_match_folded_child_chart_family() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    chart_yaml = yaml.safe_load(
-        (repo_root / "helm-charts" / "soperator" / "Chart.yaml").read_text(encoding="utf-8")
-    )
-    chart_lock = yaml.safe_load(
-        (repo_root / "helm-charts" / "soperator" / "Chart.lock").read_text(encoding="utf-8")
-    )
-    publish_catalog = json.loads(
-        (repo_root / ".github" / "helm-chart-publish.json").read_text(encoding="utf-8")
-    )
-    published_chart_dirs_by_name = {
-        str(entry.get("chartName")): str(entry.get("chartDir"))
-        for entry in publish_catalog.get("charts", [])
-    }
-    parent_child_dependencies = {
-        dependency["name"]
-        for dependency in chart_yaml.get("dependencies", [])
-        if str(dependency.get("name", "")).startswith("soperator-")
-    }
-
-    assert parent_child_dependencies == {
-        "soperator-activechecks",
-        "soperator-backup-config",
-        "soperator-checks",
-        "soperator-dcgm-exporter",
-        "soperator-notifier",
-    }
-    dependencies_by_name = {
-        str(dependency.get("name")): dependency for dependency in chart_yaml.get("dependencies", [])
-    }
-    lock_dependencies_by_name = {
-        str(dependency.get("name")): dependency for dependency in chart_lock.get("dependencies", [])
-    }
-    for dependency_name in sorted(parent_child_dependencies):
-        dependency = dependencies_by_name[dependency_name]
-        lock_dependency = lock_dependencies_by_name[dependency_name]
-        child_chart = yaml.safe_load(
-            (repo_root / "helm-charts" / dependency_name / "Chart.yaml").read_text(encoding="utf-8")
-        )
-        expected_repository = f"file://../{dependency_name}"
-        assert dependency["version"] == str(child_chart["version"])
-        repository = str(dependency["repository"])
-        if repository.startswith("oci://"):
-            assert published_chart_dirs_by_name.get(dependency_name) == (
-                f"helm-charts/{dependency_name}"
-            )
-            assert not repository.rstrip("/").endswith(f"/{dependency_name}")
-        else:
-            assert repository == expected_repository
-        assert lock_dependency["version"] == dependency["version"]
-        assert lock_dependency["repository"] == dependency["repository"]
-
-    assert dependencies_by_name["k8up"] == {
-        "name": "k8up",
-        "version": "4.9.0",
-        "repository": "https://k8up-io.github.io/k8up",
-        "condition": "soperator-backup-config.enabled",
-    }
-    assert not (repo_root / "helm-charts" / "soperator-nfs-server").exists()
-
-
-def test_soperator_parent_chart_defaults_keep_optional_services_disabled() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    values = yaml.safe_load(
-        (repo_root / "helm-charts" / "soperator" / "values.yaml").read_text(encoding="utf-8")
-    )
-
-    assert values["soperator-activechecks"]["enabled"] is False
-    assert values["soperator-activechecks"]["waitForChecks"]["enabled"] is False
-    assert values["soperator-checks"]["enabled"] is False
-    assert values["soperator-notifier"]["enabled"] is False
-    assert values["soperator-backup-config"]["enabled"] is False
-    assert values["soperator-dcgm-exporter"]["enabled"] is False
-    assert values["kruise"]["installOperator"] is True
-    assert values["mariadb-operator"]["installOperator"] is True
-    assert values["qosConfiguration"]["enabled"] is False
-    assert values["slurmNodes"]["sssd"]["enabled"] is False
-    assert values["rebooter"]["enabled"] is False
-    assert all(
-        (nodeset.get("sssd") or {}).get("enabled") is False
-        for nodeset in values["nodesets"]
-        if isinstance(nodeset, dict)
-    )
-
-
-def test_soperator_nodeconfigurator_rbac_covers_rebooter_runtime_access() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    template = (
-        repo_root
-        / "helm-charts"
-        / "soperator"
-        / "templates"
-        / "nodeconfigurator"
-        / "nodeconfigurator-rbac.yaml"
-    ).read_text(encoding="utf-8")
-
-    assert "resources:\n  - pods\n  verbs:\n  - get\n  - list\n  - watch" in template
-    assert "resources:\n  - pods/eviction\n  verbs:\n  - create" in template
-
-
-def test_soperator_chart_defaults_fit_small_clusters_first() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    values = yaml.safe_load(
-        (repo_root / "helm-charts" / "soperator" / "values.yaml").read_text(encoding="utf-8")
-    )
-
-    assert values["kruise"]["manager"]["replicas"] == 1
-    assert values["slurmConfig"]["topologyPlugin"] == ""
-    assert values["slurmConfig"]["topologyParam"] == ""
-    assert (
-        values["controllerManager"]["manager"]["env"]["topologyLabelPrefix"]
-        == "topology.kubernetes.io"
-    )
 
 
 def _kubernetes_agent_validation_enabled() -> bool:
@@ -1570,7 +1400,7 @@ def test_load_component_sources_merges_profile_and_explicit_wizard_override(tmp_
     }
 
 
-def test_load_component_sources_expands_app_wizard_profile(tmp_path: Path) -> None:
+def test_load_component_sources_rejects_soperator_catalog_entry(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
     _write_catalog_file(
         sources_file,
@@ -1582,35 +1412,13 @@ def test_load_component_sources_expands_app_wizard_profile(tmp_path: Path) -> No
                         chart="soperator",
                         version="0.1.0",
                     ),
-                    "wizard_profile": "soperator",
                 }
             }
         ),
     )
 
-    loaded = load_component_sources(explicit=sources_file)
-    chart = loaded.helm_charts[0]
-    chart_wizard_fields = _required(chart.wizard_fields)
-
-    assert chart_wizard_fields["install_mode"]["default"] == "production-cluster"
-    assert chart_wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
-    assert chart_wizard_fields["values.partitionProfile"]["options"] == {
-        "from": "soperator_partition_profiles",
-        "args": {"default": "shape-default"},
-    }
-    assert chart_wizard_fields["values.topologyProfile"]["options"] == {
-        "from": "soperator_topology_profiles",
-        "args": {"default": "disabled"},
-    }
-    assert chart_wizard_fields["placements.worker"]["default_from"] == {
-        "from": "soperator_node_groups",
-        "args": {"role": "worker"},
-    }
-    assert chart_wizard_fields["values.soperator-activechecks.enabled"] == {
-        "default": False,
-        "write_default_to_config": True,
-        "type_hint": "bool",
-    }
+    with pytest.raises(ValueError, match="components.apps.soperator is no longer supported"):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_rejects_legacy_materialize_default_key(
@@ -1719,7 +1527,7 @@ def test_load_component_sources_rejects_app_profile_name_that_does_not_match_com
                         chart="demo-app",
                         version="1.0.0",
                     ),
-                    "wizard_profile": "soperator",
+                    "wizard_profile": "mk8s",
                 }
             }
         ),
@@ -2905,17 +2713,26 @@ def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_so
 
 
 def _repo_soperator_nodesets_profiles() -> dict:
-    profiles = _repo_component_cli_settings_payload()["components"]["apps"]["soperator"]["cli"][
-        "soperator_nodesets_profile"
-    ]["profiles"]
-    assert isinstance(profiles, dict)
-    return profiles
+    return soperator_wizard_settings().nodesets.profiles
+
+
+def test_soperator_wizard_contract_is_source_free_and_has_no_downstream_qos_policy() -> None:
+    payload = _repo_soperator_wizard_payload()
+
+    assert set(payload) == {"schema", "id", "release", "wizard", "defaults", "cli"}
+    assert {"source", "repo", "repository", "version"}.isdisjoint(payload)
+    serialized = yaml.safe_dump(payload, sort_keys=False)
+    for removed in ("with-qos-preemption", "qosConfiguration", "schedulingConfig"):
+        assert removed not in serialized
 
 
 def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> None:
     profiles = _repo_soperator_nodesets_profiles()
 
     for profile_name in ("nebius-cpu-v1", "nebius-mixed-v1", "nebius-gpu-v1"):
+        filesystems = profiles[profile_name]["sfs"]["filesystems"]
+        assert set(filesystems) == {"jail", "controller-spool", "accounting"}
+        assert all(spec["forbid_deletion"] is False for spec in filesystems.values())
         node_groups = profiles[profile_name]["mk8s"]["node_groups"]
         assert node_groups["system"]["node_count"] == 3
         assert "autoscaling" not in node_groups["system"]
@@ -2940,7 +2757,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
     [
         (
             {"role_mapping": {"roles": {}}},
-            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.role_mapping is no longer supported",
+            r"soperator_wizard\.cli\.soperator_nodesets_profile\.profiles\.nebius-gpu-v1\.role_mapping is no longer supported",
         ),
         (
             {
@@ -2951,7 +2768,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
                     }
                 }
             },
-            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.placements\.controller\.k8s_node_filter_name is no longer supported",
+            r"soperator_wizard\.cli\.soperator_nodesets_profile\.profiles\.nebius-gpu-v1\.placements\.controller\.k8s_node_filter_name is no longer supported",
         ),
         (
             {
@@ -2962,7 +2779,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
                     }
                 }
             },
-            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.placements\.controller\.chart_filter_paths is no longer supported",
+            r"soperator_wizard\.cli\.soperator_nodesets_profile\.profiles\.nebius-gpu-v1\.placements\.controller\.chart_filter_paths is no longer supported",
         ),
         (
             {
@@ -2973,7 +2790,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
                     }
                 }
             },
-            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.placements\.system\.chart_affinity_paths is no longer supported",
+            r"soperator_wizard\.cli\.soperator_nodesets_profile\.profiles\.nebius-gpu-v1\.placements\.system\.chart_affinity_paths is no longer supported",
         ),
         (
             {
@@ -2990,7 +2807,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
                     }
                 },
             },
-            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.node_groups\.controller\.nodeset_name is no longer supported",
+            r"soperator_wizard\.cli\.soperator_nodesets_profile\.profiles\.nebius-gpu-v1\.mk8s\.node_groups\.controller\.nodeset_name is no longer supported",
         ),
         (
             {
@@ -3008,7 +2825,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
                     ]
                 },
             },
-            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.worker_nodesets\[0\]\.node_group_key_prefix is no longer supported",
+            r"soperator_wizard\.cli\.soperator_nodesets_profile\.profiles\.nebius-gpu-v1\.mk8s\.worker_nodesets\[0\]\.node_group_key_prefix is no longer supported",
         ),
         (
             {
@@ -3026,46 +2843,23 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
                     ]
                 },
             },
-            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.worker_nodesets\[0\]\.total_nodes_input must not use removed helper soperator\.worker_total_nodes",
+            r"soperator_wizard\.cli\.soperator_nodesets_profile\.profiles\.nebius-gpu-v1\.mk8s\.worker_nodesets\[0\]\.total_nodes_input must not use removed helper soperator\.worker_total_nodes",
         ),
     ],
 )
-def test_load_component_sources_rejects_legacy_soperator_placement_profile_keys(
-    tmp_path: Path,
+def test_soperator_wizard_rejects_legacy_placement_profile_keys(
     profile_patch: dict[str, object],
     match: str,
 ) -> None:
-    sources_file = tmp_path / "component_sources.yaml"
-    _write_catalog_file(
-        sources_file,
-        _catalog(
-            apps={
-                "soperator": {
-                    "source": {
-                        "portable": {
-                            "repo": "oci://example.invalid/soperator",
-                            "chart": "soperator",
-                            "version": "1.0.0",
-                        }
-                    },
-                    "release": {
-                        "namespace": "soperator",
-                        "name": "soperator",
-                    },
-                    "cli": {
-                        "soperator_nodesets_profile": {
-                            "profiles": {
-                                "bad": profile_patch,
-                            }
-                        }
-                    },
-                }
-            }
-        ),
+    payload = _repo_soperator_wizard_payload()
+    profiles = payload["cli"]["soperator_nodesets_profile"]["profiles"]
+    profiles["nebius-gpu-v1"] = _deep_merge_mapping(
+        profiles["nebius-gpu-v1"],
+        profile_patch,
     )
 
     with pytest.raises(ValueError, match=match):
-        load_component_sources(explicit=sources_file)
+        parse_soperator_wizard_payload(payload)
 
 
 def test_bundled_soperator_profiles_leave_worker_images_to_chart_defaults() -> None:

@@ -3,16 +3,18 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
+from project_specs_lib import lifecycle as lifecycle_module
+from project_specs_lib import migration
 from project_specs_lib.contracts import (
     ProjectSpecError,
     _managed_region,
@@ -22,31 +24,16 @@ from project_specs_lib.contracts import (
     inspect_project,
     validate_project,
 )
-from project_specs_lib.lifecycle import (
-    lifecycle_dir,
-    mark_material_write,
-    open_implementation,
-    plan,
-    seal,
-    start_prompt,
-    write_validation_receipt,
-)
 from project_specs_lib.impact import (
     CLAIM_SCHEMA,
-    ProjectSpecError as ImpactError,
     public_impact_status,
     validate_prompt_impact,
 )
-from project_specs_lib import migration
-from project_specs_lib import lifecycle as lifecycle_module
+from project_specs_lib.impact import ProjectSpecError as ImpactError
+from project_specs_lib.lifecycle import lifecycle_dir
 from project_specs_lib.migration import migrate_project, recover_migration
 
-
 SCRIPT = Path(__file__).resolve().with_name("project_specs.py")
-PROJECT_AGENT_SCRIPT = (
-    SCRIPT.parents[2]
-    / "project-agent-instructions/scripts/project_agent_instructions.py"
-)
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -119,11 +106,11 @@ def design_body(identifier: str = "TI-DES-001", requirement: str = "TI-REQ-001")
 """
 
 
-def rich_requirement_body(status: str = "active") -> str:
+def rich_requirement_body(status: str = "active", identifier: str = "REQ-001") -> str:
     return f"""# Requirements
 
-<!-- REQUIREMENT: REQ-001 status={status} priority=P0 type=feature -->
-### REQ-001: Keep behavior current
+<!-- REQUIREMENT: {identifier} status={status} priority=P0 type=feature -->
+### {identifier}: Keep behavior current
 
 #### User Story
 
@@ -149,19 +136,24 @@ Run the focused owner tests.
 
 Review the receipt status.
 
-<!-- /REQUIREMENT: REQ-001 -->
+<!-- /REQUIREMENT: {identifier} -->
 """
 
 
-def rich_design_body(status: str = "ready") -> str:
+def rich_design_body(
+    status: str = "ready",
+    identifier: str = "FEAT-001",
+    requirement: str = "REQ-001",
+    delivery: str = "unassessed",
+) -> str:
     return f"""# Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status={status} priority=P0 version=1 -->
-### FEAT-001: Maintain one owner
+<!-- FEATURE: {identifier} reqs={requirement} status={status} delivery={delivery} priority=P0 version=1 -->
+### {identifier}: Maintain one owner
 
 #### Requirements Covered
 
-- REQ-001
+- {requirement}
 
 #### Context Evidence
 
@@ -207,7 +199,15 @@ Use the paired migration recovery path.
 
 The current pair has total traceability.
 
-<!-- /FEATURE: FEAT-001 -->
+#### Implementation Evidence
+
+The canonical owner implementation is present.
+
+#### Verification Evidence
+
+The focused canonical owner tests passed.
+
+<!-- /FEATURE: {identifier} -->
 """
 
 
@@ -237,10 +237,16 @@ class ProjectSpecsTestCase(unittest.TestCase):
 
     def write_canonical(self) -> None:
         (self.docs / "requirements.md").write_bytes(
-            canonical_document("requirements", requirement_body())
+            canonical_document(
+                "requirements",
+                rich_requirement_body(identifier="TI-REQ-001"),
+            )
         )
         (self.docs / "design.md").write_bytes(
-            canonical_document("design", design_body())
+            canonical_document(
+                "design",
+                rich_design_body(identifier="TI-DES-001", requirement="TI-REQ-001"),
+            )
         )
         git(self.project, "add", "docs")
 
@@ -386,39 +392,16 @@ class ProjectSpecsTestCase(unittest.TestCase):
             generation=2,
         )
         transition = second["spec_transition"]
-        self.assertEqual(
-            transition["prior_spec_receipt_sha256"], first["spec_receipt_sha256"]
-        )
-        self.assertEqual(
-            transition["next_spec_receipt_sha256"], second["spec_receipt_sha256"]
-        )
+        self.assertEqual(transition["prior_spec_receipt_sha256"], first["spec_receipt_sha256"])
+        self.assertEqual(transition["next_spec_receipt_sha256"], second["spec_receipt_sha256"])
         self.assertEqual(transition["reason"], "owner_reconciliation")
         self.assertRegex(str(second["spec_transition_sha256"]), r"^[0-9a-f]{64}$")
 
-    def plan_with_empty_rules(self, session: str, turn: str) -> dict[str, object]:
-        git_root = Path(git(self.project, "rev-parse", "--show-toplevel"))
-        private_root = lifecycle_dir(git_root, session) / "project-instructions"
-        with mock.patch(
-            "project_specs_lib.lifecycle._verified_rendered_rules", return_value=b""
-        ):
-            return plan(
-                self.project,
-                session,
-                turn,
-                rules_file=private_root / "rules.md",
-                render_state_file=private_root / "render-state.json",
-                project_instructions_private_root=private_root,
-            )
-
     def test_missing_project_templates_have_parseable_draft_records(self) -> None:
         templates = Path(__file__).resolve().parents[1] / "assets/templates"
-        requirements = (templates / "requirements.md.template").read_text(
-            encoding="utf-8"
-        )
+        requirements = (templates / "requirements.md.template").read_text(encoding="utf-8")
         design = (templates / "design.md.template").read_text(encoding="utf-8")
-        _prefix, requirements_body, _suffix = _managed_region(
-            requirements, "requirements"
-        )
+        _prefix, requirements_body, _suffix = _managed_region(requirements, "requirements")
         _prefix, design_body, _suffix = _managed_region(design, "design")
         self.assertEqual(_parse_requirements(requirements_body)[0]["status"], "draft")
         self.assertEqual(_parse_design(design_body)[0]["status"], "draft")
@@ -428,24 +411,143 @@ class ProjectSpecsTestCase(unittest.TestCase):
     ) -> None:
         skill_root = Path(__file__).resolve().parents[1]
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
-        cases = (skill_root / "evals/reconciliation-cases.md").read_text(
-            encoding="utf-8"
-        )
+        cases = (skill_root / "evals/reconciliation-cases.md").read_text(encoding="utf-8")
 
         self.assertIn("even without `GA`, `backward", skill)
         self.assertIn("compatibility`, or another prescribed phrase", skill)
-        self.assertIn("Hooks are guardrails", skill)
+        self.assertIn("Hooks are intake and observation guardrails", skill)
         self.assertIn("Personal global instructions are conflict context only", skill)
         self.assertIn("## Existing users require compatibility", cases)
         self.assertIn("without using `GA` or `backward compatibility`", cases)
         self.assertIn("private internals on one canonical", cases)
 
+    def test_lifecycle_transition_commands_are_retired_from_docs(self) -> None:
+        skill_root = Path(__file__).resolve().parents[1]
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        lifecycle_reference = (skill_root / "references/lifecycle.md").read_text(encoding="utf-8")
+
+        for content in (skill, lifecycle_reference):
+            self.assertNotIn("<hook-python>", content)
+            self.assertNotIn("<canonical-maintain-project-specs-helper>", content)
+            self.assertNotIn("literal absolute trusted Python", content)
+        self.assertIn("`start-prompt`, `plan`, `open`, `seal`, and `waive` are retired", skill)
+        self.assertIn("not an authorization state machine", lifecycle_reference)
+
+    def test_transition_api_is_absent(self) -> None:
+        for name in (
+            "start_prompt",
+            "plan",
+            "open_implementation",
+            "mark_material_write",
+            "waive",
+            "seal",
+            "rules_context",
+            "load_for_project",
+        ):
+            self.assertFalse(hasattr(lifecycle_module, name), name)
+
+    def test_active_specs_do_not_restore_retired_lifecycle_authority(self) -> None:
+        retired_phrases = (
+            "selected-project phase gates",
+            "current selected-project lifecycle remains",
+            "project-contract owner's explicit state transition",
+            "sealed selected-lane lifecycle",
+            "contract-delta adoption",
+            "denied by the project lifecycle",
+            "at the lifecycle boundary",
+            "lifecycle git parsing",
+            "raw staging and commit remain lifecycle-denied",
+            "requires the current selected-project lifecycle",
+            "outer lifecycle cwd",
+            "selected lifecycle,",
+            "unchanged lifecycle write epochs",
+        )
+
+        def findings(content: str, marker: str, end_marker: str, live_status: str) -> list[str]:
+            found: list[str] = []
+            record: list[str] | None = None
+            identifier = ""
+            status = ""
+            for line in content.splitlines():
+                match = re.fullmatch(marker, line)
+                if match:
+                    identifier, status = match.groups()
+                    record = [line]
+                    continue
+                if record is None:
+                    continue
+                record.append(line)
+                if line == end_marker.format(identifier=identifier):
+                    body = "\n".join(record).lower()
+                    if status == live_status:
+                        found.extend(
+                            f"{identifier}: {phrase}"
+                            for phrase in retired_phrases
+                            if phrase in body
+                        )
+                    record = None
+            return found
+
+        docs_root = Path(__file__).resolve().parents[2] / "docs"
+        if not docs_root.is_dir():
+            self.skipTest("repository canonical docs are not installed skill assets")
+        requirements = (docs_root / "requirements.md").read_text(encoding="utf-8")
+        design = (docs_root / "design.md").read_text(encoding="utf-8")
+        requirement_marker = (
+            r"<!-- REQUIREMENT: (REQ-\d+) status=([a-z-]+) "
+            r"priority=P[0-3] type=[a-z-]+ -->"
+        )
+        feature_marker = (
+            r"<!-- FEATURE: (FEAT-\d+) reqs=[A-Z0-9,-]+ status=([a-z-]+) "
+            r"delivery=[a-z-]+ priority=P[0-3] version=\d+ -->"
+        )
+
+        self.assertEqual(
+            findings(
+                requirements,
+                requirement_marker,
+                "<!-- /REQUIREMENT: {identifier} -->",
+                "active",
+            ),
+            [],
+        )
+        self.assertEqual(
+            findings(
+                design,
+                feature_marker,
+                "<!-- /FEATURE: {identifier} -->",
+                "ready",
+            ),
+            [],
+        )
+        historical = """<!-- REQUIREMENT: REQ-999 status=superseded priority=P0 type=constraint -->
+selected-project phase gates
+<!-- /REQUIREMENT: REQ-999 -->
+"""
+        live = historical.replace("status=superseded", "status=active")
+        self.assertEqual(
+            findings(
+                historical,
+                requirement_marker,
+                "<!-- /REQUIREMENT: {identifier} -->",
+                "active",
+            ),
+            [],
+        )
+        self.assertEqual(
+            findings(
+                live,
+                requirement_marker,
+                "<!-- /REQUIREMENT: {identifier} -->",
+                "active",
+            ),
+            ["REQ-999: selected-project phase gates"],
+        )
+
     def test_validate_emits_one_shared_owner_receipt(self) -> None:
         self.write_canonical()
         receipt = validate_project(self.project)
-        self.assertEqual(
-            receipt["schema"], "project-agent-instructions.spec-validation.v3"
-        )
+        self.assertEqual(receipt["schema"], "maintain-project-specs.spec-validation.v4")
         self.assertEqual(receipt["owner"], "maintain-project-specs")
         self.assertEqual(receipt["status"], "current")
         self.assertEqual(receipt["project_scope"], ".")
@@ -493,12 +595,11 @@ class ProjectSpecsTestCase(unittest.TestCase):
             text=True,
             stdout=subprocess.PIPE,
         )
-        self.assertEqual(rejected.returncode, 2)
+        self.assertEqual(rejected.returncode, 0)
+        self.assertEqual(json.loads(rejected.stdout)["status"], "advisory")
         self.assertFalse((self.project / "receipt.json").exists())
 
-        wrong_session_output = (
-            lifecycle_dir(git_root, "other-session") / "spec-receipt.json"
-        )
+        wrong_session_output = lifecycle_dir(git_root, "other-session") / "spec-receipt.json"
         rejected = subprocess.run(
             [
                 sys.executable,
@@ -515,110 +616,77 @@ class ProjectSpecsTestCase(unittest.TestCase):
             text=True,
             stdout=subprocess.PIPE,
         )
-        self.assertEqual(rejected.returncode, 2)
+        self.assertEqual(rejected.returncode, 0)
+        self.assertEqual(json.loads(rejected.stdout)["status"], "advisory")
         self.assertFalse(wrong_session_output.exists())
 
-    def test_validate_can_store_one_task_implementer_attested_receipt(self) -> None:
+    def test_retired_lifecycle_command_is_not_accepted(self) -> None:
         self.write_canonical()
-        task_root = self.root / "codex/task-implementer"
-        output = task_root / "projects/project/scopes/scope/runs/run-1/orchestration"
-        current = task_root
-        current.mkdir(parents=True, mode=0o700)
-        current.chmod(0o700)
-        for part in output.relative_to(task_root).parts:
-            current /= part
-            current.mkdir(mode=0o700)
-            current.chmod(0o700)
-        receipt_path = output / "project-agent-spec-receipt.json"
-        workspace = task_root / "projects/project/scopes/scope/workspace.json"
-
-        def authorize(
-            arguments: list[str], **kwargs: object
-        ) -> subprocess.CompletedProcess[str]:
-            command = str(kwargs["input"])
-            evidence = {
-                "status": "authorized",
-                "action": "validate",
-                "outer_project_root": str(self.project),
-                "project_root": str(self.project),
-                "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
-            }
-            return subprocess.CompletedProcess(
-                arguments,
-                0,
-                stdout=json.dumps(evidence),
-                stderr="",
-            )
-
-        expected_receipt = validate_project(self.project)
-        with (
-            mock.patch.object(
-                lifecycle_module, "validate_project", return_value=expected_receipt
-            ),
-            mock.patch.object(
-                lifecycle_module.subprocess, "run", side_effect=authorize
-            ),
-        ):
-            receipt = write_validation_receipt(
-                self.project,
-                receipt_path,
-                "019ff65c-3e02-7780-8f24-448c391b5f66",
-                task_implementer_workspace=workspace,
-                task_implementer_run_id="run-1",
-            )
-        self.assertEqual(json.loads(receipt_path.read_text()), receipt)
-        self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
-
-        with self.assertRaises(ProjectSpecError):
-            write_validation_receipt(
-                self.project,
-                receipt_path,
-                "019ff65c-3e02-7780-8f24-448c391b5f66",
-                task_implementer_workspace=workspace,
-            )
-
-    def test_transition_token_reuses_current_hook_turn_without_raw_id(self) -> None:
-        self.write_canonical()
-        session = "session-token"
-        state = start_prompt(self.project, session, "opaque-turn")
-        token = str(state["turn_sha256"])
+        session = "session-unsafe-lock"
         git_root = Path(git(self.project, "rev-parse", "--show-toplevel"))
-        private_root = lifecycle_dir(git_root, session) / "project-instructions"
-        with mock.patch(
-            "project_specs_lib.lifecycle._verified_rendered_rules", return_value=b""
-        ):
-            planned = plan(
-                self.project,
+        session_root = lifecycle_dir(git_root, session)
+        maintenance_root = session_root.parent / ".maintenance"
+        (maintenance_root / "sessions").mkdir(parents=True, mode=0o700)
+        (maintenance_root / "staging").mkdir(mode=0o700)
+        (maintenance_root / "journals").mkdir(mode=0o700)
+        workspace_lock = maintenance_root / "workspace.lock"
+        workspace_lock.write_bytes(b"")
+        workspace_lock.chmod(0o644)
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "start-prompt",
+                "--project-root",
+                str(self.project),
+                "--session-id",
                 session,
-                None,
-                turn_token=token,
-                rules_file=private_root / "rules.md",
-                render_state_file=private_root / "render-state.json",
-                project_instructions_private_root=private_root,
-            )
-        self.assertEqual(planned["phase"], "planned")
-        opened = open_implementation(
-            self.project,
-            session,
-            None,
-            turn_token=token,
+                "--turn-id",
+                "turn-unsafe-lock",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-        self.assertEqual(opened["phase"], "implementation-open")
-        with self.assertRaisesRegex(ProjectSpecError, "current prompt"):
-            open_implementation(
-                self.project,
-                session,
-                None,
-                turn_token="0" * 64,
-            )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("invalid choice: 'start-prompt'", completed.stderr)
+        self.assertEqual(completed.stdout, "")
+
+    def test_retired_task_implementer_receipt_flags_are_not_accepted(self) -> None:
+        self.write_canonical()
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "validate",
+                "--project-root",
+                str(self.project),
+                "--task-implementer-workspace",
+                str(self.project / ".tasks"),
+                "--task-implementer-run-id",
+                "run-retired-bridge",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("unrecognized arguments", completed.stderr)
+        self.assertEqual(completed.stdout, "")
 
     def test_task_migration_preserves_ids_and_surrounding_bytes(self) -> None:
         prefix = b"# Human requirements\n\nKeep this paragraph.\n\n"
-        req_start = "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
-        req_end = "<!-- task-implementer:requirements:end -->"
-        des_start = (
-            "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
+        req_start = (
+            "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
         )
+        req_end = "<!-- task-implementer:requirements:end -->"
+        des_start = "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
         des_end = "<!-- task-implementer:design:end -->"
         (self.docs / "requirements.md").write_bytes(
             prefix + f"{req_start}\n{requirement_body()}\n{req_end}\n".encode()
@@ -632,13 +700,164 @@ class ProjectSpecsTestCase(unittest.TestCase):
         self.assertIn("TI-REQ-001", (self.docs / "requirements.md").read_text())
         self.assertIn("TI-DES-001", (self.docs / "design.md").read_text())
         git(self.project, "add", "docs")
-        self.assertEqual(
-            validate_project(self.project)["owner"], "maintain-project-specs"
-        )
+        self.assertEqual(validate_project(self.project)["owner"], "maintain-project-specs")
         self.assertEqual(migrate_project(self.project)["status"], "unchanged")
 
+    def test_canonical_v1_requires_explicit_migration_to_v2(self) -> None:
+        requirements = canonical_document(
+            "requirements", rich_requirement_body(identifier="REQ-001")
+        ).replace(b"requirements-v2", b"requirements-v1")
+        requirements = requirements.replace(b" status=active ", b" status=accepted ")
+        design = canonical_document(
+            "design", rich_design_body(identifier="FEAT-001", requirement="REQ-001")
+        ).replace(b"design-v2", b"design-v1")
+        design = design.replace(b" delivery=unassessed", b"")
+        design = re.sub(
+            rb"\n#### Implementation Evidence\n\n.*?\n\n"
+            rb"#### Verification Evidence\n\n.*?\n(?=\n<!-- /FEATURE:)",
+            b"",
+            design,
+            flags=re.DOTALL,
+        )
+        (self.docs / "requirements.md").write_bytes(requirements)
+        (self.docs / "design.md").write_bytes(design)
+        git(self.project, "add", "docs")
+        with self.assertRaisesRegex(ProjectSpecError, "legacy ownership"):
+            inspect_project(self.project)
+
+        result = migrate_project(self.project)
+
+        self.assertEqual(result["source"], "canonical-v1")
+        self.assertIn(
+            "<!-- REQUIREMENT: REQ-001 status=active",
+            (self.docs / "requirements.md").read_text(),
+        )
+        self.assertEqual(
+            (self.docs / "design.md").read_text().count("#### Implementation Evidence"),
+            1,
+        )
+        self.assertEqual(
+            (self.docs / "design.md").read_text().count("#### Verification Evidence"),
+            1,
+        )
+        git(self.project, "add", "docs")
+        self.assertEqual(validate_project(self.project)["validator_version"], 2)
+
+    def test_canonical_v1_preserves_existing_implementation_evidence(self) -> None:
+        requirements = canonical_document(
+            "requirements", rich_requirement_body(identifier="REQ-001")
+        ).replace(b"requirements-v2", b"requirements-v1")
+        design = canonical_document(
+            "design", rich_design_body(identifier="FEAT-001", requirement="REQ-001")
+        ).replace(b"design-v2", b"design-v1")
+        design = design.replace(b" delivery=unassessed", b"")
+        design = re.sub(
+            rb"\n#### Verification Evidence\n\n.*?\n(?=\n<!-- /FEATURE:)",
+            b"",
+            design,
+            flags=re.DOTALL,
+        )
+        (self.docs / "requirements.md").write_bytes(requirements)
+        (self.docs / "design.md").write_bytes(design)
+        git(self.project, "add", "docs")
+
+        migrate_project(self.project)
+
+        migrated = (self.docs / "design.md").read_text()
+        self.assertEqual(migrated.count("#### Implementation Evidence"), 1)
+        self.assertIn("The canonical owner implementation is present.", migrated)
+        self.assertEqual(migrated.count("#### Verification Evidence"), 1)
+        git(self.project, "add", "docs")
+        self.assertEqual(validate_project(self.project)["validator_version"], 2)
+
+    def test_compact_canonical_v1_migrates_core_and_task_records(self) -> None:
+        req_start = (
+            "<!-- maintain-project-specs:requirements:start "
+            "schema=maintain-project-specs/requirements-v1 -->"
+        )
+        req_end = "<!-- maintain-project-specs:requirements:end -->"
+        des_start = (
+            "<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->"
+        )
+        des_end = "<!-- maintain-project-specs:design:end -->"
+        requirements = "\n\n".join(
+            (
+                requirement_body(identifier="REQ-001").replace(
+                    "- Non-goals: Runtime hook installation.\n", ""
+                ),
+                requirement_body(identifier="TI-REQ-001").replace(
+                    "- Requirement: The selected project contract reflects accepted behavior.",
+                    "- Requirement: The selected project contract reflects accepted\n"
+                    "  behavior across wrapped lines.",
+                ),
+            )
+        )
+        designs = "\n\n".join(
+            (
+                design_body(identifier="FEAT-001", requirement="REQ-001")
+                .replace("- Status: planned", "- Status: active")
+                .replace(
+                    "- Boundaries and interfaces: Canonical managed regions and receipts.",
+                    "- Authority and scope: Canonical managed regions and receipts.",
+                )
+                .replace(
+                    "\n#### Alternatives considered\n\n"
+                    "- Separate writers were rejected because ownership would be ambiguous.\n",
+                    "",
+                )
+                .replace(
+                    "\n#### Implementation evidence\n\n- Shared validator and migration tests.\n",
+                    "",
+                ),
+                design_body(identifier="TI-DES-001", requirement="TI-REQ-001"),
+            )
+        )
+        (self.docs / "requirements.md").write_text(
+            f"# Human prefix\n\n{req_start}\n{requirements}\n{req_end}\n",
+            encoding="utf-8",
+        )
+        (self.docs / "design.md").write_text(
+            f"{des_start}\n{designs}\n{des_end}\n\nHuman suffix.\n",
+            encoding="utf-8",
+        )
+        git(self.project, "add", "docs")
+
+        result = migrate_project(self.project)
+
+        self.assertEqual(result["source"], "canonical-v1")
+        migrated_requirements = (self.docs / "requirements.md").read_text()
+        migrated_design = (self.docs / "design.md").read_text()
+        self.assertIn("REQ-001", migrated_requirements)
+        self.assertIn("TI-REQ-001", migrated_requirements)
+        self.assertIn("behavior across wrapped lines", migrated_requirements)
+        self.assertIn("No additional non-goal was recorded", migrated_requirements)
+        self.assertIn("FEAT-001", migrated_design)
+        self.assertIn("TI-DES-001", migrated_design)
+        self.assertIn("delivery=unassessed", migrated_design)
+        self.assertIn(
+            "**Authority and scope:** Canonical managed regions and receipts.",
+            migrated_design,
+        )
+        self.assertIn("No alternative was recorded", migrated_design)
+        self.assertTrue(migrated_requirements.startswith("# Human prefix\n\n"))
+        self.assertTrue(migrated_design.endswith("\n\nHuman suffix.\n"))
+        self.assertEqual(validate_project(self.project)["validator_version"], 2)
+
+    def test_current_records_ignore_placeholder_syntax_inside_code(self) -> None:
+        coded = rich_requirement_body().replace(
+            "current project contract.",
+            "current `<gateway>` project contract and `TODO` literal.",
+        )
+        self.assertEqual(_parse_requirements(coded)[0]["id"], "REQ-001")
+
+        unresolved = coded.replace("`<gateway>`", "<Design slice>")
+        with self.assertRaisesRegex(ProjectSpecError, "unresolved User Story"):
+            _parse_requirements(unresolved)
+
     def test_mixed_legacy_owners_fail_without_rewrite(self) -> None:
-        task_start = "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
+        task_start = (
+            "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
+        )
         task_end = "<!-- task-implementer:requirements:end -->"
         requirements = f"{task_start}\n{requirement_body()}\n{task_end}\n"
         design = "---\nschema: agentic-sdlc.design.v1\n---\n# Design\n"
@@ -647,16 +866,14 @@ class ProjectSpecsTestCase(unittest.TestCase):
         before = {path.name: path.read_bytes() for path in self.docs.iterdir()}
         with self.assertRaisesRegex(ProjectSpecError, "mixed or missing owner"):
             migrate_project(self.project)
-        self.assertEqual(
-            before, {path.name: path.read_bytes() for path in self.docs.iterdir()}
-        )
+        self.assertEqual(before, {path.name: path.read_bytes() for path in self.docs.iterdir()})
 
     def test_injected_pair_failure_restores_both_files(self) -> None:
-        req_start = "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
-        req_end = "<!-- task-implementer:requirements:end -->"
-        des_start = (
-            "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
+        req_start = (
+            "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
         )
+        req_end = "<!-- task-implementer:requirements:end -->"
+        des_start = "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
         des_end = "<!-- task-implementer:design:end -->"
         (self.docs / "requirements.md").write_text(
             f"{req_start}\n{requirement_body()}\n{req_end}\n", encoding="utf-8"
@@ -672,9 +889,7 @@ class ProjectSpecsTestCase(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "injected"):
             migrate_project(self.project, failure_injector=fail)
-        self.assertEqual(
-            before, {path.name: path.read_bytes() for path in self.docs.iterdir()}
-        )
+        self.assertEqual(before, {path.name: path.read_bytes() for path in self.docs.iterdir()})
 
     def test_mixed_canonical_and_legacy_markers_fail_closed(self) -> None:
         self.write_canonical()
@@ -688,11 +903,11 @@ class ProjectSpecsTestCase(unittest.TestCase):
         self.assertEqual(requirements.read_bytes(), before)
 
     def test_rollback_failure_retains_exact_recovery_artifacts(self) -> None:
-        req_start = "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
-        req_end = "<!-- task-implementer:requirements:end -->"
-        des_start = (
-            "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
+        req_start = (
+            "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
         )
+        req_end = "<!-- task-implementer:requirements:end -->"
+        des_start = "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
         des_end = "<!-- task-implementer:design:end -->"
         (self.docs / "requirements.md").write_text(
             f"{req_start}\n{requirement_body()}\n{req_end}\n", encoding="utf-8"
@@ -705,9 +920,7 @@ class ProjectSpecsTestCase(unittest.TestCase):
             if point == "after-requirements":
                 raise RuntimeError("injected")
 
-        with mock.patch.object(
-            migration, "_restore_pair", side_effect=OSError("rollback")
-        ):
+        with mock.patch.object(migration, "_restore_pair", side_effect=OSError("rollback")):
             with self.assertRaisesRegex(ProjectSpecError, "artifacts were retained"):
                 migrate_project(self.project, failure_injector=fail)
         transaction = migration._transaction_dir(self.project)
@@ -723,11 +936,11 @@ class ProjectSpecsTestCase(unittest.TestCase):
         self.assertTrue((transaction / migration.JOURNAL_NAME).is_file())
 
     def test_partial_private_stage_after_crash_is_cleaned_on_retry(self) -> None:
-        req_start = "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
-        req_end = "<!-- task-implementer:requirements:end -->"
-        des_start = (
-            "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
+        req_start = (
+            "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
         )
+        req_end = "<!-- task-implementer:requirements:end -->"
+        des_start = "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
         des_end = "<!-- task-implementer:design:end -->"
         (self.docs / "requirements.md").write_text(
             f"{req_start}\n{requirement_body()}\n{req_end}\n", encoding="utf-8"
@@ -747,25 +960,19 @@ class ProjectSpecsTestCase(unittest.TestCase):
             migrate_project(self.project, failure_injector=crash)
         root = migration._transaction_dir(self.project).parent
         self.assertTrue(
-            any(
-                path.name.startswith(migration.STAGING_PREFIX)
-                for path in root.iterdir()
-            )
+            any(path.name.startswith(migration.STAGING_PREFIX) for path in root.iterdir())
         )
         self.assertEqual(migrate_project(self.project)["status"], "migrated")
         self.assertFalse(
-            any(
-                path.name.startswith(migration.STAGING_PREFIX)
-                for path in root.iterdir()
-            )
+            any(path.name.startswith(migration.STAGING_PREFIX) for path in root.iterdir())
         )
 
     def test_published_private_transaction_recovers_after_crash(self) -> None:
-        req_start = "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
-        req_end = "<!-- task-implementer:requirements:end -->"
-        des_start = (
-            "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
+        req_start = (
+            "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
         )
+        req_end = "<!-- task-implementer:requirements:end -->"
+        des_start = "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
         des_end = "<!-- task-implementer:design:end -->"
         (self.docs / "requirements.md").write_text(
             f"{req_start}\n{requirement_body()}\n{req_end}\n", encoding="utf-8"
@@ -791,16 +998,14 @@ class ProjectSpecsTestCase(unittest.TestCase):
         )
         self.assertEqual(recover_migration(self.project)["status"], "recovered")
         self.assertFalse(transaction.exists())
-        self.assertEqual(
-            before, {path.name: path.read_bytes() for path in self.docs.iterdir()}
-        )
+        self.assertEqual(before, {path.name: path.read_bytes() for path in self.docs.iterdir()})
 
     def test_partial_private_cleanup_after_crash_is_cleaned_on_retry(self) -> None:
-        req_start = "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
-        req_end = "<!-- task-implementer:requirements:end -->"
-        des_start = (
-            "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
+        req_start = (
+            "<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->"
         )
+        req_end = "<!-- task-implementer:requirements:end -->"
+        des_start = "<!-- task-implementer:design:start schema=task-implementer/design-v1 -->"
         des_end = "<!-- task-implementer:design:end -->"
         (self.docs / "requirements.md").write_text(
             f"{req_start}\n{requirement_body()}\n{req_end}\n", encoding="utf-8"
@@ -833,387 +1038,14 @@ class ProjectSpecsTestCase(unittest.TestCase):
         self.assertFalse(transaction.exists())
         self.assertEqual(migrate_project(self.project)["status"], "unchanged")
         self.assertFalse(
-            any(
-                path.name.startswith(".cleanup.")
-                for path in transaction.parent.iterdir()
-            )
+            any(path.name.startswith(".cleanup.") for path in transaction.parent.iterdir())
         )
-
-    def test_implementation_only_changes_seal_with_unchanged_spec_digests(
-        self,
-    ) -> None:
-        self.write_canonical()
-        initial_receipt = validate_project(self.project)
-        session = "session-1"
-        turn = "turn-1"
-        self.assertEqual(
-            start_prompt(self.project, session, turn)["phase"], "planning-required"
-        )
-        self.assertEqual(self.plan_with_empty_rules(session, turn)["phase"], "planned")
-        self.assertEqual(
-            open_implementation(self.project, session, turn)["phase"],
-            "implementation-open",
-        )
-        first = mark_material_write(self.project, session)
-        second = mark_material_write(self.project, session)
-        assert first is not None and second is not None
-        self.assertEqual(first["phase"], "reconciliation-required")
-        self.assertEqual(second["write_epoch"], 2)
-        replanned = self.plan_with_empty_rules(session, turn)
-        self.assertEqual(replanned["phase"], "planned")
-        self.assertEqual(replanned["planned_write_epoch"], 2)
-        current_receipt = validate_project(self.project)
-        self.assertEqual(
-            current_receipt["requirements"]["sha256"],
-            initial_receipt["requirements"]["sha256"],
-        )
-        self.assertEqual(
-            current_receipt["design"]["sha256"],
-            initial_receipt["design"]["sha256"],
-        )
-        armed, state_path, _project = lifecycle_module.load_for_project(
-            self.project, session
-        )
-        assert armed is not None
-        armed["phase"] = "seal-armed"
-        lifecycle_module._write_private(state_path, armed)
-        git_root = Path(git(self.project, "rev-parse", "--show-toplevel"))
-        private_root = lifecycle_dir(git_root, session) / "project-instructions"
-        private_root.mkdir(mode=0o700)
-        state_path = private_root / "state.json"
-        state_path.write_text("{}\n", encoding="utf-8")
-        state_path.chmod(0o600)
-        with mock.patch(
-            "project_specs_lib.lifecycle._verify_project_instructions",
-            return_value=("a" * 64, True),
-        ):
-            sealed = seal(
-                self.project,
-                session,
-                turn,
-                project_instructions_state=state_path,
-                project_instructions_private_root=private_root,
-            )
-        self.assertEqual(sealed["phase"], "sealed")
-        self.assertTrue(sealed["project_instructions_reload_required"])
-
-    def test_compatibility_rules_render_before_terminal_apply_and_seal(
-        self,
-    ) -> None:
-        self.write_canonical()
-        session = "session-compatibility"
-        turn = "turn-compatibility"
-        start_prompt(self.project, session, turn)
-        git_root = Path(git(self.project, "rev-parse", "--show-toplevel"))
-        session_root = lifecycle_dir(git_root, session)
-        receipt_path = session_root / "spec-receipt.json"
-        write_validation_receipt(self.project, receipt_path, session)
-        runtime_path = session_root / "runtime-config.json"
-        runtime_path.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.runtime-config.v1",
-                    "profile": None,
-                    "overrides": {},
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        runtime_path.chmod(0o600)
-        private_root = session_root / "project-instructions"
-        manifest_path = private_root / "manifest.json"
-        subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_AGENT_SCRIPT),
-                "inspect",
-                "--project-root",
-                str(self.project),
-                "--spec-owner",
-                "maintain-project-specs",
-                "--requirements",
-                "docs/requirements.md",
-                "--design",
-                "docs/design.md",
-                "--spec-receipt",
-                str(receipt_path),
-                "--runtime-config",
-                str(runtime_path),
-                "--codex-home",
-                os.environ["CODEX_HOME"],
-                "--private-root",
-                str(private_root),
-                "--output",
-                str(manifest_path),
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        design_path = self.docs / "design.md"
-        decision_path = private_root / "decision.json"
-        rules_path = private_root / "rules.md"
-        render_state_path = private_root / "render-state.json"
-        decision_path.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.decision.v3",
-                    "manifest_sha256": manifest["manifest_sha256"],
-                    "disposition": "not-needed",
-                    "rationale": "No durable local instruction was initially selected.",
-                    "evidence": [
-                        {
-                            "path": "docs/design.md",
-                            "sha256": hashlib.sha256(
-                                design_path.read_bytes()
-                            ).hexdigest(),
-                            "locator": "### TI-DES-001: Maintain one owner",
-                        }
-                    ],
-                    "rules": [],
-                    "budget_exception": None,
-                    "ownership_approval": None,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        decision_path.chmod(0o600)
-        subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_AGENT_SCRIPT),
-                "render",
-                "--private-root",
-                str(private_root),
-                "--manifest",
-                str(manifest_path),
-                "--decision",
-                str(decision_path),
-                "--output",
-                str(rules_path),
-                "--state",
-                str(render_state_path),
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        self.assertEqual(rules_path.read_bytes(), b"")
-        decision_path.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.decision.v3",
-                    "manifest_sha256": manifest["manifest_sha256"],
-                    "disposition": "needed",
-                    "rationale": "Existing users require durable compatibility rules.",
-                    "evidence": [
-                        {
-                            "path": "docs/design.md",
-                            "sha256": hashlib.sha256(
-                                design_path.read_bytes()
-                            ).hexdigest(),
-                            "locator": "### TI-DES-001: Maintain one owner",
-                        }
-                    ],
-                    "rules": [
-                        {
-                            "section": "Change requirements",
-                            "instruction": (
-                                "This project has existing users. Preserve supported "
-                                "behavior and public interfaces across changes; treat "
-                                "unintended compatibility breakage as a regression."
-                            ),
-                            "evidence": ["docs/design.md"],
-                        },
-                        {
-                            "section": "Change requirements",
-                            "instruction": (
-                                "Breaking a supported API, CLI contract, configuration or "
-                                "persisted format, or upgrade path requires explicit "
-                                "approval, a deprecation or migration plan, and regression "
-                                "coverage. Keep internals on one canonical path."
-                            ),
-                            "evidence": ["docs/design.md"],
-                        },
-                    ],
-                    "budget_exception": None,
-                    "ownership_approval": None,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        decision_path.chmod(0o600)
-        subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_AGENT_SCRIPT),
-                "render",
-                "--private-root",
-                str(private_root),
-                "--manifest",
-                str(manifest_path),
-                "--decision",
-                str(decision_path),
-                "--output",
-                str(rules_path),
-                "--state",
-                str(render_state_path),
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-
-        planned = plan(
-            self.project,
-            session,
-            turn,
-            rules_file=rules_path,
-            render_state_file=render_state_path,
-            project_instructions_private_root=private_root,
-        )
-        pending = lifecycle_module.rules_context(
-            planned, session_root / "lifecycle.json"
-        )
-        assert pending is not None
-        self.assertIn("This project has existing users.", pending)
-        self.assertFalse((self.project / "AGENTS.md").exists())
-        open_implementation(self.project, session, turn)
-        mark_material_write(self.project, session)
-        plan(
-            self.project,
-            session,
-            turn,
-            rules_file=rules_path,
-            render_state_file=render_state_path,
-            project_instructions_private_root=private_root,
-        )
-        ownership_path = private_root / "ownership.json"
-        final_state_path = private_root / "state.json"
-        subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_AGENT_SCRIPT),
-                "apply",
-                "--private-root",
-                str(private_root),
-                "--manifest",
-                str(manifest_path),
-                "--decision",
-                str(decision_path),
-                "--ownership",
-                str(ownership_path),
-                "--state",
-                str(final_state_path),
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        verified = subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_AGENT_SCRIPT),
-                "verify",
-                "--private-root",
-                str(private_root),
-                "--state",
-                str(final_state_path),
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        self.assertTrue(json.loads(verified.stdout)["reload_required"])
-        armed, lifecycle_path, _project = lifecycle_module.load_for_project(
-            self.project, session
-        )
-        assert armed is not None
-        armed["phase"] = "seal-armed"
-        lifecycle_module._write_private(lifecycle_path, armed)
-
-        sealed = seal(
-            self.project,
-            session,
-            turn,
-            project_instructions_state=final_state_path,
-            project_instructions_private_root=private_root,
-        )
-
-        self.assertEqual(sealed["phase"], "sealed")
-        self.assertTrue(sealed["project_instructions_reload_required"])
-        self.assertIn(
-            "This project has existing users.",
-            (self.project / "AGENTS.md").read_text(encoding="utf-8"),
-        )
-
-    def test_plan_requires_verified_project_instruction_render(self) -> None:
-        self.write_canonical()
-        start_prompt(self.project, "session-render", "turn-render")
-        with self.assertRaisesRegex(ProjectSpecError, "rendered rules"):
-            plan(self.project, "session-render", "turn-render")
-
-    def test_plan_rejects_alternate_same_project_private_bundle(self) -> None:
-        self.write_canonical()
-        session = "session-alternate-bundle"
-        turn = "turn-alternate-bundle"
-        start_prompt(self.project, session, turn)
-        alternate_root = self.root / "alternate-project-instructions"
-        with mock.patch(
-            "project_specs_lib.lifecycle._verified_rendered_rules", return_value=b""
-        ):
-            with self.assertRaisesRegex(ProjectSpecError, "current lifecycle session"):
-                plan(
-                    self.project,
-                    session,
-                    turn,
-                    rules_file=alternate_root / "rules.md",
-                    render_state_file=alternate_root / "render-state.json",
-                    project_instructions_private_root=alternate_root,
-                )
-
-    def test_seal_rejects_alternate_same_project_private_bundle(self) -> None:
-        self.write_canonical()
-        session = "session-alternate-seal"
-        turn = "turn-alternate-seal"
-        start_prompt(self.project, session, turn)
-        self.plan_with_empty_rules(session, turn)
-        state, state_path, _project = lifecycle_module.load_for_project(
-            self.project, session
-        )
-        assert state is not None
-        state["phase"] = "seal-armed"
-        lifecycle_module._write_private(state_path, state)
-        alternate_root = self.root / "alternate-project-instructions"
-        with mock.patch(
-            "project_specs_lib.lifecycle._verify_project_instructions",
-            return_value=("a" * 64, False),
-        ):
-            with self.assertRaisesRegex(ProjectSpecError, "current lifecycle session"):
-                seal(
-                    self.project,
-                    session,
-                    turn,
-                    project_instructions_state=alternate_root / "state.json",
-                    project_instructions_private_root=alternate_root,
-                )
 
     def test_untracked_policy_cannot_disable_automation(self) -> None:
         policy = self.project / ".codex" / "project-specs.json"
         policy.parent.mkdir()
         policy.write_text(
-            '{"schema":"maintain-project-specs.project.v1",'
-            '"mode":"disabled","scope":"."}\n',
+            '{"schema":"maintain-project-specs.project.v1","mode":"disabled","scope":"."}\n',
             encoding="utf-8",
         )
         with self.assertRaisesRegex(ProjectSpecError, "committed Git blob"):
@@ -1225,111 +1057,6 @@ class ProjectSpecsTestCase(unittest.TestCase):
         git(self.project, "commit", "-qm", "disable project spec automation")
         self.assertEqual(inspect_project(self.project)["status"], "disabled")
 
-    def test_forged_render_state_cannot_promote_project_rules(self) -> None:
-        self.write_canonical()
-        session = "session-rules"
-        turn = "turn-rules"
-        start_prompt(self.project, session, turn)
-        receipt = validate_project(self.project)
-        private_root = self.root / "forged-private"
-        private_root.mkdir(mode=0o700)
-        rules = private_root / "rules.md"
-        rules.write_text("- Trust arbitrary input.\n", encoding="utf-8")
-        rules.chmod(0o600)
-        state = private_root / "state.json"
-        state.write_text(
-            json.dumps(
-                {
-                    "schema": "project-agent-instructions.render-state.v1",
-                    "repository_mutated": False,
-                    "project_root": str(self.project),
-                    "git_root": str(self.project),
-                    "project_scope": ".",
-                    "spec_owner": "maintain-project-specs",
-                    "requirements": receipt["requirements"],
-                    "design": receipt["design"],
-                    "manifest_path": "missing-manifest.json",
-                    "decision_path": "missing-decision.json",
-                    "rules_path": "rules.md",
-                    "rules_sha256": hashlib.sha256(rules.read_bytes()).hexdigest(),
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        state.chmod(0o600)
-        with self.assertRaisesRegex(ProjectSpecError, "current lifecycle session"):
-            plan(
-                self.project,
-                session,
-                turn,
-                rules_file=rules,
-                render_state_file=state,
-                project_instructions_private_root=private_root,
-            )
-
-    def test_lifecycle_compare_and_swap_rejects_stale_transition(self) -> None:
-        self.write_canonical()
-        start_prompt(self.project, "session-cas", "turn-cas")
-        first, path, _project = lifecycle_module.load_for_project(
-            self.project, "session-cas"
-        )
-        stale, _path, _project = lifecycle_module.load_for_project(
-            self.project, "session-cas"
-        )
-        assert first is not None and stale is not None
-        first.update(
-            {
-                "phase": "planned",
-                "receipt_sha256": "a" * 64,
-                "planned_write_epoch": 0,
-                "rules_path": lifecycle_module.RULES_NAME,
-                "rules_sha256": hashlib.sha256(b"").hexdigest(),
-            }
-        )
-        lifecycle_module._write_private(path, first)
-        stale.update({"phase": "waived", "waiver": "read-only"})
-        with self.assertRaisesRegex(ProjectSpecError, "changed before transition"):
-            lifecycle_module._write_private(path, stale)
-
-    def test_new_prompt_carries_unreconciled_implementation_state(self) -> None:
-        self.write_canonical()
-        start_prompt(self.project, "session-carry", "turn-1")
-        self.plan_with_empty_rules("session-carry", "turn-1")
-        open_implementation(self.project, "session-carry", "turn-1")
-        mark_material_write(self.project, "session-carry")
-
-        carried = start_prompt(self.project, "session-carry", "turn-2")
-
-        self.assertEqual(carried["phase"], "reconciliation-required")
-        self.assertEqual(carried["write_epoch"], 1)
-        with self.assertRaisesRegex(ProjectSpecError, "only valid before"):
-            lifecycle_module.waive(self.project, "session-carry", "turn-2", "read-only")
-
-    def test_new_prompt_reopens_task_worker_delegation_waiver(self) -> None:
-        self.write_canonical()
-        session = "session-worker-delegation"
-        delegated = start_prompt(self.project, session, "turn-1")
-        _state, path, _project = lifecycle_module.load_for_project(
-            self.project, session
-        )
-        delegated.update(
-            {
-                "phase": "waived",
-                "waiver": "task-worker-delegated",
-            }
-        )
-        lifecycle_module._write_private(path, delegated)
-
-        reopened = start_prompt(self.project, session, "turn-2")
-
-        self.assertEqual(reopened["phase"], "planning-required")
-        self.assertIsNone(reopened["waiver"])
-        self.assertEqual(
-            reopened["turn_sha256"], lifecycle_module._turn_hash("turn-2")
-        )
-
     def test_incomplete_rich_records_cannot_issue_current_receipt(self) -> None:
         (self.docs / "requirements.md").write_bytes(
             canonical_document("requirements", rich_requirement_body("draft"))
@@ -1338,6 +1065,7 @@ class ProjectSpecsTestCase(unittest.TestCase):
             canonical_document("design", rich_design_body("ready"))
         )
         git(self.project, "add", "docs")
+        self.assertEqual(inspect_project(self.project)["status"], "pending")
         with self.assertRaisesRegex(ProjectSpecError, "not current"):
             validate_project(self.project)
 
@@ -1348,7 +1076,8 @@ class ProjectSpecsTestCase(unittest.TestCase):
             canonical_document("design", rich_design_body("draft"))
         )
         git(self.project, "add", "docs")
-        with self.assertRaisesRegex(ProjectSpecError, "unmapped requirements"):
+        self.assertEqual(inspect_project(self.project)["status"], "pending")
+        with self.assertRaisesRegex(ProjectSpecError, "not current"):
             validate_project(self.project)
 
 

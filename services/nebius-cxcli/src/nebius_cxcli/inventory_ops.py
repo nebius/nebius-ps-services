@@ -19,7 +19,12 @@ from .component_sources import (
     load_component_sources,
 )
 from .component_wiring import resolved_component_row, row_input_bindings
-from .components import ComponentEntry, component_entries, component_lookup
+from .components import (
+    ComponentEntry,
+    component_entries,
+    component_lookup,
+    soperator_install_entry,
+)
 from .deploy_targets import enabled_cluster_target_refs
 from .deploy_validation_report import (
     DEPLOY_REPORT_FILENAME,
@@ -81,6 +86,26 @@ def _lookup(node: Mapping[str, Any], key: str) -> Any:
         if candidate in node:
             return node[candidate]
     return None
+
+
+def _runtime_app_entries(payload: Mapping[str, Any]) -> tuple[ComponentEntry, ...]:
+    entries = tuple(entry for entry in component_entries("apps") if entry.id != "soperator")
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, list):
+        return entries
+    soperator_row = next(
+        (
+            row
+            for row in charts
+            if isinstance(row, Mapping) and component_type_id(row) == "soperator"
+        ),
+        None,
+    )
+    if soperator_row is None:
+        return entries
+    version = str(soperator_row.get("version", "") or "").strip()
+    return (*entries, soperator_install_entry(version))
 
 
 def _coalesce(*values: Any) -> Any:
@@ -467,7 +492,7 @@ def _app_component_report_markdown_lines(config: Any) -> list[str]:
     rows_by_id = _app_chart_rows(payload_data)
     lines = ["### App Component Reports", ""]
     rendered = False
-    for entry in component_entries("apps"):
+    for entry in _runtime_app_entries(payload_data):
         for row in _enabled_component_rows(rows_by_id.get(entry.id, [])):
             rendered = True
             label = _component_report_label(row)
@@ -1276,7 +1301,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "label": entry.description,
             "enabled": _rows_enabled(app_rows.get(entry.id, [])),
         }
-        for entry in component_entries("apps")
+        for entry in _runtime_app_entries(payload_data)
     ]
 
     def _rows_by_status_kind(kind: str) -> list[dict[str, Any]]:
@@ -1546,13 +1571,15 @@ def write_inventory(
         item for item in payload["infra"].get("mysterybox_secrets", []) if isinstance(item, Mapping)
     ]
     if mysterybox_secrets:
-        lines.extend(["", "### MysteryBox Secrets", ""])
+        lines.extend(["", "### SecretStash Secrets (`mysterybox` service identifier)", ""])
         lines.extend(_mysterybox_secret_markdown_lines(mysterybox_secrets))
     mysterybox_sync = [
         item for item in payload["infra"].get("mysterybox_sync", []) if isinstance(item, Mapping)
     ]
     if mysterybox_sync:
-        lines.extend(["", "### MysteryBox Kubernetes Sync", ""])
+        lines.extend(
+            ["", "### SecretStash Kubernetes Sync (`mysterybox` service identifier)", ""]
+        )
         lines.extend(_mysterybox_sync_markdown_lines(mysterybox_sync))
     lines.extend(
         [

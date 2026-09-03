@@ -8,9 +8,10 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 Expose a durable private prompt workspace and coordinate the SDLC loop by
 reading accepted prompt revisions, specs, checkpoints, and local state,
 encouraging a safe live experiment environment when useful, selecting the next
-feature, conditionally establishing project-specific agent instructions after
-requirements and design, refreshing active steering when needed, and choosing
-exactly one next skill. After plan lock it routes through execution
+feature, recording advisory project-instruction recommendations after
+requirements and design, routing to the separate mutation skill only when the
+current user explicitly requests it, refreshing active steering when needed,
+and choosing exactly one next skill. After plan lock it routes through execution
 preparation, keeps one active
 feature while safe implementation tasks run in dependency waves, and returns
 to the project checkout only after exact promotion. In a managed outer
@@ -71,8 +72,9 @@ do not append again, and distinct concurrent same-base updates never
 auto-rebase. A new objective publishes its complete marker-bearing Ask in one
 exclusive create, and projection content cannot use the reserved
 operation-marker namespace.
-Explicit bound runs register the authoritative active prompt for unambiguous
-fresh-session attachment and close it only after verified terminal completion.
+Explicit bound runs register and close the authoritative active prompt for
+objective identity and validation. They never bind another session; every
+fresh session requires its own exact init or run command before later capture.
 Secrets and capture failures do not persist or block the direct request. Manual
 prompt-file edits and captured prompt updates still require explicit `run`.
 
@@ -112,9 +114,8 @@ worktree.
 
 - `docs/requirements.md`.
 - `docs/design.md` when present.
-- The active selected-project instruction file and latest private
-  shared-owner `project-agent-instructions` spec receipt, decision, ownership receipt, and
-  verified state when present.
+- The effective selected-project instruction chain and canonical project-spec
+  observation/receipt when present.
 - Existing local run state when present.
 - One managed `agentic-sdlc/prompt-v3` file, its full authoritative prompt ID,
   collision-safe filename-prefixed ref, and its accepted immutable revision.
@@ -126,11 +127,14 @@ worktree.
 - Active run state is accurate and backed by a checkpoint.
 - Current feature and next skill are explicit.
 - Steering is refreshed or routed through `sdlc-auto-steering` when pending.
-- Agentic SDLC validates tracked complete specs, total status-aware feature
-  coverage, and feature marker/body agreement into a private v3 receipt, then
-  verifies the conditional project-instruction decision and ownership after
-  design and before auto-steering or planning. A project-file change requires a
-  fresh Codex session before the workflow continues.
+- Agentic SDLC validates the canonical v2 pair before spec-dependent planning.
+  Its root coordinator binds the accepted intent and exact receipt into worker
+  assignments; workers return typed `spec_gaps` instead of editing specs.
+  Receipts describe project truth but never authorize execution, cleanup,
+  finalization, or Stop.
+- A `project-agent-instructions-change` steering entry remains advisory unless
+  the current user explicitly requested the separate project-instruction
+  mutation workflow.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss from the same prompt-bound command.

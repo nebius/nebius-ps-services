@@ -165,11 +165,12 @@ def _terraform_providers_block() -> str:
 def _terraform_main_block(
     *,
     module_blocks: tuple[str, ...] = (),
+    resource_blocks: tuple[str, ...] = (),
 ) -> str:
     lines: list[str] = []
-    for module_block in module_blocks:
-        if module_block:
-            lines.extend([module_block, ""])
+    for block in (*module_blocks, *resource_blocks):
+        if block:
+            lines.extend([block, ""])
     rendered = "\n".join(lines).strip()
     return f"{rendered}\n" if rendered else ""
 
@@ -1083,6 +1084,74 @@ def _render_module_block(plan: _ModulePlan) -> str:
     return "\n".join(lines)
 
 
+def _render_soperator_observability_iam_blocks(
+    config: Any,
+    plans: tuple[_ModulePlan, ...],
+) -> tuple[str, ...]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return ()
+
+    target_refs = _enabled_soperator_target_refs(payload)
+    blocks: list[str] = []
+    for plan in plans:
+        if plan.component_id != "mk8s" or plan.instance_id not in target_refs:
+            continue
+        resource_name = _safe_hcl_identifier(
+            f"{plan.module_name}_soperator_observability",
+            fallback_prefix="soperator_observability",
+        )
+        cluster_token = _hcl_literal_string(plan.instance_id)
+        blocks.extend(
+            [
+                "\n".join(
+                    [
+                        f'resource "nebius_iam_v1_group" "{resource_name}" {{',
+                        f"  for_each = module.{plan.module_name}.service_account_ids",
+                        "",
+                        "  parent_id = var.nebius_provider_parent_id",
+                        '  name = format("sop-%s-writers", substr(sha256(join(":", '
+                        f"[{cluster_token}, each.key])), 0, 20))",
+                        "}",
+                    ]
+                ),
+                "\n".join(
+                    [
+                        f'resource "nebius_iam_v1_group_membership" "{resource_name}" {{',
+                        f"  for_each = module.{plan.module_name}.service_account_ids",
+                        "",
+                        f"  parent_id = nebius_iam_v1_group.{resource_name}[each.key].id",
+                        "  member_id = each.value",
+                        "}",
+                    ]
+                ),
+                "\n".join(
+                    [
+                        f'resource "nebius_iam_v1_access_permit" "{resource_name}_metrics" {{',
+                        f"  for_each = module.{plan.module_name}.service_account_ids",
+                        "",
+                        f"  parent_id  = nebius_iam_v1_group.{resource_name}[each.key].id",
+                        "  resource_id = var.nebius_provider_parent_id",
+                        '  role        = "monitoring.metrics.writer"',
+                        "}",
+                    ]
+                ),
+                "\n".join(
+                    [
+                        f'resource "nebius_iam_v1_access_permit" "{resource_name}_logs" {{',
+                        f"  for_each = module.{plan.module_name}.service_account_ids",
+                        "",
+                        f"  parent_id  = nebius_iam_v1_group.{resource_name}[each.key].id",
+                        "  resource_id = var.nebius_provider_parent_id",
+                        '  role        = "logging.logs.writer"',
+                        "}",
+                    ]
+                ),
+            ]
+        )
+    return tuple(blocks)
+
+
 def rendered_module_sources(
     config: Any,
     *,
@@ -1276,6 +1345,7 @@ def render_terraform_artifacts(
     backend_settings = backend_settings_from_config(config)
     module_plans = _build_module_plans(config, source_profile=source_profile)
     module_blocks = tuple(_render_module_block(plan) for plan in module_plans)
+    resource_blocks = _render_soperator_observability_iam_blocks(config, module_plans)
     tfvars_payload = {
         **_provider_static_tfvars(config),
         **_render_tfvars_json(module_plans),
@@ -1302,6 +1372,7 @@ def render_terraform_artifacts(
         main_tf_path,
         _terraform_main_block(
             module_blocks=module_blocks,
+            resource_blocks=resource_blocks,
         ),
     )
     written.append(main_tf_path)

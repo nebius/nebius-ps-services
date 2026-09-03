@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config_loader import _expand_env, _validate_vm_ha_nebius_credentials
+from .config_loader import _expand_env
 from .config_wizard import (
     _CONTROL_HELP,
     WizardCancelled,
@@ -24,13 +24,13 @@ from .config_wizard import (
     _Back,
     _default_apipa,
     _Prompter,
-    _validate_absolute_path,
     _validate_apipa_cidr,
     _validate_env_name,
     _validate_ip,
     _validate_name,
 )
 from .schema import VPNGatewayConfig
+from .vm_ha_credentials import display_vm_ha_credential_path
 
 
 @dataclass(frozen=True)
@@ -142,14 +142,12 @@ def validate_vm_ha_conversion_source(raw: dict[str, t.Any]) -> None:
     """Admit only one ordinary schema-v1 gateway with no inferred VM-HA state."""
 
     if raw.get("version") != 1:
-        raise WizardValidationError("configure-vm-ha supports only configuration schema version 1.")
+        raise WizardValidationError("vm-ha supports only configuration schema version 1.")
     group = raw.get("gateway_group")
     if not isinstance(group, dict):
         raise WizardValidationError("gateway_group must be a YAML mapping.")
     if group.get("instance_count") != 1:
-        raise WizardValidationError(
-            "configure-vm-ha requires an ordinary gateway with instance_count: 1."
-        )
+        raise WizardValidationError("vm-ha requires an ordinary gateway with instance_count: 1.")
     vm_ha = group.get("vm_ha")
     if vm_ha is not None:
         if not isinstance(vm_ha, dict) or vm_ha.get("enabled") is not False:
@@ -157,8 +155,10 @@ def validate_vm_ha_conversion_source(raw: dict[str, t.Any]) -> None:
                 "The source already enables or partially defines VM-HA; use validate-config and apply instead."
             )
         allowed_disabled = {"enabled", "cluster_id", "members"}
-        if set(vm_ha) - allowed_disabled or vm_ha.get("cluster_id") not in (None, "") or (
-            vm_ha.get("members") or []
+        if (
+            set(vm_ha) - allowed_disabled
+            or vm_ha.get("cluster_id") not in (None, "")
+            or (vm_ha.get("members") or [])
         ):
             raise WizardValidationError(
                 "The source contains a partial disabled VM-HA block; remove the partial fields first."
@@ -180,10 +180,7 @@ def validate_vm_ha_conversion_source(raw: dict[str, t.Any]) -> None:
     _validate_raw_candidate(raw)
 
 
-def _default_vm_ha_block(
-    gateway_name: str,
-    nebius_credential_paths: tuple[str, str],
-) -> dict[str, t.Any]:
+def _default_vm_ha_block(gateway_name: str) -> dict[str, t.Any]:
     members: list[dict[str, t.Any]] = []
     for index, role in enumerate(("active", "passive")):
         node_id = _bounded_name(gateway_name, f"-{index}")
@@ -192,7 +189,6 @@ def _default_vm_ha_block(
                 "node_id": node_id,
                 "instance_index": index,
                 "role": role,
-                "nebius_credentials_path": nebius_credential_paths[index],
             }
         )
     return {
@@ -200,23 +196,6 @@ def _default_vm_ha_block(
         "cluster_id": _bounded_name(gateway_name, "-ha"),
         "members": members,
     }
-
-
-def _nebius_credential_paths(prompt: _Prompter, gateway_name: str) -> tuple[str, str]:
-    paths: list[str] = []
-    for index, role in enumerate(("active", "passive")):
-        node_id = _bounded_name(gateway_name, f"-{index}")
-        credential_path = prompt.ask(
-            f"Nebius credential JSON for {node_id} ({role})",
-            help_text=(
-                "Enter one absolute operator-local mode-0600 Nebius credential JSON path. "
-                "Managed mTLS identity is generated on the VM and its private key never leaves."
-            ),
-            validator=_validate_absolute_path,
-            hide_input=True,
-        )
-        paths.append(credential_path)
-    return t.cast(tuple[str, str], tuple(paths))
 
 
 def _validate_vm_ha_identity_block(
@@ -240,12 +219,8 @@ def _validate_vm_ha_identity_block(
             "node_id": _bounded_name(gateway_name, f"-{index}"),
             "instance_index": index,
             "role": role,
-            "nebius_credentials_path": member.get("nebius_credentials_path"),
         }:
             raise WizardValidationError("Structural guard rejected the VM-HA identity block.")
-        credential_path = member.get("nebius_credentials_path")
-        if not isinstance(credential_path, str) or not credential_path.startswith("/"):
-            raise WizardValidationError("Structural guard rejected the VM-HA credential references.")
 
 
 def _used_tunnel_state(
@@ -268,11 +243,7 @@ def _used_tunnel_state(
             names.add(str(semantic_tunnel.get("name") or ""))
             try:
                 networks.add(
-                    str(
-                        ipaddress.ip_network(
-                            str(semantic_tunnel.get("inner_cidr")), strict=False
-                        )
-                    )
+                    str(ipaddress.ip_network(str(semantic_tunnel.get("inner_cidr")), strict=False))
                 )
             except ValueError:
                 pass
@@ -393,8 +364,7 @@ def _apply_member_one_tunnels(
     for connection in candidate.get("connections") or []:
         original_count = len(connection.get("tunnels") or [])
         additions = [
-            copy.deepcopy(tunnel)
-            for tunnel, _ in derived[offset : offset + original_count]
+            copy.deepcopy(tunnel) for tunnel, _ in derived[offset : offset + original_count]
         ]
         connection["tunnels"].extend(additions)
         offset += original_count
@@ -406,7 +376,9 @@ def _required_tunnel_quota(
 ) -> None:
     total = sum(len(connection.get("tunnels") or []) for connection in candidate["connections"])
     if total > 200:
-        raise WizardValidationError("The two-member candidate exceeds the schema maximum of 200 tunnels.")
+        raise WizardValidationError(
+            "The two-member candidate exceeds the schema maximum of 200 tunnels."
+        )
     semantic_gateway = semantic_source.get("gateway") or {}
     semantic_quotas = semantic_gateway.get("quotas") or {}
     configured = int(semantic_quotas.get("max_tunnels", 32))
@@ -517,16 +489,13 @@ def _assert_vm_ha_structural_allowlist(
         )
 
 
-def is_vm_ha_conversion_candidate(
-    source: dict[str, t.Any], candidate: dict[str, t.Any]
-) -> bool:
+def is_vm_ha_conversion_candidate(source: dict[str, t.Any], candidate: dict[str, t.Any]) -> bool:
     """Return whether an existing destination is an exact allowed conversion of source."""
 
     try:
         validate_vm_ha_conversion_source(source)
         _assert_vm_ha_structural_allowlist(source, candidate)
         _validate_raw_candidate(candidate)
-        _validate_vm_ha_nebius_credentials(candidate)
     except (WizardValidationError, TypeError, ValueError, KeyError):
         return False
     return True
@@ -535,7 +504,7 @@ def is_vm_ha_conversion_candidate(
 def render_vm_ha_conversion_yaml(config: dict[str, t.Any]) -> str:
     body = yaml.safe_dump(config, sort_keys=False, default_flow_style=False, allow_unicode=False)
     return (
-        "# Generated by nebius-vpngw configure-vm-ha.\n"
+        "# Generated by nebius-vpngw vm-ha.\n"
         "# The original configuration is unchanged; PSKs remain environment references.\n"
         f"{body}"
     )
@@ -575,19 +544,7 @@ def run_vm_ha_conversion_wizard(
         except _Back:
             console.print("[yellow]Restarting the passive tunnel parameter section.[/yellow]")
 
-    while True:
-        try:
-            console.rule("[bold cyan]VM-HA Nebius credentials[/bold cyan]")
-            credential_paths = _nebius_credential_paths(prompt, gateway_name)
-            vm_ha_block = _default_vm_ha_block(gateway_name, credential_paths)
-            _validate_vm_ha_nebius_credentials(
-                {"gateway_group": {"vm_ha": vm_ha_block}}
-            )
-            break
-        except _Back:
-            console.print("[yellow]Restarting the credential source section.[/yellow]")
-        except ValueError as error:
-            console.print(f"[red]{error}[/red]")
+    vm_ha_block = _default_vm_ha_block(gateway_name)
 
     while True:
         try:
@@ -712,6 +669,14 @@ def run_vm_ha_conversion_wizard(
             summary.add_row("Added tunnel counterparts", str(len(derived)))
             summary.add_row("Passive public IP", passive_ip)
             summary.add_row("PSKs", "environment references only")
+            summary.add_row(
+                "VM-HA credentials",
+                "managed under "
+                + display_vm_ha_credential_path(
+                    project_id=str(candidate["project_id"]),
+                    gateway_name=gateway_name,
+                ),
+            )
             summary.add_row("Validation", "schema v1 passed")
             console.print()
             console.print(summary)
