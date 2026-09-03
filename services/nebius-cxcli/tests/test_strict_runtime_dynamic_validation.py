@@ -1015,7 +1015,9 @@ def test_validate_enabled_soperator_uses_dedicated_official_entry(
     captured: dict[str, str] = {}
 
     def _fake_validate(**kwargs) -> tuple[str, ...]:
-        captured.update({key: str(value) for key, value in kwargs.items() if key != "chart_meta_cache"})
+        captured.update(
+            {key: str(value) for key, value in kwargs.items() if key != "chart_meta_cache"}
+        )
         return ()
 
     monkeypatch.setattr("nebius_cxcli.cli._resolve_helm_chart_validation_issues", _fake_validate)

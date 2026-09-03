@@ -51,9 +51,7 @@ _OBSERVABILITY_READ_HOSTS = {
     "read.monitoring.api.nebius.cloud",
     "read.tracing.api.nebius.cloud",
 }
-_OBSERVABILITY_STATIC_KEY_ID_ANNOTATION = (
-    "nebius.ai/cxcli-observability-static-key-id"
-)
+_OBSERVABILITY_STATIC_KEY_ID_ANNOTATION = "nebius.ai/cxcli-observability-static-key-id"
 
 
 @dataclass(frozen=True)
@@ -638,9 +636,7 @@ def cleanup_observability_read_token_secret(
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"{' '.join(command)} returned invalid Secret JSON"
-        ) from exc
+        raise RuntimeError(f"{' '.join(command)} returned invalid Secret JSON") from exc
     metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
     annotations = metadata.get("annotations") if isinstance(metadata, Mapping) else None
     static_key_id = (

@@ -444,10 +444,7 @@ def test_quiesce_stops_flux_parent_before_legacy_release_children() -> None:
             "inventory": {
                 "entries": [
                     {
-                        "id": (
-                            "flux-system_soperator-fluxcd_"
-                            "helm.toolkit.fluxcd.io_HelmRelease"
-                        ),
+                        "id": ("flux-system_soperator-fluxcd_helm.toolkit.fluxcd.io_HelmRelease"),
                         "v": "v2",
                     }
                 ]

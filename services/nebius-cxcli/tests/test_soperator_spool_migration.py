@@ -46,11 +46,7 @@ class _FakeCluster:
                     }
                 ],
                 "slurmNodes": {
-                    "controller": {
-                        "volumes": {
-                            "spool": {"volumeSourceName": "controller-spool"}
-                        }
-                    }
+                    "controller": {"volumes": {"spool": {"volumeSourceName": "controller-spool"}}}
                 },
             },
         }
@@ -71,17 +67,13 @@ class _FakeCluster:
             "spec": {
                 "replicas": 1,
                 "volumeClaimUpdateStrategy": {"type": "OnPodRollingUpdate"},
-                "volumeClaimTemplates": [
-                    {"metadata": {"name": "controller-spool"}}
-                ],
+                "volumeClaimTemplates": [{"metadata": {"name": "controller-spool"}}],
                 "template": {
                     "spec": {
                         "volumes": [
                             {
                                 "name": "controller-spool",
-                                "persistentVolumeClaim": {
-                                    "claimName": "controller-spool-pvc"
-                                },
+                                "persistentVolumeClaim": {"claimName": "controller-spool-pvc"},
                             }
                         ]
                     }
@@ -108,9 +100,7 @@ class _FakeCluster:
                 "volumes": [
                     {
                         "name": "controller-spool",
-                        "persistentVolumeClaim": {
-                            "claimName": "controller-spool-pvc"
-                        },
+                        "persistentVolumeClaim": {"claimName": "controller-spool-pvc"},
                     }
                 ]
             },
@@ -208,9 +198,7 @@ class _FakeCluster:
                 return self._result(copy.deepcopy(self.controller_pod))
             if namespace == "soperator" and resource == "pvc":
                 payload = (
-                    self.source_pvc
-                    if name == "controller-spool-controller-0"
-                    else self.target_pvc
+                    self.source_pvc if name == "controller-spool-controller-0" else self.target_pvc
                 )
                 return self._result(copy.deepcopy(payload))
             if not namespace and resource == "pv" and name == "source-pv":
@@ -248,8 +236,7 @@ class _FakeCluster:
                 (
                     item
                     for item in operations
-                    if item["op"] == "test"
-                    and item["path"] == "/metadata/resourceVersion"
+                    if item["op"] == "test" and item["path"] == "/metadata/resourceVersion"
                 ),
                 None,
             )
@@ -260,15 +247,10 @@ class _FakeCluster:
             ):
                 return self._result({}, returncode=1)
             if any(item["path"] == "/spec/volumeClaimUpdateStrategy" for item in operations):
-                self.statefulset["spec"]["volumeClaimUpdateStrategy"] = {
-                    "type": "OnDelete"
-                }
+                self.statefulset["spec"]["volumeClaimUpdateStrategy"] = {"type": "OnDelete"}
                 self.pending_statefulset_status_update = True
             elif any(item["path"] == "/spec/volumeClaimTemplates/0" for item in operations):
-                if (
-                    self.statefulset["spec"]["volumeClaimUpdateStrategy"]["type"]
-                    != "OnDelete"
-                ):
+                if self.statefulset["spec"]["volumeClaimUpdateStrategy"]["type"] != "OnDelete":
                     return self._result({}, returncode=1)
                 self.statefulset["spec"]["volumeClaimTemplates"] = []
             else:
@@ -288,9 +270,7 @@ class _FakeCluster:
             self.controller_pod["spec"]["volumes"] = [
                 {
                     "name": "controller-spool",
-                    "persistentVolumeClaim": {
-                        "claimName": "controller-spool-pvc"
-                    },
+                    "persistentVolumeClaim": {"claimName": "controller-spool-pvc"},
                 }
             ]
             self.controller_pod["status"]["initContainerStatuses"] = [
@@ -357,14 +337,11 @@ def test_controller_spool_migration_is_two_step_checkpointed_and_non_deleting() 
         "value": "OnDelete",
     } in cluster.statefulset_patches[1]
     assert not any(
-        item["path"] == "/metadata/resourceVersion"
-        for item in cluster.statefulset_patches[1]
+        item["path"] == "/metadata/resourceVersion" for item in cluster.statefulset_patches[1]
     )
     assert journal["value"]["schema"] == SOPERATOR_CONTROLLER_SPOOL_MIGRATION_SCHEMA
     assert journal["value"]["status"] == "prepared"
-    assert journal["value"]["lastCompletedStep"] == (
-        "controller-restored-before-release-open"
-    )
+    assert journal["value"]["lastCompletedStep"] == ("controller-restored-before-release-open")
 
     migration.finish(prepared, release_opened=True)
 
@@ -403,9 +380,7 @@ def test_controller_spool_migration_removes_template_reintroduced_before_release
     cluster.controller_pod["spec"]["volumes"] = [
         {
             "name": "controller-spool",
-            "persistentVolumeClaim": {
-                "claimName": "controller-spool-controller-0"
-            },
+            "persistentVolumeClaim": {"claimName": "controller-spool-controller-0"},
         }
     ]
     cluster.controller_pod["status"]["initContainerStatuses"] = [
@@ -418,9 +393,10 @@ def test_controller_spool_migration_removes_template_reintroduced_before_release
     migration.finish(prepared, release_opened=True)
 
     assert cluster.statefulset["spec"]["volumeClaimTemplates"] == []
-    assert cluster.controller_pod["spec"]["volumes"][0][
-        "persistentVolumeClaim"
-    ]["claimName"] == "controller-spool-pvc"
+    assert (
+        cluster.controller_pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"]
+        == "controller-spool-pvc"
+    )
     assert cluster.controller_pod["status"]["initContainerStatuses"][0]["state"] == {
         "terminated": {"exitCode": 0}
     }
@@ -464,9 +440,7 @@ def test_completed_spool_migration_reopens_reintroduced_template_for_finish() ->
 
     assert resumed_prepared["status"] == "prepared"
     assert journal["value"]["status"] == "prepared"
-    assert journal["value"]["lastCompletedStep"] == (
-        "post-open-legacy-template-reintroduced"
-    )
+    assert journal["value"]["lastCompletedStep"] == ("post-open-legacy-template-reintroduced")
 
     resumed.finish(resumed_prepared, release_opened=True)
     assert cluster.statefulset["spec"]["volumeClaimTemplates"] == []
@@ -490,9 +464,7 @@ def test_completed_spool_migration_rechecks_after_main_release_reopens() -> None
     cluster.controller_pod["spec"]["volumes"] = [
         {
             "name": "controller-spool",
-            "persistentVolumeClaim": {
-                "claimName": "controller-spool-controller-0"
-            },
+            "persistentVolumeClaim": {"claimName": "controller-spool-controller-0"},
         }
     ]
     cluster.controller_pod["status"]["initContainerStatuses"] = [
@@ -505,9 +477,10 @@ def test_completed_spool_migration_rechecks_after_main_release_reopens() -> None
     resumed.finish(resumed_prepared, release_opened=True)
 
     assert cluster.statefulset["spec"]["volumeClaimTemplates"] == []
-    assert cluster.controller_pod["spec"]["volumes"][0][
-        "persistentVolumeClaim"
-    ]["claimName"] == "controller-spool-pvc"
+    assert (
+        cluster.controller_pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"]
+        == "controller-spool-pvc"
+    )
     assert cluster.controller_pod["status"]["initContainerStatuses"][0]["state"] == {
         "terminated": {"exitCode": 0}
     }
@@ -524,9 +497,9 @@ def test_controller_spool_migration_refuses_recreation_for_wrong_pod_owner() -> 
         {"metadata": {"name": "controller-spool"}}
     ]
     cluster.controller_pod["metadata"]["ownerReferences"][0]["uid"] = "other-owner"
-    cluster.controller_pod["spec"]["volumes"][0]["persistentVolumeClaim"][
-        "claimName"
-    ] = "controller-spool-controller-0"
+    cluster.controller_pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = (
+        "controller-spool-controller-0"
+    )
 
     with pytest.raises(RuntimeError, match="owner is not the exact"):
         migration.finish(prepared, release_opened=True)

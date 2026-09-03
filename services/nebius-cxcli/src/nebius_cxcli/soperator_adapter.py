@@ -412,8 +412,7 @@ def soperator_monitoring_dashboards_require_post_flux(
         return False
     chart = release.charts.get("monitoringDashboards")
     return bool(
-        chart is not None
-        and chart.digest in SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS
+        chart is not None and chart.digest in SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS
     )
 
 
@@ -435,9 +434,7 @@ def soperator_vm_stack_cleanup_exception(
     if identity not in SOPERATOR_VM_STACK_CLEANUP_HOOK_DISABLED_PACKAGES:
         return None
     matching_nodes = tuple(
-        node
-        for node in release.release_graph
-        if node.release_name == "soperator-fluxcd-vm-stack"
+        node for node in release.release_graph if node.release_name == "soperator-fluxcd-vm-stack"
     )
     if len(matching_nodes) != 1:
         return None
@@ -474,9 +471,7 @@ def _verified_soperator_dashboard_directory(
     for part in (*source_path.parts, "dashboards"):
         current = current / part
         if current.is_symlink() or not current.is_dir():
-            raise ValueError(
-                "the frozen monitoring-dashboard source must contain real directories"
-            )
+            raise ValueError("the frozen monitoring-dashboard source must contain real directories")
     try:
         current.resolve(strict=True).relative_to(resolved_root)
     except ValueError as exc:
@@ -550,9 +545,7 @@ def render_soperator_monitoring_dashboard_documents(
                         ),
                         "helm.sh/chart": chart_label,
                         "app.kubernetes.io/name": chart.name,
-                        "app.kubernetes.io/instance": (
-                            "soperator-fluxcd-monitoring-dashboards"
-                        ),
+                        "app.kubernetes.io/instance": ("soperator-fluxcd-monitoring-dashboards"),
                         "app.kubernetes.io/managed-by": "nebius-cxcli",
                         "grafana_dashboard": "1",
                     },
@@ -1140,9 +1133,7 @@ def _compile_slurm_values(
         if isinstance(controller, dict):
             controller_volumes = controller.setdefault("volumes", {})
             if isinstance(controller_volumes, dict):
-                controller_volumes["spool"] = {
-                    "volumeSourceName": "controller-spool"
-                }
+                controller_volumes["spool"] = {"volumeSourceName": "controller-spool"}
             _append_mount_gate(
                 controller,
                 name="controller-spool",
@@ -1460,8 +1451,7 @@ def compile_upstream_soperator_values(
         vm_stack_exception = soperator_vm_stack_cleanup_exception(pinned)
         vm_stack_values = observability.get("vmStack")
         vm_stack_enabled = not (
-            isinstance(vm_stack_values, Mapping)
-            and vm_stack_values.get("enabled") is False
+            isinstance(vm_stack_values, Mapping) and vm_stack_values.get("enabled") is False
         )
         if vm_stack_exception is not None and vm_stack_enabled:
             chart_exceptions.append(vm_stack_exception)
@@ -1495,14 +1485,11 @@ def compile_upstream_soperator_values(
         manager = _mapping(controller_manager.get("manager"))
         manager_env = _mapping(manager.get("env"))
         observability_values = _mapping(umbrella.get("observability"))
-        prometheus_operator = _mapping(
-            observability_values.get("prometheusOperator")
-        )
+        prometheus_operator = _mapping(observability_values.get("prometheusOperator"))
         manager_env.update(
             {
                 "isApparmorCrdInstalled": (
-                    _mapping(umbrella.get("securityProfilesOperator")).get("enabled")
-                    is True
+                    _mapping(umbrella.get("securityProfilesOperator")).get("enabled") is True
                 ),
                 "isMariadbCrdInstalled": (
                     _mapping(umbrella.get("mariadbOperator")).get("enabled") is True

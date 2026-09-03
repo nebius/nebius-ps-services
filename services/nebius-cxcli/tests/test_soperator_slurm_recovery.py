@@ -96,13 +96,16 @@ def test_reservation_parser_accepts_unquoted_time_values_with_spaces() -> None:
         "ReservationName=cxcli_0123456789abcdef "
         "StartTime='2026-08-29 17:36:35.000' Users=root"
     )
-    assert slurm_upgrade_preimage_from_payload(
-        build_slurm_upgrade_preimage(
-            partitions=(),
-            jobs=(),
-            reservations=reservations,
-        ).as_payload()
-    ).reservations == reservations
+    assert (
+        slurm_upgrade_preimage_from_payload(
+            build_slurm_upgrade_preimage(
+                partitions=(),
+                jobs=(),
+                reservations=reservations,
+            ).as_payload()
+        ).reservations
+        == reservations
+    )
 
 
 def test_reservation_parser_does_not_split_key_like_text_inside_quotes() -> None:

@@ -170,16 +170,11 @@ def soperator_registration_optional_service_topology_from_discovery(
     """Return the one authoritative discovery-time optional-service projection."""
 
     raw_clusters = kubernetes.get("slurmclusters")
-    clusters = [
-        item
-        for item in raw_clusters or ()
-        if isinstance(item, Mapping)
-    ]
+    clusters = [item for item in raw_clusters or () if isinstance(item, Mapping)]
     available = [
         item
         for item in clusters
-        if _non_empty_text(_mapping_path_value(item, "status.phase")).lower()
-        == "available"
+        if _non_empty_text(_mapping_path_value(item, "status.phase")).lower() == "available"
     ]
     selected = available or clusters
     if len(selected) != 1:

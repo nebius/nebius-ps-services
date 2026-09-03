@@ -62,22 +62,16 @@ _SOPERATOR_WORKER_EPHEMERAL_INPUT = "soperator.worker_ephemeral_nodes"
 _SOPERATOR_WORKER_NODE_GROUPS_INPUT = "soperator.worker_node_groups"
 
 
-_SOPERATOR_STATIC_CONFIG_REVISION_ANNOTATION = (
-    "nebius.ai/cxcli-static-slurm-config-sha256"
-)
+_SOPERATOR_STATIC_CONFIG_REVISION_ANNOTATION = "nebius.ai/cxcli-static-slurm-config-sha256"
 
 
 _SOPERATOR_STATIC_CONFIG_REVISION_ENV = "CXCLI_STATIC_SLURM_CONFIG_SHA256"
 
 
-_SOPERATOR_STATIC_CONFIG_REVISION_SCHEMA = (
-    "nebius-cxcli.soperator-static-slurm-config.v2"
-)
+_SOPERATOR_STATIC_CONFIG_REVISION_SCHEMA = "nebius-cxcli.soperator-static-slurm-config.v2"
 
 
-_SOPERATOR_STATIC_CONFIG_REVISION_LEGACY_SCHEMA = (
-    "nebius-cxcli.soperator-static-slurm-config.v1"
-)
+_SOPERATOR_STATIC_CONFIG_REVISION_LEGACY_SCHEMA = "nebius-cxcli.soperator-static-slurm-config.v1"
 
 
 _SOPERATOR_REGISTERED_RUNTIME_MOUNTS = (
@@ -678,9 +672,7 @@ def _materialize_soperator_registered_runtime_mounts(values: dict[str, Any]) -> 
             volumes = {}
             slurmd["volumes"] = volumes
         if not isinstance(volumes, dict):
-            raise ValueError(
-                f"Soperator NodeSet values[{index}].slurmd.volumes must be a mapping"
-            )
+            raise ValueError(f"Soperator NodeSet values[{index}].slurmd.volumes must be a mapping")
         mounts = volumes.get("customVolumeMounts")
         if mounts is None:
             mounts = []
@@ -732,9 +724,10 @@ def _materialize_soperator_registered_static_worker_rollout(
     for index, item in enumerate(nodesets):
         if not isinstance(item, dict):
             continue
-        if not _non_empty_text(item.get("name")) or _positive_int(
-            item.get("replicas"), default=0
-        ) <= 0:
+        if (
+            not _non_empty_text(item.get("name"))
+            or _positive_int(item.get("replicas"), default=0) <= 0
+        ):
             continue
         annotations = item.get("workerAnnotations")
         if annotations is None:
@@ -749,23 +742,18 @@ def _materialize_soperator_registered_static_worker_rollout(
             changed = True
         slurmd = item.get("slurmd")
         if not isinstance(slurmd, dict):
-            raise ValueError(
-                f"Soperator NodeSet values[{index}].slurmd must be a mapping"
-            )
+            raise ValueError(f"Soperator NodeSet values[{index}].slurmd must be a mapping")
         custom_env = slurmd.get("customEnv")
         if custom_env is None:
             custom_env = []
             slurmd["customEnv"] = custom_env
         if not isinstance(custom_env, list):
-            raise ValueError(
-                f"Soperator NodeSet values[{index}].slurmd.customEnv must be a list"
-            )
+            raise ValueError(f"Soperator NodeSet values[{index}].slurmd.customEnv must be a list")
         revision_indexes = [
             env_index
             for env_index, env in enumerate(custom_env)
             if isinstance(env, Mapping)
-            and _non_empty_text(env.get("name"))
-            == _SOPERATOR_STATIC_CONFIG_REVISION_ENV
+            and _non_empty_text(env.get("name")) == _SOPERATOR_STATIC_CONFIG_REVISION_ENV
         ]
         if len(revision_indexes) > 1:
             raise ValueError(
@@ -815,8 +803,7 @@ def _prepend_internal_activechecks_partition(values: dict[str, Any]) -> bool:
     internal_partition = _soperator_internal_activechecks_partition()
     if any(
         isinstance(partition, Mapping)
-        and _non_empty_text(partition.get("name"))
-        == _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME
+        and _non_empty_text(partition.get("name")) == _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME
         for partition in partitions
     ):
         return False
@@ -2830,8 +2817,7 @@ def _soperator_hydrate_registered_nodesets_from_profile(
     adopted_worker_count = sum(
         1
         for item in adopted
-        if isinstance(item, Mapping)
-        and _non_empty_text(item.get("name")).startswith("worker")
+        if isinstance(item, Mapping) and _non_empty_text(item.get("name")).startswith("worker")
     )
     for index, raw_nodeset in enumerate(adopted):
         if not isinstance(raw_nodeset, Mapping):
@@ -2861,14 +2847,10 @@ def _soperator_hydrate_registered_nodesets_from_profile(
         materialized = copy.deepcopy(to_plain_data(dict(selected[0][1])))
         _merge_replace_mapping(materialized, raw_nodeset)
         if "nodeSelector" in raw_nodeset:
-            materialized["nodeSelector"] = copy.deepcopy(
-                to_plain_data(raw_nodeset["nodeSelector"])
-            )
+            materialized["nodeSelector"] = copy.deepcopy(to_plain_data(raw_nodeset["nodeSelector"]))
             materialized.pop("affinity", None)
         elif "affinity" in raw_nodeset:
-            materialized["affinity"] = copy.deepcopy(
-                to_plain_data(raw_nodeset["affinity"])
-            )
+            materialized["affinity"] = copy.deepcopy(to_plain_data(raw_nodeset["affinity"]))
             materialized.pop("nodeSelector", None)
         materialized["name"] = name
         if inputs is not None and placements is not None and name.startswith("worker"):
@@ -2951,11 +2933,7 @@ def _soperator_normalize_registered_gpu_shape(
         if legacy_present
         else None
     )
-    if (
-        canonical_count is not None
-        and legacy_count is not None
-        and canonical_count != legacy_count
-    ):
+    if canonical_count is not None and legacy_count is not None and canonical_count != legacy_count:
         raise ValueError(
             f"Registered worker NodeSet '{name}' has conflicting GPU counts in "
             "slurmd.resources.gpu and slurmd.resources.nvidia.com/gpu."
@@ -3016,9 +2994,7 @@ def _soperator_normalize_registered_gpu_shape(
         raise ValueError(f"Registered worker NodeSet '{name}' slurmd must be a mapping.")
     resources = slurmd.setdefault("resources", {})
     if not isinstance(resources, dict):
-        raise ValueError(
-            f"Registered worker NodeSet '{name}' slurmd.resources must be a mapping."
-        )
+        raise ValueError(f"Registered worker NodeSet '{name}' slurmd.resources must be a mapping.")
     resources["gpu"] = effective_gpu_count
     resources.pop("nvidia.com/gpu", None)
 
@@ -3029,9 +3005,7 @@ def _soperator_normalize_registered_gpu_shape(
     if not raw_gres_present:
         node_config = nodeset.setdefault("nodeConfig", {})
         if not isinstance(node_config, dict):
-            raise ValueError(
-                f"Registered worker NodeSet '{name}' nodeConfig must be a mapping."
-            )
+            raise ValueError(f"Registered worker NodeSet '{name}' nodeConfig must be a mapping.")
         last_gpu_index = effective_gpu_count - 1
         node_config["gresConfig"] = [
             f"AutoDetect=off Name=gpu File=/dev/nvidia[0-{last_gpu_index}]"
@@ -3226,8 +3200,7 @@ def _soperator_bind_adopted_nodesets_to_discovered_placements(
     adopted_workers = [
         item
         for item in nodesets
-        if isinstance(item, dict)
-        and _non_empty_text(item.get("name")).startswith("worker")
+        if isinstance(item, dict) and _non_empty_text(item.get("name")).startswith("worker")
     ]
     for nodeset in adopted_workers:
         name = _non_empty_text(nodeset.get("name"))
@@ -3241,13 +3214,8 @@ def _soperator_bind_adopted_nodesets_to_discovered_placements(
             )
         if len(group_keys) == 1:
             expression = _soperator_node_group_selector_expression(inputs, group_keys[0])
-            if (
-                expression.get("operator") == "In"
-                and len(expression.get("values", [])) == 1
-            ):
-                nodeset["nodeSelector"] = {
-                    str(expression["key"]): str(expression["values"][0])
-                }
+            if expression.get("operator") == "In" and len(expression.get("values", [])) == 1:
+                nodeset["nodeSelector"] = {str(expression["key"]): str(expression["values"][0])}
                 nodeset.pop("affinity", None)
                 continue
         terms = _soperator_node_group_selector_terms(inputs, group_keys)
@@ -3257,9 +3225,7 @@ def _soperator_bind_adopted_nodesets_to_discovered_placements(
             )
         nodeset["affinity"] = {
             "nodeAffinity": {
-                "requiredDuringSchedulingIgnoredDuringExecution": {
-                    "nodeSelectorTerms": terms
-                }
+                "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": terms}
             }
         }
         nodeset.pop("nodeSelector", None)

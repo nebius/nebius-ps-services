@@ -37,9 +37,7 @@ def test_soperator_docs_keep_exactly_two_accessible_svg_sources_of_truth() -> No
             and not any(attribute.rsplit("}", 1)[-1] == "href" for attribute in element.attrib)
             for element in root.iter()
         )
-        children = {
-            child.tag.rsplit("}", 1)[-1]: (child.text or "").strip() for child in root
-        }
+        children = {child.tag.rsplit("}", 1)[-1]: (child.text or "").strip() for child in root}
         assert children["title"]
         assert children["desc"]
         assert next(child for child in root if child.tag.endswith("title")).attrib.get("id") == (
@@ -60,12 +58,8 @@ def test_soperator_svg_assets_are_referenced_by_readme_and_design() -> None:
 
 
 def test_soperator_svg_semantics_match_current_upgrade_and_rootfs_contracts() -> None:
-    workflow = (DOCS_ROOT / "soperator-protected-upgrade-workflow.svg").read_text(
-        encoding="utf-8"
-    )
-    jail = (DOCS_ROOT / "jail-rootfs-active-passive-storage.svg").read_text(
-        encoding="utf-8"
-    )
+    workflow = (DOCS_ROOT / "soperator-protected-upgrade-workflow.svg").read_text(encoding="utf-8")
+    jail = (DOCS_ROOT / "jail-rootfs-active-passive-storage.svg").read_text(encoding="utf-8")
 
     retired_contracts = (
         "scratch PVC",

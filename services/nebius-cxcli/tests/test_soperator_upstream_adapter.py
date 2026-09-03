@@ -318,11 +318,14 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
     env = {item["name"]: item for item in mount_container["env"]}
     assert env["FILESYSTEM_ID"]["value"] == "filesystem-jail"
     assert env["NODE_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "spec.nodeName"
-    assert len(
-        jail_daemonset["spec"]["template"]["metadata"]["annotations"][
-            "soperator.nebius.ai/mount-script-sha256"
-        ]
-    ) == 64
+    assert (
+        len(
+            jail_daemonset["spec"]["template"]["metadata"]["annotations"][
+                "soperator.nebius.ai/mount-script-sha256"
+            ]
+        )
+        == 64
+    )
     assert set(env["CREATE_DIRS"]["value"].split(";")) == {
         "rootfs/slot-a",
         "rootfs/slot-b",
@@ -345,9 +348,7 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
     assert "umask 077" not in mount_script
 
     controller = umbrella["slurmCluster"]["overrideValues"]["slurmNodes"]["controller"]
-    assert controller["volumes"]["spool"] == {
-        "volumeSourceName": "controller-spool"
-    }
+    assert controller["volumes"]["spool"] == {"volumeSourceName": "controller-spool"}
     assert {item["name"] for item in controller["customInitContainers"]} >= {
         "mount-gate-controller-spool",
         "mount-gate-controller-jail",
@@ -376,9 +377,7 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
         for item in exporter["customInitContainers"]
     )
     login = umbrella["slurmCluster"]["overrideValues"]["slurmNodes"]["login"]
-    assert [item["mountPath"] for item in login["volumes"]["jailSubMounts"]] == [
-        "/home"
-    ]
+    assert [item["mountPath"] for item in login["volumes"]["jailSubMounts"]] == ["/home"]
     worker = umbrella["nodesets"]["overrideValues"]["nodesets"][0]
     assert {item["name"] for item in worker["customInitContainers"]} >= {
         "mount-gate-worker-jail",
@@ -419,9 +418,7 @@ def test_rest_disabled_controller_has_no_jwt_config_gate() -> None:
         for item in controller["customInitContainers"]
         if item["name"] == "mount-gate-controller-jail"
     )
-    assert "Waiting for Slurm REST JWT configuration" not in controller_jail_gate[
-        "command"
-    ][-1]
+    assert "Waiting for Slurm REST JWT configuration" not in controller_jail_gate["command"][-1]
 
 
 def test_adapter_requires_optional_persistent_directory_to_preexist() -> None:
@@ -533,8 +530,7 @@ def test_adapter_adopts_exact_controller_and_accounting_storage() -> None:
         item
         for item in documents
         if item.get("kind") == "DaemonSet"
-        and item.get("metadata", {}).get("name")
-        == "nebius-cxcli-soperator-controller-spool-mount"
+        and item.get("metadata", {}).get("name") == "nebius-cxcli-soperator-controller-spool-mount"
     )
     spool_env = {
         item["name"]: item.get("value")
@@ -542,9 +538,10 @@ def test_adapter_adopts_exact_controller_and_accounting_storage() -> None:
         if "value" in item
     }
     assert spool_env["MOUNT_ID"] == "controller-spool"
-    assert spool_env["FILESYSTEM_ID"] == values["sfs"]["filesystems"]["controller-spool"][
-        "filesystem_id"
-    ]
+    assert (
+        spool_env["FILESYSTEM_ID"]
+        == values["sfs"]["filesystems"]["controller-spool"]["filesystem_id"]
+    )
 
     current_documents = [
         item
@@ -566,12 +563,9 @@ def test_adapter_adopts_exact_controller_and_accounting_storage() -> None:
         item
         for item in changed
         if item.get("kind") == "DaemonSet"
-        and item.get("metadata", {}).get("name")
-        == "nebius-cxcli-soperator-controller-spool-mount"
+        and item.get("metadata", {}).get("name") == "nebius-cxcli-soperator-controller-spool-mount"
     )
-    changed_env = changed_spool_mount["spec"]["template"]["spec"]["containers"][0][
-        "env"
-    ]
+    changed_env = changed_spool_mount["spec"]["template"]["spec"]["containers"][0]["env"]
     next(item for item in changed_env if item["name"] == "FILESYSTEM_ID")["value"] = (
         "filesystem-other"
     )
@@ -591,8 +585,7 @@ def test_adapter_adopts_exact_controller_and_accounting_storage() -> None:
         item
         for item in fallback_documents
         if item.get("kind") == "DaemonSet"
-        and item.get("metadata", {}).get("name")
-        == "nebius-cxcli-soperator-controller-spool-mount"
+        and item.get("metadata", {}).get("name") == "nebius-cxcli-soperator-controller-spool-mount"
     )
     fallback_env = {
         item["name"]: item.get("value")
@@ -738,9 +731,7 @@ def test_adapter_renders_verified_official_dashboards_as_owned_configmaps(
         assert metadata["annotations"]["soperator.nebius.ai/upstream-chart-digest"] == (
             broken_digest
         )
-        assert metadata["annotations"]["soperator.nebius.ai/dashboard-sha256"].startswith(
-            "sha256:"
-        )
+        assert metadata["annotations"]["soperator.nebius.ai/dashboard-sha256"].startswith("sha256:")
         assert document["data"] == {
             f"{dashboard_name}.json": (dashboard_dir / source_name).read_text(encoding="utf-8")
         }

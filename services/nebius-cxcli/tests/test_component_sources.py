@@ -462,9 +462,7 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
 
     soperator_settings = soperator_wizard_settings()
     soperator = soperator_install_entry("4.1.7")
-    assert soperator.source == (
-        "oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd"
-    )
+    assert soperator.source == ("oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd")
     assert soperator.chart_repo == soperator.source
     assert soperator.chart_name == "helm-soperator-fluxcd"
     assert soperator.version == "4.1.7"

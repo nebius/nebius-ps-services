@@ -23214,17 +23214,13 @@ def _validate_component_sources_or_raise(
     normalized_selected = (
         None
         if selected_app_ids is None
-        else {
-            normalize_component_token(value)
-            for value in selected_app_ids
-            if str(value).strip()
-        }
+        else {normalize_component_token(value) for value in selected_app_ids if str(value).strip()}
     )
-    validate_soperator = normalized_selected is not None and _SOPERATOR_APP_ID in normalized_selected
+    validate_soperator = (
+        normalized_selected is not None and _SOPERATOR_APP_ID in normalized_selected
+    )
     catalog_selected = (
-        None
-        if normalized_selected is None
-        else normalized_selected - {_SOPERATOR_APP_ID}
+        None if normalized_selected is None else normalized_selected - {_SOPERATOR_APP_ID}
     )
     with console.status("[cyan]Validating component catalog/settings...[/cyan]"):
         registry_kwargs: dict[str, Any] = {}

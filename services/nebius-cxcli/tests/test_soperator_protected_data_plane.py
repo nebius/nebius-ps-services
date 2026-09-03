@@ -975,11 +975,7 @@ def test_fresh_consumer_census_ignores_terminal_foreign_pods(phase: str) -> None
             "name": "preserved-populate-evidence",
             "labels": {"nebius-cxcli/operation-id": "superseded"},
         },
-        "spec": {
-            "volumes": [
-                {"persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}}
-            ]
-        },
+        "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}}]},
         "status": {"phase": phase},
     }
 
@@ -1002,11 +998,7 @@ def test_fresh_consumer_census_rejects_nonterminal_foreign_pods(phase: str) -> N
             "name": "live-foreign-consumer",
             "labels": {"nebius-cxcli/operation-id": "foreign"},
         },
-        "spec": {
-            "volumes": [
-                {"persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}}
-            ]
-        },
+        "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}}]},
         "status": {"phase": phase},
     }
 

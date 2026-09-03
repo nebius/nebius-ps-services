@@ -351,9 +351,7 @@ def test_operation_anchor_freezes_and_loads_exact_main_workload_authority(
             return subprocess.CompletedProcess(args, 0, stdout=json.dumps(state), stderr="")
         if args[0] == "patch":
             for operation in json.loads(args[-1]):
-                if operation["op"] in {"add", "replace"} and operation[
-                    "path"
-                ].startswith("/data/"):
+                if operation["op"] in {"add", "replace"} and operation["path"].startswith("/data/"):
                     state["data"][operation["path"].removeprefix("/data/")] = operation["value"]
             state["metadata"]["resourceVersion"] = "13"
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
@@ -369,9 +367,7 @@ def test_operation_anchor_freezes_and_loads_exact_main_workload_authority(
     with pytest.raises(SoperatorSafetyPauseError, match="conflicts"):
         anchor.freeze_main_workload_authority(identity)
     with pytest.raises(SoperatorSafetyPauseError, match="conflicts"):
-        anchor.freeze_main_workload_authority(
-            replace(advanced, uid="replacement-main-uid")
-        )
+        anchor.freeze_main_workload_authority(replace(advanced, uid="replacement-main-uid"))
 
 
 @pytest.mark.parametrize(

@@ -37,9 +37,7 @@ _SLURM_CLUSTER_RELEASE_NAME = "soperator-fluxcd-slurm-cluster"
 _SLURM_CONTROLLER_SPOOL_CLAIM_PATH = (
     "/spec/slurmNodes/controller/volumes/spool/volumeClaimTemplateSpec"
 )
-_SLURM_CONTROLLER_SPOOL_SOURCE_PATH = (
-    "/spec/slurmNodes/controller/volumes/spool/volumeSourceName"
-)
+_SLURM_CONTROLLER_SPOOL_SOURCE_PATH = "/spec/slurmNodes/controller/volumes/spool/volumeSourceName"
 
 
 def _slug(value: str) -> str:
@@ -436,9 +434,7 @@ def soperator_graph_post_render_patches(
             override_values = _nested(values, "slurmCluster", "overrideValues")
             cluster_name = str(override_values.get("clusterName") or "").strip()
             if not cluster_name:
-                raise ValueError(
-                    "Soperator Slurm child requires an exact cluster identity"
-                )
+                raise ValueError("Soperator Slurm child requires an exact cluster identity")
             child_patch: list[dict[str, Any]] = [
                 {
                     "op": "test",

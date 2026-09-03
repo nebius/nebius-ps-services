@@ -198,9 +198,7 @@ def test_recovery_journal_rejects_changed_safe_replay_supersession_intent(
     journal.begin_safe_replay_supersession(**evidence)
 
     with pytest.raises(RuntimeError, match="intent changed"):
-        journal.begin_safe_replay_supersession(
-            **{**evidence, "workload_uid": "job-uid-b"}
-        )
+        journal.begin_safe_replay_supersession(**{**evidence, "workload_uid": "job-uid-b"})
 
 
 def test_recovery_journal_rejects_supersession_after_inventory_boundary(

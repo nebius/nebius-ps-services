@@ -404,16 +404,13 @@ def test_registration_reads_optional_service_topology_from_discovery_section() -
         ]
     }
 
-    assert (
-        registration_projection.soperator_registration_optional_service_topology_from_discovery(
-            kubernetes
-        )
-        == {
-            "accounting": {"enabled": True},
-            "exporter": {"enabled": False, "size": 1},
-            "rest": {"enabled": True, "size": 2},
-        }
-    )
+    assert registration_projection.soperator_registration_optional_service_topology_from_discovery(
+        kubernetes
+    ) == {
+        "accounting": {"enabled": True},
+        "exporter": {"enabled": False, "size": 1},
+        "rest": {"enabled": True, "size": 2},
+    }
 
 
 def test_registration_replaces_profile_partition_defaults_with_live_topology() -> None:
@@ -435,7 +432,9 @@ def test_registration_replaces_profile_partition_defaults_with_live_topology() -
     assert row["values"]["partitionConfiguration"] == {"configType": "default"}
 
 
-def test_registration_materialization_compiles_live_default_partitions_for_static_nodesets() -> None:
+def test_registration_materialization_compiles_live_default_partitions_for_static_nodesets() -> (
+    None
+):
     payload = _registered_payload()
     payload["deploy"]["targets"][0]["inventory"]["node_groups"]["worker-a"] = {
         "node_count": 1,
@@ -471,9 +470,7 @@ def test_registration_materialization_compiles_live_default_partitions_for_stati
             }
         ],
         "partitionConfiguration": {"configType": "default"},
-        "slurmNodes": {
-            "rest": {"enabled": True, "k8sNodeFilterName": "system"}
-        },
+        "slurmNodes": {"rest": {"enabled": True, "k8sNodeFilterName": "system"}},
     }
 
     soperator_config._materialize_soperator_component_defaults(payload)
@@ -514,9 +511,7 @@ def test_registration_materialization_compiles_live_default_partitions_for_stati
     worker = row["values"]["nodesets"][0]
     assert worker["slurmd"]["resources"]["gpu"] == 1
     assert "nvidia.com/gpu" not in worker["slurmd"]["resources"]
-    assert worker["nodeConfig"]["gresConfig"] == [
-        "AutoDetect=off Name=gpu File=/dev/nvidia[0]"
-    ]
+    assert worker["nodeConfig"]["gresConfig"] == ["AutoDetect=off Name=gpu File=/dev/nvidia[0]"]
     assert "Gres=gpu:1" in worker["nodeConfig"]["static"]
     assert worker["workerAnnotations"] == {
         soperator_config._SOPERATOR_STATIC_CONFIG_REVISION_ANNOTATION: (
@@ -529,19 +524,14 @@ def test_registration_materialization_compiles_live_default_partitions_for_stati
     } in worker["slurmd"]["customEnv"]
     assert {
         "name": soperator_config._SOPERATOR_STATIC_CONFIG_REVISION_ENV,
-        "value": soperator_config._soperator_registered_static_config_revision(
-            row["values"]
-        ),
+        "value": soperator_config._soperator_registered_static_config_revision(row["values"]),
     } in worker["slurmd"]["customEnv"]
     assert worker["slurmd"]["volumes"]["customVolumeMounts"] == [
-        copy.deepcopy(item)
-        for item in soperator_config._SOPERATOR_REGISTERED_RUNTIME_MOUNTS
+        copy.deepcopy(item) for item in soperator_config._SOPERATOR_REGISTERED_RUNTIME_MOUNTS
     ]
     assert row["values"]["slurmNodes"]["rest"]["enabled"] is True
     assert row["values"]["slurmNodes"]["rest"]["k8sNodeFilterName"] == "system"
-    assert (
-        row["values"]["slurmNodes"]["controller"]["openMetrics"]["enabled"] is False
-    )
+    assert row["values"]["slurmNodes"]["controller"]["openMetrics"]["enabled"] is False
 
 
 def test_registration_runtime_mount_materialization_rejects_reserved_path_collision() -> None:
@@ -763,13 +753,16 @@ def test_recovery_storage_discovery_rejects_admitted_target_drift() -> None:
 def test_new_admission_storage_discovery_still_requires_fresh_inventory() -> None:
     fresh_result = {"storage_kind": "sfs", "sfs_node_group_ids": ("nodes-a",)}
 
-    assert cli._soperator_storage_discovery_inputs_for_admission(
-        infrastructure=None,
-        project_id="project-a",
-        cluster_id="cluster-a",
-        kubernetes_uid="kubernetes-a",
-        discover_fresh=lambda: fresh_result,
-    ) is fresh_result
+    assert (
+        cli._soperator_storage_discovery_inputs_for_admission(
+            infrastructure=None,
+            project_id="project-a",
+            cluster_id="cluster-a",
+            kubernetes_uid="kubernetes-a",
+            discover_fresh=lambda: fresh_result,
+        )
+        is fresh_result
+    )
 
 
 @pytest.mark.parametrize("forbid_deletion", [False, True])

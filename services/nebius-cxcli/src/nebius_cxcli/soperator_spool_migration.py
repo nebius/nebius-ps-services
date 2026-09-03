@@ -11,9 +11,7 @@ from typing import Protocol
 
 from .soperator_failures import SoperatorSafetyPauseError
 
-SOPERATOR_CONTROLLER_SPOOL_MIGRATION_SCHEMA = (
-    "nebius-cxcli.soperator-controller-spool-migration.v1"
-)
+SOPERATOR_CONTROLLER_SPOOL_MIGRATION_SCHEMA = "nebius-cxcli.soperator-controller-spool-migration.v1"
 
 _SOPERATOR_NAMESPACE = "soperator"
 _SOPERATOR_CLUSTER_NAME = "soperator"
@@ -135,8 +133,7 @@ class SoperatorControllerSpoolMigration:
                 detail = "details redacted"
             suffix = f": {detail}" if detail else ""
             raise RuntimeError(
-                "Soperator controller spool migration Kubernetes request failed"
-                f"{suffix}"
+                f"Soperator controller spool migration Kubernetes request failed{suffix}"
             )
         try:
             payload = json.loads(result.stdout or "{}")
@@ -241,13 +238,10 @@ class SoperatorControllerSpoolMigration:
 
     def _observe_identity(self, *, allow_migrated: bool) -> _ObservedMigrationIdentity:
         deployment = self._deployment()
-        deployment_metadata = self._metadata(
-            deployment, label="Soperator controller Deployment"
-        )
+        deployment_metadata = self._metadata(deployment, label="Soperator controller Deployment")
         deployment_labels = _mapping(deployment_metadata.get("labels"))
         if (
-            _text(deployment_labels.get("app.kubernetes.io/version"))
-            != self._target_release
+            _text(deployment_labels.get("app.kubernetes.io/version")) != self._target_release
             or _text(deployment_labels.get("app.kubernetes.io/managed-by")) != "Helm"
         ):
             raise SoperatorSafetyPauseError(
@@ -295,9 +289,7 @@ class SoperatorControllerSpoolMigration:
                 "legacy controller spool template disappeared before migration admission"
             )
 
-        source_pvc_name = (
-            f"{_LEGACY_SPOOL_TEMPLATE}-{_SOPERATOR_CONTROLLER_STATEFULSET}-0"
-        )
+        source_pvc_name = f"{_LEGACY_SPOOL_TEMPLATE}-{_SOPERATOR_CONTROLLER_STATEFULSET}-0"
         source_pvc = self._pvc(source_pvc_name)
         source_pvc_metadata = self._metadata(source_pvc, label="legacy controller spool PVC")
         source_pvc_spec = _mapping(source_pvc.get("spec"))
@@ -441,9 +433,7 @@ class SoperatorControllerSpoolMigration:
                     },
                 ),
             )
-            if _mapping(source_pv.get("spec")).get("persistentVolumeReclaimPolicy") != (
-                "Retain"
-            ):
+            if _mapping(source_pv.get("spec")).get("persistentVolumeReclaimPolicy") != ("Retain"):
                 raise RuntimeError("legacy controller spool PV retention did not converge")
         return self._checkpoint(
             state,
@@ -499,19 +489,22 @@ class SoperatorControllerSpoolMigration:
                     and available >= replicas
                 ):
                     subsets = self._webhook_endpoints().get("subsets")
-                    ready_addresses = sum(
-                        len(addresses)
-                        for subset in subsets if isinstance(subset, Mapping)
-                        for addresses in (subset.get("addresses"),)
-                        if isinstance(addresses, list)
-                    ) if isinstance(subsets, list) else 0
+                    ready_addresses = (
+                        sum(
+                            len(addresses)
+                            for subset in subsets
+                            if isinstance(subset, Mapping)
+                            for addresses in (subset.get("addresses"),)
+                            if isinstance(addresses, list)
+                        )
+                        if isinstance(subsets, list)
+                        else 0
+                    )
                     if ready_addresses >= replicas:
                         return
             if time.monotonic() >= deadline:
                 state = "available" if require_available else "quiescent"
-                raise RuntimeError(
-                    f"Soperator controller Deployment did not become {state}"
-                )
+                raise RuntimeError(f"Soperator controller Deployment did not become {state}")
             time.sleep(self._poll_interval_seconds)
 
     def _remove_legacy_template(
@@ -520,9 +513,7 @@ class SoperatorControllerSpoolMigration:
         state: Mapping[str, object],
     ) -> dict[str, object]:
         statefulset = self._statefulset()
-        metadata = self._metadata(
-            statefulset, label="legacy controller AdvancedStatefulSet"
-        )
+        metadata = self._metadata(statefulset, label="legacy controller AdvancedStatefulSet")
         if metadata.get("uid") != identity.statefulset_uid:
             raise SoperatorSafetyPauseError(
                 "legacy controller AdvancedStatefulSet identity changed"
@@ -586,9 +577,7 @@ class SoperatorControllerSpoolMigration:
                 lastCompletedStep="claim-update-strategy-staged",
             )
         statefulset = self._statefulset()
-        metadata = self._metadata(
-            statefulset, label="legacy controller AdvancedStatefulSet"
-        )
+        metadata = self._metadata(statefulset, label="legacy controller AdvancedStatefulSet")
         if metadata.get("uid") != identity.statefulset_uid:
             raise SoperatorSafetyPauseError(
                 "legacy controller AdvancedStatefulSet identity changed"
@@ -600,8 +589,7 @@ class SoperatorControllerSpoolMigration:
         if (
             claim_strategy.get("type") != "OnDelete"
             or len(templates) != 1
-            or _text(_mapping(templates[0].get("metadata")).get("name"))
-            != _LEGACY_SPOOL_TEMPLATE
+            or _text(_mapping(templates[0].get("metadata")).get("name")) != _LEGACY_SPOOL_TEMPLATE
         ):
             raise SoperatorSafetyPauseError(
                 "legacy controller claim strategy or template changed before removal"
@@ -641,18 +629,14 @@ class SoperatorControllerSpoolMigration:
         target_sources = [
             item
             for item in sources
-            if isinstance(item, Mapping)
-            and _text(item.get("name")) == _TARGET_SPOOL_VOLUME_SOURCE
+            if isinstance(item, Mapping) and _text(item.get("name")) == _TARGET_SPOOL_VOLUME_SOURCE
         ]
         if len(target_sources) != 1:
             raise SoperatorSafetyPauseError(
                 "target SlurmCluster controller spool volume source is not unique"
             )
         claim = _mapping(target_sources[0].get("persistentVolumeClaim"))
-        if (
-            _text(claim.get("claimName")) != self._target_pvc_name
-            or claim.get("readOnly") is True
-        ):
+        if _text(claim.get("claimName")) != self._target_pvc_name or claim.get("readOnly") is True:
             raise SoperatorSafetyPauseError(
                 "target SlurmCluster controller spool PVC projection is not exact"
             )
@@ -671,8 +655,7 @@ class SoperatorControllerSpoolMigration:
         matches = [
             item
             for item in items
-            if isinstance(item, Mapping)
-            and _text(item.get("name")) == _TARGET_SPOOL_VOLUME_SOURCE
+            if isinstance(item, Mapping) and _text(item.get("name")) == _TARGET_SPOOL_VOLUME_SOURCE
         ]
         if len(matches) != 1:
             return ""
@@ -715,18 +698,14 @@ class SoperatorControllerSpoolMigration:
         if claim_name == self._target_pvc_name:
             return
         if claim_name != identity.source_pvc_name:
-            raise SoperatorSafetyPauseError(
-                "legacy controller Pod spool claim identity changed"
-            )
+            raise SoperatorSafetyPauseError("legacy controller Pod spool claim identity changed")
         labels = metadata.get("labels")
         label_map = labels if isinstance(labels, Mapping) else {}
         existing = label_map.get(_KRUISE_SPECIFIED_DELETE_LABEL)
         if existing == "true":
             return
         if existing is not None:
-            raise SoperatorSafetyPauseError(
-                "legacy controller Pod specified-delete intent changed"
-            )
+            raise SoperatorSafetyPauseError("legacy controller Pod specified-delete intent changed")
         label_path = "/metadata/labels/apps.kruise.io~1specified-delete"
         label_operation: dict[str, object]
         if labels is None:
@@ -773,9 +752,7 @@ class SoperatorControllerSpoolMigration:
         deadline = time.monotonic() + self._timeout_seconds
         while True:
             statefulset = self._statefulset()
-            metadata = self._metadata(
-                statefulset, label="legacy controller AdvancedStatefulSet"
-            )
+            metadata = self._metadata(statefulset, label="legacy controller AdvancedStatefulSet")
             if metadata.get("uid") != identity.statefulset_uid:
                 raise SoperatorSafetyPauseError(
                     "legacy controller AdvancedStatefulSet identity changed"
@@ -784,8 +761,7 @@ class SoperatorControllerSpoolMigration:
             statefulset_template = _mapping(statefulset_spec.get("template"))
             statefulset_ready = (
                 not self._volume_templates(statefulset)
-                and self._controller_spool_claim(statefulset_template)
-                == self._target_pvc_name
+                and self._controller_spool_claim(statefulset_template) == self._target_pvc_name
             )
             pods = self._get(
                 "--namespace",
@@ -801,16 +777,13 @@ class SoperatorControllerSpoolMigration:
             owners = pod_metadata.get("ownerReferences")
             owner_items = owners if isinstance(owners, list) else []
             owned = bool(owner_items) and self._controller_pod_is_owned(pod, identity)
-            pod_claim_ready = (
-                owned and self._controller_spool_claim(pod) == self._target_pvc_name
-            )
+            pod_claim_ready = owned and self._controller_spool_claim(pod) == self._target_pvc_name
             init_statuses = _mapping(pod.get("status")).get("initContainerStatuses")
             init_items = init_statuses if isinstance(init_statuses, list) else []
             gate_matches = [
                 item
                 for item in init_items
-                if isinstance(item, Mapping)
-                and _text(item.get("name")) == _TARGET_SPOOL_MOUNT_GATE
+                if isinstance(item, Mapping) and _text(item.get("name")) == _TARGET_SPOOL_MOUNT_GATE
             ]
             gate_state = _mapping(gate_matches[0].get("state")) if len(gate_matches) == 1 else {}
             terminated = _mapping(gate_state.get("terminated"))
@@ -831,18 +804,14 @@ class SoperatorControllerSpoolMigration:
             )
         source_pv = self._pv(identity.source_pv_name)
         if _mapping(source_pv.get("spec")).get("persistentVolumeReclaimPolicy") != "Retain":
-            raise SoperatorSafetyPauseError(
-                "legacy controller spool PV lost its Retain policy"
-            )
+            raise SoperatorSafetyPauseError("legacy controller spool PV lost its Retain policy")
 
     def prepare(self) -> Mapping[str, object]:
         """Quiesce the reconciler and stage the admission-safe two-step update."""
 
         self._assert_authority()
         current = self._read_state()
-        identity = self._observe_identity(
-            allow_migrated=isinstance(current, Mapping)
-        )
+        identity = self._observe_identity(allow_migrated=isinstance(current, Mapping))
         if current is None:
             state = self._new_state(identity)
             self._write_state(state)

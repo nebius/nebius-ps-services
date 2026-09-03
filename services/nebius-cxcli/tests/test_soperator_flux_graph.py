@@ -128,15 +128,11 @@ def test_post_render_repairs_exact_controller_storage_shape() -> None:
     patches = soperator_graph_post_render_patches(lock, values)
 
     slurm_patch = next(
-        item
-        for item in patches
-        if item["target"]["name"] == "soperator-fluxcd-slurm-cluster"
+        item for item in patches if item["target"]["name"] == "soperator-fluxcd-slurm-cluster"
     )
     operations = yaml.safe_load(slurm_patch["patch"])
     child_renderer = next(
-        operation
-        for operation in operations
-        if operation["path"] == "/spec/postRenderers"
+        operation for operation in operations if operation["path"] == "/spec/postRenderers"
     )
     assert child_renderer == {
         "op": "add",
@@ -237,9 +233,7 @@ def test_post_render_does_not_patch_changed_vm_stack_identity() -> None:
             operation["path"].startswith("/spec/values/victoria-metrics-operator")
             for operation in operations
         )
-        assert not any(
-            operation["path"] == "/spec/install/strategy" for operation in operations
-        )
+        assert not any(operation["path"] == "/spec/install/strategy" for operation in operations)
 
 
 def test_optional_graph_is_explicit_and_complete() -> None:

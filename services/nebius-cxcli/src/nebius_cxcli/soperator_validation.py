@@ -95,6 +95,8 @@ _SOPERATOR_POD_UNHEALTHY_TERMINATED_REASONS = {
     "Error",
     "OOMKilled",
 }
+
+
 def _smoke_script(
     *,
     partition: str = "",
@@ -2440,9 +2442,7 @@ def _check_gpu_driver_jail_nodeset_contract(
         checks,
         name="GPU driver jail NodeSet contract",
         status="passed",
-        summary=(
-            "GPU worker NodeSets include the adapter-owned read-only host driver root mount."
-        ),
+        summary=("GPU worker NodeSets include the adapter-owned read-only host driver root mount."),
         command=command,
         extra={"gpu_driver_jail_nodesets": gpu_nodesets},
     )

@@ -520,14 +520,10 @@ def test_kruise_child_preserves_webhook_object_drift_correction() -> None:
         suspend_children=False,
     )
 
-    kruise_patch = next(
-        item for item in patches if item["target"]["name"].endswith("-kruise")
-    )
+    kruise_patch = next(item for item in patches if item["target"]["name"].endswith("-kruise"))
     operations = yaml.safe_load(kruise_patch["patch"])
     assert [
-        operation
-        for operation in operations
-        if operation["path"] == "/spec/driftDetection"
+        operation for operation in operations if operation["path"] == "/spec/driftDetection"
     ] == [
         {
             "op": "test",
@@ -571,14 +567,11 @@ def test_kruise_child_preserves_webhook_object_drift_correction() -> None:
     ignore_rules = next(
         operation["value"]["ignore"]
         for operation in operations
-        if operation["path"] == "/spec/driftDetection"
-        and operation["op"] == "replace"
+        if operation["path"] == "/spec/driftDetection" and operation["op"] == "replace"
     )
     assert all("" not in rule["paths"] for rule in ignore_rules)
     assert all(
-        rule["paths"]
-        == ["/webhooks", "/metadata/annotations/template"]
-        for rule in ignore_rules
+        rule["paths"] == ["/webhooks", "/metadata/annotations/template"] for rule in ignore_rules
     )
 
 
@@ -805,9 +798,7 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
         _paths(tmp_path),
         cache_dir=tmp_path / "cache",
         poll_interval_seconds=0.01,
-        on_stage_progress=lambda index, count, releases: progress.append(
-            (index, count, releases)
-        ),
+        on_stage_progress=lambda index, count, releases: progress.append((index, count, releases)),
         prepare_main_release_stage=lambda: (
             main_stage_events.append("prepare-main") or {"status": "prepared"}
         ),
@@ -865,8 +856,7 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
     stable_patches = stable_outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
     stable_suspend_by_target = {
         item["target"]["name"]: any(
-            operation["path"] == "/spec/suspend"
-            for operation in yaml.safe_load(item["patch"])
+            operation["path"] == "/spec/suspend" for operation in yaml.safe_load(item["patch"])
         )
         for item in stable_patches
     }
@@ -1184,11 +1174,7 @@ def test_kruise_dependency_health_requires_crds_workloads_and_webhook(
         commands.append(tuple(command))
         name = command[-3]
         if "customresourcedefinition" in command:
-            return {
-                "status": {
-                    "conditions": [{"type": "Established", "status": "True"}]
-                }
-            }
+            return {"status": {"conditions": [{"type": "Established", "status": "True"}]}}
         if "deployment" in command:
             return {
                 "metadata": {"generation": 2},
@@ -1243,9 +1229,7 @@ def test_kruise_default_recovery_repairs_only_missing_soperator_partition(
                             "name": "controller",
                             "namespace": "soperator",
                             "resourceVersion": "17",
-                            "labels": {
-                                "app.kubernetes.io/managed-by": "slurm-operator"
-                            },
+                            "labels": {"app.kubernetes.io/managed-by": "slurm-operator"},
                             "ownerReferences": [
                                 {
                                     "kind": "SlurmCluster",
@@ -1339,9 +1323,7 @@ def test_kruise_default_recovery_retries_unavailable_admission(
                     "namespace": "soperator",
                     "resourceVersion": "17",
                     "labels": {"app.kubernetes.io/managed-by": "slurm-operator"},
-                    "ownerReferences": [
-                        {"kind": "SlurmCluster", "controller": True}
-                    ],
+                    "ownerReferences": [{"kind": "SlurmCluster", "controller": True}],
                 },
                 "spec": {
                     "updateStrategy": {
@@ -1391,12 +1373,8 @@ def test_kruise_default_recovery_rejects_non_soperator_owner(
                         "name": "foreign",
                         "namespace": "other",
                         "resourceVersion": "7",
-                        "labels": {
-                            "app.kubernetes.io/managed-by": "slurm-operator"
-                        },
-                        "ownerReferences": [
-                            {"kind": "Deployment", "controller": True}
-                        ],
+                        "labels": {"app.kubernetes.io/managed-by": "slurm-operator"},
+                        "ownerReferences": [{"kind": "Deployment", "controller": True}],
                     },
                     "spec": {
                         "updateStrategy": {

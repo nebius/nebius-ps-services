@@ -549,9 +549,7 @@ def supersede_soperator_operation_anchor(
     data = payload.get("data") if isinstance(payload, Mapping) else None
     metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
     resource_version = (
-        str(metadata.get("resourceVersion") or "").strip()
-        if isinstance(metadata, Mapping)
-        else ""
+        str(metadata.get("resourceVersion") or "").strip() if isinstance(metadata, Mapping) else ""
     )
     expected_core = {
         "schema": SOPERATOR_OPERATION_ANCHOR_SCHEMA,
@@ -1042,10 +1040,7 @@ class SoperatorOperationAnchor:
                     code="main-workload-authority-conflict",
                 )
             existing = self._parse_main_workload_authority(existing_json)
-            if (
-                soperator_sha256(self._main_workload_authority_payload(existing))
-                != existing_sha256
-            ):
+            if soperator_sha256(self._main_workload_authority_payload(existing)) != existing_sha256:
                 raise SoperatorSafetyPauseError(
                     "Soperator main-workload authority digest does not match its payload",
                     code="main-workload-authority-digest-mismatch",
@@ -1054,7 +1049,10 @@ class SoperatorOperationAnchor:
                 return existing
             immutable_existing = replace(existing, generation=1, observed_generation=1)
             immutable_observed = replace(identity, generation=1, observed_generation=1)
-            if immutable_existing != immutable_observed or identity.generation <= existing.generation:
+            if (
+                immutable_existing != immutable_observed
+                or identity.generation <= existing.generation
+            ):
                 raise SoperatorSafetyPauseError(
                     "Soperator main-workload authority conflicts with its frozen identity",
                     code="main-workload-authority-conflict",

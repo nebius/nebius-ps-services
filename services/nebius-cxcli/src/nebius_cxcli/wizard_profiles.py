@@ -148,6 +148,7 @@ def _disabled_bool_wizard_field() -> dict[str, Any]:
         "type_hint": "bool",
     }
 
+
 def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     for role in ("system", "controller", "login", "accounting"):

@@ -204,9 +204,7 @@ def _record_fields(record: str) -> dict[str, str]:
         if not key:
             raise ValueError("Slurm reservation record contains an empty field name")
         if key in fields:
-            raise ValueError(
-                f"Slurm reservation record contains duplicates: field {key}"
-            )
+            raise ValueError(f"Slurm reservation record contains duplicates: field {key}")
         fields[key] = value
     if strict:
         return fields
@@ -251,9 +249,7 @@ def _record_fields(record: str) -> dict[str, str]:
         value_end = starts[item_index + 1][0] if item_index + 1 < len(starts) else len(text)
         raw_value = text[value_start:value_end].strip()
         if key in fields:
-            raise ValueError(
-                f"Slurm reservation record contains duplicates: field {key}"
-            )
+            raise ValueError(f"Slurm reservation record contains duplicates: field {key}")
         try:
             decoded = shlex.split(f"{key}={raw_value}", posix=True)
         except ValueError as exc:

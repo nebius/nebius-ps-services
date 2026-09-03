@@ -1009,12 +1009,10 @@ def _configured_app_release_specs(
                             raise ValueError(
                                 "the frozen Soperator source is required for dashboard delivery"
                             )
-                        soperator_post_flux_docs = (
-                            render_soperator_monitoring_dashboard_documents(
-                                values_node,
-                                release=release_snapshot,
-                                source_root=Path(source_dir),
-                            )
+                        soperator_post_flux_docs = render_soperator_monitoring_dashboard_documents(
+                            values_node,
+                            release=release_snapshot,
+                            source_root=Path(source_dir),
                         )
                     else:
                         soperator_post_flux_docs = []

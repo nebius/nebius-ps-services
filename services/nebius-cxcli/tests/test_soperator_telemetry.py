@@ -362,18 +362,14 @@ def test_metric_query_rejects_unsafe_label_values() -> None:
 
 
 def test_query_plan_rejects_project_id_path_traversal() -> None:
-    scope = SoperatorObservabilityScope(
-        **{**_scope().__dict__, "project_id": "../project-other"}
-    )
+    scope = SoperatorObservabilityScope(**{**_scope().__dict__, "project_id": "../project-other"})
 
     with pytest.raises(ValueError, match="project_id"):
         telemetry._query_plan(scope)
 
 
 def test_observability_rejects_invalid_project_id_before_query() -> None:
-    scope = SoperatorObservabilityScope(
-        **{**_scope().__dict__, "project_id": "../project-other"}
-    )
+    scope = SoperatorObservabilityScope(**{**_scope().__dict__, "project_id": "../project-other"})
     queries: list[object] = []
 
     with pytest.raises(SoperatorObservabilityFailure) as caught:
@@ -390,9 +386,7 @@ def test_observability_rejects_invalid_project_id_before_query() -> None:
 
 
 def test_failure_receipt_survives_invalid_scope_identifiers() -> None:
-    scope = SoperatorObservabilityScope(
-        **{**_scope().__dict__, "project_id": "../project-other"}
-    )
+    scope = SoperatorObservabilityScope(**{**_scope().__dict__, "project_id": "../project-other"})
 
     receipt = failed_soperator_observability_receipt(
         verification_id="verification-1",

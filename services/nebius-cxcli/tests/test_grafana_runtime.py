@@ -446,15 +446,13 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
     monkeypatch.setattr(
         grafana_runtime,
         "_apply_secret",
-        lambda *, namespace, name, string_data, extra_env, **kwargs: (
-            applied.append(
-                {
-                    "namespace": namespace,
-                    "name": name,
-                    "string_data": dict(string_data),
-                    "static_key_id": kwargs.get("observability_static_key_id"),
-                }
-            )
+        lambda *, namespace, name, string_data, extra_env, **kwargs: applied.append(
+            {
+                "namespace": namespace,
+                "name": name,
+                "string_data": dict(string_data),
+                "static_key_id": kwargs.get("observability_static_key_id"),
+            }
         ),
     )
 
@@ -474,8 +472,7 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
         }
     ]
     assert emitted == [
-        "Refreshed Observability read-token secret "
-        "`nebius-cxcli-grafana-observability-read`."
+        "Refreshed Observability read-token secret `nebius-cxcli-grafana-observability-read`."
     ]
 
 

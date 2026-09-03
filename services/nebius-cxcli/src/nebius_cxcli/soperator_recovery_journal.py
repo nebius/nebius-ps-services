@@ -319,9 +319,7 @@ class SoperatorRecoveryJournal:
 
         if (
             not re.fullmatch(r"sha256:[0-9a-f]{64}", predecessor_operation_id)
-            or not re.fullmatch(
-                r"sha256:[0-9a-f]{64}", discarded_replay_receipt_sha256
-            )
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", discarded_replay_receipt_sha256)
             or not str(workload_name or "").strip()
             or not str(workload_uid or "").strip()
             or not str(workload_resource_version or "").strip()
