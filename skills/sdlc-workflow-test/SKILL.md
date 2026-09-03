@@ -1,9 +1,23 @@
 ---
 name: sdlc-workflow-test
-description: "Use only when explicitly asked, outside the Agentic SDLC workflow, to safely verify the whole Agentic SDLC system: keep the no-flag lightweight verifier unchanged, or use --create to replace the previous exactly owned local three-tier Docker application before computer-use GUI UAT, with --keep, --resume, --destroy, exact cleanup, and sanitized reporting."
+description: "Use only when explicitly asked, outside Agentic SDLC, to verify the workflow with the no-flag check or --create/--keep/--resume/--destroy for one owned local three-tier Docker app plus GUI UAT and sanitized cleanup."
 ---
 
 # SDLC Workflow Test
+
+## Help
+
+For `$sdlc-workflow-test --help` or `$sdlc-workflow-test -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -142,16 +156,12 @@ remotes.
    python3 sdlc-workflow-test/scripts/verify_agentic_sdlc.py
    ```
 
-   This script checks source-installed parity for all required SDLC skills and
-   the `worktree`, `nebius-grafana-query`, and conditional `troubleshoot`
-   runtime support, explicit-only invocation policy, prompt workspace/history/
-   rename/lifecycle regressions, execution scope/recovery/replan/secret gates,
-   sequential fallback, Task Implementer interoperability, the composed
-   managed outer-worktree lease lifecycle, bounded observability contract,
-   normalized failure/diagnosis/repair-control and corrective-plan contracts,
-   exact-SHA PR handoff and canonical single-action merge modes, verifier
-   self-tests, and hook fixtures. The disposable fixture is a nested selected
-   folder in a local
+   This script checks source-installed parity, explicit-only invocation,
+   canonical spec ownership, advisory project-lifecycle independence, prompt
+   workspace regressions, execution and secret gates, Task Implementer and
+   managed-worktree interoperability, bounded observability, repair control,
+   exact-SHA publication modes, verifier self-tests, and hook fixtures. The
+   disposable fixture is a nested selected folder in a local
    monorepo-shaped Git repository. A clean canonical flat fixture with the
    exact expected tracked tree and no remote is migrated once. Unknown,
    unowned, dirty, remote-backed, or non-canonical directories and repositories
@@ -165,15 +175,16 @@ remotes.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
    `sdlc-create-requirements`, `sdlc-start`, `sdlc-gather-context`,
-   `sdlc-create-design`, `sdlc-auto-steering`, `sdlc-create-plan`,
+   `sdlc-create-design`, `sdlc-auto-steering`,
+   `sdlc-create-plan`,
    `sdlc-prepare-execution`, `sdlc-tdd`,
    `sdlc-implement-plan`, `sdlc-validate-codes`, `sdlc-unit-tests`,
-   `sdlc-evaluate`, `sdlc-update-documents`, `sdlc-align-specs`,
+   `sdlc-evaluate`, `sdlc-update-documents`, `align`,
    `sdlc-commit`, and `sdlc-uat-tests`. Run `sdlc-update-documents` again
    after UAT when final docs changed. Do not use `sdlc-merge-pr`, and do not
    create a real PR.
 6. Verify rerun and change-request behavior.
-   Repeat `$sdlc-start run <prompt-path-or-unique-filename>` with no prompt
+   Repeat `$sdlc-start run <prompt-ref-or-file>` with no prompt
    changes, then edit the same prompt with the safe change
    request from the checklist and confirm stable IDs, immutable locked plans,
    scoped changes, refreshed evidence, and no duplicate commits.
@@ -258,7 +269,7 @@ Use this process only after explicit `--create`, `--create --keep`, or
    first run `$sdlc-start workspace init <project-folder>`, then use
    `scripts/render_three_tier_prompt.py` to replace the generated starter body
    while preserving its managed identity, and finally run
-   `$sdlc-start run <prompt-path-or-unique-filename>`. Follow the returned phase
+   `$sdlc-start run <prompt-ref-or-file>`. Follow the returned phase
    skill; do not make the lifecycle helper or hooks orchestrate phases.
 4. Build all three logical layers: browser GUI, Django/Gunicorn web/API server,
    and PostgreSQL. Run exactly two labelled Compose containers, dynamically

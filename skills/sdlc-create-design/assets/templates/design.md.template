@@ -1,14 +1,16 @@
+<!-- markdownlint-disable MD003 MD022 MD033 MD041 -->
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 ---
-schema: agentic-sdlc.design.v1
+schema: maintain-project-specs/design-v2
 project: "<project-name>"
 owner: "<owner-or-team>"
 status: "draft"
 created_at: "<YYYY-MM-DD>"
 updated_at: "<YYYY-MM-DD>"
-created_by_skill: "sdlc-create-design"
-updated_by_skill: "sdlc-create-design"
+created_by_skill: "maintain-project-specs"
+updated_by_skill: "maintain-project-specs"
 source_requirements: "docs/requirements.md"
-user_edit_policy: "Do not edit manually. Update through sdlc-create-design from requirements and gathered context."
+user_edit_policy: "Update through maintain-project-specs; SDLC design phases are authoring adapters."
 execution_plan_policy: "Execution plans are local runtime artifacts and must not be committed."
 id_policy: "Feature IDs are stable. Never renumber existing IDs."
 ---
@@ -99,7 +101,7 @@ conditions.
 
 ## Feature Designs
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=draft delivery=not-started priority=P0 version=1 -->
 ### FEAT-001: TODO feature name
 
 #### Requirements Covered
@@ -168,6 +170,14 @@ Tests: passing
 Evaluation: passing
 Commit: required
 UAT impact: included
+
+#### Implementation Evidence
+
+Not implemented yet.
+
+#### Verification Evidence
+
+Not independently verified yet.
 <!-- /FEATURE: FEAT-001 -->
 
 ## Cross-Cutting Validation Strategy
@@ -181,3 +191,5 @@ UAT impact: included
 ## Decision Log
 
 ## Change Log
+<!-- maintain-project-specs:design:end -->
+<!-- markdownlint-enable MD003 MD022 MD033 MD041 -->

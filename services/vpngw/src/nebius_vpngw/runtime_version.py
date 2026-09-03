@@ -15,6 +15,7 @@ _GIT_DESCRIBE_REGEX = re.compile(
     r"^(?P<tag>nebius-vpngw-v\d+\.\d+\.\d+)-(?P<distance>\d+)-g(?P<commit>[0-9a-f]{40})(?:-dirty)?$"
 )
 _UNKNOWN_VERSION = "0.0.0"
+_GIT_DESCRIBE_TIMEOUT_SECONDS = 5
 
 
 def _service_root() -> Path | None:
@@ -42,19 +43,14 @@ def _parse_git_describe_version(describe_output: str) -> str | None:
 
 def _version_from_setuptools_scm(service_root: Path) -> str | None:
     try:
-        from setuptools_scm import get_version
+        from setuptools_scm import _get_version
+        from vcs_versioning import VcsEnvironment
     except Exception:
         return None
     try:
-        return get_version(
-            root=str(service_root),
-            search_parent_directories=True,
-            version_scheme="semver-pep440",
-            local_scheme="no-local-version",
-            tag_regex=_TAG_REGEX,
-            fallback_version=_UNKNOWN_VERSION,
-            scm={"git": {"describe_command": _GIT_DESCRIBE_COMMAND}},
-        )
+        environment = VcsEnvironment.from_env("SETUPTOOLS_SCM")
+        config = environment.build_config(name=service_root / "pyproject.toml")
+        return _get_version(config, force_write_version_files=False)
     except Exception:
         return None
 
@@ -67,8 +63,9 @@ def _version_from_git_describe(service_root: Path) -> str | None:
             check=True,
             capture_output=True,
             text=True,
+            timeout=_GIT_DESCRIBE_TIMEOUT_SECONDS,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     return _parse_git_describe_version(completed.stdout.strip())
 

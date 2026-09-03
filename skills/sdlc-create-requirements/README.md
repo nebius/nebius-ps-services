@@ -1,21 +1,23 @@
 # Create Requirements
 
-`sdlc-create-requirements` is an Agentic SDLC skill. It is authored in this repository and is
+`sdlc-create-requirements` is an Agentic SDLC authoring adapter to
+`maintain-project-specs`. It is authored in this repository and is
 installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Convert user intent into durable, testable product requirements in
-`docs/requirements.md`, including an optional guarded Live Experiment
+Convert user intent into durable, testable product requirements in the
+canonical managed region of `docs/requirements.md`, including an optional guarded Live Experiment
 Environment section for later evaluation and UAT.
 
 ## Main Boundaries
 
-- Edit `docs/design.md`.
-- Create execution plans.
-- Implement code or tests.
-- Rename existing requirement IDs.
-- Store raw credentials, private endpoints, customer data, or raw logs.
+- Do not change the design managed region. Its exact bytes still participate
+  in the owner-managed paired validation/publication transaction.
+- Do not create execution plans.
+- Do not implement code or tests.
+- Do not rename existing requirement IDs.
+- Do not store raw credentials, private endpoints, customer data, or raw logs.
 
 ## Primary Inputs
 
@@ -27,7 +29,8 @@ Environment section for later evaluation and UAT.
 
 ## Output
 
-- `docs/requirements.md` exists.
+- A canonical v2 requirements/design pair exists and passes the shared owner;
+  this adapter changes only the requirements managed region.
 - Every requirement has acceptance criteria, validation method, test method, and evaluation method.
 - Live Experiment Environment status is recorded.
 - Open questions and change log are explicit.

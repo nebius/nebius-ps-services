@@ -133,7 +133,7 @@ ownership from a name prefix alone.
 
    ```text
    $sdlc-start workspace init <project-folder>
-   $sdlc-start run <prompt-path-or-unique-filename>
+   $sdlc-start run <prompt-ref-or-file>
    ```
 
    Do not add a workflow CLI or let the lifecycle helper call SDLC phases.

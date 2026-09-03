@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-prepare-positive-01,true,"Prepare the private integration worktree and task waves for this locked SDLC feature plan."
+sdlc-prepare-positive-02,true,"Resume the exact recoverable execution state before SDLC test-first work begins."
+sdlc-prepare-positive-03,true,"Safely replan the active SDLC integration workspace from the corrective plan."
+sdlc-prepare-negative-01,false,"Create an ordinary linked Git worktree."
+sdlc-prepare-negative-02,false,"Implement the tasks in the already-prepared SDLC workspace."
+sdlc-prepare-negative-03,false,"Prepare execution before the feature plan is locked."

@@ -1,9 +1,23 @@
 ---
 name: sdlc-auto-steering
-description: "Use only as part of the Agentic SDLC workflow; use when an active prompt-bound SDLC run needs private `STEERING.md` refreshed from an accepted same-prompt revision, requirements, design, context, locked plans, fingerprints, or recent evidence before selecting the next phase."
+description: "Use only as part of the Agentic SDLC workflow; refresh private STEERING.md for an active prompt-bound run from accepted revisions, specs, context, locked plans, fingerprints, or evidence before phase selection."
 ---
 
 # SDLC Auto Steering
+
+## Help
+
+For `$sdlc-auto-steering --help` or `$sdlc-auto-steering -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -75,6 +89,10 @@ changing committed product-truth documents directly.
   compact redacted summary, never raw prompt text, and redact secrets,
   credentials, private endpoints, customer data, raw logs, or other unsafe
   material.
+- Accept only `active_steering` revisions from the current non-terminal run.
+  A completed-prompt edit starts a linked run whose `r0001` kind is
+  `completed_follow_up`; route it through requirements refinement as a fresh
+  objective and never record it as steering.
 - Classify every unresolved steering entry as one of:
   `runtime-only`, `requirements-change`, `design-change`,
   `project-agent-instructions-change`, `docs-update`, `resolved`,
@@ -83,8 +101,11 @@ changing committed product-truth documents directly.
   `sdlc-start`; do not let them become implementation truth until the owning
   product-truth document has been updated by `sdlc-create-requirements` or
   `sdlc-create-design`.
-- Treat `project-agent-instructions-change` as a request for `sdlc-start` to
-  rerun the conditional decision. Never edit a project instruction file here.
+- Treat `project-agent-instructions-change` as advisory unless the current user
+  explicitly requested the separate mutation workflow. Only in that explicit
+  case may `sdlc-start` route to `project-agent-instructions`; otherwise keep
+  the recommendation nonblocking and continue under already-effective
+  instructions. Never edit a project instruction file here.
 - If execution is prepared or running, include its plan digest, integration
   identity, active wave, started assignments, and cleanup blockers in routing
   reminders. A product-truth or plan change must request `REPLAN_REQUIRED` and
@@ -95,6 +116,9 @@ changing committed product-truth documents directly.
   machine-readable with the same pending disposition state.
 - After both ledgers are durably updated, invoke the private prompt helper's
   `steering-resolve` transition with `applied`, `blocked`, or `no_effect`.
+  `applied` and `no_effect` additionally require the current accepted prompt
+  impact receipt and must agree with its owner-derived effect; a steering
+  summary or unchanged spec bytes are not sufficient evidence.
 - Return the requested routing signal for `sdlc-start` instead of invoking the
   next SDLC phase directly.
 
@@ -117,8 +141,9 @@ changing committed product-truth documents directly.
   `needs-human`.
 - Unsafe prompt content is redacted and classified with a safe summary; raw
   secrets or customer data must not be persisted.
-- Product-truth drift routes to `sdlc-create-requirements`,
-  `sdlc-create-design`, or `project-agent-instructions`.
+- Product-truth drift routes to `sdlc-create-requirements` or
+  `sdlc-create-design`. Project-instruction recommendations stay advisory
+  unless the current user explicitly requested the separate mutation workflow.
 - Documentation-only drift routes to `sdlc-update-documents`.
 
 ## Must Not
@@ -145,12 +170,15 @@ changing committed product-truth documents directly.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md`, `docs/design.md`, and any
-  provenance-owned generated project-root `AGENTS.md` as committed project
+  ownership-receipted v3 selected-project `AGENTS.md` as committed project
   truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only
-  `sdlc-create-design` writes `docs/design.md`; only
-  `project-agent-instructions` creates or refreshes its generated project-root
-  `AGENTS.md`. Other skills route changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner. Only
+  `project-agent-instructions` creates, attaches, refreshes, adopts, or retires
+  its v3-managed selected-project `AGENTS.md` tail.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under
   `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest

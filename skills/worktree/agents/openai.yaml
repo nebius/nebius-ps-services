@@ -1,9 +1,11 @@
 interface:
   display_name: "Worktree"
-  short_description: "Manage isolated worktrees and nested coordinator ownership"
-  default_prompt: "Use $worktree to create a safe isolated full-repository
-    worktree for the current monorepo project from origin/main, serialize
-    publication actions, and keep nested Task Implementer or Agentic SDLC workers internal
-    until their outer lease is released."
+  short_description: "Create, work from, and integrate monorepo worktrees"
+  default_prompt: "Use $worktree to create full-repository child worktrees from
+    an exact clean local feature branch, route development through the returned
+    directory, and integrate from the primary checkout by safely committing an
+    eligible ordinary dirty child and source behind a durable source-scoped
+    claim and reviewed-tree proof before exact candidate validation; never
+    publish managed private branches and remove children only with proof."
 policy:
   allow_implicit_invocation: false

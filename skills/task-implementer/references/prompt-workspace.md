@@ -1,250 +1,203 @@
-# Prompt Workspace And V2 State Contract
+# Task Implementer Prompt Workspace
 
-Read this reference before initialization, intake routing, steering, recovery,
-or private-state validation.
+The prompt workspace is private durable input and state for one exact project
+scope. It is not repository content and does not grant lifecycle authority.
 
-## Public Surface
-
-The only public commands are:
+## Layout
 
 ```text
-$task-implementer workspace init [project-folder]
-$task-implementer run <prompt-path-or-unique-filename>
+${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/<project>/<scope>/
+├── workspace.json
+├── activity.json
+├── prompt-queue.json
+├── queued-prompts/
+├── prompts/
+│   ├── 00-START-HERE.md
+│   └── *.md
+└── runs/<run>/
+    ├── manifest.json
+    ├── steering.json
+    ├── requirements-refinement.json
+    ├── prompt-impact-claim.json
+    ├── prompt-impact/
+    ├── inputs/<revision>/prompt.md
+    ├── handoff.md
+    └── orchestration/
+        ├── coordinator.json
+        ├── resume-control.json
+        ├── waves/
+        ├── tasks/
+        ├── assignments/
+        ├── results/
+        ├── evidence/
+        ├── journals/
+        ├── interop.json
+        ├── run-summary.prepared.json
+        └── run-summary.json
 ```
 
-All helper commands are private mechanical transitions. Never ask the user for
-prompt, run, wave, task, branch, worktree, assignment, or result IDs.
+Directories are owner-only. State files are bounded regular files written
+atomically with mode `0600`. Reject symlinks, unsafe ownership, hard-linked
+mutable state, and path escape.
 
-## Workspace Identity And Storage
+## Managed Prompt Contract
 
-Canonical Git root plus exact repo-relative scope determine one workspace:
+One prompt has a stable private ID and filename. Only `## Ask` is required;
+optional headings may capture context, constraints, acceptance criteria,
+verification, non-goals, assumptions, dependencies, and references.
+
+An explicit `run` accepts one immutable revision snapshot. Editing the same
+prompt and running again is steering. Exact retries do not append a duplicate
+revision. Editing a completed prompt starts a linked new full-objective run;
+omission never deletes previously accepted product truth.
+
+`prompt-session-intake` may merge a safe project-intent projection into the
+already-bound prompt. It excludes workflow instructions, commands, delivery
+requests, agent-control text, status chatter, and sensitive material. Capture
+never invokes Task Implementer, advances workflow state, or blocks the direct
+request on failure.
+
+## Workspace Identity
+
+`workspace.json` binds:
+
+- canonical Git common directory;
+- exact primary checkout and named non-default source ref;
+- exact selected project scope;
+- persistent lane identity;
+- private paths and trusted helper identity.
+
+Do not recompute identity from mutable repository metadata during a run.
+`workspace reuse` verifies the existing record without repairing it.
+
+## Run and Revision State
+
+The run manifest binds one prompt, one accepted revision, the lane generation,
+and current public-safe status. Immutable snapshots remain under
+`inputs/<revision>/prompt.md`.
+
+Requirements refinement records stable clarification IDs, extracted
+categories, compiled requirements digest, and one of:
 
 ```text
-${CODEX_HOME:-$HOME/.codex}/task-implementer/
-├── projects/<project-id>/scopes/<scope-id>/
-│   ├── workspace.json
-│   ├── activity.json
-│   ├── <scope>-prompts.code-workspace
-│   ├── prompts/<created-at>--<slug>.md
-│   └── runs/<run-id>/
-│       ├── manifest.json
-│       ├── steering.json
-│       ├── inputs/<revision>/prompt.md
-│       ├── handoff.md
-│       └── orchestration/
-│           ├── coordinator.json
-│           ├── interop.json
-│           ├── waves/wave-001.json
-│           ├── tasks/wave-001/task-1.json
-│           ├── assignments/wave-001/task-1.json
-│           ├── incoming-handoffs/wave-001/task-1.json
-│           ├── results/wave-001/task-1.json
-│           └── journals/wave-001.jsonl
-└── worktrees/<project-id>/<scope-id>/<run-id>/wave-001/
-    ├── integration/
-    ├── task-1/
-    └── task-2/
+extracting | needs_clarification | ready
 ```
 
-The private root must be outside Git storage. On POSIX, managed directories are
-`0700` and files are `0600`. Reject symlinks, traversal, foreign paths, unsafe
-permissions, malformed UTF-8/JSON/Markdown, duplicate identities, and state
-whose canonical paths no longer match its manifest.
+Material open questions prevent `ready`. Once ready, the workflow publishes a
+complete Task Implementer-owned prompt-impact claim and immutable receipt.
 
-Prompts remain `task-implementer/prompt-v1`, with a maximum of 256 KiB. Prompt
-filenames and workflow-managed mtimes never change. The filename date is
-creation metadata; accepted invocation ordering comes from private
-`last_invoked_at` activity.
+## Prompt Impact State
 
-## Initialization
-
-Private `init` canonicalizes the repository and exact source scope, creates or
-verifies workspace metadata, and creates exactly one starter prompt only when
-no Markdown prompt exists. Repeated initialization preserves every prompt,
-revision, run, result, branch, and worktree record. It never starts a run.
-
-The generated workspace exposes `CODE` and `PROMPTS`. The editor task creates a
-new prompt only; it does not invoke Codex.
-
-## Intake And Steering
-
-Private `intake` resolves a managed absolute prompt path or unique filename and
-returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`,
-`finalize`, or `done`.
-
-- Acquire the scope lock before mutable private-state changes.
-- One unfinished prompt owns a scope.
-- Snapshot each adjacent changed digest as one immutable revision.
-- Record steering dispositions as `pending`, `applied`, `blocked`, or
-  `no_effect`.
-- A planned wave may be recomputed before resources exist. Once a wave is
-  preparing, running, integrating, or promotion-pending, its assignments remain
-  immutable and new steering queues for the next safe join boundary.
-- Contradictory steering preserves work and stops before promotion with
-  `STEERING_QUEUED_AFTER_WAVE` or `HUMAN_INPUT_REQUIRED`.
-- An unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
-  prompt starts a new run.
-- A terminal handoff whose managed outer lease was not released returns private
-  `finalize`/`TASK_LEASE_RELEASE_REQUIRED` and resumes the same run.
-
-Every validated, lock-acquired invocation updates private activity and the
-handoff `Last invoked at`, including no-op and blocked outcomes. Rejected and
-lock-busy calls do not reorder prompts.
-
-## V3 Execution State Ownership
-
-`handoff.md` is coordinator-owned. It contains the stable task queue,
-requirements/design mappings, wave schedule, checkpoints, failure log, and
-human-readable recovery status. Workers never edit it.
-
-`coordinator.json` owns the run branch, initial `HEAD`, plan digest, ordered wave
-index, active wave, and overall v4 execution status. Each wave file owns its base,
-contract commit, integration identity, stable task order, task states,
-promotion proof, and cleanup inventory.
-
-Each mutable task plane records `planned -> assigned -> running -> committed -> merged|failed`,
-the current worker session fingerprint, append-only session-fingerprint
-history, assignment digest, result digest, and commit.
-
-`interop.json` is strict private run state. For a `worktree`-managed outer
-checkout it binds the run to the exact outer name, branch, path, outer/task
-scope, v2 `task-implementer` owner lease identity, promoted head, and release
-status. For an unmanaged
-checkout it records only the unmanaged mode. Any malformed or mismatched state
-fails closed.
-
-Assignments are immutable and bind:
-
-Their schema is `task-implementer/worker-assignment-v7`; v6 and older
-assignments are a hard-cut unsupported execution surface.
-
-- run, wave, and task;
-- exact base commit and plan digest;
-- unique branch and full-repository worktree;
-- absolute scope cwd inside that worktree;
-- exact helper and workspace-manifest paths for the first transition;
-- exact/prefix write claims and conflict domains;
-- requirements, design, goal, plan, implementation steps, end-to-end
-  validation, dependencies, rollback, and stop context;
-- canonical worktree/network/credential/external-service guardrails that may be
-  relaxed only by exact immutable-assignment authorization, plus read/execute-
-  only use of required installed skill instructions/helpers and standard local
-  executables;
-- immutable `standard` 240/300-second or dependent `integration`
-  360/420-second read-only warning/timeout profile, plus 60-second
-  dispatch-to-start, 30-second heartbeat, 240-second stale-heartbeat, and total
-  worker budgets;
-- incoming-handoff path and digest;
-- validation and done criteria;
-- assignment digest and creation time.
-
-The worker passes the embedded assignment digest unchanged to `task-start`
-through those exact paths. That helper validates the canonical unsigned
-assignment digest and Git/cwd identity; workers must not guess or recompute the
-JSON serialization before starting.
-
-The referenced `incoming-handoff-v1` record is private, immutable, and
-digest-bound. It contains an ordered list of accepted results from all earlier
-completed waves and capacity batches. Only the first batch of the first wave
-has an empty list. Workers write one
-`worker-result-v3` record with summary, decisions, and open risks. The coordinator distrusts it and
-re-observes the branch, commit ancestry, cleanliness, and changed paths before
-acceptance.
-
-## Hidden Mechanical Commands
-
-The skill may invoke:
+Task Implementer owns:
 
 ```text
-prompt_workspace.py wave-plan --workspace <manifest> --run-id <id> --capacity <n>
-prompt_workspace.py wave-replan --workspace <manifest> --run-id <id> --capacity <n>
-prompt_workspace.py wave-prepare --workspace <manifest> --run-id <id>
-prompt_workspace.py wave-dispatch --workspace <manifest> --run-id <id> --contract-commit <sha>
-prompt_workspace.py batch-advance --workspace <manifest> --run-id <id>
-prompt_workspace.py task-arm --workspace <manifest> --run-id <id> --task-id <id>
-prompt_workspace.py task-start --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest>
-prompt_workspace.py task-heartbeat --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest> --phase <phase>
-prompt_workspace.py task-watch --workspace <manifest> --run-id <id> --task-id <id>
-prompt_workspace.py task-recover --workspace <manifest> --run-id <id> --task-id <id> --confirmed-stopped
-prompt_workspace.py task-finish --workspace <manifest> --run-id <id> --task-id <id>
-prompt_workspace.py wave-integrate --workspace <manifest> --run-id <id>
-prompt_workspace.py wave-promote --workspace <manifest> --run-id <id> --evidence <private-json>
-prompt_workspace.py wave-cleanup --workspace <manifest> --run-id <id>
-prompt_workspace.py run-finalize --workspace <manifest> --run-id <id> --alignment <summary>
+task-implementer/prompt-impact-claim-v1
+task-implementer/prompt-impact-receipt-v1
+task-implementer/prompt-impact-ledger-v1
+task-implementer/prompt-impact-plan-v1
 ```
 
-These names and arguments are not public workflow commands. Human output stays
-redacted; internal JSON may carry assignment paths to the coordinator.
-`wave-replan` replaces only a clean planned tail that owns no Git resources.
-The coordinator index keeps completed history plus the replacement schedule;
-superseded planned wave files remain blocked, non-indexed history.
-After the last promoted wave is cleaned, `wave-replan` may append a new
-isolated correction tail discovered by integration review before finalization.
-`task-recover` requires confirmation that the previous worker stopped and must
-be invoked by the fresh replacement worker from the assigned scope cwd. The
-coordinator communicates the stop confirmation but never invokes recovery for
-the replacement because heartbeat and finish ownership bind to the caller.
-Recovery transfers only declared dirty state or one direct-child commit.
-Blocked resources remain retained for operator-directed recovery;
-they are never silently discarded.
+The claim classifies every extracted statement occurrence exactly once. The
+receipt derives effects and `retain_plan` or `replan_required`; callers cannot
+self-attest `no_effect`. Publication is serialized, append-only, and
+compare-and-set. A conflicting orphan attempt is preserved and skipped.
 
-`wave-plan` acquires the managed outer task lease before task resources exist.
-Each integration/worker identity is recorded before creation and marked absent
-only after real Git and filesystem removal. `run-finalize` requires all waves
-done, no retained cleanup resources, a clean project branch at the final
-promoted head, and non-empty final `$align` evidence before lease release.
-An interrupted release is retried idempotently. Unfinished pre-interop runs in
-a managed outer checkout return `WORKFLOW_UPGRADE_REQUIRED`; there is no
-migration, stale timeout, PID recovery, or force-clear path.
+The plan basis binds the exact current prompt-impact receipt, accepted
+root-intent digest, canonical project-spec v2 receipt and bytes, and immutable
+plan digest. Spec or prompt drift requires reconciliation or a distinct replan
+before resource creation and dispatch.
 
-Completed private prompt/run history may be archived only after the outer
-worktree lifecycle has also been removed. Archive is history retention, not a
-workspace identity migration; never rebind it to a primary or different linked
-checkout.
+`maintain-project-specs` provides the canonical parser, pair publisher, and
+spec-validation receipt. Task Implementer stores that exact receipt as project
+truth evidence, never as transition authority.
 
-## Legacy Boundary
+## Queue Contract
 
-Workspace, prompt, and run-manifest schemas are unchanged. The execution state
-machine has no compatibility path: every
-`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3 run returns
-`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v3 resources,
-including completed records. Do not add a legacy read path, migration, or
-upgrade command.
+Only an explicit `run` may queue a different prompt while work is active.
+Creating or saving a prompt does not queue it. Queue order is FIFO.
 
-## Sandbox And Bootstrap
+An edited queued prompt updates its accepted snapshot only after another
+explicit `run`. Unaccepted queue-head drift blocks activation. After successful
+finalization releases the active generation, activate the unchanged queue head
+atomically. Never overtake blocked work.
 
-Preflight write access to the private root and shared Git common directory.
-Native subagents inherit the parent sandbox and are cooperative, not
-worktree-confined. Verify absolute cwd, real worktree root, branch, base, and
-assignment digest at every worker transition.
+## Steering Contract
 
-Do not copy ignored/untracked files, credentials, dotenv files, caches, local
-tool state, or hooks from the primary checkout. Linked worktrees already share
-repository objects, refs, config, and hooks. If a safe required bootstrap input
-is unavailable, stop with `ENVIRONMENT_BLOCKER`. If persistent private-root
-access is missing, report the narrow launch option:
+Steering entries bind prompt ID, accepted revision, digest, snapshot, and a
+sanitized summary. Classify each entry as pending, applied, blocked, or
+no-effect. Apply steering only at a safe wave boundary. Material changes create
+a new plan identity; locked plan bytes are never edited in place.
 
-```bash
-codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"
-```
+## Coordinator and Resume State
 
-Never widen permissions automatically.
+Coordinator-v7 is authoritative after creation. It indexes waves, immutable
+tasks, plan digest, generation identity, current prompt-impact basis, and exact
+Git/resource state.
 
-## Stable Errors
+`resume-control-v1` records one controlled transition:
 
-- `WORKSPACE_NOT_FOUND`, `WORKSPACE_MISMATCH`, `WORKSPACE_PATH_INVALID`,
-  `WORKSPACE_PERMISSION_INVALID`, `WORKSPACE_BUSY`
-- `PROMPT_NOT_FOUND`, `PROMPT_AMBIGUOUS`, `PROMPT_CONFLICT`, `PROMPT_DRIFT`,
-  `PROMPT_TOO_LARGE`
-- `RUN_STATE_INVALID`, `EXECUTION_STATE_INVALID`,
-  `WORKFLOW_UPGRADE_REQUIRED`
-- `DEPENDENCY_CYCLE`, `REPLAN_REQUIRED`, `UNSUPPORTED_SUBMODULE_SCOPE`,
-  `UNSUPPORTED_SYMLINK_SCOPE`
-- `WORKTREE_COLLISION`, `WORKTREE_CONFLICT`, `GIT_OPERATION_FAILED`
-- `INTEGRATION_CONFLICT`, `INTEGRATION_VALIDATION_FAILED`
-- `PROMOTION_BLOCKED`, `PROMOTION_FAILED`, `CLEANUP_BLOCKED`
-- `ENVIRONMENT_BLOCKER`, `HUMAN_INPUT_REQUIRED`,
-  `STEERING_QUEUED_AFTER_WAVE`
+- monotonic epoch;
+- transition name;
+- canonical argument object and digest;
+- prior observed-state digest;
+- phase and effect evidence;
+- terminal digest.
 
-Retry only after re-observing durable state. Never silently repair malformed
-state or delete recovery resources.
+Consume the returned resume token and arguments unchanged. Do not reconstruct
+private commands from conversation or handoff text. A stale token fails before
+effect; an interrupted observed effect completes without repeating mutation.
+
+## Handoff Projection
+
+`handoff.md` is the human-readable projection of accepted intent, tasks,
+progress, evidence, and next action. It is planning input before coordinator
+creation. Afterward, machine state is authoritative and handoff updates are
+compare-and-set projections.
+
+The handoff may summarize the canonical spec status but does not expose private
+receipt paths or project-instruction decision fields. Immutable assignments
+carry the machine-readable project-spec receipt. Existing applicable
+instructions are read directly from the selected checkout.
+
+## Project-Spec Boundary
+
+Canonical specs are root-owned project truth. Their exact receipt participates
+in plan and assignment evidence but never authorizes dispatch, cleanup,
+finalization, or release.
+
+- No lifecycle authorization command exists.
+- No lifecycle contract-delta adoption command exists.
+- No private lifecycle state path is accepted from a user or hook.
+- No project-instruction receipt is copied into run state.
+- Missing or invalid canonical specs require root reconciliation before a
+  spec-dependent plan lock; private lifecycle state does not change workflow
+  outcome.
+- Historical lifecycle artifacts are ignored, not migrated.
+- Workers inherit the root intent/receipt and return typed `spec_gaps`; they do
+  not write specs.
+
+## Finalization and Summary
+
+Finalization requires all indexed waves done, no retained internal resources,
+current workflow-owned prompt impact, clean exact lane head, and bounded final
+`$align` evidence. It prepares and seals one deterministic `run-summary-v1`,
+releases the generation, projects the handoff, and activates the next queue
+head.
+
+An interrupted finalization resumes from its own prepared summary and intent.
+It never waits for a Stop hook or lifecycle seal. `ALREADY_COMPLETE` returns
+the same sealed summary bytes.
+
+## Public Status
+
+`lane-report-v2` is a separate zero-write read model. It double-observes a
+bounded evidence set and emits only a matching pair. It exposes progress,
+totals, current/remaining steps, and one next public action—never prompt text,
+internal IDs, branches, commits, state paths, raw diffs, or lifecycle data.
+
+## Unsupported State
+
+Coordinator v1 through v6, unfinished pre-interop runs, unsafe generated
+workspace shapes, and ambiguous writer/resource state fail closed with
+`WORKFLOW_UPGRADE_REQUIRED` or a precise recovery blocker. Do not add a legacy
+compatibility reader or automatic migration.

@@ -161,6 +161,7 @@ def test_generate_wireguard_client_config_writes_secret_file(
             public_ip="203.0.113.10",
             ssh_user="ubuntu",
             ssh_private_key=None,
+            ssh_known_hosts_file=Path(__file__),
             client_name=None,
             local_subnets=normalize_local_subnets(["10.0.0.0/8"]),
             dns=(),
@@ -173,10 +174,110 @@ def test_generate_wireguard_client_config_writes_secret_file(
     assert calls
     assert "--name wg-aaaaaaaaaaaa" in calls[0][-1]
     assert "--local-subnet" in calls[0][-1]
+    assert "StrictHostKeyChecking=yes" in calls[0]
+    assert f"UserKnownHostsFile={Path(__file__).resolve()}" in calls[0]
+    assert "GlobalKnownHostsFile=/dev/null" in calls[0]
     assert result.output_path.name == "wg-aaaaaaaaaaaa.conf"
     assert result.output_path.read_text(encoding="utf-8") == "[Interface]\nPrivateKey = secret\n"
     assert oct(result.output_path.stat().st_mode & 0o777) == "0o600"
     assert result.remaining_client_slots == 252
+
+
+def test_generate_wireguard_missing_trust_fails_before_remote_or_local_output(
+    tmp_path: Path,
+) -> None:
+    component = select_wireguard_component(
+        {
+            "infra": {
+                "components": [
+                    {
+                        "id": "wireguard-gw",
+                        "enabled": True,
+                        "inputs": {"ssh_user_name": "ubuntu"},
+                    }
+                ]
+            }
+        }
+    )
+    output_dir = tmp_path / "wireguard-clients"
+
+    def fail_run(_cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("remote helper must not run without SSH trust")
+
+    with pytest.raises(RuntimeError, match="SSH known-hosts file does not exist"):
+        generate_wireguard_client_config(
+            WireGuardClientGenerationRequest(
+                component=component,
+                public_ip="203.0.113.10",
+                ssh_user="ubuntu",
+                ssh_private_key=None,
+                ssh_known_hosts_file=tmp_path / "missing-known-hosts",
+                client_name="client-1",
+                local_subnets=(),
+                dns=(),
+                persistent_keepalive=None,
+                output_dir=output_dir,
+            ),
+            run_command=fail_run,
+        )
+
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "ssh_error",
+    [
+        "Host key verification failed.",
+        "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
+    ],
+)
+def test_generate_wireguard_rejects_unknown_or_mismatched_host_identity(
+    tmp_path: Path,
+    ssh_error: str,
+) -> None:
+    component = select_wireguard_component(
+        {
+            "infra": {
+                "components": [
+                    {
+                        "id": "wireguard-gw",
+                        "enabled": True,
+                        "inputs": {"ssh_user_name": "ubuntu"},
+                    }
+                ]
+            }
+        }
+    )
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("host ssh-ed25519 AAAATEST\n", encoding="utf-8")
+    output_dir = tmp_path / "wireguard-clients"
+    calls: list[list[str]] = []
+
+    def fail_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        raise subprocess.CalledProcessError(255, cmd, stderr=ssh_error)
+
+    with pytest.raises(RuntimeError, match=ssh_error):
+        generate_wireguard_client_config(
+            WireGuardClientGenerationRequest(
+                component=component,
+                public_ip="203.0.113.10",
+                ssh_user="ubuntu",
+                ssh_private_key=None,
+                ssh_known_hosts_file=known_hosts,
+                client_name="alice",
+                local_subnets=(),
+                dns=(),
+                persistent_keepalive=None,
+                output_dir=output_dir,
+            ),
+            run_command=fail_run,
+        )
+
+    assert len(calls) == 1
+    assert "StrictHostKeyChecking=yes" in calls[0]
+    assert f"UserKnownHostsFile={known_hosts.resolve()}" in calls[0]
+    assert not tuple(output_dir.glob("*.conf"))
 
 
 def test_wireguard_secret_write_keeps_previous_file_on_replace_failure(
@@ -222,6 +323,7 @@ def test_generate_wireguard_client_config_rejects_wg_quick_invalid_name(tmp_path
                 public_ip="203.0.113.10",
                 ssh_user="ubuntu",
                 ssh_private_key=None,
+                ssh_known_hosts_file=Path(__file__),
                 client_name="client-20260514224002-8e7cbf",
                 local_subnets=(),
                 dns=(),
@@ -270,6 +372,7 @@ def test_update_wireguard_local_subnets_runs_vm_local_helper() -> None:
             public_ip="203.0.113.10",
             ssh_user="ubuntu",
             ssh_private_key=None,
+            ssh_known_hosts_file=Path(__file__),
             operation="add",
             local_subnets=("10.20.0.0/16",),
         ),
@@ -278,6 +381,8 @@ def test_update_wireguard_local_subnets_runs_vm_local_helper() -> None:
 
     assert "add-local-subnets" in calls[0][-1]
     assert "--local-subnet 10.20.0.0/16" in calls[0][-1]
+    assert "StrictHostKeyChecking=yes" in calls[0]
+    assert f"UserKnownHostsFile={Path(__file__).resolve()}" in calls[0]
     assert result.added == ("10.20.0.0/16",)
     assert result.local_subnets == ("10.0.0.0/8", "10.20.0.0/16")
 
@@ -344,6 +449,7 @@ def test_wireguard_command_uses_deployed_output_and_default_ignored_dir(
     assert request.public_ip == "203.0.113.10"
     assert request.output_dir == paths.project_dir / "wireguard-clients"
     assert request.local_subnets == ("10.0.0.0/8",)
+    assert request.ssh_known_hosts_file == (paths.generated_dir / "ssh_known_hosts").resolve()
     assert "WireGuard client config written" in result.output
     assert "Client config ignore rule" not in result.output
     connect_command = f"wg-quick up {shlex.quote(str(request.output_dir / 'client-1.conf'))}"
@@ -467,6 +573,7 @@ def test_wireguard_command_adds_local_subnets_from_comma_separated_list(
 
     monkeypatch.setattr(cli_module, "update_wireguard_local_subnets", fake_update)
 
+    explicit_trust = tmp_path / "operator-known-hosts"
     result = runner.invoke(
         app,
         [
@@ -475,6 +582,8 @@ def test_wireguard_command_adds_local_subnets_from_comma_separated_list(
             str(paths.config_path),
             "--local-subnet",
             "10.20.0.1/16,10.30.0.0/16",
+            "--ssh-known-hosts-file",
+            str(explicit_trust),
         ],
     )
 
@@ -482,6 +591,7 @@ def test_wireguard_command_adds_local_subnets_from_comma_separated_list(
     request = captured["request"]
     assert request.operation == "add"
     assert request.local_subnets == ("10.20.0.0/16", "10.30.0.0/16")
+    assert request.ssh_known_hosts_file == explicit_trust.resolve()
     assert "Added: 10.20.0.0/16, 10.30.0.0/16" in result.output
 
 

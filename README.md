@@ -1,7 +1,6 @@
 # nebius-ps-services
 
-Public Nebius Professional Services monorepo for reusable AI/ML deployment
-building blocks on Nebius AI Cloud.
+Nebius Platform Services: reusable AI/ML deployment building blocks for Nebius AI Cloud.
 
 This repository contains Terraform modules, Helm charts, CLI services, examples,
 and reusable Codex skills. Root-level files should stay focused on repository
@@ -56,6 +55,14 @@ The repository uses Dependabot for dependency update pull requests.
   `Pipfile`, and `Pipfile.lock`.
 - Dependabot pull requests that touch source code or other non-dependency files
   remain ineligible for repo-level auto-merge.
+
+## Reusable Skill CI
+
+Changes to the canonical project-spec owner and its ordinary-session, Task
+Implementer, Agentic SDLC, hook-installer, and project-instruction adapters run
+the focused `skills-project-specs-ci.yml` contract suite. The workflow validates
+the single v2 parser/publisher contract, nonblocking intake hooks, worker
+intent/spec inheritance, typed spec-gap reporting, and safe hook retirement.
 
 ## License
 

@@ -1,9 +1,23 @@
 ---
 name: sdlc-merge-pr
-description: "Use only as part of the Agentic SDLC workflow; use only when the user explicitly asks to merge a specific pull request in the Agentic SDLC workflow. Verifies the PR still points to the exact promoted and reviewed SHA, then merges only when policy, checks, reviews, branch state, and UAT allow it."
+description: "Use only as part of the Agentic SDLC workflow; only on an explicit request, merge a specific PR after proving its exact promoted/reviewed SHA and passing policy, checks, reviews, branch-state, and UAT gates."
 ---
 
 # Merge PR
+
+## Help
+
+For `$sdlc-merge-pr --help` or `$sdlc-merge-pr -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -41,6 +55,10 @@ Merge only after explicit human instruction and final readiness verification.
 - `permissions/merge-authorization.json`, immediately before the merge, with a
   short expiry and specific PR scope.
 - Final run status when this completes the SDLC run.
+- When this transition completes the run and all execution resources are
+  released, invoke the private Agentic SDLC `queue-next` transition. Activate
+  only the unchanged FIFO head; queue-head drift requires the user to rerun the
+  edited prompt, and a blocked active run is never overtaken.
 
 ## Process
 
@@ -49,6 +67,9 @@ Merge only after explicit human instruction and final readiness verification.
 - Verify required reviews pass and unresolved conversations do not block policy.
 - Verify branch is up to date when required.
 - Verify UAT passed.
+- Require the PR base and recorded PR authorization base to equal the actual
+  symbolic `origin` default branch, and require its current HEAD to equal the
+  recorded `base_head`. Do not guess from branch names or tolerate base drift.
 - Require the current clean local HEAD, recorded promoted SHA, reviewed PR head,
   and current remote PR head to be identical. Any drift or branch-changing fix
   returns through `sdlc-classify-failure` and `sdlc-start`.
@@ -62,7 +83,8 @@ Merge only after explicit human instruction and final readiness verification.
 - Write `permissions/merge-authorization.json` in the active run directory
   immediately before merge execution. Include `allowed: true`,
   `phase: "sdlc-merge-pr"`, the specific PR URL or number,
-  `expected_head: <promoted-sha>`, `exact_command`,
+  `expected_head: <promoted-sha>`, `base_branch: <origin-default>`,
+  `base_head: <recorded-default-head>`, `exact_command`,
   `explicit_user_request: true`, checks status, review status, UAT status, and
   `expires_at`. All three readiness statuses must be `passed`.
 - Run only that exact authorized CLI command and record the result. Active
@@ -109,8 +131,11 @@ Merge only after explicit human instruction and final readiness verification.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

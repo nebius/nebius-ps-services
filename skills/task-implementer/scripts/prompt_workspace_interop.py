@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Optional coordination with a worktree-managed outer checkout."""
+"""Coordinate one run with its Worktree-owned persistent lane generation."""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import signal
 import subprocess
 import sys
 from typing import Any
@@ -20,10 +23,24 @@ from prompt_workspace_core import (
 from prompt_workspace_execution import orchestration_dir
 
 
-SCHEMA = 1
+SCHEMA = 4
 NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?")
 LEASE_ID_RE = re.compile(r"[0-9a-f]{32}")
 OBJECT_ID_RE = re.compile(r"[0-9a-f]{40,64}")
+PRIVATE_WORKTREE_ACTIONS = frozenset(
+    {
+        "anchor-inspect",
+        "task-lease-acquire",
+        "task-lease-inspect",
+        "task-lease-promote",
+        "task-lease-release",
+        "task-lease-resource",
+        "task-lane-generation-prepare",
+        "task-lane-generation-open",
+        "task-lane-generation-inspect",
+        "task-lane-generation-release",
+    }
+)
 
 
 def _helper_path(*, required: bool = True) -> Path | None:
@@ -36,7 +53,7 @@ def _helper_path(*, required: bool = True) -> Path | None:
     if required and not path.is_file():
         raise PromptWorkspaceError(
             "ENVIRONMENT_BLOCKER",
-            "the managed outer checkout requires the installed worktree helper",
+            "the persistent lane requires the installed Worktree helper",
         )
     return path if path.is_file() else None
 
@@ -45,25 +62,53 @@ def _source_root(workspace: dict[str, object]) -> Path:
     return Path(required_string(workspace, "source_root", "workspace manifest"))
 
 
-def _call(workspace: dict[str, object], arguments: list[str]) -> dict[str, object]:
+def _call(
+    workspace: dict[str, object],
+    arguments: list[str],
+    *,
+    environment: dict[str, str] | None = None,
+) -> dict[str, object]:
+    if not arguments or arguments[0] not in PRIVATE_WORKTREE_ACTIONS:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT",
+            "Task Implementer private worktree interop rejects public lifecycle actions",
+        )
     helper = _helper_path()
     assert helper is not None
+    timeout = 930 if arguments[0] == "task-lane-generation-open" else 60
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [sys.executable, str(helper), *arguments],
             cwd=_source_root(workspace),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=False,
-            timeout=60,
+            start_new_session=True,
+            env=environment,
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        raise PromptWorkspaceError(
+            "ENVIRONMENT_BLOCKER", "worktree interop helper timed out"
+        ) from error
+    except OSError as error:
         raise PromptWorkspaceError(
             "ENVIRONMENT_BLOCKER", "worktree interop helper could not run"
         ) from error
     try:
-        payload: Any = json.loads(result.stdout)
+        payload: Any = json.loads(stdout)
     except json.JSONDecodeError as error:
         raise PromptWorkspaceError(
             "WORKTREE_CONFLICT", "worktree interop helper returned invalid state"
@@ -72,7 +117,7 @@ def _call(workspace: dict[str, object], arguments: list[str]) -> dict[str, objec
         raise PromptWorkspaceError(
             "WORKTREE_CONFLICT", "worktree interop helper returned invalid state"
         )
-    if result.returncode != 0 or payload.get("status") == "blocked":
+    if process.returncode != 0 or payload.get("status") == "blocked":
         detail = payload.get("error")
         raise PromptWorkspaceError(
             "WORKTREE_CONFLICT",
@@ -85,12 +130,199 @@ def _interop_path(run_dir: Path) -> Path:
     return orchestration_dir(run_dir) / "interop.json"
 
 
-def _scope_contains(outer: str, inner: str) -> bool:
-    if outer == ".":
-        return True
-    outer_path = PurePosixPath(outer)
-    inner_path = PurePosixPath(inner)
-    return inner_path == outer_path or outer_path in inner_path.parents
+def _checkpoint_path(run_dir: Path) -> Path:
+    return orchestration_dir(run_dir) / "lane-checkpoint.json"
+
+
+def _checkpoint_preparation_path(run_dir: Path) -> Path:
+    return orchestration_dir(run_dir) / "lane-checkpoint-preparation.json"
+
+
+def _claims_sha256(claims: list[dict[str, str]]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            claims, separators=(",", ":"), sort_keys=True, ensure_ascii=False
+        ).encode()
+    ).hexdigest()
+
+
+def load_checkpoint_preparation(
+    run_dir: Path,
+    *,
+    claims: list[dict[str, str]],
+    required: bool = True,
+) -> dict[str, object] | None:
+    path = _checkpoint_preparation_path(run_dir)
+    if not path.exists():
+        if required:
+            raise PromptWorkspaceError(
+                "CHECKPOINT_REVIEW_REQUIRED",
+                "lane checkpoint preparation is missing; prepare and review it first",
+            )
+        return None
+    value = load_json_object(path, "lane checkpoint preparation")
+    required_fields = {
+        "schema",
+        "run_id",
+        "lane_id",
+        "status",
+        "checkpoint_state",
+        "requires_review",
+        "before_head",
+        "candidate_tree",
+        "paths",
+        "paths_sha256",
+        "review_token",
+        "claims_sha256",
+    }
+    paths = value.get("paths")
+    if (
+        set(value) != required_fields
+        or value.get("schema") != 1
+        or value.get("run_id") != run_dir.name
+        or re.fullmatch(r"[0-9a-f]{32}", str(value.get("lane_id"))) is None
+        or value.get("status") not in {"prepared", "recovered", "active-recovered"}
+        or value.get("checkpoint_state")
+        not in {"prepared", "staged", "committed", "review-required"}
+        or not isinstance(value.get("requires_review"), bool)
+        or any(
+            not isinstance(value.get(key), str)
+            or OBJECT_ID_RE.fullmatch(str(value[key])) is None
+            for key in ("before_head", "candidate_tree")
+        )
+        or LEASE_ID_RE.fullmatch(str(value.get("review_token"))) is None
+        or not isinstance(paths, list)
+        or any(not isinstance(item, str) or not item for item in paths)
+        or paths != sorted(set(paths))
+        or value.get("requires_review") != bool(paths)
+        or value.get("paths_sha256")
+        != hashlib.sha256(
+            json.dumps(paths, separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()
+        or value.get("claims_sha256") != _claims_sha256(claims)
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "lane checkpoint preparation is invalid"
+        )
+    return value
+
+
+def load_checkpoint_receipt(
+    run_dir: Path, *, required: bool = True
+) -> dict[str, object] | None:
+    path = _checkpoint_path(run_dir)
+    if not path.exists():
+        if required:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "lane checkpoint receipt is missing"
+            )
+        return None
+    value = load_json_object(path, "lane checkpoint receipt")
+    required_fields = {
+        "schema",
+        "run_id",
+        "lane_id",
+        "status",
+        "before_head",
+        "initial_head",
+        "tree",
+        "paths",
+        "paths_sha256",
+    }
+    paths = value.get("paths")
+    if (
+        set(value) != required_fields
+        or value.get("schema") != 1
+        or value.get("run_id") != run_dir.name
+        or not isinstance(value.get("lane_id"), str)
+        or re.fullmatch(r"[0-9a-f]{32}", str(value.get("lane_id"))) is None
+        or value.get("status") not in {"not-needed", "created", "recovered"}
+        or any(
+            not isinstance(value.get(key), str)
+            or OBJECT_ID_RE.fullmatch(str(value[key])) is None
+            for key in ("before_head", "initial_head", "tree")
+        )
+        or not isinstance(paths, list)
+        or any(not isinstance(item, str) or not item for item in paths)
+        or paths != sorted(set(paths))
+        or (
+            value.get("status") == "not-needed"
+            and (value.get("before_head") != value.get("initial_head") or paths)
+        )
+        or (
+            value.get("status") == "created"
+            and (value.get("before_head") == value.get("initial_head") or not paths)
+        )
+        or value.get("paths_sha256")
+        != hashlib.sha256(
+            json.dumps(paths, separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "lane checkpoint receipt is invalid"
+        )
+    return value
+
+
+def prepare_checkpoint(
+    workspace: dict[str, object],
+    run_dir: Path,
+    workspace_path: Path,
+    initial_head: str,
+    claims: list[dict[str, str]],
+) -> dict[str, object]:
+    if load_interop(run_dir, required=False) is not None:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID",
+            "an active generation does not prepare another checkpoint",
+        )
+    anchor = inspect_anchor(workspace)
+    task_scope = required_string(workspace, "scope", "workspace manifest")
+    if anchor.get("status") != "task-lane":
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "Task Implementer runs require a workspace-v2 persistent lane",
+        )
+    if anchor.get("task_scope") != task_scope:
+        raise PromptWorkspaceError(
+            "REPLAN_REQUIRED",
+            "task scope must match the persistent Task Implementer lane",
+        )
+    prepared = _call(
+        workspace,
+        [
+            "task-lane-generation-prepare",
+            "--workspace",
+            str(workspace_path.resolve()),
+            "--run-id",
+            run_dir.name,
+            "--task-scope",
+            task_scope,
+            "--expected-head",
+            initial_head,
+            "--claims-json",
+            json.dumps(claims, separators=(",", ":"), sort_keys=True),
+        ],
+    )
+    paths = prepared.get("changed_paths")
+    receipt = {
+        "schema": 1,
+        "run_id": run_dir.name,
+        "lane_id": prepared.get("lane_id"),
+        "status": prepared.get("status"),
+        "checkpoint_state": prepared.get("checkpoint_state"),
+        "requires_review": prepared.get("requires_review"),
+        "before_head": prepared.get("before_head"),
+        "candidate_tree": prepared.get("candidate_tree"),
+        "paths": paths,
+        "paths_sha256": prepared.get("paths_sha256"),
+        "review_token": prepared.get("review_token"),
+        "claims_sha256": _claims_sha256(claims),
+    }
+    write_atomic(_checkpoint_preparation_path(run_dir), stable_json(receipt))
+    loaded = load_checkpoint_preparation(run_dir, claims=claims)
+    assert loaded is not None
+    return loaded
 
 
 def _safe_scope(value: object) -> str | None:
@@ -102,46 +334,44 @@ def _safe_scope(value: object) -> str | None:
     return value
 
 
-def inspect_anchor(workspace: dict[str, object]) -> dict[str, object]:
+def inspect_anchor(
+    workspace: dict[str, object], *, environment: dict[str, str] | None = None
+) -> dict[str, object]:
     path = _helper_path(required=False)
     if path is None:
-        repo = _source_root(workspace)
-        try:
-            branch = subprocess.run(
-                ["git", "branch", "--show-current"],
-                cwd=repo,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                timeout=15,
-            ).stdout.strip()
-            marker = subprocess.run(
-                [
-                    "git",
-                    "config",
-                    "--local",
-                    "--get",
-                    f"branch.{branch}.worktreeSkillName",
-                ],
-                cwd=repo,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                timeout=15,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise PromptWorkspaceError(
-                "ENVIRONMENT_BLOCKER", "could not inspect the project checkout"
-            ) from error
-        if branch and marker.returncode == 0 and marker.stdout.strip():
-            raise PromptWorkspaceError(
-                "ENVIRONMENT_BLOCKER",
-                "the managed outer checkout requires the installed worktree helper",
-            )
-        return {"status": "unmanaged"}
-    return _call(workspace, ["anchor-inspect"])
+        raise PromptWorkspaceError(
+            "ENVIRONMENT_BLOCKER",
+            "the persistent Task Implementer lane requires the Worktree helper",
+        )
+    return _call(workspace, ["anchor-inspect"], environment=environment)
+
+
+def verify_workspace_anchor(workspace: dict[str, object]) -> dict[str, object]:
+    """Require the workspace to match its exact live Worktree-owned lane."""
+
+    anchor = inspect_anchor(workspace)
+    expected = {
+        "status": "task-lane",
+        "lane_id": required_string(workspace, "lane_id", "workspace manifest"),
+        "incarnation": workspace.get("lane_incarnation"),
+        "name": required_string(workspace, "lane_name", "workspace manifest"),
+        "branch": required_string(workspace, "lane_branch", "workspace manifest"),
+        "worktree": required_string(workspace, "repo_root", "workspace manifest"),
+        "scope": required_string(workspace, "scope", "workspace manifest"),
+        "task_scope": required_string(workspace, "scope", "workspace manifest"),
+        "common_dir": required_string(workspace, "common_dir", "workspace manifest"),
+        "primary": required_string(workspace, "primary_root", "workspace manifest"),
+        "source_branch": required_string(
+            workspace, "source_branch", "workspace manifest"
+        ),
+        "source_ref": required_string(workspace, "source_ref", "workspace manifest"),
+    }
+    if any(anchor.get(key) != value for key, value in expected.items()):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT",
+            "Task Implementer workspace disagrees with its live project lane",
+        )
+    return anchor
 
 
 def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
@@ -157,19 +387,23 @@ def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
         "worktree",
         "promoted_head",
         "released",
+        "lane_id",
+        "generation",
     }
+    if value.get("schema") in {1, 2, 3}:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "older worktree interop state is unsupported; start a new run",
+        )
     if set(value) != required or value.get("schema") != SCHEMA:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "worktree interop state is invalid"
         )
-    if value.get("run_id") != run_id or value.get("mode") not in {
-        "managed",
-        "unmanaged",
-    }:
+    if value.get("run_id") != run_id or value.get("mode") != "lane":
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "worktree interop identity is invalid"
         )
-    if value["mode"] == "managed":
+    if value["mode"] == "lane":
         for key in (
             "name",
             "lease_id",
@@ -188,12 +422,15 @@ def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
         promoted = value["promoted_head"]
         if (
             NAME_RE.fullmatch(str(name)) is None
-            or value["branch"] != f"worktree/{name}"
+            or not str(name).startswith("project-")
+            or value["branch"] != f"feature/{str(name).removeprefix('project-')}"
             or LEASE_ID_RE.fullmatch(str(value["lease_id"])) is None
+            or re.fullmatch(r"[0-9a-f]{32}", str(value.get("lane_id"))) is None
+            or not isinstance(value.get("generation"), int)
+            or int(value["generation"]) < 1
             or not Path(str(value["worktree"])).is_absolute()
             or outer_scope is None
             or task_scope is None
-            or not _scope_contains(outer_scope, task_scope)
             or (
                 promoted is not None
                 and (
@@ -203,30 +440,11 @@ def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
             )
         ):
             raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", "managed worktree interop scope is invalid"
+                "EXECUTION_STATE_INVALID", "Task lane interop scope is invalid"
             )
         if not isinstance(value.get("released"), bool):
             raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", "managed worktree release state is invalid"
-            )
-    else:
-        if (
-            any(
-                value.get(key) is not None
-                for key in (
-                    "name",
-                    "lease_id",
-                    "outer_scope",
-                    "task_scope",
-                    "branch",
-                    "worktree",
-                    "promoted_head",
-                )
-            )
-            or value.get("released") is not True
-        ):
-            raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", "unmanaged worktree interop is invalid"
+                "EXECUTION_STATE_INVALID", "Task lane release state is invalid"
             )
     return value
 
@@ -243,81 +461,301 @@ def load_interop(run_dir: Path, *, required: bool = True) -> dict[str, object] |
     return _validate_state(load_json_object(path, "worktree interop"), run_dir.name)
 
 
+def _inspect_managed_lease(
+    workspace: dict[str, object],
+    interop: dict[str, object],
+    *,
+    allow_outer_dirty: bool = False,
+) -> dict[str, object]:
+    inspected = _call(
+        workspace,
+        [
+            "task-lane-generation-inspect",
+            "--name",
+            str(interop["name"]),
+            "--generation",
+            str(interop["generation"]),
+            "--lease-id",
+            str(interop["lease_id"]),
+        ],
+    )
+    expected = {
+        "owner_kind": "task-implementer",
+        "name": interop["name"],
+        "branch": interop["branch"],
+        "worktree": interop["worktree"],
+        "run_id": interop["run_id"],
+        "scope": interop["outer_scope"],
+        "task_scope": interop["task_scope"],
+        "token": interop["lease_id"],
+        "lane_id": interop["lane_id"],
+        "generation": interop["generation"],
+    }
+    if any(inspected.get(key) != value for key, value in expected.items()):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane lease identity changed"
+        )
+    if inspected.get("state") not in {"active", "released"}:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane lease state is invalid"
+        )
+    if inspected.get("outer_clean") is not True and not allow_outer_dirty:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane must remain clean"
+        )
+    return inspected
+
+
+def observe_managed_state(
+    workspace: dict[str, object],
+    run_dir: Path,
+    interop: dict[str, object],
+    *,
+    initial_head: str | None = None,
+    workspace_path: Path | None = None,
+    allow_outer_dirty: bool = False,
+) -> dict[str, object]:
+    """Observe the exact external lease without repairing local interop state."""
+
+    inspected = _inspect_managed_lease(
+        workspace, interop, allow_outer_dirty=allow_outer_dirty
+    )
+    if initial_head is not None and inspected.get("initial_head") != initial_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane initial head changed"
+        )
+    if workspace_path is not None and inspected.get("workspace") != str(
+        workspace_path.resolve()
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane workspace identity changed"
+        )
+    lease_promoted = inspected.get("promoted_head")
+    local_promoted = interop.get("promoted_head")
+    repair_promoted = local_promoted is None and lease_promoted is not None
+    if (
+        lease_promoted is not None
+        and local_promoted is not None
+        and lease_promoted != local_promoted
+    ):
+        history = inspected.get("promotion_heads")
+        if (
+            not isinstance(history, list)
+            or len(history) < 2
+            or history[-2:] != [local_promoted, lease_promoted]
+        ):
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT", "persistent lane promoted head changed"
+            )
+        repair_promoted = True
+    if local_promoted is not None and lease_promoted is None:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "local promotion is missing from the lane lease"
+        )
+    expected_head = lease_promoted or inspected.get("initial_head")
+    lease_released = inspected["state"] == "released"
+    if not lease_released and inspected.get("outer_head") != expected_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane head disagrees with its lease"
+        )
+    if interop.get("released") is True and not lease_released:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "local release is missing from the lane lease"
+        )
+    repairs: dict[str, object] = {}
+    if repair_promoted:
+        repairs["promoted_head"] = lease_promoted
+    if lease_released and interop.get("released") is False:
+        repairs["released"] = True
+    return {"lease": inspected, "repairs": repairs}
+
+
+def _reconcile_managed_state(
+    workspace: dict[str, object],
+    run_dir: Path,
+    interop: dict[str, object],
+    *,
+    initial_head: str | None = None,
+    workspace_path: Path | None = None,
+    allow_outer_dirty: bool = False,
+) -> dict[str, object]:
+    observation = observe_managed_state(
+        workspace,
+        run_dir,
+        interop,
+        initial_head=initial_head,
+        workspace_path=workspace_path,
+        allow_outer_dirty=allow_outer_dirty,
+    )
+    inspected = dict(observation["lease"])
+    repairs = dict(observation["repairs"])
+    if repairs:
+        interop.update(repairs)
+        _validate_state(interop, run_dir.name)
+        write_atomic(_interop_path(run_dir), stable_json(interop))
+    return inspected
+
+
 def acquire_interop(
     workspace: dict[str, object],
     run_dir: Path,
     workspace_path: Path,
     initial_head: str,
+    claims: list[dict[str, str]] | None = None,
+    *,
+    allow_outer_dirty: bool = False,
 ) -> dict[str, object]:
     existing = load_interop(run_dir, required=False)
     if existing is not None:
+        anchor = inspect_anchor(workspace)
+        if anchor.get("status") != "task-lane":
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT", "Task Implementer lane disappeared"
+            )
+        _reconcile_managed_state(
+            workspace,
+            run_dir,
+            existing,
+            initial_head=initial_head,
+            workspace_path=workspace_path,
+            allow_outer_dirty=allow_outer_dirty,
+        )
         return existing
     anchor = inspect_anchor(workspace)
     task_scope = required_string(workspace, "scope", "workspace manifest")
-    if anchor.get("status") == "unmanaged":
-        state: dict[str, object] = {
-            "schema": SCHEMA,
-            "mode": "unmanaged",
-            "run_id": run_dir.name,
-            "name": None,
-            "lease_id": None,
-            "outer_scope": None,
-            "task_scope": None,
-            "branch": None,
-            "worktree": None,
-            "promoted_head": None,
-            "released": True,
-        }
-    else:
-        outer_scope = str(anchor.get("scope"))
-        if anchor.get("task_scope") != task_scope or not _scope_contains(
-            outer_scope, task_scope
-        ):
-            raise PromptWorkspaceError(
-                "REPLAN_REQUIRED",
-                "task scope must be equal to or nested under the managed outer scope",
-            )
-        acquired = _call(
-            workspace,
-            [
-                "task-lease-acquire",
-                "--owner-kind",
-                "task-implementer",
-                "--workspace",
-                str(workspace_path.resolve()),
-                "--run-id",
-                run_dir.name,
-                "--task-scope",
-                task_scope,
-                "--initial-head",
-                initial_head,
-            ],
+    if anchor.get("status") != "task-lane":
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "Task Implementer runs require a workspace-v2 persistent lane",
         )
-        lease_id = acquired.get("token")
-        if not isinstance(lease_id, str) or not lease_id:
-            raise PromptWorkspaceError(
-                "WORKTREE_CONFLICT", "worktree task lease identity is missing"
-            )
-        state = {
-            "schema": SCHEMA,
-            "mode": "managed",
-            "run_id": run_dir.name,
-            "name": str(acquired["name"]),
-            "lease_id": lease_id,
-            "outer_scope": outer_scope,
-            "task_scope": task_scope,
-            "branch": str(acquired["branch"]),
-            "worktree": str(acquired["worktree"]),
-            "promoted_head": acquired.get("promoted_head"),
-            "released": False,
-        }
+    outer_scope = str(anchor.get("scope"))
+    if anchor.get("task_scope") != task_scope:
+        raise PromptWorkspaceError(
+            "REPLAN_REQUIRED",
+            "task scope must match the persistent Task Implementer lane",
+        )
+    if claims is None:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID",
+            "initial repository claims are required before opening a generation",
+        )
+    preparation = load_checkpoint_preparation(run_dir, claims=claims)
+    assert preparation is not None
+    recovered_post_commit = preparation["status"] == "recovered" and preparation[
+        "checkpoint_state"
+    ] in {"committed", "review-required"}
+    if initial_head != preparation["before_head"] and not (
+        preparation["status"] == "active-recovered" or recovered_post_commit
+    ):
+        raise PromptWorkspaceError(
+            "CHECKPOINT_REVIEW_REQUIRED",
+            "lane checkpoint baseline changed; prepare and review it again",
+        )
+    acquired = _call(
+        workspace,
+        [
+            "task-lane-generation-open",
+            "--workspace",
+            str(workspace_path.resolve()),
+            "--run-id",
+            run_dir.name,
+            "--task-scope",
+            task_scope,
+            "--expected-head",
+            initial_head,
+            "--claims-json",
+            json.dumps(claims, separators=(",", ":"), sort_keys=True),
+            "--review-token",
+            str(preparation["review_token"]),
+            "--reviewed-tree",
+            str(preparation["candidate_tree"]),
+            "--reviewed-paths-sha256",
+            str(preparation["paths_sha256"]),
+        ],
+    )
+    generation = acquired.get("generation")
+    lane_id = acquired.get("lane_id")
+    lease_id = acquired.get("token")
+    checkpoint_status = acquired.get("checkpoint_status")
+    checkpoint_before_head = acquired.get("checkpoint_before_head")
+    checkpoint_head = acquired.get("checkpoint_head")
+    checkpoint_tree = acquired.get("checkpoint_tree")
+    checkpoint_paths = acquired.get("checkpoint_paths")
+    expected_acquisition = {
+        "owner_kind": "task-implementer",
+        "name": anchor.get("name"),
+        "branch": anchor.get("branch"),
+        "worktree": anchor.get("worktree"),
+        "scope": outer_scope,
+        "task_scope": task_scope,
+        "run_id": run_dir.name,
+        "workspace": str(workspace_path.resolve()),
+        "initial_head": checkpoint_head,
+    }
+    if (
+        not isinstance(lease_id, str)
+        or not lease_id
+        or not isinstance(generation, int)
+        or generation < 1
+        or not isinstance(lane_id, str)
+        or LEASE_ID_RE.fullmatch(lane_id) is None
+        or checkpoint_status not in {"not-needed", "created", "recovered"}
+        or initial_head not in {checkpoint_before_head, checkpoint_head}
+        or not isinstance(checkpoint_head, str)
+        or OBJECT_ID_RE.fullmatch(checkpoint_head) is None
+        or not isinstance(checkpoint_tree, str)
+        or OBJECT_ID_RE.fullmatch(checkpoint_tree) is None
+        or not isinstance(checkpoint_paths, list)
+        or any(not isinstance(item, str) or not item for item in checkpoint_paths)
+        or checkpoint_paths != sorted(set(checkpoint_paths))
+        or acquired.get("state") != "active"
+        or acquired.get("promoted_head") is not None
+        or any(
+            acquired.get(key) != value for key, value in expected_acquisition.items()
+        )
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "Task Implementer generation identity is missing"
+        )
+    receipt = {
+        "schema": 1,
+        "run_id": run_dir.name,
+        "lane_id": lane_id,
+        "status": checkpoint_status,
+        "before_head": checkpoint_before_head,
+        "initial_head": checkpoint_head,
+        "tree": checkpoint_tree,
+        "paths": checkpoint_paths,
+        "paths_sha256": hashlib.sha256(
+            json.dumps(
+                checkpoint_paths, separators=(",", ":"), ensure_ascii=False
+            ).encode()
+        ).hexdigest(),
+    }
+    write_atomic(_checkpoint_path(run_dir), stable_json(receipt))
+    load_checkpoint_receipt(run_dir)
+    state = {
+        "schema": SCHEMA,
+        "mode": "lane",
+        "run_id": run_dir.name,
+        "name": str(acquired["name"]),
+        "lease_id": lease_id,
+        "outer_scope": outer_scope,
+        "task_scope": task_scope,
+        "branch": str(acquired["branch"]),
+        "worktree": str(acquired["worktree"]),
+        "promoted_head": acquired.get("promoted_head"),
+        "released": False,
+        "lane_id": lane_id,
+        "generation": generation,
+    }
     _validate_state(state, run_dir.name)
     write_atomic(_interop_path(run_dir), stable_json(state))
     return state
 
 
 def managed(state: dict[str, object]) -> bool:
-    return state.get("mode") == "managed"
+    return state.get("mode") == "lane"
 
 
 def record_resource(
@@ -355,6 +793,40 @@ def record_resource(
     )
 
 
+def inspect_active_resources(
+    workspace: dict[str, object], run_dir: Path
+) -> list[dict[str, str]]:
+    """Return exact active lease resources for owner-side reconciliation."""
+
+    interop = load_interop(run_dir)
+    assert interop is not None
+    if not managed(interop) or interop.get("released") is True:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "resource recovery requires an active managed lease"
+        )
+    inspected = _inspect_managed_lease(workspace, interop)
+    if inspected.get("state") != "active":
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "resource recovery requires an active managed lease"
+        )
+    resources = inspected.get("resources")
+    if not isinstance(resources, list) or any(
+        not isinstance(item, dict) for item in resources
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed lease resources are invalid"
+        )
+    return [
+        {
+            "kind": str(item.get("kind")),
+            "path": str(item.get("path")),
+            "branch": str(item.get("branch")),
+            "state": str(item.get("state")),
+        }
+        for item in resources
+    ]
+
+
 def record_promotion(
     workspace: dict[str, object], run_dir: Path, promoted_head: str
 ) -> None:
@@ -362,7 +834,53 @@ def record_promotion(
     assert interop is not None
     if not managed(interop):
         return
-    _call(
+    if interop.get("released") is True:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "released worktree interop cannot be promoted"
+        )
+    inspected = _inspect_managed_lease(workspace, interop)
+    if inspected.get("state") != "active":
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "released worktree interop cannot be promoted"
+        )
+    lease_promoted = inspected.get("promoted_head")
+    history = inspected.get("promotion_heads")
+    local_promoted = interop.get("promoted_head")
+    if lease_promoted == promoted_head:
+        expected_head = promoted_head
+    else:
+        expected_head = lease_promoted or inspected.get("initial_head")
+    if not isinstance(expected_head, str):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane promotion baseline is invalid"
+        )
+    predecessor_matches = (
+        lease_promoted == promoted_head
+        and local_promoted not in {None, promoted_head}
+        and isinstance(history, list)
+        and len(history) >= 2
+        and history[-2:] == [local_promoted, promoted_head]
+    )
+    if (
+        local_promoted not in {None, lease_promoted, promoted_head}
+        and not predecessor_matches
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "worktree promotion changed after it was recorded"
+        )
+    if (
+        lease_promoted == promoted_head
+        and local_promoted not in {None, promoted_head}
+        and not predecessor_matches
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "worktree promotion history is inconsistent"
+        )
+    if inspected.get("outer_head") != promoted_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "persistent lane head is not the promotion"
+        )
+    result = _call(
         workspace,
         [
             "task-lease-promote",
@@ -374,8 +892,14 @@ def record_promotion(
             str(interop["lease_id"]),
             "--promoted-head",
             promoted_head,
+            "--expected-head",
+            expected_head,
         ],
     )
+    if result.get("state") != "active" or result.get("promoted_head") != promoted_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "lane lease did not record the exact promotion"
+        )
     interop["promoted_head"] = promoted_head
     write_atomic(_interop_path(run_dir), stable_json(interop))
 
@@ -387,22 +911,35 @@ def release_interop(
     assert interop is not None
     if not managed(interop):
         return {"status": "unmanaged"}
-    if interop["released"] is True:
-        return {"status": "released", "promoted_head": promoted_head}
-    result = _call(
-        workspace,
-        [
-            "task-lease-release",
-            "--owner-kind",
-            "task-implementer",
-            "--name",
-            str(interop["name"]),
-            "--lease-id",
-            str(interop["lease_id"]),
-            "--promoted-head",
-            promoted_head,
-        ],
-    )
+    if interop.get("promoted_head") != promoted_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "release head does not match the recorded promotion"
+        )
+    inspected = _reconcile_managed_state(workspace, run_dir, interop)
+    if inspected["state"] == "active":
+        result = _call(
+            workspace,
+            [
+                "task-lane-generation-release",
+                "--name",
+                str(interop["name"]),
+                "--generation",
+                str(interop["generation"]),
+                "--lease-id",
+                str(interop["lease_id"]),
+                "--promoted-head",
+                promoted_head,
+            ],
+        )
+    else:
+        result = {**inspected, "status": "already-released"}
+    if (
+        result.get("state") != "released"
+        or result.get("promoted_head") != promoted_head
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "lane generation release receipt is inconsistent"
+        )
     interop["released"] = True
     write_atomic(_interop_path(run_dir), stable_json(interop))
     return result

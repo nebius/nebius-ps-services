@@ -21,6 +21,8 @@ TEST_SCRIPTS = (
     "test-prompt-workspace.py",
     "test-task-specs.py",
     "test-task-execution.py",
+    "test-task-resume.py",
+    "test-task-reporting.py",
     "test-task-waves.py",
     "test-worktree-interoperability.py",
 )
@@ -34,6 +36,7 @@ HARNESS_TEST_SCRIPTS = (
     "test_verify_task_implementer.py",
 )
 IGNORED_NAMES = {"__pycache__", ".install-source-id"}
+DEFAULT_SUITE_TIMEOUT_SECONDS = 900
 
 
 def default_private_root() -> Path:
@@ -84,7 +87,10 @@ def contract(source: Path) -> tuple[str, str]:
     metadata = (source / "agents" / "openai.yaml").read_text(encoding="utf-8")
     required_commands = (
         "$task-implementer workspace init [project-folder]",
-        "$task-implementer run <prompt-path-or-unique-filename>",
+        "$task-implementer workspace reuse [project-folder]",
+        "$task-implementer run <prompt-ref-or-file>",
+        "$task-implementer integrate [project-folder]",
+        "$task-implementer workspace remove [project-folder]",
     )
     frontmatter = re.match(r"\A---\n(?P<body>.*?)\n---\n", skill, re.DOTALL)
     if source.name != "task-implementer" or frontmatter is None:
@@ -94,7 +100,7 @@ def contract(source: Path) -> tuple[str, str]:
         return "FAIL", "the source folder and frontmatter name do not match"
     observed_commands = tuple(re.findall(r"(?m)^\$task-implementer[^\n]*$", skill))
     if observed_commands != required_commands:
-        return "FAIL", "the public interface is not exactly the two canonical commands"
+        return "FAIL", "the public interface is not exactly the five canonical actions"
     policy_block = re.search(
         r"(?m)^policy:\s*(?:#.*)?\n(?P<body>(?:(?:[ \t]+[^\n]*|[ \t]*)\n?)*)",
         metadata,
@@ -116,7 +122,7 @@ def contract(source: Path) -> tuple[str, str]:
         return "FAIL", "an unsupported public compatibility command is present"
     return (
         "PASS",
-        "explicit-only metadata and the exact two-command surface are present",
+        "explicit-only metadata and the exact five-action surface are present",
     )
 
 
@@ -229,9 +235,7 @@ def verify(
         status, detail = parity(source, installed)
         checks.append({"name": "installed parity", "status": status, "detail": detail})
         if dependency_source is not None and dependency_installed is not None:
-            status, detail = dependency_parity(
-                dependency_source, dependency_installed
-            )
+            status, detail = dependency_parity(dependency_source, dependency_installed)
             checks.append(
                 {
                     "name": "project-agent-instructions parity",
@@ -300,7 +304,7 @@ def main() -> int:
     parser.add_argument(
         "--report", type=Path, default=default_private_root() / "report.md"
     )
-    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--timeout", type=int, default=DEFAULT_SUITE_TIMEOUT_SECONDS)
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")

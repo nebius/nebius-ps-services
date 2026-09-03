@@ -1,9 +1,23 @@
 ---
 name: sdlc-start
-description: "Use only as part of the Agentic SDLC workflow; use when the user explicitly invokes `workspace init` or `run` with a managed prompt path or unique filename to initialize, start, resume, continue, or steer a prompt-bound Agentic SDLC run. This is the main SDLC coordinator and state-machine skill."
+description: "Use only as part of the Agentic SDLC workflow; on explicit workspace init or run, initialize, resume, continue, or steer one prompt-bound run by exact ref/file. Prompt capture may refine but never invokes this coordinator."
 ---
 
 # Start SDLC
+
+## Help
+
+For `$sdlc-start --help` or `$sdlc-start -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -17,13 +31,25 @@ Expose exactly these two actions:
 
 ```text
 $sdlc-start workspace init [project-folder]
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 ```
 
 - `workspace init` defaults to the exact current folder and may run before Git
   is initialized.
-- `run` accepts one managed absolute prompt path or unique managed filename.
+- `run` accepts one exact unique prompt ref, full prompt ID, managed absolute
+  path, or managed filename.
 - Steering means editing the same prompt and repeating `run`.
+- After explicit binding:
+  direct prompts may be captured into the canonical prompt.
+  Prompt-session intake must never invoke this coordinator.
+  It does not invoke either public action.
+  The internal merge accepts only a durable project-intent projection, rehashes
+  it against the accepted digest, and binds that digest to the operation
+  marker. Ephemeral workflow/skill, shell/tool, delivery, agent-control,
+  status, conversation, and unrelated wrappers remain outside the prompt;
+  commands remain eligible when they define a project contract or example.
+  Capture failure never blocks the direct turn, exact duplicates never append,
+  and distinct prompt drift never auto-rebases.
 - Do not expose bare resume, prompt IDs, run IDs, phase actions, aliases, or a
   separate steering command.
 
@@ -63,8 +89,9 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `checkpoints/latest.json`, and the latest checkpoint file.
 - `STEERING.md`.
 - `steering/auto-steering.json` when present.
-- The latest private `project-agent-instructions` manifest, decision, and state
-  when present.
+- The canonical project-spec observation/receipt and any project-instruction
+  advisory already present in private state. Historical lifecycle state is not
+  an input.
 - Latest feature evidence and failure logs.
 - The active `failure-event-v1`, optional `diagnosis-v1`,
   `repair-control-v1`, append-only repair journal, and current repair pointer.
@@ -90,37 +117,72 @@ $sdlc-start run <prompt-path-or-unique-filename>
   remain owned by the deterministic `sdlc-classify-failure` helper.
 - Checkpoint pointers to execution state; Git resource mutation remains owned by
   `sdlc-prepare-execution`, `sdlc-implement-plan`, and `sdlc-commit`.
-- Private project-instruction decision pointers and fingerprints returned by
-  `project-agent-instructions`. That skill exclusively owns any generated
-  project-root `AGENTS.md`.
+- Optional canonical project-spec observations. Agentic SDLC never creates or
+  edits project instruction files as an automatic workflow phase.
 
 ## Process
 
 - Read `references/state-schema.md` before initializing or repairing local state.
+- Read `references/prompt-requirements-refinement.md` before requirements
+  extraction, clarification, or deciding that a follow-up has no product effect.
 - For `workspace init`, invoke private `prompt_workspace.py init`; create or
   verify the exact project workspace, preserve all prompts and history, create
   one starter only when empty, optionally open the CODE/PROMPTS editor
-  workspace with `Agentic SDLC: New Prompt` and `Agentic SDLC: Prompt History`
-  tasks, report metadata-only history, and stop without starting a run. The
-  private `new`, `list`, and `verify` actions are editor/state helpers, not
-  additional public skill commands.
+  workspace with a default `Agentic SDLC: New Prompt` task plus history and
+  queue tasks, keep generated `00-START-HERE.md` visible but excluded from
+  prompt parsing, report metadata-only history, and stop without starting a
+  run. New Prompt allocates a fresh ID; do not clone managed prompts. The
+  private `new`, `list`, `queue-list`, `queue-cancel`, `queue-next`, and
+  `verify` actions are editor/state helpers, not additional public skill commands.
+  Private `refinement-verify` is a requirements lock helper and is likewise not
+  an additional public skill command.
 - For `run`, invoke private `prompt_workspace.py intake` before reading or
   changing phase state. Trust only its validated bound run, revision, digest,
   and snapshot; never use the editable prompt directly after intake.
+- When the workspace is Git-backed and unmanaged, intake resolves the actual
+  `origin` default through its symbolic `HEAD`. A new run on that clean default
+  creates and switches to `feature/sdlc-<run-hash>` from the verified remote
+  SHA. In a managed `worktree` child, execution instead retains the exact local
+  child branch and `HEAD` without fetching or consulting a remote default. A
+  recorded run reuses its exact promotion identity; drift blocks instead of
+  creating another branch or worktree.
 - Route `new` into normal run initialization, `resume` through checkpoint
-  reconciliation, `steering` only to `sdlc-auto-steering`, and `done` to
-  `ALREADY_COMPLETE`. A different prompt cannot replace an unfinished run.
+  reconciliation, active same-prompt `steering` only to
+  `sdlc-auto-steering`, and `done` to `ALREADY_COMPLETE`. Intake for a
+  different prompt while a run is active durably accepts or updates it in the
+  private FIFO queue; creating or saving a prompt never queues it. Do not
+  overtake the active run or reorder queued prompts.
 - When initializing or resuming, mirror the bound prompt filename, ID, latest
   revision, digest, and snapshot pointer into `run.json`; fail closed if that
   mirror disagrees with `prompt.json`.
 - Accept an exact manual prompt rename only when the old source is absent, the
-  prompt ID is unique, and bytes equal the bound revision. Repair the binding
-  and run mirror before continuation. Reject rename-plus-edit, duplicate/stale
-  copies, or digest disagreement; rename first, run once, then edit and rerun.
+  prompt ID is unique, and normalized intent equals the bound revision. Repair
+  the binding and run mirror before continuation. Raw metadata, comment, and
+  formatting changes do not create work. Reject rename plus an intent edit,
+  duplicate/stale copies, or intent-digest disagreement; rename first, run
+  once, then edit and rerun.
 - Require `sdlc-auto-steering` to link the accepted prompt ID, revision,
   digest, and snapshot in its ledger, then call private `steering-resolve`
-  after recording an `applied`, `blocked`, or `no_effect` disposition.
-- At the beginning of a new run, or when `docs/requirements.md` is missing or
+  after recording an `applied`, `blocked`, or `no_effect` disposition. An
+  `applied` or `no_effect` transition additionally requires the current
+  owner-validated impact receipt and matching derived effect.
+- At the beginning of a new run, first apply
+  `references/prompt-requirements-refinement.md`. Extract the full Ask and any
+  optional headings into normalized product truth, inspect discoverable facts,
+  and persist stable clarification IDs privately. Route to
+  `sdlc-create-requirements`; block design/planning only for material open or
+  reopened questions. Answers may arrive through chat or a later prompt
+  revision, and a contradiction reopens the same question ID. Before leaving
+  requirements, invoke private `prompt_workspace.py refinement-verify` for the
+  exact workspace and run after writing the complete private impact claim; do
+  not route to design unless the shared owner binds the latest accepted
+  identity and intent to the exact current canonical specs and publishes the
+  immutable impact receipt. Publication is per-run locked, compare-checks the
+  ledger, and preserves then skips conflicting crash orphans. An existing
+  execution without a basis receipt must use a distinct safe replan for
+  material impact; never relabel unchanged plan bytes as current evidence.
+  Then, when
+  `docs/requirements.md` is missing or
   lacks a Live Experiment Environment section, encourage the user to provide a
   non-production or disposable environment with safe connection steps, allowed
   actions, reset instructions, and evidence limits. Do not block the workflow
@@ -145,17 +207,16 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `sdlc-gather-context`.
 - If design is missing or stale and required context is present, route only to
   `sdlc-create-design`.
-- Once both requirements and design are current and validated, route to
-  `project-agent-instructions` before auto-steering, feature planning, or
-  execution. Pass the exact selected project root, `agentic-sdlc` ownership,
-  and a caller-owned private state directory. Continue only after `created`,
-  `refreshed`, `existing-sufficient`, or `not-needed`; explicitly read any
-  active project instruction file before proceeding.
-- Re-run `project-agent-instructions` when its decision is absent or when the
-  requirements, design, inherited instruction chain, selected project,
-  evidence, renderer, target, or prior decision fingerprint changes. Treat its
-  structured conflict or safety blocker as the current blocked state rather
-  than bypassing it.
+- Before design exits and before planning, require
+  `scripts/validate_project_specs.py` to validate the exact canonical v2 pair.
+  Structural or traceability defects route to the owning requirements/design
+  adapter before spec-dependent planning. The resulting receipt describes
+  project truth but never authorizes auto-steering, execution, cleanup,
+  finalization, or Stop.
+- Read every already-effective `AGENTS.md` in the selected instruction chain.
+  Do not create, edit, retire, or reload project instructions automatically.
+  A user-invoked project-instruction workflow remains separately responsible
+  for its own mutation safety and cannot become an SDLC prerequisite.
 - Build or refresh the feature queue from `docs/design.md`.
 - Check `STEERING.md` and `steering/auto-steering.json` before every
   iteration.
@@ -165,9 +226,12 @@ $sdlc-start run <prompt-path-or-unique-filename>
   implementation phase.
 - Honor `sdlc-auto-steering` dispositions: route `requirements-change` to
   `sdlc-create-requirements`, `design-change` to `sdlc-create-design`,
-  `project-agent-instructions-change` to `project-agent-instructions`,
   `docs-update` to `sdlc-update-documents`, and `needs-human` to a blocked
-  human-input state.
+  human-input state. A `project-agent-instructions-change` disposition is
+  advisory unless the current user explicitly requested the separate mutation
+  workflow. Only in that explicit case route to `project-agent-instructions`;
+  otherwise record the recommendation and continue under already-effective
+  instructions.
 - Select the highest-priority incomplete feature whose dependencies are complete.
 - Keep exactly one feature execution active. After `plan_locked`, route to
   `sdlc-prepare-execution`; after `execution_prepared`, route to `sdlc-tdd` in
@@ -176,6 +240,9 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - During implementation, route repeatedly to `sdlc-implement-plan` until every
   dependency wave is integrated, combined evidence passes, and worker cleanup
   completes. Task agents may run concurrently only inside the current wave.
+  Their assignments inherit the accepted root-intent digest and exact spec
+  receipt. Workers do not reclassify intent or edit specs; typed `spec_gaps`
+  return to the root coordinator for adapter reconciliation and replanning.
 - On every gate failure, require an immutable normalized failure event and
   route to `sdlc-classify-failure`. Preserve the failed criterion, exact
   integration commit, environment identity, reproduction oracle, evidence
@@ -212,17 +279,25 @@ $sdlc-start run <prompt-path-or-unique-filename>
   project branch, and integration-resource cleanup. UAT and PR phases use the
   promoted project checkout.
 - Set one `next_recommended_skill` based on the current phase.
-- After evaluation passes, route to `sdlc-update-documents` before
-  `sdlc-align-specs` when feature-facing docs, changelog, examples, or
-  documentation steering need updates.
-- After UAT, route back to `sdlc-update-documents` before PR creation when UAT
+- After evaluation passes, route to `sdlc-update-documents` when feature-facing
+  docs, changelog, examples, or documentation steering need updates, then use
+  the general `align` quality gate before commit readiness.
+- After UAT, route back to `sdlc-update-documents` before final handoff when UAT
   or final steering requires run-level documentation updates.
 - In a managed outer worktree, invoke the private `release-outer-lease`
   transition only after final alignment, UAT, and documentation evidence are
-  recorded, the exact promoted HEAD is clean, and all Agentic SDLC integration
-  and worker resources are absent. Route to `create-pr` only after release.
-- Treat the shared PR skills as restricted SDLC modes after that handoff:
-  `create-pr` may publish only the clean exact promoted SHA, and `review-pr`
+  recorded, the exact promoted child HEAD is clean, and all Agentic SDLC
+  integration and worker resources are absent. Record phase
+  `outer-integration-pending`, return the recorded primary path/source branch
+  plus the exact `$worktree integrate <generated-name>` command, and stop. Do
+  not invoke or auto-continue the explicit-only `worktree` skill; wait for a
+  fresh user invocation from that primary checkout. After independently
+  observing local integration, invoke private
+  `complete-outer-integration` to bind the source merge proof; never push the
+  child or open a PR from it.
+- In an unmanaged final source checkout, treat the shared PR skills as
+  restricted SDLC modes: `create-pr` may publish only the clean exact promoted
+  SHA, and `review-pr`
   may record findings/readiness without changing the PR head. Any required
   branch change returns through `sdlc-classify-failure` and this coordinator.
   `sdlc-merge-pr` may merge only after an explicit user request and only while
@@ -236,7 +311,16 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - Write a history entry only when state changes. A repeated resume with no
   state change returns the existing checkpoint and does not duplicate history.
 - Stop when complete, blocked, retry budget is exceeded, or human input is
-  required.
+  required. On terminal completion, invoke private `queue-next`; activate the
+  unchanged FIFO head only after execution resources are released. Queue-head
+  drift requires an explicit rerun of that prompt before activation.
+- When the current explicit invocation carried a prompt-session binding
+  receipt and owns an active objective transition, register the authoritative
+  prompt identity/digest through the internal prompt-session objective
+  transition. Mark it terminal only after `ALREADY_COMPLETE` or verified
+  workflow completion. Do not register a queued prompt as active before its
+  authoritative activation. Direct-prompt capture never supplies a run
+  transition or terminal workflow fact.
 
 ## Idempotency
 
@@ -244,13 +328,16 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - Every `run` starts with prompt intake. An unchanged digest reuses the current
   revision; a changed digest creates exactly one adjacent immutable revision.
 - An unchanged completed prompt returns `ALREADY_COMPLETE`; editing that prompt
-  starts a new run without changing completed history.
+  starts a linked fresh-full-objective run against current product truth
+  without changing completed history. Its `r0001` is not steering. Omission
+  alone never deletes accepted requirements.
 - Repeating the same invocation with unchanged specs, fingerprints, evidence,
   and steering returns the same current feature and `next_recommended_skill`.
 - Repeating with unchanged auto-steering state must not re-route to
   `sdlc-auto-steering` or duplicate steering history.
-- Repeating with a verified unchanged project-instruction decision reuses its
-  private state and must not rewrite the project file.
+- On the separately invoked project-instruction route, repeating a verified
+  unchanged decision reuses that route's private state and must not rewrite the
+  project file. Ordinary SDLC runs do not create or apply that decision.
 - Completed features with unchanged fingerprints are skipped.
 - Changed requirements or design invalidate only affected features and
   supersede stale plans; they also invalidate the project-instruction decision
@@ -272,7 +359,7 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `WORKFLOW_UPGRADE_REQUIRED`. Completed unbound history remains readable; do
   not adopt or migrate it.
 - If plan lock conflicts exist, stop and report.
-- If any execution coordinator schema v1, v2, or v3 record exists, stop with
+- If any execution coordinator schema v1 through v6 record exists, stop with
   `WORKFLOW_UPGRADE_REQUIRED`, including for completed records. If registered Git identity, plan digest, or
   exact HEAD drifts, stop with the execution-plane failure code rather than
   routing around the coordinator.
@@ -288,8 +375,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
 ## Must Not
 
 - Free-edit requirements or design.
-- Create, overwrite, or delete project instruction files directly; route their
-  conditional ownership to `project-agent-instructions`.
+- Create, overwrite, or delete project instruction files as an automatic SDLC
+  phase.
 - Implement code directly.
 - Commit, push, create PRs, review PRs, or merge.
 - Bypass validation, tests, or evaluation.
@@ -311,8 +398,11 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - Active repair state, owner, invalidations, budgets, and stop reason are
   explicit and checkpointed when a failure cycle exists.
 - Steering has been consumed, refreshed, or routed to `sdlc-auto-steering`.
-- The current project-instruction decision is verified and its outcome and
-  fingerprint are checkpointed.
+- After implementation and focused verification, route canonical design
+  reconciliation through the owner adapter to record separate implementation
+  and verification evidence. Satisfied requirements require verified delivery.
+- Canonical project-spec observation is checkpoint context, not a workflow
+  authorization or completion criterion.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss.
@@ -321,10 +411,11 @@ $sdlc-start run <prompt-path-or-unique-filename>
 
 - Treat `docs/requirements.md`, `docs/design.md`, and any
   provenance-owned project-root `AGENTS.md` as committed project truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`; only `project-agent-instructions` may create or
-  refresh its generated project-root `AGENTS.md`. Other skills route changes
-  to those owners.
+- `maintain-project-specs` is the sole semantic, schema, paired-publication, and
+  validation owner of both canonical specs. Requirements and design phase
+  skills write only as its Agentic SDLC adapters; spec receipts are project
+  truth evidence, not lifecycle authority.
+  Explicit project-instruction changes remain outside the automatic workflow.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - Keep editable prompts and project-level prompt workspace metadata under the
   matching private `~/.codex/sdlc-runs/<project-id>/` directory.

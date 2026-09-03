@@ -1,9 +1,25 @@
 ---
 name: terraform
-description: "Use for Terraform repo/module hardening: scaffold, standardize, or improve Terraform project structure, state/backends, environment roots, module interfaces, validation/test strategy, security controls, CI checks, and Terraform best practices. Do not use for nebius-cxcli wizard, validation, status, or component-catalog wiring unless the task is Terraform module structure."
+description: "Scaffold, standardize, or harden Terraform repos/modules: structure, state/backends, environments, interfaces, tests, security, and CI. Not for nebius-cxcli wizard/status/catalog work unless changing Terraform modules."
 ---
 
 # Terraform
+
+## Help
+
+For `$terraform --help` or `$terraform -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Generate production-grade Terraform scaffolding and enforce module and environment best practices.
 

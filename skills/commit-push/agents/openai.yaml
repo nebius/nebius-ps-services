@@ -1,6 +1,6 @@
 interface:
   display_name: "Commit and Push"
   short_description: "Commit whole-repo branch changes and push"
-  default_prompt: "Use $commit-push to commit all repository changes with repo-root git add -A and push to origin."
+  default_prompt: "Use $commit-push to reject every state-classified managed child, integration candidate, nested worker, or inconsistent ownership claim; otherwise commit all repository changes with repo-root git add -A and push the unmanaged source branch to origin."
 policy:
   allow_implicit_invocation: false

@@ -1,0 +1,20 @@
+[Unit]
+Description=Nebius VPNGW VM-HA warm-standby rearm
+After=network-online.target nebius-vpngw-vm-ha.service
+ConditionPathExists=/etc/nebius-vpngw/vm-ha-enabled
+
+[Service]
+Type=simple
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-rearm-service
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=/var/lib/nebius-vpngw
+
+[Install]
+WantedBy=multi-user.target

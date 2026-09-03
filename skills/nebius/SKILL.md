@@ -1,9 +1,25 @@
 ---
 name: nebius
-description: "Use for Nebius SDK/cloud automation in Python: IAM/Object Storage, service accounts/access keys, VPC pools/subnets/routes, quota checks, MK8s compatibility/readiness, GPU platform/preset/fabric/operator decisions, and observability endpoint/auth wiring. Do not use for Terraform scaffolding, Helm charts, or nebius-cxcli module onboarding."
+description: "Build Nebius SDK/cloud automation in Python for IAM/Object Storage, service accounts, VPC, quotas, MK8s readiness, GPU platforms, or observability auth. Use Terraform, Helm, or cxcli for their owned workflows."
 ---
 
 # Nebius
+
+## Help
+
+For `$nebius --help` or `$nebius -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s compatibility/readiness workflows with reusable SDK patterns, references, and read-only inspection scripts.
 

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import subprocess
-import threading
+import sys
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from types import MethodType
 from typing import Any
+
+from . import __version__
 
 _DELETED_KEY_REFRESH_LOG_MARKERS = (
     "public key not exists",
@@ -28,108 +29,11 @@ _RETRYABLE_REQUEST_LOG_MARKERS = (
 _LOGGER = logging.getLogger(__name__)
 
 
-class _ManagedSdkEventLoop:
-    """Dedicated loop for Nebius SDK synchronous wait helpers."""
-
-    def __init__(self, *, context: str) -> None:
-        self.loop = asyncio.new_event_loop()
-        self._context = context
-        self._lock = threading.Lock()
-        self._started = threading.Event()
-        self._stopped = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._closed = False
-
-    def ensure_started(self) -> None:
-        if self.loop.is_running():
-            return
-        with self._lock:
-            if self._closed:
-                raise RuntimeError(f"Nebius SDK event loop is closed for {self._context}.")
-            if self.loop.is_running():
-                return
-            self._thread = threading.Thread(
-                target=self._run,
-                name=f"nebius-cxcli-sdk-loop-{self._context}",
-                daemon=True,
-            )
-            self._thread.start()
-        if not self._started.wait(timeout=5):
-            raise RuntimeError(f"Timed out starting Nebius SDK event loop for {self._context}.")
-
-    def stop(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-            thread = self._thread
-            if self.loop.is_closed():
-                self._stopped.set()
-                return
-            if self.loop.is_running():
-                self.loop.call_soon_threadsafe(self.loop.stop)
-            else:
-                self.loop.close()
-                self._stopped.set()
-                return
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=5)
-
-    def _run(self) -> None:
-        asyncio.set_event_loop(self.loop)
-        self._started.set()
-        try:
-            self.loop.run_forever()
-        finally:
-            pending = tuple(asyncio.all_tasks(self.loop))
-            if pending:
-                for task in pending:
-                    task.cancel()
-                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            self.loop.run_until_complete(self.loop.shutdown_asyncgens())
-            asyncio.set_event_loop(None)
-            self.loop.close()
-            self._stopped.set()
+NEBIUS_SDK_USER_AGENT_PREFIX = f"nebius-cxcli/{__version__}"
 
 
-def _attach_managed_sdk_event_loop(sdk: Any, manager: _ManagedSdkEventLoop) -> Any:
-    original_run_sync = sdk.run_sync
-    original_close = sdk.close
-
-    def _run_sync(_self: object, awaitable: Any, timeout: float | None = None) -> Any:
-        manager.ensure_started()
-        return original_run_sync(awaitable, timeout)
-
-    async def _close(_self: object, grace: float | None = None) -> None:
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-        try:
-            if running_loop is manager.loop:
-                await original_close(grace)
-            else:
-                manager.ensure_started()
-                future = asyncio.run_coroutine_threadsafe(
-                    original_close(grace),
-                    manager.loop,
-                )
-                await asyncio.wrap_future(future)
-        finally:
-            manager.stop()
-
-    def _sync_close(_self: object, timeout: float | None = None) -> None:
-        try:
-            manager.ensure_started()
-            return original_run_sync(original_close(None), timeout)
-        finally:
-            manager.stop()
-
-    sdk.run_sync = MethodType(_run_sync, sdk)
-    sdk.close = MethodType(_close, sdk)
-    sdk.sync_close = MethodType(_sync_close, sdk)
-    sdk._cxcli_sdk_event_loop_manager = manager
-    return sdk
+class _CliTokenUnavailable(RuntimeError):
+    """Sanitized Nebius CLI token acquisition failure."""
 
 
 def _as_text(value: object) -> str:
@@ -209,23 +113,21 @@ def suppress_expected_sdk_retry_logs():
         request_logger.removeFilter(request_filter)
 
 
-def _ensure_iam_token_from_cli(
+def _interactive_cli_auth_available() -> bool:
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, OSError):
+        return False
+
+
+def _run_iam_token_cli(
+    args: list[str],
     *,
-    profile: str | None = None,
-    timeout_seconds: int = 30,
-) -> str | None:
-    impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
-    if not impersonate_service_account_id:
-        token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
-        if token:
-            return token
-    args = ["nebius", "iam", "get-access-token"]
-    profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE"))
-    if profile_value:
-        args.extend(("--profile", profile_value))
-    if impersonate_service_account_id:
-        args.extend(("--impersonate-service-account-id", impersonate_service_account_id))
-    args.extend(("--format", "text", "--no-browser"))
+    timeout_seconds: int,
+    interactive: bool,
+    env: Mapping[str, str] | None = None,
+) -> tuple[str | None, _CliTokenUnavailable | None]:
+    mode = "interactive" if interactive else "non-interactive"
     try:
         cp = subprocess.run(
             args,
@@ -233,13 +135,161 @@ def _ensure_iam_token_from_cli(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=dict(env) if env is not None else None,
         )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
+    except FileNotFoundError:
+        return None, _CliTokenUnavailable("Nebius CLI executable was not found")
+    except subprocess.CalledProcessError as exc:
+        return None, _CliTokenUnavailable(
+            f"Nebius CLI {mode} access-token request failed with exit code {exc.returncode}"
+        )
+    except subprocess.TimeoutExpired:
+        return None, _CliTokenUnavailable(
+            f"Nebius CLI {mode} access-token request timed out after {timeout_seconds} seconds"
+        )
+    except OSError as exc:
+        return None, _CliTokenUnavailable(
+            f"Nebius CLI {mode} access-token request could not start ({type(exc).__name__})"
+        )
     token = cp.stdout.strip()
     if token:
+        return token, None
+    return None, _CliTokenUnavailable(
+        f"Nebius CLI {mode} access-token request returned an empty token"
+    )
+
+
+_OPERATOR_CLI_FORBIDDEN_AUTH_ENV = frozenset(
+    {
+        "CXCLI_NEBIUS_DELEGATE_ID",
+        "NEBIUS_AUTH_CREDENTIALS_FILE",
+        "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM",
+        "NEBIUS_AUTH_PUBLIC_KEY_ID",
+        "NEBIUS_CREDENTIALS_FILE",
+        "NEBIUS_IAM_TOKEN",
+        "NEBIUS_SA_ID",
+    }
+)
+
+
+def _operator_cli_environment() -> dict[str, str]:
+    """Return the process environment without cxcli runtime identities."""
+
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _OPERATOR_CLI_FORBIDDEN_AUTH_ENV
+    }
+
+
+def _iam_token_from_cli_attempt(
+    *,
+    profile: str | None = None,
+    timeout_seconds: int = 30,
+    interactive_timeout_seconds: int = 300,
+) -> tuple[str | None, _CliTokenUnavailable | None]:
+    impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
+    if not impersonate_service_account_id:
+        env_token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
+        if env_token:
+            return env_token, None
+    args = ["nebius", "iam", "get-access-token"]
+    profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE"))
+    if profile_value:
+        args.extend(("--profile", profile_value))
+    if impersonate_service_account_id:
+        args.extend(("--impersonate-service-account-id", impersonate_service_account_id))
+    args.extend(("--format", "text", "--no-browser"))
+    cli_token, failure = _run_iam_token_cli(
+        args,
+        timeout_seconds=timeout_seconds,
+        interactive=False,
+    )
+    if cli_token:
+        return cli_token, None
+    if not _interactive_cli_auth_available():
+        assert failure is not None
+        return None, _CliTokenUnavailable(
+            f"{failure}; browser reauthentication was not attempted because stdin is not "
+            "interactive"
+        )
+
+    interactive_args = [arg for arg in args if arg != "--no-browser"]
+    return _run_iam_token_cli(
+        interactive_args,
+        timeout_seconds=interactive_timeout_seconds,
+        interactive=True,
+    )
+
+
+def _ensure_iam_token_from_cli(
+    *,
+    profile: str | None = None,
+    timeout_seconds: int = 30,
+    interactive_timeout_seconds: int = 300,
+) -> str | None:
+    token, _failure = _iam_token_from_cli_attempt(
+        profile=profile,
+        timeout_seconds=timeout_seconds,
+        interactive_timeout_seconds=interactive_timeout_seconds,
+    )
+    return token
+
+
+def acquire_operator_access_token(
+    *,
+    profile: str | None = None,
+    interactive: bool = True,
+    timeout_seconds: int = 30,
+    interactive_timeout_seconds: int = 300,
+    context: str = "Nebius API read",
+) -> str:
+    """Acquire one short-lived token from the operator's Nebius CLI identity.
+
+    This deliberately ignores cxcli runtime service-account credentials,
+    delegated service-account settings, and ``NEBIUS_IAM_TOKEN``. A browser
+    retry is allowed only for an explicitly interactive TTY invocation.
+    """
+
+    args = ["nebius", "iam", "get-access-token"]
+    profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE"))
+    if profile_value:
+        args.extend(("--profile", profile_value))
+    args.extend(("--format", "text", "--no-browser"))
+    operator_env = _operator_cli_environment()
+    token, failure = _run_iam_token_cli(
+        args,
+        timeout_seconds=timeout_seconds,
+        interactive=False,
+        env=operator_env,
+    )
+    if token:
         return token
-    return None
+    if not interactive or not _interactive_cli_auth_available():
+        detail = failure or _CliTokenUnavailable("Nebius CLI access-token request failed")
+        raise RuntimeError(
+            f"Operator IAM authentication is unavailable for {context}; {detail}; "
+            "browser reauthentication requires an interactive TTY"
+        ) from failure
+
+    interactive_args = [arg for arg in args if arg != "--no-browser"]
+    token, interactive_failure = _run_iam_token_cli(
+        interactive_args,
+        timeout_seconds=interactive_timeout_seconds,
+        interactive=True,
+        env=operator_env,
+    )
+    if token:
+        return token
+    detail = (
+        interactive_failure
+        or failure
+        or _CliTokenUnavailable("Nebius CLI access-token request failed")
+    )
+    raise RuntimeError(f"Operator IAM authentication is unavailable for {context}; {detail}") from (
+        interactive_failure or failure
+    )
 
 
 def init_nebius_sdk(
@@ -251,37 +301,40 @@ def init_nebius_sdk(
     context: str = "Nebius API",
     prefer_operator_auth: bool = False,
     allow_cli_token: bool = True,
+    require_renewable_auth: bool = False,
 ):
-    """Initialize Nebius SDK with robust auth fallback order."""
+    """Initialize Nebius SDK with robust auth fallback order.
+
+    Long-running callers can require a credentials file or service-account
+    private key so the SDK owns token exchange and renewal. One-shot IAM,
+    CLI, config-profile, and impersonation tokens are deliberately excluded
+    from that path.
+    """
     try:
         from nebius.sdk import SDK
     except Exception as exc:  # pragma: no cover - import guard
         raise RuntimeError(
             f"Nebius SDK is required for {context}. "
-            'Install dependencies with `pip install -e ".[dev]"`.'
+            "Reinstall nebius-cxcli with its declared dependencies."
         ) from exc
 
     profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE")) or None
     endpoint_value = _as_text(endpoint) or _as_text(os.environ.get("NEBIUS_ENDPOINT")) or None
 
-    def _sdk_kwargs(**base: object) -> dict[str, object]:
+    def _sdk_kwargs(**base: Any) -> dict[str, Any]:
         kwargs = dict(base)
+        kwargs["user_agent_prefix"] = NEBIUS_SDK_USER_AGENT_PREFIX
         if endpoint_value:
-            kwargs["endpoint"] = endpoint_value
+            kwargs["domain"] = endpoint_value
         if parent_id:
             kwargs["parent_id"] = parent_id
         return kwargs
 
-    def _create_sdk(**base: object) -> object:
-        manager = _ManagedSdkEventLoop(context=context)
-        try:
-            sdk = SDK(**_sdk_kwargs(event_loop=manager.loop, **base))
-        except Exception:
-            manager.stop()
-            raise
-        return _attach_managed_sdk_event_loop(sdk, manager)
+    def _create_sdk(**base: Any) -> object:
+        return SDK(**_sdk_kwargs(**base))
 
     last_auth_error: Exception | None = None
+    cli_auth_error: _CliTokenUnavailable | None = None
     impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
 
     def _sdk_from_credentials_file() -> object | None:
@@ -315,7 +368,8 @@ def init_nebius_sdk(
         return _create_sdk(credentials=iam_token)
 
     def _sdk_from_cli_token() -> object | None:
-        iam_token = _ensure_iam_token_from_cli(profile=profile_value)
+        nonlocal cli_auth_error
+        iam_token, cli_auth_error = _iam_token_from_cli_attempt(profile=profile_value)
         if not iam_token:
             return None
         return _create_sdk(credentials=iam_token)
@@ -333,7 +387,7 @@ def init_nebius_sdk(
             )
             return None
 
-        config_kwargs: dict[str, object] = {}
+        config_kwargs: dict[str, Any] = {}
         if profile_value:
             config_kwargs["profile"] = profile_value
         if endpoint_value:
@@ -367,7 +421,12 @@ def init_nebius_sdk(
             and path.is_file()
         )
 
-    if impersonate_service_account_id:
+    if require_renewable_auth:
+        auth_attempts = [
+            _sdk_from_credentials_file,
+            _sdk_from_service_account_env,
+        ]
+    elif impersonate_service_account_id:
         # Impersonation is an explicit identity boundary. Never fall back to the
         # base credentials or profile if token exchange is unavailable.
         auth_attempts = [_sdk_from_cli_token] if allow_cli_token else []
@@ -391,21 +450,88 @@ def init_nebius_sdk(
         if allow_cli_token:
             auth_attempts.append(_sdk_from_cli_token)
     for auth_attempt in auth_attempts:
-        sdk = auth_attempt()
+        try:
+            sdk = auth_attempt()
+        except Exception as exc:
+            if not require_renewable_auth:
+                raise
+            last_auth_error = exc
+            continue
         if sdk is not None:
             return sdk
+
+    if require_renewable_auth:
+        present = [
+            name
+            for name in (
+                "NEBIUS_AUTH_CREDENTIALS_FILE",
+                "NEBIUS_SA_ID",
+                "NEBIUS_AUTH_PUBLIC_KEY_ID",
+                "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+            )
+            if _as_text(os.environ.get(name))
+        ]
+        error = RuntimeError(
+            f"Failed to initialize renewable Nebius SDK credentials for {context}. "
+            f"Renewable auth variables set at attempt time: {', '.join(present) or 'none'}. "
+            "Long-running operations require NEBIUS_AUTH_CREDENTIALS_FILE or the complete "
+            "NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE set. "
+            "Static NEBIUS_IAM_TOKEN, CLI access-token, config-profile token, and "
+            "impersonation fallbacks are not accepted because they can expire while the "
+            "operation is still running. Project-aware cxcli commands create/load the "
+            "canonical nebius-cxcli-sa profile automatically; log in with the Nebius CLI "
+            "or provide operator credentials if first-time bootstrap is required."
+        )
+        if last_auth_error is not None:
+            raise error from last_auth_error
+        raise error
 
     cli_hint = (
         "log in with the Nebius CLI so `nebius iam get-access-token` works, or "
         if allow_cli_token
         else ""
     )
+    cli_failure_detail = (
+        f" Nebius CLI fallback detail: {cli_auth_error}." if cli_auth_error is not None else ""
+    )
     error = RuntimeError(
         f"Failed to initialize Nebius SDK credentials for {context}. "
         "Provide NEBIUS_AUTH_CREDENTIALS_FILE, runtime auth env vars "
         "(NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE), "
         f"set NEBIUS_IAM_TOKEN, {cli_hint}provide a Nebius SDK config/profile."
+        f"{cli_failure_detail}"
     )
+    if cli_auth_error is not None:
+        raise error from cli_auth_error
     if last_auth_error is not None:
         raise error from last_auth_error
     raise error
+
+
+def acquire_nebius_access_token(
+    *,
+    profile: str | None = None,
+    endpoint: str | None = None,
+    config_file: Path | None = None,
+    timeout_seconds: float = 30.0,
+    context: str = "Nebius API read",
+) -> str:
+    """Acquire one short-lived token from existing operator credentials only."""
+
+    sdk = init_nebius_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        context=context,
+        prefer_operator_auth=True,
+    )
+    try:
+        token_value = sdk.get_token_sync(timeout_seconds)
+        token = str(getattr(token_value, "token", "") or "").strip()
+        if not token:
+            raise RuntimeError(f"Existing operator credentials returned no token for {context}")
+        return token
+    finally:
+        sync_close = getattr(sdk, "sync_close", None)
+        if callable(sync_close):
+            sync_close(timeout_seconds)

@@ -1,9 +1,23 @@
 ---
 name: sdlc-update-documents
-description: "Use only as part of the Agentic SDLC workflow; use after feature evaluation, resolved steering, UAT, or final run evidence to update project-facing README, changelog, usage docs, examples, or generated documentation without editing SDLC requirements or design."
+description: "Use only as part of the Agentic SDLC workflow; after evaluation, resolved steering, UAT, or final evidence, update README, changelog, usage docs, examples, or generated docs without editing requirements/design."
 ---
 
 # SDLC Update Documents
+
+## Help
+
+For `$sdlc-update-documents --help` or `$sdlc-update-documents -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -16,7 +30,7 @@ after feature evaluation or UAT.
   need to match the implemented behavior.
 - `sdlc-auto-steering` classified an entry as `docs-update`.
 - UAT or final run review found README, changelog, examples, or usage docs that
-  must be refreshed before PR creation.
+  must be refreshed before final source integration or PR creation.
 - `sdlc-start` routes a documentation phase before `sdlc-align-specs`.
 
 ## When Not To Use
@@ -69,7 +83,7 @@ after feature evaluation or UAT.
   promotion, and record the resulting integration HEAD in document evidence.
 - Reload active run state and evidence before editing any documentation.
 - Determine whether the scope is `feature` or `run`: feature scope runs after
-  evaluation; run scope runs after UAT or before PR creation.
+  evaluation; run scope runs after UAT or before final handoff.
 - Compare implemented behavior and evidence against existing docs. Update only
   documentation that describes the active feature, run-level product behavior,
   commands, configuration, examples, or usage that actually changed.
@@ -83,7 +97,7 @@ after feature evaluation or UAT.
 - Route requirements or design drift back to `sdlc-create-requirements` or
   `sdlc-create-design` instead of editing product-truth docs here.
 - Return to `sdlc-start` so the coordinator can continue to
-  `sdlc-align-specs`, UAT, or PR handoff.
+  `sdlc-align-specs`, UAT, managed source integration, or unmanaged PR handoff.
 
 ## Idempotency
 
@@ -133,9 +147,11 @@ after feature evaluation or UAT.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only
-  `sdlc-create-design` writes `docs/design.md`. Other skills route spec
-  changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under
   `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest

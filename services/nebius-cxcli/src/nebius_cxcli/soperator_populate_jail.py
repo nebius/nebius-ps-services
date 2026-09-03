@@ -11,9 +11,10 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from .soperator_adapter import mount_gate_init_container
 from .soperator_jail_mounts import JAIL_LEGACY_ACTIVE_SOURCE, sync_jail_volume_sources
+from .soperator_release import SOPERATOR_ADAPTER_MOUNT_IMAGE
 
-POPULATE_JAIL_REFRESH_PHASE_ID = "populate-jail-refresh"
 POPULATE_JAIL_REFRESH_MODES = frozenset({"auto", "force", "manual"})
 POPULATE_JAIL_PASSIVE_SLOT_REFRESH = "populatePassiveSlot"
 POPULATE_JAIL_STEADY_MAINTENANCE = "none"
@@ -133,52 +134,6 @@ class PopulateJailProgress:
 
 
 @dataclass(frozen=True)
-class PopulateJailRefreshPlan:
-    mode: str
-    required: bool
-    reason: str
-    manual_instruction: str
-    before: PopulateJailSnapshot
-    after_chart: PopulateJailSnapshot
-
-    def as_payload(self) -> dict[str, Any]:
-        return {
-            "mode": self.mode,
-            "required": self.required,
-            "reason": self.reason,
-            "manual_instruction": self.manual_instruction,
-            "before": self.before.as_payload(),
-            "after_chart": self.after_chart.as_payload(),
-        }
-
-
-@dataclass(frozen=True)
-class PopulateJailRefreshResult:
-    mode: str
-    status: str
-    reason: str
-    target_image: str
-    job_name: str
-    job_uid: str
-    job_image: str
-    maintenance_restored: bool
-    detail: str = ""
-
-    def as_payload(self) -> dict[str, Any]:
-        return {
-            "mode": self.mode,
-            "status": self.status,
-            "reason": self.reason,
-            "target_image": self.target_image,
-            "job_name": self.job_name,
-            "job_uid": self.job_uid,
-            "job_image": self.job_image,
-            "maintenance_restored": self.maintenance_restored,
-            "detail": self.detail,
-        }
-
-
-@dataclass(frozen=True)
 class ActivePassiveJailRootfsSlots:
     active_slot: str
     passive_slot: str
@@ -196,68 +151,6 @@ class ActivePassiveJailRootfsSlots:
             "active_pvc": self.active_pvc,
             "passive_pvc": self.passive_pvc,
         }
-
-
-def normalize_populate_jail_refresh_mode(value: str | None) -> str:
-    mode = str(value or "").strip().lower() or "auto"
-    if mode not in POPULATE_JAIL_REFRESH_MODES:
-        raise RuntimeError(
-            "--populate-jail-refresh must be one of: "
-            + ", ".join(sorted(POPULATE_JAIL_REFRESH_MODES))
-        )
-    return mode
-
-
-def populate_jail_refresh_values(values: Mapping[str, Any]) -> dict[str, Any]:
-    patched = copy.deepcopy(dict(values))
-    patched["maintenance"] = POPULATE_JAIL_STEADY_MAINTENANCE
-    populate = patched.get("populateJail")
-    if not isinstance(populate, dict):
-        populate = {}
-        patched["populateJail"] = populate
-    populate["overwrite"] = False
-    jail_rootfs = patched.get("jailRootfs")
-    if not isinstance(jail_rootfs, dict):
-        jail_rootfs = {}
-        patched["jailRootfs"] = jail_rootfs
-    slots = active_passive_jail_rootfs_slots(patched)
-    refresh = jail_rootfs.get("refresh")
-    if not isinstance(refresh, dict):
-        refresh = {}
-        jail_rootfs["refresh"] = refresh
-    refresh.update(
-        {
-            "mode": POPULATE_JAIL_PASSIVE_SLOT_REFRESH,
-            "targetSlot": slots.passive_slot,
-            "rollbackSlot": slots.active_slot,
-            "status": "planned",
-        }
-    )
-    return sync_jail_volume_sources(patched)
-
-
-def populate_jail_steady_state_values(values: Mapping[str, Any]) -> dict[str, Any]:
-    patched = copy.deepcopy(dict(values))
-    patched["maintenance"] = POPULATE_JAIL_STEADY_MAINTENANCE
-    populate = patched.get("populateJail")
-    if not isinstance(populate, dict):
-        populate = {}
-        patched["populateJail"] = populate
-    populate["overwrite"] = False
-    return sync_jail_volume_sources(patched)
-
-
-def populate_jail_manual_instruction(*, namespace: str, slurmcluster_name: str) -> str:
-    target = slurmcluster_name or "<slurmcluster>"
-    return (
-        "Refresh the jail rootfs by populating the passive active/passive slot with "
-        "the target populate-jail image, switching the canonical jail volume-source "
-        "alias plus controller, SConfigController, login, worker, and REST "
-        f"consumers to that slot, and keeping the previous slot available for rollback. Wait for "
-        f"job/{target}-{POPULATE_JAIL_JOB_SUFFIX}-passive-<slot> to complete in "
-        f"namespace {namespace}, then require every enabled alias consumer to roll out "
-        "Ready without letting the login Service reach zero ready endpoints."
-    )
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -317,12 +210,6 @@ def active_passive_jail_rootfs_slots(values: Mapping[str, Any]) -> ActivePassive
     )
 
 
-def _mapping_items(value: Any) -> tuple[Mapping[str, Any], ...]:
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return tuple(item for item in value if isinstance(item, Mapping))
-    return ()
-
-
 def _copy_mapping_field(source: Mapping[str, Any], key: str, target: dict[str, Any]) -> None:
     value = source.get(key)
     if isinstance(value, Mapping) and value:
@@ -352,29 +239,6 @@ def active_passive_pod_scheduling_fields(
     if priority_class_name:
         fields["priorityClassName"] = priority_class_name
     return fields
-
-
-def active_passive_populate_jail_job_scheduling(
-    values: Mapping[str, Any],
-) -> dict[str, Any]:
-    populate_jail = _mapping(values.get("populateJail"))
-    filter_name = str(populate_jail.get("k8sNodeFilterName") or "").strip()
-    scheduling: dict[str, Any] = {}
-    if filter_name:
-        for item in _mapping_items(values.get("k8sNodeFilters")):
-            if str(item.get("name") or "").strip() != filter_name:
-                continue
-            _copy_mapping_field(item, "affinity", scheduling)
-            _copy_mapping_field(item, "nodeSelector", scheduling)
-            _copy_sequence_field(item, "tolerations", scheduling)
-            break
-
-    priority_class = str(
-        populate_jail.get("priorityClass") or populate_jail.get("priorityClassName") or ""
-    ).strip()
-    if priority_class:
-        scheduling["priorityClassName"] = priority_class
-    return active_passive_pod_scheduling_fields(scheduling)
 
 
 def switch_active_passive_jail_rootfs_values(values: Mapping[str, Any]) -> dict[str, Any]:
@@ -428,6 +292,8 @@ def active_passive_populate_jail_job_manifest(
     image_pull_policy: str = "IfNotPresent",
     scheduling: Mapping[str, Any] | None = None,
     active_deadline_seconds: int = 2700,
+    operation_purpose: str = "",
+    require_mount_receipt: bool = True,
 ) -> dict[str, Any]:
     target = str(target_ref or "soperator").strip() or "soperator"
     slot_suffix = passive_slot.replace("-", "")
@@ -439,6 +305,10 @@ def active_passive_populate_jail_job_manifest(
                 "name": "populate-jail",
                 "image": image,
                 "imagePullPolicy": image_pull_policy,
+                "env": [{"name": "OVERWRITE", "value": "1"}],
+                "securityContext": {
+                    "capabilities": {"add": ["SYS_ADMIN", "SETFCAP"]},
+                },
                 "volumeMounts": [{"name": "jail-rootfs", "mountPath": "/mnt/jail"}],
             }
         ],
@@ -449,124 +319,47 @@ def active_passive_populate_jail_job_manifest(
             }
         ],
     }
+    if require_mount_receipt:
+        pod_spec["initContainers"] = [
+            mount_gate_init_container(
+                name="populate-jail",
+                volume_name="jail-rootfs",
+                mount_id="jail",
+                filesystem_id="",
+                image=SOPERATOR_ADAPTER_MOUNT_IMAGE,
+            )
+        ]
     pod_spec.update(active_passive_pod_scheduling_fields(scheduling))
+    object_labels = {
+        "app.kubernetes.io/component": "populate-jail",
+        "slurm.nebius.ai/jail-rootfs-refresh": "active-passive",
+        "slurm.nebius.ai/jail-rootfs-slot": passive_slot,
+    }
+    pod_labels = {
+        "app.kubernetes.io/component": "populate-jail",
+        "slurm.nebius.ai/jail-rootfs-slot": passive_slot,
+    }
+    normalized_purpose = str(operation_purpose or "").strip()
+    if normalized_purpose:
+        object_labels["soperator.nebius.ai/protected-data-plane"] = normalized_purpose
+        pod_labels["soperator.nebius.ai/protected-data-plane"] = normalized_purpose
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {
             "namespace": namespace,
             "name": f"{target}-{POPULATE_JAIL_JOB_SUFFIX}-passive-{slot_suffix}",
-            "labels": {
-                "app.kubernetes.io/component": "populate-jail",
-                "slurm.nebius.ai/jail-rootfs-refresh": "active-passive",
-                "slurm.nebius.ai/jail-rootfs-slot": passive_slot,
-            },
+            "labels": object_labels,
         },
         "spec": {
             "activeDeadlineSeconds": max(int(active_deadline_seconds), 1),
             "backoffLimit": 0,
             "template": {
-                "metadata": {
-                    "labels": {
-                        "app.kubernetes.io/component": "populate-jail",
-                        "slurm.nebius.ai/jail-rootfs-slot": passive_slot,
-                    }
-                },
+                "metadata": {"labels": pod_labels},
                 "spec": pod_spec,
             },
         },
     }
-
-
-def plan_populate_jail_refresh(
-    *,
-    mode: str,
-    chart_changed: bool,
-    before: PopulateJailSnapshot,
-    after_chart: PopulateJailSnapshot,
-    namespace: str,
-) -> PopulateJailRefreshPlan:
-    normalized = normalize_populate_jail_refresh_mode(mode)
-    image_changed = bool(before.image and after_chart.image and before.image != after_chart.image)
-    if normalized == "force":
-        required = True
-        reason = "forced by --populate-jail-refresh force"
-    elif normalized == "manual":
-        required = bool(chart_changed or image_changed)
-        reason = (
-            "manual refresh requested for target chart/rootfs change"
-            if required
-            else "manual refresh requested but no chart/rootfs change was detected"
-        )
-    elif image_changed:
-        required = True
-        reason = "target populateJail image differs from the pre-upgrade image"
-    elif chart_changed:
-        required = True
-        reason = "target chart changed; existing jail rootfs compatibility is unproven"
-    else:
-        required = False
-        reason = "target chart and populateJail image are unchanged"
-    return PopulateJailRefreshPlan(
-        mode=normalized,
-        required=required,
-        reason=reason,
-        manual_instruction=populate_jail_manual_instruction(
-            namespace=namespace,
-            slurmcluster_name=after_chart.slurmcluster_name or before.slurmcluster_name,
-        ),
-        before=before,
-        after_chart=after_chart,
-    )
-
-
-def skipped_populate_jail_refresh_result(
-    plan: PopulateJailRefreshPlan,
-) -> PopulateJailRefreshResult:
-    return PopulateJailRefreshResult(
-        mode=plan.mode,
-        status="skipped",
-        reason=plan.reason,
-        target_image=plan.after_chart.image,
-        job_name=plan.after_chart.job_name,
-        job_uid=plan.after_chart.job_uid,
-        job_image=plan.after_chart.job_image,
-        maintenance_restored=True,
-    )
-
-
-def manual_populate_jail_refresh_result(plan: PopulateJailRefreshPlan) -> PopulateJailRefreshResult:
-    return PopulateJailRefreshResult(
-        mode=plan.mode,
-        status="manual_required",
-        reason=plan.reason,
-        target_image=plan.after_chart.image,
-        job_name=plan.after_chart.job_name,
-        job_uid=plan.after_chart.job_uid,
-        job_image=plan.after_chart.job_image,
-        maintenance_restored=False,
-        detail=plan.manual_instruction,
-    )
-
-
-def completed_populate_jail_refresh_result(
-    *,
-    mode: str,
-    reason: str,
-    snapshot: PopulateJailSnapshot,
-    maintenance_restored: bool,
-) -> PopulateJailRefreshResult:
-    return PopulateJailRefreshResult(
-        mode=mode,
-        status="refreshed",
-        reason=reason,
-        target_image=snapshot.image,
-        job_name=snapshot.job_name,
-        job_uid=snapshot.job_uid,
-        job_image=snapshot.job_image,
-        maintenance_restored=maintenance_restored,
-        detail=snapshot.detail,
-    )
 
 
 def _kubectl_args(
@@ -618,16 +411,6 @@ def _metadata_uid(resource: Mapping[str, Any]) -> str:
     if not isinstance(metadata, Mapping):
         return ""
     return str(metadata.get("uid", "") or "").strip()
-
-
-def _slurmcluster_image(resource: Mapping[str, Any]) -> str:
-    spec = resource.get("spec")
-    if not isinstance(spec, Mapping):
-        return ""
-    populate = spec.get("populateJail")
-    if not isinstance(populate, Mapping):
-        return ""
-    return str(populate.get("image", "") or "").strip()
 
 
 def _job_complete(resource: Mapping[str, Any]) -> bool:
@@ -698,109 +481,6 @@ def _job_container_image(resource: Mapping[str, Any]) -> str:
     return ""
 
 
-def _active_consumer_pods(pods_payload: Mapping[str, Any]) -> tuple[str, ...]:
-    items = pods_payload.get("items")
-    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
-        return ()
-    active: list[str] = []
-    for item in items:
-        if not isinstance(item, Mapping):
-            continue
-        name = _metadata_name(item)
-        if not name:
-            continue
-        if not (name.startswith("login-") or name.startswith("worker-")):
-            continue
-        status = item.get("status")
-        phase = str(status.get("phase", "") or "").strip() if isinstance(status, Mapping) else ""
-        if phase in {"Succeeded", "Failed"}:
-            continue
-        active.append(name)
-    return tuple(sorted(active))
-
-
-def inspect_populate_jail(
-    runner: PopulateJailCommandRunner,
-    *,
-    namespace: str,
-    target_ref: str,
-    kube_context: str | None = None,
-    timeout_seconds: int = 120,
-) -> PopulateJailSnapshot:
-    target = str(target_ref or "").strip()
-    slurmcluster, detail = _run_json(
-        runner,
-        _kubectl_args(
-            kube_context=kube_context,
-            namespace=namespace,
-            args=("get", "slurmcluster", target, "-o", "json"),
-        ),
-        timeout_seconds=timeout_seconds,
-        check=False,
-    )
-    if not slurmcluster:
-        listed, list_detail = _run_json(
-            runner,
-            _kubectl_args(
-                kube_context=kube_context,
-                namespace=namespace,
-                args=("get", "slurmclusters", "-o", "json"),
-            ),
-            timeout_seconds=timeout_seconds,
-            check=False,
-        )
-        items = listed.get("items") if isinstance(listed, Mapping) else None
-        item_list = (
-            [item for item in items if isinstance(item, Mapping)]
-            if isinstance(items, Sequence) and not isinstance(items, (str, bytes, bytearray))
-            else []
-        )
-        if len(item_list) == 1:
-            slurmcluster = dict(item_list[0])
-            detail = "resolved the only live SlurmCluster"
-        else:
-            reason = list_detail or detail or "SlurmCluster was not found"
-            return PopulateJailSnapshot(status="not_collected", detail=reason)
-    slurmcluster_name = _metadata_name(slurmcluster)
-    image = _slurmcluster_image(slurmcluster)
-    job_name = f"{slurmcluster_name}-{POPULATE_JAIL_JOB_SUFFIX}" if slurmcluster_name else ""
-    job: dict[str, Any] = {}
-    job_detail = ""
-    if job_name:
-        job, job_detail = _run_json(
-            runner,
-            _kubectl_args(
-                kube_context=kube_context,
-                namespace=namespace,
-                args=("get", "job", job_name, "-o", "json"),
-            ),
-            timeout_seconds=timeout_seconds,
-            check=False,
-        )
-    pods_payload, _pods_detail = _run_json(
-        runner,
-        _kubectl_args(
-            kube_context=kube_context,
-            namespace=namespace,
-            args=("get", "pods", "-o", "json"),
-        ),
-        timeout_seconds=timeout_seconds,
-        check=False,
-    )
-    return PopulateJailSnapshot(
-        slurmcluster_name=slurmcluster_name,
-        image=image,
-        job_name=job_name,
-        job_uid=_metadata_uid(job),
-        job_complete=_job_complete(job),
-        job_failed=_job_failed(job),
-        job_image=_job_container_image(job),
-        active_consumer_pods=_active_consumer_pods(pods_payload),
-        status="collected",
-        detail=job_detail or detail,
-    )
-
-
 def _timestamp_deadline(value: object, timeout_seconds: int) -> str:
     text = str(value or "").strip()
     if not text:
@@ -841,6 +521,27 @@ def _named_container_status(pod: Mapping[str, Any]) -> Mapping[str, Any]:
         if isinstance(container, Mapping) and str(container.get("name") or "") == "populate-jail":
             return container
     return {}
+
+
+def _failed_init_container_reason(pod: Mapping[str, Any]) -> str:
+    status = pod.get("status")
+    statuses = status.get("initContainerStatuses") if isinstance(status, Mapping) else None
+    if not isinstance(statuses, Sequence) or isinstance(statuses, (str, bytes, bytearray)):
+        return ""
+    for container in statuses:
+        if not isinstance(container, Mapping):
+            continue
+        state = container.get("state")
+        terminated = state.get("terminated") if isinstance(state, Mapping) else None
+        if not isinstance(terminated, Mapping):
+            continue
+        exit_code = _non_negative_int(terminated.get("exitCode"))
+        if exit_code in {None, 0}:
+            continue
+        name = str(container.get("name") or "<unknown>").strip()
+        reason = str(terminated.get("reason") or "Error").strip()
+        return f"init container {name} failed: {reason} (exit {exit_code})"
+    return ""
 
 
 def _non_negative_int(value: object) -> int | None:
@@ -1073,8 +774,11 @@ def inspect_active_passive_populate_jail_progress(
                 reason = "populate-jail log tail is temporarily unavailable"
     progress = _structured_log_progress(log_text)
 
-    if _job_failed(job) or (container_state == "terminated" and exit_code not in {None, 0}):
+    job_failed = _job_failed(job)
+    if job_failed or (container_state == "terminated" and exit_code not in {None, 0}):
         status = "failed"
+        if job_failed:
+            reason = _failed_init_container_reason(pod) or reason or "Job failed"
     elif _job_complete(job) and progress["summary_seen"] and not progress["summary_complete"]:
         status = "failed"
         reason = "structured completion summary reported incomplete file or byte restoration"
@@ -1120,45 +824,6 @@ def inspect_active_passive_populate_jail_progress(
         log_sha256=hashlib.sha256(log_text.encode()).hexdigest() if log_text else "",
         **progress,
     )
-
-
-def wait_for_populate_jail_refresh(
-    runner: PopulateJailCommandRunner,
-    *,
-    namespace: str,
-    target_ref: str,
-    previous_job_uid: str,
-    expected_image: str,
-    kube_context: str | None = None,
-    timeout_seconds: int = 2700,
-    poll_interval_seconds: int = 10,
-) -> PopulateJailSnapshot:
-    deadline = time.monotonic() + max(timeout_seconds, 0)
-    while True:
-        snapshot = inspect_populate_jail(
-            runner,
-            namespace=namespace,
-            target_ref=target_ref,
-            kube_context=kube_context,
-            timeout_seconds=120,
-        )
-        if snapshot.job_failed:
-            raise RuntimeError(
-                f"populate-jail refresh job {snapshot.job_name or '<unknown>'} failed."
-            )
-        new_job_seen = not previous_job_uid or (
-            bool(snapshot.job_uid) and snapshot.job_uid != previous_job_uid
-        )
-        image_ok = not expected_image or snapshot.job_image == expected_image
-        if snapshot.job_complete and new_job_seen and image_ok:
-            return snapshot
-        if time.monotonic() >= deadline:
-            detail = snapshot.detail or "timed out waiting for refreshed populate-jail Job"
-            raise RuntimeError(
-                "Timed out waiting for populate-jail refresh to complete"
-                + (f": {detail}" if detail else "")
-            )
-        time.sleep(max(poll_interval_seconds, 1))
 
 
 def wait_for_active_passive_populate_jail_job(
@@ -1301,15 +966,6 @@ def _items(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     return tuple(item for item in items if isinstance(item, Mapping))
 
 
-def _login_service_names(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    names = []
-    for item in _items(payload):
-        name = _metadata_name(item)
-        if name and "login" in name:
-            names.append(name)
-    return tuple(sorted(dict.fromkeys(names)))
-
-
 def _ready_endpoint_count(payload: Mapping[str, Any]) -> int:
     ready = 0
     for item in _items(payload):
@@ -1323,52 +979,6 @@ def _ready_endpoint_count(payload: Mapping[str, Any]) -> int:
             if isinstance(conditions, Mapping) and conditions.get("ready") is True:
                 ready += 1
     return ready
-
-
-def _statefulset_rollout_ready(payload: Mapping[str, Any]) -> bool:
-    metadata = _mapping(payload.get("metadata"))
-    spec = _mapping(payload.get("spec"))
-    status = _mapping(payload.get("status"))
-    try:
-        generation = int(metadata.get("generation") or 0)
-        observed_generation = int(status.get("observedGeneration") or 0)
-        replicas = int(spec.get("replicas") if spec.get("replicas") is not None else 1)
-        ready_replicas = int(status.get("readyReplicas") or 0)
-        updated_replicas = int(status.get("updatedReplicas") or 0)
-    except (TypeError, ValueError):
-        return False
-    return (
-        observed_generation >= generation
-        and ready_replicas >= replicas
-        and updated_replicas >= replicas
-    )
-
-
-def _discover_login_service_names(
-    runner: PopulateJailCommandRunner,
-    *,
-    namespace: str,
-    target_ref: str,
-    kube_context: str | None,
-) -> tuple[str, ...]:
-    services, detail = _run_json(
-        runner,
-        _kubectl_args(
-            kube_context=kube_context,
-            namespace=namespace,
-            args=("get", "services", "-o", "json"),
-        ),
-        timeout_seconds=120,
-        check=False,
-    )
-    names = _login_service_names(services)
-    if not names:
-        target = str(target_ref or "").strip() or "<unknown>"
-        raise RuntimeError(
-            f"Could not find a login Service for SlurmCluster {target} in namespace {namespace}"
-            + (f": {detail}" if detail else "")
-        )
-    return names
 
 
 def login_service_ready_endpoint_count(
@@ -1401,124 +1011,141 @@ def login_service_ready_endpoint_count(
     return ready
 
 
-def wait_for_login_service_ready_endpoints(
+def observe_login_service_continuity(
     runner: PopulateJailCommandRunner,
     *,
     namespace: str,
-    target_ref: str,
     kube_context: str | None = None,
-    min_ready_endpoints: int = 1,
-    timeout_seconds: int = 600,
-    poll_interval_seconds: int = 5,
+    tcp_probe: Callable[[str, int], bool] | None = None,
 ) -> dict[str, Any]:
-    service_names = _discover_login_service_names(
-        runner,
-        namespace=namespace,
-        target_ref=target_ref,
-        kube_context=kube_context,
-    )
-    deadline = time.monotonic() + max(timeout_seconds, 0)
-    while True:
-        ready = login_service_ready_endpoint_count(
-            runner,
-            namespace=namespace,
-            service_names=service_names,
-            kube_context=kube_context,
-        )
-        if ready >= min_ready_endpoints:
-            return {"service_names": list(service_names), "ready_endpoints": ready}
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                "Timed out waiting for login Service ready endpoints"
-                f": services={', '.join(service_names)}, ready={ready}, required={min_ready_endpoints}"
-            )
-        time.sleep(max(poll_interval_seconds, 1))
+    """Return non-blocking login Service evidence for upgrade progress reporting."""
 
-
-def wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
-    runner: PopulateJailCommandRunner,
-    *,
-    namespace: str,
-    target_ref: str,
-    kube_context: str | None = None,
-    statefulset_name: str = "login",
-    min_ready_endpoints: int = 1,
-    timeout_seconds: int = 900,
-    poll_interval_seconds: int = 5,
-) -> dict[str, Any]:
-    service_names = _discover_login_service_names(
-        runner,
-        namespace=namespace,
-        target_ref=target_ref,
-        kube_context=kube_context,
-    )
-    deadline = time.monotonic() + max(timeout_seconds, 0)
-    last_ready = 0
-    while True:
-        last_ready = login_service_ready_endpoint_count(
-            runner,
-            namespace=namespace,
-            service_names=service_names,
-            kube_context=kube_context,
-        )
-        if last_ready < min_ready_endpoints:
-            raise RuntimeError(
-                "Login Service ready endpoints dropped below the active/passive guard"
-                f": services={', '.join(service_names)}, ready={last_ready}, "
-                f"required={min_ready_endpoints}"
-            )
-        statefulset, detail = _run_json(
+    try:
+        services, detail = _run_json(
             runner,
             _kubectl_args(
                 kube_context=kube_context,
                 namespace=namespace,
-                args=("get", "statefulsets.apps.kruise.io", statefulset_name, "-o", "json"),
+                args=("get", "services", "-o", "json"),
             ),
             timeout_seconds=120,
             check=False,
         )
-        if _statefulset_rollout_ready(statefulset):
-            return {"service_names": list(service_names), "ready_endpoints": last_ready}
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                f"Timed out waiting for StatefulSet/{statefulset_name} while guarding "
-                "login Service ready endpoints"
-                + (f": {detail}" if detail else f": ready={last_ready}")
+        observations: list[dict[str, Any]] = []
+        ready_endpoints = 0
+        for item in _items(services):
+            name = _metadata_name(item)
+            if not name or "login" not in name:
+                continue
+            metadata = _mapping(item.get("metadata"))
+            spec = _mapping(item.get("spec"))
+            status = _mapping(item.get("status"))
+            load_balancer = _mapping(status.get("loadBalancer"))
+            ingress = load_balancer.get("ingress")
+            ingress_rows = (
+                ingress
+                if isinstance(ingress, Sequence)
+                and not isinstance(ingress, (str, bytes, bytearray))
+                else ()
             )
-        time.sleep(max(poll_interval_seconds, 1))
-
-
-def wait_for_populate_jail_consumers_down(
-    runner: PopulateJailCommandRunner,
-    *,
-    namespace: str,
-    target_ref: str,
-    kube_context: str | None = None,
-    timeout_seconds: int = 900,
-    poll_interval_seconds: int = 10,
-) -> PopulateJailSnapshot:
-    deadline = time.monotonic() + max(timeout_seconds, 0)
-    last_snapshot = PopulateJailSnapshot(status="not_collected")
-    while True:
-        snapshot = inspect_populate_jail(
-            runner,
-            namespace=namespace,
-            target_ref=target_ref,
-            kube_context=kube_context,
-            timeout_seconds=120,
-        )
-        last_snapshot = snapshot
-        if snapshot.job_failed:
-            raise RuntimeError(
-                f"populate-jail refresh job {snapshot.job_name or '<unknown>'} failed."
+            addresses = sorted(
+                {
+                    str(row.get("ip") or row.get("hostname") or "").strip()
+                    for row in ingress_rows
+                    if isinstance(row, Mapping)
+                    and str(row.get("ip") or row.get("hostname") or "").strip()
+                }
             )
-        if snapshot.status == "collected" and not snapshot.active_consumer_pods:
-            return snapshot
-        if time.monotonic() >= deadline:
-            pods = ", ".join(last_snapshot.active_consumer_pods) or "<unknown>"
-            detail = last_snapshot.detail or "timed out waiting for login/worker pods to stop"
-            raise RuntimeError(
-                "Timed out waiting for login/worker pods to stop before populate-jail refresh"
-                f": {pods}; {detail}"
+            service_ready = login_service_ready_endpoint_count(
+                runner,
+                namespace=namespace,
+                service_names=(name,),
+                kube_context=kube_context,
             )
-        time.sleep(max(poll_interval_seconds, 1))
+            ready_endpoints += service_ready
+            tcp_reachable: bool | None = None
+            if tcp_probe is not None and addresses:
+                try:
+                    tcp_reachable = any(tcp_probe(address, 22) for address in addresses)
+                except Exception:
+                    tcp_reachable = None
+            observations.append(
+                {
+                    "name": name,
+                    "uid": str(metadata.get("uid") or "").strip(),
+                    "type": str(spec.get("type") or "").strip(),
+                    "clusterIP": str(spec.get("clusterIP") or "").strip(),
+                    "clusterIPs": sorted(
+                        {
+                            str(value).strip()
+                            for value in (
+                                spec.get("clusterIPs")
+                                if isinstance(spec.get("clusterIPs"), Sequence)
+                                and not isinstance(spec.get("clusterIPs"), (str, bytes, bytearray))
+                                else ()
+                            )
+                            if str(value).strip()
+                        }
+                    ),
+                    "ports": sorted(
+                        (
+                            {
+                                "name": str(port.get("name") or "").strip(),
+                                "port": int(port.get("port") or 0),
+                                "targetPort": str(port.get("targetPort") or "").strip(),
+                                "nodePort": int(port.get("nodePort") or 0),
+                                "protocol": str(port.get("protocol") or "TCP").strip(),
+                            }
+                            for port in (
+                                spec.get("ports") if isinstance(spec.get("ports"), list) else []
+                            )
+                            if isinstance(port, Mapping)
+                        ),
+                        key=lambda item: (
+                            str(item["name"]),
+                            int(item["port"]),
+                            str(item["protocol"]),
+                        ),
+                    ),
+                    "selector": {
+                        str(key): str(value)
+                        for key, value in sorted(
+                            _mapping(spec.get("selector")).items(),
+                            key=lambda item: str(item[0]),
+                        )
+                    },
+                    "allocationIds": sorted(
+                        {
+                            str(value).strip()
+                            for key, value in _mapping(metadata.get("annotations")).items()
+                            if "allocation" in str(key).lower() and str(value).strip()
+                        }
+                    ),
+                    "ingress": addresses,
+                    "readyEndpoints": service_ready,
+                    "tcp22Reachable": tcp_reachable,
+                }
+            )
+        if not observations:
+            return {
+                "status": "unknown",
+                "serviceCount": 0,
+                "readyEndpoints": 0,
+                "reason": "login-service-not-observed",
+                "inspectionDetailPresent": bool(detail),
+            }
+        reachable = any(item["tcp22Reachable"] is True for item in observations)
+        status_value = "available" if ready_endpoints > 0 else "degraded"
+        return {
+            "status": status_value,
+            "serviceCount": len(observations),
+            "readyEndpoints": ready_endpoints,
+            "tcp22Reachable": reachable if any(item["ingress"] for item in observations) else None,
+            "services": observations,
+        }
+    except Exception as exc:
+        return {
+            "status": "unknown",
+            "reason": "observer-unavailable",
+            "failureType": type(exc).__name__,
+        }

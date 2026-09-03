@@ -7,8 +7,7 @@ requirements.
 This structure is based on the current OpenAI Codex Agent Skills documentation,
 Codex best practices, and the open Agent Skills specification:
 
-- [OpenAI Codex Agent Skills](https://developers.openai.com/codex/skills)
-- [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
+- [OpenAI Build skills](https://learn.chatgpt.com/docs/build-skills)
 - [Agent Skills specification](https://agentskills.io/specification)
 - [Agent Skills best practices](https://agentskills.io/skill-creation/best-practices)
 
@@ -63,11 +62,13 @@ skill-name/
 `-- scripts/
 ```
 
-Every repo-owned skill must keep `agents/openai.yaml`. Do not remove it because
-upstream OpenAI docs classify it as optional. Do not create empty resource
-directories just to match the tree; add `assets/`, `evals/`, `references/`, or
-`scripts/` when they have useful files or when the local repository convention
-requires them.
+Every repo-owned skill must keep `agents/openai.yaml`. Every authorized
+writable target that completes `align-skill` also keeps a canonical
+`evals/trigger-prompts.csv`; legacy skills acquire that contract incrementally
+when aligned. Do not remove metadata because upstream OpenAI docs classify it
+as optional, and do not create empty resource directories just to match the
+tree. Add `assets/`, `references/`, or `scripts/` only when they have useful
+files.
 
 ## Required Files
 
@@ -92,9 +93,9 @@ The `name` should match the parent folder.
   reliability is needed or agents keep rewriting the same helper.
 - `assets/`: templates, examples, schemas, starter files, and static resources
   used as inputs or output scaffolds.
-- `evals/`: reusable trigger prompts or quality-evaluation examples. Use when
-  activation behavior needs repeatable evidence; keep examples public-safe and
-  free of secrets or customer data.
+- `evals/`: canonical trigger prompts for aligned writable targets plus
+  output-quality cases when behavior warrants them. Keep examples public-safe
+  and free of secrets or customer data.
 
 ## File Purpose Table
 
@@ -105,7 +106,7 @@ The `name` should match the parent folder.
 | `references/` | Optional | Optional | Long guidance loaded only when relevant. |
 | `scripts/` | Optional | Optional | Deterministic helpers or validators. |
 | `assets/` | Optional | Optional | Templates and reusable output/input resources. |
-| `evals/` | Repo convention | Optional | Trigger and quality examples used as repeatable review evidence. |
+| `evals/` | Repo convention | Required after writable target alignment | Canonical trigger cases and proportionate quality examples. |
 
 ## SKILL.md Section Template
 
@@ -118,6 +119,8 @@ description: Use this skill when...
 ---
 
 # Skill Name
+
+## Help
 
 ## Purpose
 
@@ -143,8 +146,20 @@ description: Use this skill when...
 For larger skills, keep only trigger, scope, required workflow, guardrails,
 validation, and output contract in `SKILL.md`; move long checklists, examples,
 policy, troubleshooting, and templates into `references/` or `assets/`.
+Treat more than 500 lines as a soft review warning, not a portability failure.
+Split focused provider or domain variants only when their instructions differ
+materially, keep references one level deep, and state the exact condition for
+loading each one.
 For scaffolded skill folders, draft skill content, or update work, read
 `references/skill-authoring-best-practices.md` after target scope is known.
+
+For this repository's source-owned standard, `## Help` is mandatory for every
+new or aligned skill. Inventory the documented public interface before writing
+it. The Help contract must make `--help` and `-h` report-only, state purpose and
+invocation policy, show exact usage for every public action, and require one
+concise description for each public action, positional argument, and flag. It
+must include `-h, --help`, say "No additional public flags" when applicable,
+and exclude private helper actions, script flags, and workflow transitions.
 
 ## OpenAI Metadata
 
@@ -269,6 +284,12 @@ For this profile:
 
 - Put always-needed routing, scope, workflow, guardrails, and output contract in
   `SKILL.md`.
+- Put the standard `## Help` section in every repo-owned `SKILL.md`. After the
+  selected `SKILL.md` loads, Help must short-circuit before workflow reads,
+  additional tools, or mutation; report purpose, invocation policy, public
+  usage/actions, and documented options; and keep private helper flags private.
+  Internal or coordinator-only skills must say they have no standalone public
+  workflow action.
 - Put the standard `## Learning Loop` section in every `SKILL.md` so durable
   public-safe source learning is active whenever that skill loads.
 - Put long rubrics, policy details, vendor research rules, troubleshooting, and

@@ -1,0 +1,9 @@
+id,should_trigger,prompt
+create-pr-positive-01,true,"Create a GitHub pull request from the current feature branch."
+create-pr-positive-02,true,"Prepare this named branch merge the latest base push it and open or reuse its PR."
+create-pr-positive-03,true,"Run the PR creation checks and report the resulting URL and readiness."
+create-pr-positive-04,true,"The Agentic SDLC run passed UAT; publish a PR for the exact promoted SHA without changing that commit."
+create-pr-negative-01,false,"Commit and push this branch without opening a pull request."
+create-pr-negative-02,false,"Review pull request 42 and report blockers."
+create-pr-negative-03,false,"Merge this ready pull request."
+create-pr-negative-04,false,"The managed Agentic SDLC child passed its tests; publish that child branch directly before integration."

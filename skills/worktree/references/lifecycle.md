@@ -1,215 +1,230 @@
-# Worktree Lifecycle Reference
+# Local Worktree Lifecycle
 
-Use this reference for exact action sequencing and failure interpretation. The
-Python helper is the canonical implementation of identity, path, ref, and
-cleanup checks; do not rewrite its command logic ad hoc.
+## Topology
 
-## Contents
-
-- Managed identity
-- Add lifecycle
-- Push and PR handoff
-- Cleanup proof
-- Recovery
-- Official references
-
-## Managed Identity
-
-A managed worktree has all of these properties:
-
-- it appears in `git worktree list --porcelain -z`;
-- its branch is `worktree/<generated-name>`;
-- its absolute path is under the sibling
-  `<repo-parent>/<repo-name>-worktrees/` directory;
-- its branch-local Git configuration records the canonical repo-relative
-  project scope, absolute path, fetched base SHA, and generated name;
-- a private durable ownership manifest under
-  `<repo-name>-worktrees/.worktree-skill/` agrees with its name, branch,
-  primary checkout, path, project scope, and base SHA;
-- its common Git directory matches the primary checkout;
-- its project working directory is `<worktree>/<recorded-scope>`.
-
-Treat a disagreement between live Git state, the ownership manifest, and
-branch metadata as a blocker. Never adopt a path or branch merely because its
-name resembles this convention or because a similarly named PR exists.
-For newly generated identities, use the constant `project` prefix plus the
-public-safe task slug and random suffix. Do not derive a public branch or path
-component from the repository name or recorded scope.
-
-## Add Lifecycle
-
-Resolve the primary checkout from the first non-bare worktree record. `add`
-must start in that primary checkout, although the current directory may be a
-nested project folder.
-
-Before managed branch or worktree creation:
-
-1. Require a named branch, `origin`, no in-progress Git operation, and no
-   unresolved conflicts.
-2. Fetch `origin`, require `origin/main`, and record its exact SHA.
-3. Canonicalize the optional repository-relative project path and reject any
-   escape outside the Git root.
-4. Reject staged, unstaged, or untracked files in the selected project.
-5. Compare the current branch with its `origin/main` merge base and reject
-   branch-introduced changes in the selected project unless the selected-scope
-   tree is exactly equal to `origin/main`. The exact-tree exception supports a
-   squash-merged change whose old feature branch is no longer ancestry-merged.
-   This deliberately allows an old or dirty feature branch when its changes
-   are confined to another monorepo project.
-6. Create the sibling parent idempotently, but reject a symlink parent.
-7. Check the candidate filesystem path, registered worktrees, local refs, and
-   remote refs before creating anything.
-
-The fetch in step 2 updates remote-tracking state before the planned ownership
-manifest exists. Write that manifest after preflight and before creating the
-managed branch or linked worktree; do not describe it as preceding every Git
-mutation.
-
-Creation uses the fixed base and no upstream:
-
-```bash
-git worktree add \
-  --no-track \
-  -b "worktree/<generated-name>" \
-  "<repo-parent>/<repo-name>-worktrees/<generated-name>" \
-  origin/main
+```text
+clean local source branch
+  -> child A / child B / child C develop concurrently
+  -> one durable integration candidate at a time
+  -> source branch advances by exact validated merge commits
+  -> children are removed explicitly
+  -> source branch is published once
 ```
 
-Write a private `planned` ownership manifest before creation. After creation,
-write local Git metadata, re-observe the exact path, branch, base SHA,
-cleanliness, common Git directory, and scope directory, then promote the
-manifest to `active`. Roll back only a clean just-created worktree whose branch
-still equals the recorded base; otherwise retain a `recovery` manifest.
+Every linked worktree contains the full repository. The selected project is
+only the initial working directory and label; related projects and shared files
+may change in the same child.
 
-## Push And PR Handoff
+## Creation Invariants
 
-Acquire the action-bound private publication reservation before either handoff.
-The reservation operation performs the same scope-clean inspection, fetches
-current `origin/main`, validates managed identity, and rejects:
+- Invoke from the primary checkout on a named non-default branch.
+- Require staged, unstaged, untracked, and conflict state to be empty.
+- Complete the full preflight without creating state, locks, or directories;
+  then acquire the lifecycle lock and repeat the same preflight before mutation.
+- Require the sibling worktree parent and private state root to be canonical
+  directories and reject every encountered symlink or non-directory.
+- Resolve configured `origin/HEAD` only to reject the default branch; do not
+  fetch or compare source content with a remote.
+- Resolve project scope before task identity. When no explicit task slug is
+  supplied, normalize the resolved project directory basename and use `work`
+  only when normalization is empty.
+- Freeze the exact local source ref and SHA before writing planned ownership
+  state and before creating the generated branch/worktree.
+- Hold the private repository lifecycle lock from duplicate-manifest selection
+  through planned state, Git worktree creation, and active-state verification.
+- Re-observe the shared common Git directory, generated branch, exact HEAD,
+  clean index/worktree, and selected starting directory.
+- After successful creation or exact reuse, route subsequent development
+  commands through the selected starting directory and verify the child branch
+  there. This changes the agent's command workdir, not a parent shell, Codex
+  workspace, or editor window; lifecycle actions still run from the primary
+  checkout.
 
-- dirty tracked or untracked paths outside the recorded scope;
-- branch-owned committed paths outside the recorded scope;
-- a path, branch, common-directory, or metadata mismatch.
+## Integration Attempt
 
-After a passing inspection:
+Run every integration lifecycle action from the primary checkout on the
+recorded non-default source branch. The helper rejects child or candidate
+checkout invocation before it writes a reservation or candidate.
 
-- `push` follows `commit-push` without changing its whole-repository staging or
-  divergence rules;
-- `create-pr` follows `create-pr` on the same branch with base `main` without
-  changing its validation, merge-from-base, push, PR reuse, or check-waiting
-  rules.
+Before a fresh attempt, run the read-only integration preflight. It validates
+the primary and child identities, branches, ancestry, Git operations, complete
+dirt, nested lease participation, and existing reservations without writing
+state. Its result is one of:
 
-Keep the reservation identity private and release it only after the child
-workflow returns successfully. If the process stops or the result is uncertain,
-leave the reservation in place and repeat the same public action. The same
-action resumes its reservation; a different publication action, task lease, or
-cleanup is blocked. Reservations have no expiry, PID recovery, or force-clear
-path.
+- `ready-clean`: invoke the clean-only integration helper with the returned
+  exact source and child SHAs.
+- `commit-required`: inspect the complete checkout diffs, safely commit the
+  ordinary child first and source second through the delegated `$commit`
+  workflow, then rerun preflight.
+- `blocked`: preserve all resources and resolve the reported owner or recovery
+  boundary before retrying.
 
-This is cooperative lifecycle serialization, not an OS sandbox. It prevents
-participating `worktree`, Task Implementer, and Agentic SDLC owners from racing,
-but it cannot stop an arbitrary process from editing the checkout. If another
-writer may be active, stop and re-observe the worktree before publication.
+Automatic commits exist only before a reservation. Each stages the full linked
+checkout from its repository root and records the reviewed staged tree. Before
+the first normal-hook commit, the helper atomically creates a durable
+source-scoped preparation claim. Competing source reservations, preparations,
+nested lease acquisition, removal, and source publication honor that claim and
+fail closed. Each commit must be one direct descendant on the same branch,
+leave a completely clean checkout, and have a commit tree equal to the reviewed
+staged tree. A hook-modified tree remains review-required until the complete
+actual commit is inspected and bound by exact head/tree proof. Nested Task
+Implementer or Agentic SDLC participation makes child dirt ineligible because
+its terminal receipt binds an exact promoted head. Conflicts, active Git
+operations, unsafe or unclear content, orphan candidate resources, and
+concurrent movement also block before candidate creation.
 
-The scope check is what makes those existing repo-root `git add -A` contracts
-safe for this project-isolation workflow.
+Successful commits are never rolled back when a later commit, revalidation, or
+candidate step fails. The preparation record makes a crash or retry reconcile
+the same ordered commits without duplication. The final preflight SHAs and
+preparation token are compared again while the preparation is atomically
+consumed into the integration reservation.
+If the reservation write succeeds but preparation cleanup is interrupted, the
+next exact token-bound retry validates both records and consumes the stale
+preparation before it may resume candidate work.
 
-## Nested Coordinator Ownership
+The durable reservation binds:
 
-When `task-implementer` or Agentic SDLC starts inside a managed linked worktree,
-it acquires a v2 worktree-owned lease with owner kind `task-implementer` or
-`agentic-sdlc`. The lease is bound to the exact outer name, branch, path, scope,
-common Git directory, private workspace/run, task scope, and starting `HEAD`.
-Integration and worker resources are declared before creation and tracked
-through `planned`, `present`, and `absent` states. Owner-specific branch rules
-accept only `codex/ti-*` or `codex/sdlc/*` resources respectively.
+- managed child name, branch, worktree, and exact child SHA;
+- source branch/ref and exact source-start SHA;
+- private integration branch/path and token;
+- state `planned -> present -> ready` and exact candidate SHA.
 
-The lease makes the task coordinator internal to the outer workflow:
+One source ref may have only one active reservation. A transient file lock
+protects individual transitions; the durable reservation protects the
+human-resolution interval.
 
-- every wave or feature starts from the current exact outer branch `HEAD`;
-- worker branches merge into a temporary integration branch, then verified
-  fast-forward promotion advances only the outer worktree branch;
-- per-wave cleanup removes internal worktrees and branches without force;
-- the lease remains across all local work and final changed-surface alignment;
-- outer inspect, push, PR creation, and removal remain blocked until release.
+Only the exact source ref named by a preparation may be claimed, and only one
+preparation or reservation may own that source at a time. Explicit preparation
+abort deletes the private claim only; it never resets or removes a retained Git
+commit. Orphan candidate branches, paths, symlinks, or registered worktrees are
+never adopted as a new attempt.
 
-Release requires a clean outer worktree at the recorded promoted head and no
-registered or filesystem-visible internal worktree or branch. Missing,
-malformed, mismatched, or incomplete state fails closed. There is no stale
-lease auto-recovery, force-clear command, compatibility shim, or state
-migration.
+Create the candidate from source-start, then merge the child using `--no-ff`.
+The source checkout is never the conflict workspace. A resolved candidate must
+be clean and have exactly two parents: first parent source-start, second parent
+child-head.
 
-Agentic SDLC additionally requires final alignment, UAT, and documentation
-evidence before releasing its run-level lease. It then acquires the normal
-`create-pr` publication reservation. Lease v2 is independent from publication
-reservation schema v1; upgrading leases does not invalidate reservations.
-
-## Cleanup Proof
-
-Always inspect before deleting:
-
-```bash
-git -C "<path>" status --short
-git -C "<path>" log --oneline --decorate -5
-```
-
-Run cleanup from the primary checkout with an exact generated name. The helper
-holds the shared lifecycle lock, fetches and prunes remote-tracking context,
-requires matching durable ownership
-state, then requires a clean worktree and no in-progress operation. Cleanup is
-authorized only by one of:
-
-1. exactly one PR for the exact head branch and base `main` is `MERGED`, and
-   its `headRefOid` equals the local or remaining remote tip; or
-2. the branch was never published, has no PR, and contains no commit beyond
-   its recorded creation base.
-
-If a remote branch exists, its current SHA must equal the proved head before
-local cleanup starts. Remove in this order:
-
-1. `git worktree remove <path>` without force;
-2. atomically delete the local ref with
-   `git update-ref -d refs/heads/<branch> <expected-head>` and remove its local
-   branch configuration;
-3. delete a still-matching remote ref with
-   `--force-with-lease=refs/heads/<branch>:<expected-sha>` and an explicit
-   delete refspec;
-4. `git fetch origin --prune`.
-
-The lease is a compare-and-delete guard, not permission to overwrite branch
-history. If the remote advances, deletion fails and the remote branch remains.
-The first authorized cleanup records an immutable expected head in the
-`cleanup-pending` manifest. Every retry requires all remaining local and remote
-refs to equal that head before it consults PR state or mutates another resource;
-a newer merged PR never replaces the original cleanup proof.
+Validation is external to the Python helper. The first helper call returns the
+candidate path/SHA. `$align`, tests, and applicable Agentic SDLC UAT must not
+change that candidate. The promotion call supplies the exact validated SHA;
+the helper requires the candidate checkout and private ref to remain at that
+SHA, rechecks parents, refs, cleanliness, and source/child stability, and
+passes the immutable SHA—not the mutable private ref—to `git merge --ff-only`
+inside the primary checkout.
 
 ## Recovery
 
-- Worktree and branch remain: rerun from the primary checkout with the exact
-  generated name.
-- Interrupted setup with partial branch metadata: a `planned` or `recovery`
-  manifest can remove only the exact registered worktree and branch when they
-  are clean and still equal the recorded creation base. Any advancement or
-  unregistered surviving path blocks recovery.
-- Worktree is gone but local branch remains: rerun from the primary checkout;
-  branch metadata supplies the remaining identity.
-- Local branch is gone but remote remains: rerun from the primary checkout
-  with the generated name; the durable manifest plus exact merged PR head
-  supplies the ownership and deletion proof.
-- All three resources are absent: return `already-removed`.
-- Dirty, mismatched, advanced, unmerged, or ambiguous resources remain for
-  operator review. Never broaden cleanup to nearby names.
+- `planned` plus exact branch/worktree resources resumes preparation.
+- `present` plus `MERGE_HEAD` resumes conflict resolution. The developer edits
+  and stages only the resolution; the helper seals the merge on retry.
+- `ready` returns the same candidate until its exact SHA is validated.
+- Dirt in the source or child after any reservation blocks all automatic
+  commits. Preserve the attempt; clean without moving its frozen heads to
+  resume, or explicitly commit reviewed repairs and use `--restart` when a head
+  must move.
+- If source moves, the attempt is stale. Preserve it until explicit
+  `--restart`; restart aborts only the exact owned merge, requires the candidate
+  clean after abort, removes it non-forcibly, deletes its ref by expected SHA,
+  then starts from the new source.
+- If source already equals a ready candidate after a crash, reconcile proof;
+  never restart or layer another merge.
+- After source promotion, write integrated manifest proof before candidate
+  cleanup. A cleanup failure leaves the reservation so retry finishes safely.
+- Downstream completion rechecks the recorded merge's exact parent order and
+  requires the current local source ref to contain that merge; a stale manifest
+  alone is never accepted as source-integration proof.
 
-## Official References
+## Nested Coordinator Lease
 
-- [Git worktree](https://git-scm.com/docs/git-worktree): linked worktree
-  lifecycle, clean-only removal, `--no-track`, and stable porcelain `-z` output.
-- [Git update-ref](https://git-scm.com/docs/git-update-ref): deleting a ref only
-  when its current value matches an expected old object ID.
-- [Git push](https://git-scm.com/docs/git-push): exact-value
-  `--force-with-lease=<ref>:<expect>` behavior.
-- [GitHub CLI `gh pr list`](https://cli.github.com/manual/gh_pr_list): all-state,
-  base/head filtering and PR JSON fields including `baseRefName`,
-  `headRefName`, `headRefOid`, and `mergedAt`.
-- [Python `fcntl`](https://docs.python.org/3/library/fcntl.html): Unix-only file
-  locking used to serialize private lifecycle ownership.
+Task Implementer and Agentic SDLC use lease schema v4. An `active` lease binds
+the exact outer path/branch/common Git directory, owner, run, token, initial
+head, ordered promotion heads, and every internal resource. Each promotion is
+an expected-head compare-and-set, which permits successive Task Implementer
+waves without accepting skipped or stale history. Ownership-manifest schema v4
+independently records the lease participation state, owner, and token; a missing
+lease file therefore cannot silently unlock integration or removal. Release
+requires the clean outer checkout at the final promoted head and all resources
+physically absent, then atomically changes the lease record and manifest marker
+to `released`. A released receipt cannot be reacquired or updated; exact release
+replay is safe, while missing, stale, or contradictory state fails closed. Outer
+integration may proceed through a released receipt.
+
+## Persistent Task Implementer Lane
+
+Task Implementer is a private Worktree-engine consumer, not a caller of public
+`$worktree` actions. Its lane key is the canonical common Git directory,
+primary checkout, exact named non-default source ref, and exact repo-relative
+project scope. Creation is permitted with source-checkout dirt because the lane
+starts from committed source `HEAD`; the source checkout is neither copied nor
+mutated. The lane itself must be clean before a generation starts.
+
+Separate schema-v1 lane state records incarnation, globally monotonic active/
+pending/integrated generations across reincarnations, repository-wide exact/
+prefix/domain claims, integration recovery, and removal intent. Immutable
+generation receipts are persisted before a terminal schema-v4 coordinator
+lease is retired. Claims are validated against every other lane before the
+candidate lane document is published. This keeps the general Worktree manifest
+and lease schemas unchanged.
+
+The lane branch's `lane_id`, `source_ref`, and `incarnation` configuration is an
+all-or-none identity. Inspection also cross-checks the live lane registry by
+exact branch and worktree. Partial configuration, or a matching live lane with
+missing branch configuration, is corruption and fails closed before ordinary
+managed-child classification or lease mutation.
+
+Lane integration requires the source checkout and lane both clean, no active
+generation, and one contiguous pending range. It serializes the recorded source
+ref, reuses the exact two-parent candidate and validation protocol above,
+promotes by expected-old source-head proof, then fast-forwards and rearms the
+same lane at the merge head. Explicit lane removal requires idle, fully
+integrated, clean, source-reachable state and never deletes Task prompt/run
+history. Idle reuse/refresh, generation transitions, integration, and removal
+share the per-lane transition lock; initialization takes the lifecycle lock
+before that per-lane lock. Removal binds the observed source ref and source
+head into its durable intent, then atomically verifies that source ref while
+deleting the exact lane ref. Public Worktree integration/removal reject
+lane-owned branches.
+An exact review-rejection replay is a bounded exception to the checkpoint-first
+integration rejection only after the lane is already `pending`, its integration
+journal is absent, and the immutable rejection receipt matches the candidate
+and findings digest. It returns the receipt's unchanged source/lane heads even
+when the correction generation has only reserved a pending checkpoint. It
+cannot open or finish that checkpoint, create a candidate, or promote a ref;
+all ordinary integration attempts still fail until the checkpoint finishes.
+Before creating or resuming an outer integration reservation, rebind that
+receipt to the manifest and live outer branch/path/scope/common-directory/head,
+then rescan every recorded private path, symlink, registered worktree, and
+branch. Removal performs the same identity and resurrection proof before
+cleanup and receipt deletion.
+
+## Removal Proof
+
+An unused child is removable only at its captured base. An integrated child is
+removable only when its unchanged head equals the recorded second parent and
+the recorded merge remains reachable from the source ref. Source rewrites,
+dirty state, active operations, active leases/reservations, or identity drift
+retain all resources.
+
+Remove the clean linked worktree without force, then delete the local child ref
+with its exact expected old SHA. Never inspect, delete, or mutate a remote child
+branch as part of this lifecycle.
+
+Removal validates released resources before outer cleanup and again after exact
+worktree/ref cleanup. It then atomically persists an exact removal-intent
+snapshot, deletes the terminal receipt, deletes the ownership manifest, rescans
+the snapshot's resources, and deletes the intent last. The intent remains a
+publication claim and exact compare-and-set anchor across either deletion crash
+window. Removal never deletes an active lease.
+
+## Publication Classification
+
+The primary and every linked checkout are classified by canonical path,
+checked-out branch, and shared Git common directory against complete branch
+metadata, all ownership manifests, active integration reservations, and all
+lease resources. This prevents a private candidate ref moved into the primary
+checkout from bypassing publication policy. Exact private matches are blocked.
+Partial matches, malformed state, an absent resource that physically reappears,
+or an unclaimed checkout inside the deterministic managed parent are
+inconsistent and blocked. The primary source is allowed only when no private
+claim matches; a manual linked worktree outside the managed namespace is
+allowed under the same condition.

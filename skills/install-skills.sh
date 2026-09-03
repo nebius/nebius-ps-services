@@ -1230,6 +1230,7 @@ had_existing = hooks_json.exists()
 added = 0
 refreshed = 0
 unchanged_entries = 0
+superseded_removed = 0
 registration_statuses: list[tuple[str, str, str]] = []
 
 if had_existing:
@@ -1257,6 +1258,129 @@ else:
     if not isinstance(target_hooks, dict):
         fail(f"{hooks_json} must contain a top-level hooks object")
     target_script_entries = existing_script_index(hooks_json, target_hooks)
+
+    project_specs_selected_events = {
+        event_name
+        for event_name, entries in source_hooks.items()
+        if any(
+            "project_specs_lifecycle.py" in entry_python_script_names(entry)
+            for entry in entries
+        )
+    }
+    if project_specs_selected_events:
+        for retired_event in ("PreToolUse", "PostToolUse"):
+            if retired_event in project_specs_selected_events:
+                continue
+            event_entries = target_hooks.get(retired_event, [])
+            if not isinstance(event_entries, list):
+                fail(f"{hooks_json} hooks.{retired_event} must be an array")
+            retained_entries: list[object] = []
+            for entry in event_entries:
+                if not isinstance(entry, dict):
+                    retained_entries.append(entry)
+                    continue
+                names = set(entry_python_script_names(entry))
+                if "project_specs_lifecycle.py" not in names:
+                    retained_entries.append(entry)
+                    continue
+                handlers = entry.get("hooks")
+                if (
+                    not isinstance(handlers, list)
+                    or len(handlers) != 1
+                    or not isinstance(handlers[0], dict)
+                    or names != {"project_specs_lifecycle.py"}
+                ):
+                    fail(
+                        "Retired project-spec observer registration matched a mixed "
+                        "handler entry; refusing to remove unrelated policy"
+                    )
+                command = handlers[0].get("command")
+                if not isinstance(command, str):
+                    fail("Retired project-spec observer registration has no command")
+                try:
+                    tokens = shlex.split(command)
+                except ValueError:
+                    tokens = []
+                expected_paths = {
+                    "${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py",
+                    str(
+                        (hooks_json.parent / "hooks" / "project_specs_lifecycle.py").resolve()
+                    ),
+                }
+                if (
+                    len(tokens) != 2
+                    or tokens[0] != "python3"
+                    or tokens[1] not in expected_paths
+                ):
+                    fail(
+                        "Retired project-spec observer registration did not match "
+                        "the exact managed command; refusing removal"
+                    )
+                superseded_removed += 1
+            target_hooks[retired_event] = retained_entries
+        target_script_entries = existing_script_index(hooks_json, target_hooks)
+
+    arbiter_selected = any(
+        "stop_lifecycle_arbiter.py" in entry_python_script_names(entry)
+        for entry in source_hooks.get("Stop", [])
+    )
+    if arbiter_selected:
+        stop_entries = target_hooks.get("Stop", [])
+        if not isinstance(stop_entries, list):
+            fail(f"{hooks_json} hooks.Stop must be an array")
+        superseded_scripts = {
+            "stop_sdlc_continue.py",
+            "remediation_attempt_guard.py",
+        }
+        retained_stop_entries: list[object] = []
+        for entry in stop_entries:
+            if not isinstance(entry, dict):
+                retained_stop_entries.append(entry)
+                continue
+            names = set(entry_python_script_names(entry))
+            matched = names & superseded_scripts
+            if not matched:
+                retained_stop_entries.append(entry)
+                continue
+            handlers = entry.get("hooks")
+            if (
+                set(entry) != {"hooks"}
+                or not isinstance(handlers, list)
+                or len(handlers) != 1
+                or not isinstance(handlers[0], dict)
+                or names != matched
+                or len(names) != 1
+            ):
+                fail(
+                    "Legacy Stop registration migration matched a mixed handler "
+                    "entry; refusing to remove unrelated policy"
+                )
+            handler = handlers[0]
+            command = handler.get("command")
+            if not isinstance(command, str):
+                fail("Legacy Stop registration has no exact command")
+            try:
+                tokens = shlex.split(command)
+            except ValueError:
+                tokens = []
+            script_name = next(iter(matched))
+            expected_paths = {
+                f"${{CODEX_HOME:-$HOME/.codex}}/hooks/{script_name}",
+                str((hooks_json.parent / "hooks" / script_name).resolve()),
+            }
+            if (
+                len(tokens) != 2
+                or tokens[0] != "python3"
+                or tokens[1] not in expected_paths
+            ):
+                fail(
+                    "Legacy Stop registration migration did not match the exact "
+                    "managed command; refusing removal"
+                )
+            superseded_removed += 1
+        if superseded_removed:
+            target_hooks["Stop"] = retained_stop_entries
+            target_script_entries = existing_script_index(hooks_json, target_hooks)
 
     for source_label, _manifest_path, loaded_hooks in loaded_sources:
         for event_name, source_entries in loaded_hooks.items():
@@ -1326,7 +1450,13 @@ if replace_hooks_json:
 if replace_hooks_json:
     unchanged = existing_valid and existing_target == target
 else:
-    unchanged = had_existing and existing_valid and added == 0 and refreshed == 0
+    unchanged = (
+        had_existing
+        and existing_valid
+        and added == 0
+        and refreshed == 0
+        and superseded_removed == 0
+    )
 
 if preflight_only:
     raise SystemExit(0)
@@ -1381,6 +1511,11 @@ if not unchanged:
             f"unchanged {unchanged_entries} "
             f"from {len(source_manifests)} source manifest(s) -> {hooks_json}"
         )
+        if superseded_removed:
+            extra_messages.append(
+                "Retired exact obsolete managed hook registrations while preserving "
+                f"unrelated policy: {superseded_removed}"
+            )
     if backup_path:
         extra_messages.append(f"Backed up previous hooks.json: {backup_path}")
 else:

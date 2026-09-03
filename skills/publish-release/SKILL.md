@@ -1,9 +1,25 @@
 ---
 name: publish-release
-description: "Use to publish GitHub Releases end to end from the current project: collect package inputs, optionally set up changelog/helper/workflow assets, prep the release branch, create and merge a PR, tag from the default branch, wait for the release workflow, verify the GitHub Release assets, and report the result. Also supports explicit setup-only guidance."
+description: "Use only when explicitly asked to publish GitHub Releases end to end: collect package inputs, set up optional assets, prepare/merge a PR, tag, wait, verify assets, and report. Also supports setup-only guidance."
 ---
 
 # Publish Release
+
+## Help
+
+For `$publish-release --help` or `$publish-release -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Publish a versioned application/package release to GitHub Releases from the
 current project folder. This is a doer-first skill: setup/guidance is still

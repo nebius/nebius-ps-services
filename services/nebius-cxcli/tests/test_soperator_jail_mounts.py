@@ -4,10 +4,9 @@ import pytest
 
 from nebius_cxcli.soperator_jail_mounts import (
     apply_jail_persistent_mount_values,
-    jail_persistent_mount_decisions,
-    jail_persistent_mount_status,
+    jail_persistent_mounts_from_paths,
+    jail_rootfs_active_source,
     normalize_jail_persistent_mounts,
-    parse_jail_persistent_mount_spec,
 )
 
 
@@ -38,43 +37,6 @@ def test_apply_external_persistent_mount_values_adopts_legacy_paths_in_place() -
     assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == ("jail-pvc")
     assert "jail_home" not in values
     assert "home" not in values["jailRootfs"]
-
-
-def test_external_persistent_mount_decisions_record_auto_explicit_and_existing_submounts() -> None:
-    source_values = {
-        "externalNfs": {
-            "enabled": True,
-            "mountPath": "/home",
-            "server": "nfs.example.invalid",
-            "path": "/exports/home",
-        }
-    }
-    explicit_data = parse_jail_persistent_mount_spec("/data=/mnt/jail/shared/data")
-    values = apply_jail_persistent_mount_values(
-        source_values,
-        target_ref="external-cluster",
-        persistent_mounts=[explicit_data],
-        layout="external",
-    )
-
-    decisions = jail_persistent_mount_decisions(
-        original_values=source_values,
-        patched_values=values,
-        explicit_mounts=[explicit_data],
-    )
-
-    assert {item["mount_path"]: item["status"] for item in decisions} == {
-        "/home": "existing-submount",
-        "/data": "explicit",
-        "/scripts": "adopted-in-place",
-        "/models": "adopted-in-place",
-    }
-    assert {item["mount_path"]: item["copy_required"] for item in decisions} == {
-        "/home": False,
-        "/data": True,
-        "/scripts": False,
-        "/models": False,
-    }
 
 
 def test_apply_persistent_mount_values_removes_chart_rendered_volume_source_duplicates() -> None:
@@ -184,13 +146,111 @@ def test_apply_managed_persistent_mount_values_uses_same_store_home() -> None:
 
     assert values["jailRootfs"]["store"]["mountPath"] == "/mnt/jail-store"
     assert values["jailRootfs"]["store"]["rootfsPath"] == "/mnt/jail-store/rootfs"
+    assert values["jailRootfs"]["adoption"] == {
+        "activeSource": "slot",
+        "rollbackSource": "slot",
+    }
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"}
+        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail-store/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail-store/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
     ]
     assert values["volume"]["jail"]["localPath"] == "/mnt/jail-store"
 
 
-def test_apply_managed_first_adoption_adds_customer_shared_paths() -> None:
+def test_active_source_resolver_distinguishes_slot_defaults_from_legacy_values() -> None:
+    assert jail_rootfs_active_source({"jailRootfs": {"strategy": "activePassive"}}) == "slot"
+    assert (
+        jail_rootfs_active_source({"jailRootfs": {"strategy": "activePassive", "adoption": {}}})
+        == "slot"
+    )
+    assert jail_rootfs_active_source({}) == "legacy-rootfs"
+    assert (
+        jail_rootfs_active_source({"jailRootfs": {"adoption": {"activeSource": "legacy-rootfs"}}})
+        == "legacy-rootfs"
+    )
+    with pytest.raises(ValueError, match="must be slot or legacy-rootfs"):
+        jail_rootfs_active_source({"jailRootfs": {"adoption": {"activeSource": "unknown"}}})
+
+
+@pytest.mark.parametrize(
+    "values, message",
+    [
+        ({"jailRootfs": None}, "jailRootfs must be a mapping"),
+        ({"jailRootfs": []}, "jailRootfs must be a mapping"),
+        (
+            {"jailRootfs": {"strategy": "legacy"}},
+            "jailRootfs.strategy must be activePassive when present",
+        ),
+        (
+            {"jailRootfs": {"strategy": False}},
+            "jailRootfs.strategy must be activePassive when present",
+        ),
+        (
+            {"jailRootfs": {"strategy": "activePassive", "adoption": None}},
+            "jailRootfs.adoption must be a mapping",
+        ),
+        (
+            {"jailRootfs": {"strategy": "activePassive", "adoption": []}},
+            "jailRootfs.adoption must be a mapping",
+        ),
+        (
+            {
+                "jailRootfs": {
+                    "strategy": "activePassive",
+                    "adoption": {"activeSource": None},
+                }
+            },
+            "jailRootfs.adoption.activeSource must be a non-empty string",
+        ),
+        (
+            {
+                "jailRootfs": {
+                    "strategy": "activePassive",
+                    "adoption": {"activeSource": False},
+                }
+            },
+            "jailRootfs.adoption.activeSource must be a non-empty string",
+        ),
+        (
+            {
+                "jailRootfs": {
+                    "strategy": "activePassive",
+                    "adoption": {"activeSource": 0},
+                }
+            },
+            "jailRootfs.adoption.activeSource must be a non-empty string",
+        ),
+        (
+            {
+                "jailRootfs": {
+                    "strategy": "activePassive",
+                    "adoption": {"activeSource": ""},
+                }
+            },
+            "jailRootfs.adoption.activeSource must be a non-empty string",
+        ),
+    ],
+)
+def test_active_source_resolver_rejects_malformed_explicit_state(
+    values: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        jail_rootfs_active_source(values)
+
+
+def test_apply_jail_mount_values_rejects_malformed_explicit_rootfs_state() -> None:
+    with pytest.raises(ValueError, match="jailRootfs.strategy must be activePassive"):
+        apply_jail_persistent_mount_values(
+            {"jailRootfs": {"strategy": "legacy"}},
+            target_ref="cxcli-slurm",
+            layout="managed",
+        )
+
+
+def test_apply_managed_first_adoption_submounts_legacy_customer_paths_without_copy() -> None:
     values = apply_jail_persistent_mount_values(
         {
             "jailRootfs": {
@@ -202,50 +262,17 @@ def test_apply_managed_first_adoption_adds_customer_shared_paths() -> None:
         },
         target_ref="cxcli-slurm",
         layout="managed",
-        include_default_shared_mounts=True,
         legacy_active_source=True,
     )
 
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"},
-        {"mountPath": "/data", "localPath": "/mnt/jail-store/shared/data"},
-        {"mountPath": "/scripts", "localPath": "/mnt/jail-store/shared/scripts"},
-        {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
+        {"mountPath": "/home", "localPath": "/mnt/jail-store/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail-store/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail-store/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail-store/models"},
     ]
     assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
     assert values["jailRootfs"]["adoption"]["rollbackSource"] == "legacy-rootfs"
-
-
-def test_parse_explicit_persistent_mount_spec() -> None:
-    mount = parse_jail_persistent_mount_spec("/data=/mnt/jail/shared/data")
-
-    assert mount.mount_path == "/data"
-    assert mount.local_path == "/mnt/jail/shared/data"
-    assert mount.name == "jail-persistent-data"
-
-
-def test_parse_multiple_shared_persistent_mount_specs() -> None:
-    data = parse_jail_persistent_mount_spec("/data=/mnt/jail/shared/data")
-    scripts = parse_jail_persistent_mount_spec("/scripts=/mnt/jail/shared/scripts")
-
-    assert data.local_path == "/mnt/jail/shared/data"
-    assert scripts.local_path == "/mnt/jail/shared/scripts"
-
-
-def test_explicit_home_persistent_mount_replaces_default_home() -> None:
-    values = apply_jail_persistent_mount_values(
-        {},
-        target_ref="external-cluster",
-        persistent_mounts=[parse_jail_persistent_mount_spec("/home=/mnt/jail/customer-home")],
-        layout="external",
-    )
-
-    assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail/customer-home"},
-        {"mountPath": "/data", "localPath": "/mnt/jail/data"},
-        {"mountPath": "/scripts", "localPath": "/mnt/jail/scripts"},
-        {"mountPath": "/models", "localPath": "/mnt/jail/models"},
-    ]
 
 
 def test_existing_external_home_submount_prevents_duplicate_default_home() -> None:
@@ -267,7 +294,6 @@ def test_existing_external_home_submount_prevents_duplicate_default_home() -> No
         {"mountPath": "/scripts", "localPath": "/mnt/jail/scripts"},
         {"mountPath": "/models", "localPath": "/mnt/jail/models"},
     ]
-    assert jail_persistent_mount_status(values).status == "verified"
 
 
 def test_persistent_mount_validation_rejects_bad_paths() -> None:
@@ -303,15 +329,34 @@ def test_persistent_mount_validation_rejects_bad_paths() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "spec",
-    (
-        "/data=/mnt/jail/$(touch-pwned)",
-        "/data=/mnt/jail/data;touch-pwned",
-        "/data=/mnt/jail/data with-space",
-        "/data;touch-pwned=/mnt/jail/data",
-    ),
-)
-def test_parse_persistent_mount_spec_rejects_shell_unsafe_paths(spec: str) -> None:
-    with pytest.raises(ValueError, match="shell-safe path components"):
-        parse_jail_persistent_mount_spec(spec)
+def test_optional_paths_derive_layout_owned_backing_paths() -> None:
+    assert [
+        mount.as_values()
+        for mount in jail_persistent_mounts_from_paths(["/opt/customer-data"], layout="external")
+    ] == [{"mountPath": "/opt/customer-data", "localPath": "/mnt/jail/opt/customer-data"}]
+    assert [
+        mount.as_values()
+        for mount in jail_persistent_mounts_from_paths(["/srv/results"], layout="managed")
+    ] == [
+        {
+            "mountPath": "/srv/results",
+            "localPath": "/mnt/jail-store/shared/srv/results",
+        }
+    ]
+    assert [
+        mount.as_values()
+        for mount in jail_persistent_mounts_from_paths(
+            ["/srv/results"], layout="managed", legacy_active_source=True
+        )
+    ] == [
+        {
+            "mountPath": "/srv/results",
+            "localPath": "/mnt/jail-store/srv/results",
+        }
+    ]
+
+
+@pytest.mark.parametrize("path", ["/usr", "/opt", "/etc", "/proc/data", "/tmp/cache"])
+def test_optional_paths_reject_system_roots_and_runtime_trees(path: str) -> None:
+    with pytest.raises(ValueError):
+        jail_persistent_mounts_from_paths([path], layout="external")

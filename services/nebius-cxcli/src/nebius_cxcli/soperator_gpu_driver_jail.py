@@ -9,7 +9,6 @@ SOPERATOR_GPU_DRIVER_JAIL_VALUE_KEY = "gpuDriverJail"
 SOPERATOR_GPU_DRIVER_JAIL_MOUNT_NAME = "nvidia-driver-root"
 SOPERATOR_GPU_DRIVER_JAIL_MOUNT_PATH = "/run/nvidia/driver"
 SOPERATOR_GPU_DRIVER_JAIL_HOST_PATH = "/"
-SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME = "cxcli-gpu-driver-jail"
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -44,10 +43,7 @@ def soperator_nodeset_is_gpu_worker(nodeset: Mapping[str, Any]) -> bool:
     if bool(gpu.get("enabled", False)):
         return True
     resources = _mapping(_mapping(nodeset.get("slurmd")).get("resources"))
-    return any(
-        _positive_int(resources.get(key)) > 0
-        for key in ("gpu", "nvidia.com/gpu")
-    )
+    return any(_positive_int(resources.get(key)) > 0 for key in ("gpu", "nvidia.com/gpu"))
 
 
 def _canonical_gpu_driver_jail_mount(mount: Mapping[str, Any]) -> bool:
@@ -69,7 +65,7 @@ def normalize_soperator_gpu_driver_jail_mounts(
 ) -> None:
     """Remove canonical raw driver mounts and reject conflicting ones.
 
-    The local chart injects this mount itself for GPU NodeSets. cxcli still
+    The upstream adapter injects this mount for GPU NodeSets. cxcli still
     normalizes adopted values so old/raw mounts do not compete with the
     chart-owned mount while unrelated custom mounts stay intact.
     """
@@ -120,13 +116,15 @@ def ensure_soperator_gpu_driver_jail_values(
     *,
     context: str,
 ) -> None:
-    """Enable and validate the chart-owned GPU driver jail contract for cxcli."""
+    """Enable and validate the adapter-owned GPU driver mount contract for cxcli."""
 
     nodesets = values.get("nodesets")
     if not isinstance(nodesets, Sequence) or isinstance(nodesets, (str, bytes, bytearray)):
         return
     gpu_nodesets = [
-        item for item in nodesets if isinstance(item, MutableMapping) and soperator_nodeset_is_gpu_worker(item)
+        item
+        for item in nodesets
+        if isinstance(item, MutableMapping) and soperator_nodeset_is_gpu_worker(item)
     ]
     if not gpu_nodesets:
         return
@@ -136,7 +134,7 @@ def ensure_soperator_gpu_driver_jail_values(
     if _bool_false(config.get("enabled")):
         raise ValueError(
             f"{context} has GPU worker NodeSets but {SOPERATOR_GPU_DRIVER_JAIL_VALUE_KEY}.enabled=false. "
-            "Nebius-image GPU workers require the chart-owned driver jail mount and init guard."
+            "Nebius-image GPU workers require the adapter-owned read-only driver root mount."
         )
     config["enabled"] = True
     values[SOPERATOR_GPU_DRIVER_JAIL_VALUE_KEY] = config

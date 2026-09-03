@@ -1,9 +1,25 @@
 ---
 name: agent-nebius-auth-setup
-description: Explicitly bootstrap or repair Codex Agent Nebius authentication for one current-session project. Use only when the user invokes this skill directly. It manages the fixed codex-agent-sa account, one exact-permit tenant group, a project-bound credential and profile, optional bounded local-repair leases, and separately requested hook installation.
+description: "Use only when explicitly invoked to bootstrap or repair current-project Codex Agent Nebius auth: account/tenant access, credentials/profile, repair lease, or separately requested auth hooks."
 ---
 
 # Agent Nebius Auth Setup
+
+## Help
+
+For `$agent-nebius-auth-setup --help` or `$agent-nebius-auth-setup -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Set up or repair persistent Codex Agent authentication for one authoritative
 Nebius project. Keep setup, read-only diagnosis, runtime token injection, repair

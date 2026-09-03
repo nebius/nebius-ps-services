@@ -48,18 +48,14 @@
 - Pending steering revisions: none
 - Applied steering revisions: none
 
-## Project Agent Instructions
+## Effective Instructions
 
-- Decision schema: project-agent-instructions.decision.v1
-- Outcome: pending | created | refreshed | existing-sufficient | not-needed | blocked
-- Active instruction path: none
-- Decision SHA-256: none
-- Project instruction SHA-256: none
-- Requirements SHA-256: none
-- Design SHA-256: none
-- Inherited instruction fingerprint: none
-- Contract commit: none
-- Blocker: none
+- Applicable repository instruction files read: none
+- Instruction conflict: none
+- Canonical project specs: missing | pending | current | invalid | migration-required
+
+Canonical spec status is informational in this Markdown projection. The
+machine-readable v2 receipt is bound in coordinator state and assignments.
 
 ## Request Summary
 
@@ -240,7 +236,7 @@ Tasks become done only after verified fast-forward promotion.
 
 ## Coordinator Handoff
 
-- Current action: resume recorded v3 transition
+- Current action: inspect authoritative resume-control-v1 transition
 - Coordinator state path:
 - Active wave:
 - Dispatch batch:
@@ -249,17 +245,30 @@ Tasks become done only after verified fast-forward promotion.
 
 ## Final Alignment
 
-- Completed at: none
 - Promoted commit: none
 - Evidence: none
+
+## Completion Report
+
+- Schema: task-implementer/run-summary-v1
+- Tasks: none
+- Waves: none
+- Temporary resources: none
+- Validation: none
+- Review: none
+- Source observation: unknown_legacy
+- Run-local files: none
+- Next action: none
 
 ## Next Run Prompt
 
 ```text
-Use $task-implementer run <same-prompt-path-or-unique-filename>.
+Use $task-implementer run <same-prompt-ref-or-file>.
 
-Read the run manifest, exact bound snapshot, complete coordinator-owned handoff,
-v2 coordinator/wave state, immutable assignments/results, and wave journal.
+Read the run manifest, exact bound snapshot, coordinator-v7, wave-v4,
+task-plane-v5, resume-control-v1, immutable assignments/results, interop-v4,
+and wave journal. Treat handoff status as a human projection after coordinator
+creation.
 Re-observe the primary checkout and every managed worktree/ref before choosing a
 transition. Resume the active dependency wave idempotently. Keep shared specs
 and documentation coordinator-owned; require each worker to use its assigned

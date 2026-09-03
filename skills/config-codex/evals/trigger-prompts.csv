@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+config-codex-positive-01,true,"Configure a public-safe Codex home with hooks task state and read-only agents."
+config-codex-positive-02,true,"Repair my missing Codex config and validate the local setup."
+config-codex-positive-03,true,"Set up Codex like this repository without copying private paths or secrets."
+config-codex-negative-01,false,"Manage context and subagents for this one complex coding task."
+config-codex-negative-02,false,"Change the application configuration inside this repository."
+config-codex-negative-03,false,"Install one repository skill into a temporary destination."

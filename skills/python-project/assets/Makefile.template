@@ -1,49 +1,38 @@
 .DEFAULT_GOAL := all
 
-VENV ?= .venv
-PYTHON ?= python3
-VENV_PYTHON := $(VENV)/bin/python
-VENV_PIP := $(VENV)/bin/pip
-VENV_STAMP := $(VENV)/.installed
+UV := uv
 
-.PHONY: all env install fmt lint test test-unit test-integration coverage build check clean
+.PHONY: all lock-check sync fmt lint test test-unit test-integration coverage build check clean
 
 all: check build
 
-env: $(VENV_STAMP)
+lock-check:
+	$(UV) lock --check
 
-install: env
+sync: lock-check
+	$(UV) sync --locked
 
-$(VENV_PYTHON):
-	$(PYTHON) -m venv $(VENV)
+fmt: sync
+	$(UV) run --locked ruff format src tests
 
-$(VENV_STAMP): pyproject.toml Makefile | $(VENV_PYTHON)
-	$(VENV_PIP) install --upgrade pip
-	$(VENV_PIP) install -e ".[dev]"
-	touch $(VENV_STAMP)
-
-fmt: $(VENV_STAMP)
-	$(VENV_PYTHON) -m ruff format src tests
-
-lint: $(VENV_STAMP)
-	$(VENV_PYTHON) -m ruff check src tests
+lint: sync
+	$(UV) run --locked ruff check src tests
 
 test: test-unit
 
-test-unit: $(VENV_STAMP)
-	$(VENV_PYTHON) -m pytest -m "not integration" tests/unit
+test-unit: sync
+	$(UV) run --locked pytest -m "not integration" tests/unit
 
-test-integration: $(VENV_STAMP)
-	$(VENV_PYTHON) -m pytest -m integration tests/integration
+test-integration: sync
+	$(UV) run --locked pytest -m integration tests/integration
 
-coverage: $(VENV_STAMP)
-	$(VENV_PYTHON) -m pytest --cov={{package_name}} --cov-report=term-missing tests/unit
+coverage: sync
+	$(UV) run --locked pytest --cov={{package_name}} --cov-report=term-missing tests/unit
 
-build: $(VENV_STAMP)
-	rm -rf build dist
-	$(VENV_PYTHON) -m build --wheel
+build: sync
+	$(UV) run --locked python -m build --wheel
 
 check: lint test-unit
 
 clean:
-	rm -rf $(VENV) build dist .pytest_cache .ruff_cache .coverage coverage.xml
+	rm -rf build dist .pytest_cache .ruff_cache .coverage coverage.xml

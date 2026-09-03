@@ -1,9 +1,23 @@
 ---
 name: sdlc-validate-codes
-description: "Use only as part of the Agentic SDLC workflow; use after implementation or before `sdlc-commit` to run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation, then use `code-review` as a review-only implementation-quality gate before marking the feature validated."
+description: "Use only as part of the Agentic SDLC workflow; after implementation or before sdlc-commit, run build, parse, lint, type, import, dependency, config, and locked-slice checks, then a report-only code-review gate."
 ---
 
 # Validate Codes
+
+## Help
+
+For `$sdlc-validate-codes --help` or `$sdlc-validate-codes -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -121,8 +135,11 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

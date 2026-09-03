@@ -1,9 +1,23 @@
 ---
 name: task-implementer-test
-description: "Use only when the user explicitly asks to verify Task Implementer: run the no-flag lightweight contract and temporary-fixture suite without a real application, or use --create, --create --keep, and --destroy for one replaceable verifier-owned local frontend/API/PostgreSQL stack."
+description: "Use only when the user explicitly asks to verify Task Implementer: run the no-flag contract/fixture suite, or use --create/--keep/--destroy for one replaceable verifier-owned local frontend/API/PostgreSQL stack."
 ---
 
 # Task Implementer Test
+
+## Help
+
+For `$task-implementer-test --help` or `$task-implementer-test -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -24,8 +38,8 @@ checks separate from the opt-in disposable application lifecycle.
 - Do not invoke this skill implicitly for ordinary implementation work.
 - Do not use it on a user, production, customer, remote-backed, or otherwise
   non-disposable project.
-- Do not use it instead of `$task-implementer workspace init` or
-  `$task-implementer run` for real brownfield work.
+- Do not use it instead of `$task-implementer workspace init`, `workspace
+  reuse`, `run`, `integrate`, or `workspace remove` for real brownfield work.
 - Do not add `--resume`, aliases, or compatibility modes.
 
 ## Inputs
@@ -91,11 +105,14 @@ evidence, and exact owned runtime resources do not.
    python3 task-implementer-test/scripts/verify_task_implementer.py
    ```
 
-   It validates explicit-only metadata, the exact two-command public surface,
+   It validates explicit-only metadata, the exact five-action public surface,
    source-installed parity, and all current Task Implementer contract,
-   workspace, specification, scheduler, temporary-Git wave, and outer-worktree
+   workspace, specification, scheduler, temporary-Git wave, and persistent-lane
    suites, plus the verifier's own helper/lifecycle/semantic suites. It must not
    call Docker, create workers, or touch a real project.
+   The bounded default is 900 seconds per suite so the complete disposable
+   linked-worktree crash matrix is not cut off by the worker's shorter
+   per-assignment runtime budget.
    Report the deterministic profile independently; absence of live evidence is
    `NOT_RUN`, not synthetic live PASS.
 3. For `--destroy`, invoke the lifecycle helper's `destroy` action. A missing
@@ -105,7 +122,8 @@ evidence, and exact owned runtime resources do not.
    FAIL blocks mutation and preserves a retained instance.
 5. Invoke lifecycle `prepare`. While holding its private lock, it validates
    ownership, destroys and archives the previous exact active generation, and
-   only then creates a fresh seeded remote-free brownfield Git fixture. If
+   only then creates a fresh seeded local-only brownfield Git fixture with an
+   owned bare `origin`, configured `origin/HEAD`, and non-default source branch. If
    cleanup or ownership is ambiguous, stop; never create a second instance.
 6. Retain the immutable generation ID returned by `prepare`. Pass it to every
    later lifecycle mutation so a superseded invocation cannot modify its
@@ -118,6 +136,7 @@ evidence, and exact owned runtime resources do not.
    ```text
    $task-implementer workspace init <project-folder>
    $task-implementer run <managed-prompt-path>
+   $task-implementer integrate <project-folder>
    ```
 
    Run it with the lifecycle's isolated Codex home. Do not bypass the public
@@ -147,8 +166,10 @@ evidence, and exact owned runtime resources do not.
    300-second or dependent `integration` 420-second read-only budget, or on
    total-budget expiry; do not recover or
    retry this disposable verification run. Once the
-   workspace is promoted and cleaned, continue directly to runtime evidence and
-   report generation.
+   run generation is finalized and cleaned, invoke public `integrate` and bind
+   its exact validated candidate, then invoke public `workspace remove` for the
+   now-idle lane. Only after both source integration and lane removal succeed
+   continue to runtime evidence and report generation.
    At the assignment's 240-second `standard` or 360-second `integration`
    warning, demand an immediate edit or blocker.
    Reject autonomous/background heartbeat loops as no-progress behavior.

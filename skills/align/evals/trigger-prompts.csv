@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+align-positive-01,true,"Run a project-wide alignment pass after these code and documentation changes."
+align-positive-02,true,"Reconcile the CLI help tests CI configuration and README for this feature."
+align-positive-03,true,"Use align to validate the changed project surfaces before I finish."
+align-negative-01,false,"Align this single Codex skill folder with the canonical skill structure."
+align-negative-02,false,"Review this patch for bugs without changing project documentation."
+align-negative-03,false,"Lint the Markdown and Python files in this repository."

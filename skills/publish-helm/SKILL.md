@@ -1,9 +1,25 @@
 ---
 name: publish-helm
-description: "Use to publish Helm charts end to end from the current project: collect chart and OCI inputs, optionally set up changelog/helper/workflow assets, prep chart release changes, create and merge a PR, tag from the default branch, wait for the chart publish workflow, verify the pushed OCI chart, and report the result. Also supports explicit setup-only guidance."
+description: "Use only when explicitly asked to publish Helm charts end to end: collect chart/OCI inputs, set up optional assets, prepare/merge a PR, tag, wait, verify the OCI chart, and report. Also supports setup-only guidance."
 ---
 
 # Publish Helm
+
+## Help
+
+For `$publish-helm --help` or `$publish-helm -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Publish a Helm chart release from the current project folder. This is a
 doer-first skill: setup/guidance is still supported, but release execution is

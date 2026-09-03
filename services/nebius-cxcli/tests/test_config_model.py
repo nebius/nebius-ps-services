@@ -15,7 +15,11 @@ from nebius_cxcli.component_sources import (
     reset_component_sources_cache,
     set_component_sources_file_override,
 )
-from nebius_cxcli.components import component_entries, reset_component_entry_cache
+from nebius_cxcli.components import (
+    component_entries,
+    reset_component_entry_cache,
+    soperator_install_entry,
+)
 from nebius_cxcli.config_loader import load_config, normalize_runtime_config_payload
 from nebius_cxcli.config_model import is_dynamic_payload, to_dynamic_payload, to_runtime_payload
 from nebius_cxcli.config_template import starter_config_yaml
@@ -40,6 +44,7 @@ def _project_folder_name(project_id: str = "project-456") -> str:
 @pytest.fixture(autouse=True)
 def _reset_component_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
+    monkeypatch.setattr(cli_module, "_ensure_project_auth_identity", lambda **_kwargs: None)
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
         lambda **kwargs: (kwargs["tenant_id"], kwargs["project_id"]),
@@ -293,7 +298,6 @@ def test_normalize_runtime_config_prunes_cpu_soperator_gpu_node_group_defaults()
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-cpu-v1",
                     "values": {},
                 }
@@ -333,9 +337,11 @@ def test_starter_payload_names_target_bound_app_instances() -> None:
     assert "target_ref" not in charts["n8n"]
 
 
-def test_starter_payload_local_profile_uses_local_chart_and_portable_fallback() -> None:
+def test_starter_payload_uses_dedicated_upstream_soperator_entry() -> None:
     infra_entries = component_entries("infra", source_profile=SourceProfile.LOCAL)
-    app_entries = component_entries("apps", source_profile=SourceProfile.LOCAL)
+    generic_app_entries = component_entries("apps", source_profile=SourceProfile.LOCAL)
+    assert "soperator" not in {entry.id for entry in generic_app_entries}
+    app_entries = (*generic_app_entries, soperator_install_entry("4.1.7"))
     app_entry_by_id = {entry.id: entry for entry in app_entries}
     payload = yaml.safe_load(
         starter_config_yaml(
@@ -358,8 +364,8 @@ def test_starter_payload_local_profile_uses_local_chart_and_portable_fallback() 
     cert_manager = charts["cert-manager"]
 
     assert soperator["enabled"] is True
-    assert soperator["repo"] == ""
-    assert soperator["version"] == app_entry_by_id["soperator"].version
+    assert soperator["repo"] == app_entry_by_id["soperator"].source
+    assert soperator["version"] == "4.1.7"
     assert cert_manager["enabled"] is True
     assert cert_manager["repo"] == app_entry_by_id["cert-manager"].source
     assert cert_manager["version"] == app_entry_by_id["cert-manager"].version

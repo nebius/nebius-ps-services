@@ -1,0 +1,12 @@
+{
+  "critical_combined_percent": {
+    "src/nebius_cxcli/credential_compensation.py": 76.1,
+    "src/nebius_cxcli/project_bundle_transaction.py": 84.7,
+    "src/nebius_cxcli/soperator_infrastructure_identity.py": 62.9,
+    "src/nebius_cxcli/soperator_release_ownership.py": 65.2,
+    "src/nebius_cxcli/soperator_upgrade_supervisor.py": 92.3
+  },
+  "global_combined_percent": 70.4,
+  "schema": "nebius-cxcli.coverage-ratchets.v1",
+  "target_critical_combined_percent": 90.0
+}

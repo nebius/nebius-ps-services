@@ -1,12 +1,13 @@
 # Create Design
 
-`sdlc-create-design` is an Agentic SDLC skill. It is authored in this repository and is
+`sdlc-create-design` is an Agentic SDLC authoring adapter to
+`maintain-project-specs`. It is authored in this repository and is
 installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
 Convert requirements and gathered context into evidence-backed architecture
-and feature designs in `docs/design.md`. The skill maps stable `REQ-*` blocks
+and feature designs in the canonical managed region of `docs/design.md`. The adapter maps stable `REQ-*` blocks
 to stable `FEAT-*` blocks, records selected and rejected design options, and
 defines vertical end-to-end feature flow, layer boundaries, implementation,
 validation, test, evaluation, rollout, and rollback boundaries before planning
@@ -41,6 +42,9 @@ becoming redesign.
 - Do not implement code.
 - Do not modify tests.
 - Do not rewrite requirements.
+- Publish through the owner-managed pair transaction; the exact requirements
+  bytes are a compare-and-set input even though this adapter does not change
+  them.
 - Do not use for non-SDLC design docs, ADRs, or `/plan` handoffs.
 - Do not delete feature blocks without explicit requirement removal.
 - Do not accept a spec gap, probable diagnosis, large private implementation,
@@ -61,6 +65,8 @@ becoming redesign.
 - Every ready feature has selected and rejected options, implementation
   boundaries, vertical flow or layer map when applicable, validation, test,
   evaluation, rollout, rollback, and done criteria.
+- Ready pre-implementation features use delivery `not-started`; later root
+  reconciliation records separate implementation and verification evidence.
 - Open design questions are explicit.
 - An admitted design change preserves FEAT IDs and records a new fingerprint
   for immutable plan vN+1; reaffirmation records why and returns to

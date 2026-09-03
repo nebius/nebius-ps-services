@@ -1,0 +1,1393 @@
+# Dedicated install-time policy for the official nebius/soperator release.
+# Source and version authority live in soperator_release.py, never in this file.
+schema: nebius-cxcli.soperator-wizard.v1
+id: soperator-wizard
+release:
+  namespace: flux-system
+  name: soperator-fluxcd
+  timeout: 90m
+wizard:
+  namespace:
+    prompt: false
+  release-name:
+    prompt: false
+  values:
+    prompt: false
+  profile:
+    default: nebius-gpu-v1
+    write_default_to_config: true
+    options:
+      from: soperator_nodesets_profiles
+  values.partitionProfile:
+    default: shape-default
+    write_default_to_config: true
+    options:
+      from: soperator_partition_profiles
+      args:
+        default: shape-default
+  values.topologyProfile:
+    default: disabled
+    write_default_to_config: true
+    options:
+      from: soperator_topology_profiles
+      args:
+        default: disabled
+  values.soperator-notifier.slack.webhookSource:
+    default: deploy-time
+    write_default_to_config: true
+    sources:
+      - source: static
+        values:
+          - value: deploy-time
+            label: Provide webhook URL at deploy time
+          - value: mysterybox
+            label: "Use existing Nebius SecretStash Secret ID (service identifier: mysterybox)"
+  values.soperator-notifier.slack.mysterybox.secretId:
+    default: ""
+    type_hint: string
+  values.soperator-notifier.slack.existingSecret:
+    default: soperator-notifier-slack-webhook
+    write_default_to_config: true
+    type_hint: string
+  values.soperator-notifier.slack.existingSecretKey:
+    default: url
+    write_default_to_config: true
+    type_hint: string
+  values.soperator-backup-config.secret.name:
+    default: jail-backup
+    write_default_to_config: true
+    type_hint: string
+  values.soperator-backup-config.secret.keys.accessKeyID:
+    default: aws-access-key-id
+    write_default_to_config: true
+    type_hint: string
+  values.soperator-backup-config.secret.keys.secretAccessKey:
+    default: aws-access-secret-key
+    write_default_to_config: true
+    type_hint: string
+  values.soperator-backup-config.secret.keys.backupPassword:
+    default: backup-password
+    write_default_to_config: true
+    type_hint: string
+  values.soperator-backup-config.backup.schedule:
+    default: "@daily-random"
+    write_default_to_config: true
+    type_hint: string
+  values.soperator-backup-config.prune.schedule:
+    default: "@daily-random"
+    write_default_to_config: true
+    type_hint: string
+  placements.system:
+    write_default_to_config: true
+    type_hint: list(string)
+    default_from:
+      from: soperator_node_groups
+      args:
+        role: system
+    options:
+      from: soperator_node_groups
+      args:
+        role: system
+  placements.controller:
+    write_default_to_config: true
+    type_hint: list(string)
+    default_from:
+      from: soperator_node_groups
+      args:
+        role: controller
+    options:
+      from: soperator_node_groups
+      args:
+        role: controller
+  placements.login:
+    write_default_to_config: true
+    type_hint: list(string)
+    default_from:
+      from: soperator_node_groups
+      args:
+        role: login
+    options:
+      from: soperator_node_groups
+      args:
+        role: login
+  placements.accounting:
+    write_default_to_config: true
+    type_hint: list(string)
+    default_from:
+      from: soperator_node_groups
+      args:
+        role: accounting
+    options:
+      from: soperator_node_groups
+      args:
+        role: accounting
+  placements.worker:
+    write_default_to_config: true
+    type_hint: list(string)
+    default_from:
+      from: soperator_node_groups
+      args:
+        role: worker
+    options:
+      from: soperator_node_groups
+      args:
+        role: worker
+  values.soperator-activechecks.enabled: &disabled-component
+    default: false
+    write_default_to_config: true
+    type_hint: bool
+  values.soperator-activechecks.waitForChecks.enabled: *disabled-component
+  values.soperator-checks.enabled: *disabled-component
+  values.soperator-dcgm-exporter.enabled: *disabled-component
+  values.soperator-notifier.enabled: *disabled-component
+  values.soperator-backup-config.enabled: *disabled-component
+  values.sssd.enabled: *disabled-component
+defaults:
+  values.soperator-checks.enabled: false
+  values.soperator-checks.fullnameOverride: soperator-checks
+  values.soperator-checks.serviceMonitor.enabled: false
+  values.soperator-activechecks.enabled: false
+  values.soperator-activechecks.fullnameOverride: soperator-activechecks
+  values.soperator-activechecks.waitForChecks.enabled: false
+  values.soperator-activechecks.checks.all-reduce-perf-nccl-in-docker.runAfterCreation: false
+  values.soperator-activechecks.checks.all-reduce-perf-nccl-with-ib.runAfterCreation: false
+  values.soperator-activechecks.checks.all-reduce-perf-nccl-without-ib.runAfterCreation: false
+  values.soperator-activechecks.checks.cuda-samples.runAfterCreation: false
+  values.soperator-activechecks.checks.dcgmi-diag-r2.runAfterCreation: false
+  values.soperator-activechecks.checks.dcgmi-diag-r3.runAfterCreation: false
+  values.soperator-activechecks.checks.gpu-fryer.runAfterCreation: false
+  values.soperator-activechecks.checks.ib-gpu-perf.runAfterCreation: false
+  values.soperator-activechecks.checks.manage-jail-state.runAfterCreation: false
+  values.soperator-activechecks.checks.mem-perf.runAfterCreation: false
+  values.soperator-activechecks.checks.prepull-container-image.runAfterCreation: false
+  values.soperator-notifier.enabled: false
+  values.soperator-notifier.fullnameOverride: soperator-notifier
+  values.soperator-notifier.slack.mode: existing-webhook
+  values.soperator-notifier.slack.webhookSource: deploy-time
+  values.soperator-notifier.slack.existingSecret: soperator-notifier-slack-webhook
+  values.soperator-notifier.slack.existingSecretKey: url
+  values.soperator-notifier.slack.mysterybox.property: url
+  values.soperator-backup-config.enabled: false
+  values.soperator-backup-config.fullnameOverride: soperator-jail-backup
+  values.soperator-backup-config.secret.name: jail-backup
+  values.soperator-backup-config.secret.keys.accessKeyID: aws-access-key-id
+  values.soperator-backup-config.secret.keys.secretAccessKey: aws-access-secret-key
+  values.soperator-backup-config.secret.keys.backupPassword: backup-password
+  values.soperator-dcgm-exporter.enabled: false
+  values.soperator-dcgm-exporter.fullnameOverride: soperator-dcgm-exporter
+  values.soperator-dcgm-exporter.serviceMonitor.enabled: false
+cli:
+  mk8s_gpu_policy:
+    install_after:
+    - cert-manager
+    - nvidia-network-operator
+    - nvidia-gpu-operator
+  soperator_nodesets_profile:
+    default: nebius-gpu-v1
+    profiles:
+      nebius-cpu-v1:
+        wizard:
+          label: 'CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, accounting DB enabled'
+        placements:
+          system:
+            kind: platform-support
+            node_group: system
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            soperator_node_filter: system
+            soperator_value_bindings:
+              populateJail.k8sNodeFilterName: system
+            soperator_affinity_bindings:
+            - controllerManager.affinity
+            - soperator-checks.checks.affinity
+            - mariadb-operator.affinity
+            - mariadb-operator.webhook.affinity
+          controller:
+            kind: slurm-service
+            node_group: controller
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            - controller-spool
+            soperator_node_filter: controller
+            soperator_value_bindings:
+              slurmNodes.controller.k8sNodeFilterName: controller
+              slurmNodes.rest.k8sNodeFilterName: controller
+              sConfigController.node.k8sNodeFilterName: controller
+          login:
+            kind: slurm-service
+            node_group: login
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            soperator_node_filter: login
+            soperator_value_bindings:
+              slurmNodes.login.k8sNodeFilterName: login
+          accounting:
+            kind: slurm-service
+            node_group: accounting
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            - accounting
+            soperator_node_filter: accounting
+            soperator_value_bindings:
+              slurmNodes.accounting.k8sNodeFilterName: accounting
+          worker:
+            kind: slurm-worker-nodeset
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            nodeset_templates:
+            - worker-cpu
+        mk8s:
+          inputs:
+            node_group_defaults:
+              cpu:
+                platform: cpu-d3
+                preset: 32vcpu-128gb
+          node_groups:
+            system:
+              placement_name: system
+              workload: system
+              node_count: 3
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - controller-spool
+              node_labels:
+                nebius.ai/soperator-bridge-domain: system
+            controller:
+              placement_name: controller
+              workload: controller
+              node_count: 2
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - controller-spool
+              node_labels:
+                nebius.ai/soperator-bridge-domain: controller
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: controller
+                effect: NO_SCHEDULE
+            login:
+              placement_name: login
+              workload: login
+              node_count: 2
+              node_count_input: soperator.login_node_count
+              autoscaling_input: soperator.login_autoscaling
+              gpu: false
+              jail: true
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: login
+                effect: NO_SCHEDULE
+            accounting:
+              placement_name: accounting
+              workload: accounting
+              node_count: 2
+              node_count_input: soperator.accounting_node_count
+              autoscaling_input: soperator.accounting_autoscaling
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - accounting
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: accounting
+                effect: NO_SCHEDULE
+          worker_nodesets:
+          - name: worker-cpu
+            nodeset_name: worker-cpu
+            node_group_prefix: worker-cpu
+            workload: worker
+            gpu: false
+            jail: true
+            total_nodes_input: soperator.worker_cpu_total_nodes
+            nodes_per_group_input: soperator.worker_cpu_nodes_per_group
+            default_total_nodes: 1
+            default_nodes_per_group: 100
+            max_nodes_per_group: 100
+        sfs:
+          filesystems: &id001
+            jail:
+              name: '{target}-jail'
+              size_gib: 2048
+              block_size_kib: 4
+              mount_tag: '{target}-jail'
+              forbid_deletion: false
+            controller-spool:
+              name: '{target}-controller-spool'
+              size_gib: 128
+              block_size_kib: 4
+              mount_tag: '{target}-controller-spool'
+              forbid_deletion: false
+            accounting:
+              name: '{target}-accounting'
+              size_gib: 128
+              block_size_kib: 4
+              mount_tag: '{target}-accounting'
+              forbid_deletion: false
+        chart:
+          topology_profiles:
+            disabled: &id002
+              wizard:
+                label: 'Disabled: generic/existing cluster; do not require Soperator tier-* node labels'
+              values:
+                slurmConfig:
+                  topologyPlugin: ''
+            nebius-tiered-tree-v1: &id003
+              wizard:
+                label: 'Nebius tiered tree: fresh production topology/tree with prepared topology.nebius.com
+                  tier labels'
+              values:
+                slurmConfig:
+                  topologyPlugin: topology/tree
+                  topologyParam: SwitchAsNodeRank
+                soperator-activechecks:
+                  checks:
+                    wait-for-topology:
+                      runAfterCreation: true
+                controllerManager:
+                  manager:
+                    env:
+                      topologyLabelPrefix: topology.nebius.com
+          onboarding_values: &id004
+            kruise:
+              manager:
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+            sConfigController:
+              container:
+                resources:
+                  cpu: 100m
+                  memory: 128Mi
+                  ephemeralStorage: 1Gi
+            slurmNodes:
+              accounting:
+                slurmdbd:
+                  resources:
+                    cpu: 250m
+                    memory: 512Mi
+                    ephemeralStorage: 2Gi
+                mariadbOperator:
+                  metrics:
+                    enabled: false
+                  resources:
+                    cpu: 250m
+                    memory: 1Gi
+                    ephemeralStorage: 2Gi
+                munge:
+                  resources:
+                    cpu: 100m
+                    memory: 128Mi
+                    ephemeralStorage: 1Gi
+              controller:
+                slurmctld:
+                  resources:
+                    cpu: 250m
+                    memory: 512Mi
+                    ephemeralStorage: 2Gi
+                munge:
+                  resources:
+                    cpu: 100m
+                    memory: 128Mi
+                    ephemeralStorage: 1Gi
+              login:
+                sshd:
+                  resources:
+                    cpu: 250m
+                    memory: 512Mi
+                    ephemeralStorage: 2Gi
+                munge:
+                  resources:
+                    cpu: 100m
+                    memory: 128Mi
+                    ephemeralStorage: 1Gi
+          activechecks:
+            srunReadyPartition: cpu
+          values:
+            mariadb-operator:
+              installOperator: true
+            clusterType: cpu
+            customSlurmConfig: PluginDir=/usr/lib/x86_64-linux-gnu/slurm
+            soperator-activechecks:
+              checks:
+                all-reduce-perf-nccl-in-docker:
+                  enabled: false
+                all-reduce-perf-nccl-with-ib:
+                  enabled: false
+                all-reduce-perf-nccl-without-ib:
+                  enabled: false
+                cuda-samples:
+                  enabled: false
+                dcgmi-diag-r2:
+                  enabled: false
+                dcgmi-diag-r3:
+                  enabled: false
+                gpu-fryer:
+                  enabled: false
+                ib-gpu-perf:
+                  enabled: false
+                ensure-healthy-nodes:
+                  enabled: false
+                extensive-check:
+                  enabled: false
+                mem-perf:
+                  enabled: false
+                prepull-container-image:
+                  enabled: false
+                wait-for-topology:
+                  runAfterCreation: false
+            partitionConfiguration:
+              configType: structured
+              partitions:
+              - name: cpu
+                nodeSetRefs:
+                - worker-cpu
+                policy:
+                  default: true
+                  state: UP
+                  maxTime: INFINITE
+                  priorityTier: 5
+            nodesets:
+            - name: worker-cpu
+              replicas: 2
+              maxUnavailable: 1
+              enableHostUserNamespace: true
+              gpu:
+                enabled: false
+              nodeConfig:
+                features:
+                - cpu
+                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+              slurmd:
+                resources:
+                  cpu: '4'
+                  memory: 16Gi
+                  ephemeralStorage: 10Gi
+                volumes:
+                  spool:
+                    emptyDir: {}
+                  jail:
+                    persistentVolumeClaim:
+                      claimName: jail-rootfs-slot-a-pvc
+                  jailSubMounts: []
+                  sharedMemorySize: 8Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              munge:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
+                  ephemeralStorage: 1Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              sssd:
+                enabled: false
+              priorityClass: soperator-worker-high-priority
+              nodeSelector:
+                slurm.nebius.ai/nodeset-name: worker-cpu
+              workerAnnotations: {}
+              customInitContainers: []
+            populateJail:
+              k8sNodeFilterName: system
+            slurmNodes:
+              accounting:
+                enabled: true
+                k8sNodeFilterName: accounting
+                mariadbOperator:
+                  enabled: true
+                  metrics:
+                    enabled: false
+                  storage:
+                    size: 128Gi
+                    storageClassName: compute-csi-default-sc
+                    volumeClaimTemplate:
+                      accessModes:
+                      - ReadWriteOnce
+                      resources:
+                        requests:
+                          storage: 128Gi
+                      storageClassName: compute-csi-default-sc
+                slurmConfig:
+                  accountingStorageTRES: CPU,Mem,Node,VMem
+            volume:
+              accounting:
+                enabled: true
+          partition_profiles:
+            shape-default:
+              wizard:
+                label: 'Baseline queues: default CPU worker queue; accounting enabled; no QoS/preemption'
+            with-debug-long:
+              wizard:
+                label: Add debug/long queues on the same CPU workers; accounting enabled; no QoS objects
+              values:
+                partitionConfiguration:
+                  configType: structured
+                  partitions:
+                  - name: cpu
+                    nodeSetRefs:
+                    - worker-cpu
+                    policy:
+                      default: true
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 5
+                  - name: debug
+                    nodeSetRefs:
+                    - worker-cpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 00:30:00
+                      priorityTier: 100
+                  - name: long
+                    nodeSetRefs:
+                    - worker-cpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 7-00:00:00
+                      priorityTier: 1
+      nebius-mixed-v1:
+        wizard:
+          label: 'Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu partitions, accounting
+            DB enabled'
+        placements:
+          system:
+            kind: platform-support
+            node_group: system
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            soperator_node_filter: system
+            soperator_value_bindings:
+              populateJail.k8sNodeFilterName: system
+            soperator_affinity_bindings:
+            - controllerManager.affinity
+            - soperator-checks.checks.affinity
+            - mariadb-operator.affinity
+            - mariadb-operator.webhook.affinity
+          controller:
+            kind: slurm-service
+            node_group: controller
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            - controller-spool
+            soperator_node_filter: controller
+            soperator_value_bindings:
+              slurmNodes.controller.k8sNodeFilterName: controller
+              slurmNodes.rest.k8sNodeFilterName: controller
+              sConfigController.node.k8sNodeFilterName: controller
+          login:
+            kind: slurm-service
+            node_group: login
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            soperator_node_filter: login
+            soperator_value_bindings:
+              slurmNodes.login.k8sNodeFilterName: login
+          accounting:
+            kind: slurm-service
+            node_group: accounting
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            - accounting
+            soperator_node_filter: accounting
+            soperator_value_bindings:
+              slurmNodes.accounting.k8sNodeFilterName: accounting
+          worker:
+            kind: slurm-worker-nodeset
+            default_node_group_kind: gpu
+            filesystem_keys:
+            - jail
+            nodeset_templates:
+            - worker-cpu
+            - worker-gpu
+        mk8s:
+          inputs:
+            node_group_defaults:
+              cpu:
+                platform: cpu-d3
+                preset: 32vcpu-128gb
+              gpu:
+                platform: gpu-h100-sxm
+                preset: 8gpu-128vcpu-1600gb
+                os: ubuntu24.04
+                boot_disk:
+                  type: NETWORK_SSD
+                gpu_stack_source: nebius_image
+                gpu_stack_preset: cuda13.0
+          gpu_clusters:
+            workers: {}
+          gpu_cluster_key: workers
+          node_groups:
+            system:
+              placement_name: system
+              workload: system
+              node_count: 3
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - controller-spool
+              node_labels:
+                nebius.ai/soperator-bridge-domain: system
+            controller:
+              placement_name: controller
+              workload: controller
+              node_count: 2
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - controller-spool
+              node_labels:
+                nebius.ai/soperator-bridge-domain: controller
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: controller
+                effect: NO_SCHEDULE
+            login:
+              placement_name: login
+              workload: login
+              node_count: 2
+              node_count_input: soperator.login_node_count
+              autoscaling_input: soperator.login_autoscaling
+              gpu: false
+              jail: true
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: login
+                effect: NO_SCHEDULE
+            accounting:
+              placement_name: accounting
+              workload: accounting
+              node_count: 2
+              node_count_input: soperator.accounting_node_count
+              autoscaling_input: soperator.accounting_autoscaling
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - accounting
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: accounting
+                effect: NO_SCHEDULE
+          worker_nodesets:
+          - name: worker-cpu
+            nodeset_name: worker-cpu
+            node_group_prefix: worker-cpu
+            workload: worker
+            gpu: false
+            jail: true
+            total_nodes_input: soperator.worker_cpu_total_nodes
+            nodes_per_group_input: soperator.worker_cpu_nodes_per_group
+            default_total_nodes: 1
+            default_nodes_per_group: 100
+            max_nodes_per_group: 100
+          - name: worker-gpu
+            nodeset_name: worker-gpu
+            node_group_prefix: worker-gpu
+            workload: worker
+            gpu: true
+            jail: true
+            total_nodes_input: soperator.worker_gpu_total_nodes
+            nodes_per_group_input: soperator.worker_gpu_nodes_per_group
+            default_total_nodes: 1
+            default_nodes_per_group: 100
+            max_nodes_per_group: 100
+            node_group:
+              gpu_cluster_key: workers
+              reservation:
+                policy: AUTO
+              taints:
+              - key: nvidia.com/gpu
+                value: 'true'
+                effect: NO_SCHEDULE
+        sfs:
+          filesystems: *id001
+        chart:
+          topology_profiles:
+            disabled: *id002
+            nebius-tiered-tree-v1: *id003
+            nebius-nvl-rack-v1: &id005
+              wizard:
+                label: 'Nebius NVL rack: rack-scoped topology/block for GB300/NVL clusters; reads topology.nvidia.com
+                  rack labels'
+              values:
+                slurmConfig:
+                  topologyPlugin: topology/block
+                  topologyParam: SwitchAsNodeRank
+                soperator-activechecks:
+                  checks:
+                    wait-for-topology:
+                      runAfterCreation: true
+                controllerManager:
+                  manager:
+                    env:
+                      topologyLabelPrefix: topology.nvidia.com
+          activechecks:
+            srunReadyPartition: hidden
+          onboarding_values: *id004
+          values:
+            mariadb-operator:
+              installOperator: true
+            clusterType: gpu
+            customSlurmConfig: PluginDir=/usr/lib/x86_64-linux-gnu/slurm
+            soperator-activechecks:
+              checks:
+                ensure-healthy-nodes:
+                  runAfterCreation: false
+                wait-for-topology:
+                  runAfterCreation: false
+            partitionConfiguration:
+              configType: structured
+              partitions:
+              - name: cpu
+                nodeSetRefs:
+                - worker-cpu
+                policy:
+                  default: true
+                  state: UP
+                  maxTime: INFINITE
+                  priorityTier: 5
+              - name: gpu
+                nodeSetRefs:
+                - worker-gpu
+                policy:
+                  default: false
+                  state: UP
+                  maxTime: INFINITE
+                  priorityTier: 10
+            nodesets:
+            - name: worker-cpu
+              replicas: 1
+              maxUnavailable: 1
+              enableHostUserNamespace: true
+              gpu:
+                enabled: false
+              nodeConfig:
+                features:
+                - cpu
+                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+              slurmd:
+                resources:
+                  cpu: '4'
+                  memory: 16Gi
+                  ephemeralStorage: 10Gi
+                volumes:
+                  spool:
+                    emptyDir: {}
+                  jail:
+                    persistentVolumeClaim:
+                      claimName: jail-rootfs-slot-a-pvc
+                  jailSubMounts: []
+                  sharedMemorySize: 8Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              munge:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
+                  ephemeralStorage: 1Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              sssd:
+                enabled: false
+              priorityClass: soperator-worker-high-priority
+              nodeSelector:
+                slurm.nebius.ai/nodeset-name: worker-cpu
+              workerAnnotations: {}
+              customInitContainers: []
+            - name: worker-gpu
+              replicas: 2
+              maxUnavailable: 1
+              enableHostUserNamespace: true
+              gpu:
+                enabled: true
+                nvidia:
+                  gdrCopyEnabled: true
+              nodeConfig:
+                features:
+                - gpu
+                - cuda
+                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
+                gresConfig:
+                - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
+              slurmd:
+                customEnv:
+                - name: NVIDIA_DRIVER_CAPABILITIES
+                  value: compute,graphics,utility,video
+                resources:
+                  cpu: '32'
+                  memory: 16Gi
+                  ephemeralStorage: 10Gi
+                  gpu: 8
+                volumes:
+                  spool:
+                    emptyDir: {}
+                  jail:
+                    persistentVolumeClaim:
+                      claimName: jail-rootfs-slot-a-pvc
+                  jailSubMounts: []
+                  sharedMemorySize: 8Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              munge:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
+                  ephemeralStorage: 1Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              sssd:
+                enabled: false
+              priorityClass: soperator-worker-high-priority
+              nodeSelector:
+                slurm.nebius.ai/nodeset-name: worker-gpu
+              tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+              workerAnnotations: {}
+              customInitContainers: []
+            populateJail:
+              k8sNodeFilterName: system
+            slurmNodes:
+              accounting:
+                enabled: true
+                k8sNodeFilterName: accounting
+                mariadbOperator:
+                  enabled: true
+                  metrics:
+                    enabled: false
+                  storage:
+                    size: 128Gi
+                    storageClassName: compute-csi-default-sc
+                    volumeClaimTemplate:
+                      accessModes:
+                      - ReadWriteOnce
+                      resources:
+                        requests:
+                          storage: 128Gi
+                      storageClassName: compute-csi-default-sc
+            volume:
+              accounting:
+                enabled: true
+          partition_profiles:
+            shape-default:
+              wizard:
+                label: 'Baseline queues: cpu/gpu shape partitions; accounting enabled; no QoS/preemption'
+            with-debug-long:
+              wizard:
+                label: Add debug/long queues across CPU and GPU workers; accounting enabled; no QoS objects
+              values:
+                partitionConfiguration:
+                  configType: structured
+                  partitions:
+                  - name: cpu
+                    nodeSetRefs:
+                    - worker-cpu
+                    policy:
+                      default: true
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 5
+                  - name: gpu
+                    nodeSetRefs:
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 10
+                  - name: debug
+                    nodeSetRefs:
+                    - worker-cpu
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 00:30:00
+                      priorityTier: 100
+                  - name: long
+                    nodeSetRefs:
+                    - worker-cpu
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 7-00:00:00
+                      priorityTier: 1
+            with-h100-infiniband-debug-long:
+              wizard:
+                label: H100/InfiniBand feature partitions plus debug and long across mixed workers
+              values:
+                partitionConfiguration:
+                  configType: structured
+                  partitions:
+                  - name: cpu
+                    nodeSetRefs:
+                    - worker-cpu
+                    policy:
+                      default: true
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 5
+                  - name: gpu
+                    nodeSetRefs:
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 10
+                  - name: h100
+                    nodeSetRefs:
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 20
+                  - name: infiniband
+                    nodeSetRefs:
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 15
+                  - name: debug
+                    nodeSetRefs:
+                    - worker-cpu
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 00:30:00
+                      priorityTier: 100
+                  - name: long
+                    nodeSetRefs:
+                    - worker-cpu
+                    - worker-gpu
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 7-00:00:00
+                      priorityTier: 1
+                nodesets:
+                - name: worker-cpu
+                  replicas: 2
+                  maxUnavailable: 1
+                  enableHostUserNamespace: true
+                  gpu:
+                    enabled: false
+                  nodeConfig:
+                    features:
+                    - cpu
+                    static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                  slurmd:
+                    resources:
+                      cpu: '4'
+                      memory: 16Gi
+                      ephemeralStorage: 10Gi
+                    volumes:
+                      spool:
+                        emptyDir: {}
+                      jail:
+                        persistentVolumeClaim:
+                          claimName: jail-rootfs-slot-a-pvc
+                      jailSubMounts: []
+                      sharedMemorySize: 8Gi
+                    security:
+                      appArmorProfile: unconfined
+                      limitsConfig: ''
+                      procMount: Default
+                  munge:
+                    resources:
+                      cpu: 200m
+                      memory: 512Mi
+                      ephemeralStorage: 1Gi
+                    security:
+                      appArmorProfile: unconfined
+                      limitsConfig: ''
+                      procMount: Default
+                  sssd:
+                    enabled: false
+                  priorityClass: soperator-worker-high-priority
+                  nodeSelector:
+                    slurm.nebius.ai/nodeset-name: worker-cpu
+                  workerAnnotations: {}
+                  customInitContainers: []
+                - name: worker-gpu
+                  replicas: 2
+                  maxUnavailable: 1
+                  enableHostUserNamespace: true
+                  gpu:
+                    enabled: true
+                    nvidia:
+                      gdrCopyEnabled: true
+                  nodeConfig:
+                    features:
+                    - gpu
+                    - cuda
+                    - h100
+                    - infiniband
+                    static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
+                    gresConfig:
+                    - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
+                  slurmd:
+                    customEnv:
+                    - name: NVIDIA_DRIVER_CAPABILITIES
+                      value: compute,graphics,utility,video
+                    resources:
+                      cpu: '32'
+                      memory: 16Gi
+                      ephemeralStorage: 10Gi
+                      gpu: 8
+                    volumes:
+                      spool:
+                        emptyDir: {}
+                      jail:
+                        persistentVolumeClaim:
+                          claimName: jail-rootfs-slot-a-pvc
+                      jailSubMounts: []
+                      sharedMemorySize: 8Gi
+                    security:
+                      appArmorProfile: unconfined
+                      limitsConfig: ''
+                      procMount: Default
+                  munge:
+                    resources:
+                      cpu: 200m
+                      memory: 512Mi
+                      ephemeralStorage: 1Gi
+                    security:
+                      appArmorProfile: unconfined
+                      limitsConfig: ''
+                      procMount: Default
+                  sssd:
+                    enabled: false
+                  priorityClass: soperator-worker-high-priority
+                  nodeSelector:
+                    slurm.nebius.ai/nodeset-name: worker-gpu
+                  tolerations:
+                  - key: nvidia.com/gpu
+                    operator: Exists
+                    effect: NoSchedule
+                  workerAnnotations: {}
+                  customInitContainers: []
+      nebius-gpu-v1:
+        wizard:
+          label: 'Production GPU layout: system/controller/login/accounting CPU groups, GPU worker NodeSet,
+            accounting DB enabled'
+        placements:
+          system:
+            kind: platform-support
+            node_group: system
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            soperator_node_filter: system
+            soperator_value_bindings:
+              populateJail.k8sNodeFilterName: system
+            soperator_affinity_bindings:
+            - controllerManager.affinity
+            - soperator-checks.checks.affinity
+            - mariadb-operator.affinity
+            - mariadb-operator.webhook.affinity
+          controller:
+            kind: slurm-service
+            node_group: controller
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            - controller-spool
+            soperator_node_filter: controller
+            soperator_value_bindings:
+              slurmNodes.controller.k8sNodeFilterName: controller
+              slurmNodes.rest.k8sNodeFilterName: controller
+              sConfigController.node.k8sNodeFilterName: controller
+          login:
+            kind: slurm-service
+            node_group: login
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            soperator_node_filter: login
+            soperator_value_bindings:
+              slurmNodes.login.k8sNodeFilterName: login
+          accounting:
+            kind: slurm-service
+            node_group: accounting
+            default_node_group_kind: cpu
+            filesystem_keys:
+            - jail
+            - accounting
+            soperator_node_filter: accounting
+            soperator_value_bindings:
+              slurmNodes.accounting.k8sNodeFilterName: accounting
+          worker:
+            kind: slurm-worker-nodeset
+            default_node_group_kind: gpu
+            filesystem_keys:
+            - jail
+            nodeset_templates:
+            - worker
+        mk8s:
+          inputs:
+            node_group_defaults:
+              cpu:
+                platform: cpu-d3
+                preset: 32vcpu-128gb
+              gpu:
+                platform: gpu-h100-sxm
+                preset: 8gpu-128vcpu-1600gb
+                os: ubuntu24.04
+                boot_disk:
+                  type: NETWORK_SSD
+                gpu_stack_source: nebius_image
+                gpu_stack_preset: cuda13.0
+          gpu_clusters:
+            workers: {}
+          gpu_cluster_key: workers
+          node_groups:
+            system:
+              placement_name: system
+              workload: system
+              node_count: 3
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - controller-spool
+              node_labels:
+                nebius.ai/soperator-bridge-domain: system
+            controller:
+              placement_name: controller
+              workload: controller
+              node_count: 2
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - controller-spool
+              node_labels:
+                nebius.ai/soperator-bridge-domain: controller
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: controller
+                effect: NO_SCHEDULE
+            login:
+              placement_name: login
+              workload: login
+              node_count: 2
+              node_count_input: soperator.login_node_count
+              autoscaling_input: soperator.login_autoscaling
+              gpu: false
+              jail: true
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: login
+                effect: NO_SCHEDULE
+            accounting:
+              placement_name: accounting
+              workload: accounting
+              node_count: 2
+              node_count_input: soperator.accounting_node_count
+              autoscaling_input: soperator.accounting_autoscaling
+              gpu: false
+              jail: true
+              sfs_filesystem_keys:
+              - accounting
+              taints:
+              - key: slurm.nebius.ai/nodeset-name
+                value: accounting
+                effect: NO_SCHEDULE
+          worker_nodesets:
+          - name: worker
+            nodeset_name: worker
+            node_group_prefix: worker
+            workload: worker
+            gpu: true
+            jail: true
+            total_nodes_input: soperator.worker_gpu_total_nodes
+            nodes_per_group_input: soperator.worker_gpu_nodes_per_group
+            default_total_nodes: 1
+            default_nodes_per_group: 100
+            max_nodes_per_group: 100
+            node_group:
+              gpu_cluster_key: workers
+              reservation:
+                policy: AUTO
+              taints:
+              - key: nvidia.com/gpu
+                value: 'true'
+                effect: NO_SCHEDULE
+        sfs:
+          filesystems: *id001
+        chart:
+          topology_profiles:
+            disabled: *id002
+            nebius-tiered-tree-v1: *id003
+            nebius-nvl-rack-v1: *id005
+          activechecks:
+            srunReadyPartition: hidden
+          onboarding_values: *id004
+          values:
+            mariadb-operator:
+              installOperator: true
+            customSlurmConfig: PluginDir=/usr/lib/x86_64-linux-gnu/slurm
+            soperator-activechecks:
+              checks:
+                ensure-healthy-nodes:
+                  runAfterCreation: false
+                wait-for-topology:
+                  runAfterCreation: false
+            partitionConfiguration:
+              configType: structured
+              partitions:
+              - name: gpu
+                nodeSetRefs:
+                - worker
+                policy:
+                  default: true
+                  state: UP
+                  maxTime: INFINITE
+                  priorityTier: 10
+            nodesets:
+            - name: worker
+              replicas: 1
+              maxUnavailable: 1
+              enableHostUserNamespace: true
+              gpu:
+                enabled: true
+                nvidia:
+                  gdrCopyEnabled: true
+              nodeConfig:
+                features:
+                - gpu
+                - cuda
+                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
+                gresConfig:
+                - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
+              slurmd:
+                customEnv:
+                - name: NVIDIA_DRIVER_CAPABILITIES
+                  value: compute,graphics,utility,video
+                resources:
+                  cpu: '32'
+                  memory: 16Gi
+                  ephemeralStorage: 10Gi
+                  gpu: 8
+                volumes:
+                  spool:
+                    emptyDir: {}
+                  jail:
+                    persistentVolumeClaim:
+                      claimName: jail-rootfs-slot-a-pvc
+                  jailSubMounts: []
+                  sharedMemorySize: 8Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              munge:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
+                  ephemeralStorage: 1Gi
+                security:
+                  appArmorProfile: unconfined
+                  limitsConfig: ''
+                  procMount: Default
+              sssd:
+                enabled: false
+              priorityClass: soperator-worker-high-priority
+              nodeSelector:
+                slurm.nebius.ai/nodeset-name: worker
+              tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+              workerAnnotations: {}
+              customInitContainers: []
+            populateJail:
+              k8sNodeFilterName: system
+            slurmNodes:
+              accounting:
+                enabled: true
+                k8sNodeFilterName: accounting
+                mariadbOperator:
+                  enabled: true
+                  metrics:
+                    enabled: false
+                  storage:
+                    size: 128Gi
+                    storageClassName: compute-csi-default-sc
+                    volumeClaimTemplate:
+                      accessModes:
+                      - ReadWriteOnce
+                      resources:
+                        requests:
+                          storage: 128Gi
+                      storageClassName: compute-csi-default-sc
+            volume:
+              accounting:
+                enabled: true
+          partition_profiles:
+            shape-default:
+              wizard:
+                label: 'Baseline queues: default GPU worker queue; accounting enabled; no QoS/preemption'
+            with-debug-long:
+              wizard:
+                label: Add debug/long queues on the same GPU workers; accounting enabled; no QoS objects
+              values:
+                partitionConfiguration:
+                  configType: structured
+                  partitions:
+                  - name: gpu
+                    nodeSetRefs:
+                    - worker
+                    policy:
+                      default: true
+                      state: UP
+                      maxTime: INFINITE
+                      priorityTier: 10
+                  - name: debug
+                    nodeSetRefs:
+                    - worker
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 00:30:00
+                      priorityTier: 100
+                  - name: long
+                    nodeSetRefs:
+                    - worker
+                    policy:
+                      default: false
+                      state: UP
+                      maxTime: 7-00:00:00
+                      priorityTier: 1

@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py\"",
+            "timeout": 30,
+            "statusMessage": "Auditing project contracts",
+            "additionalContextLimit": 1600
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py\"",
+            "timeout": 30,
+            "statusMessage": "Binding project contracts",
+            "additionalContextLimit": 1600
+          }
+        ]
+      }
+    ]
+  }
+}

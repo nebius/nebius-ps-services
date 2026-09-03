@@ -1,9 +1,23 @@
 ---
 name: config-codex
-description: Configure or recover a public-safe Codex home setup for a developer machine, including a missing config.toml, global AGENTS.md policy, features and MCP servers, hooks, task-state layout, custom read-only agents, optional private task-implementer workspace access, and validation. Use when a user wants Codex configured similarly to this repo's global context-management workflow without copying personal paths, private state, or secrets.
+description: "Use only when explicitly asked to configure or recover a public-safe Codex home: config, global policy, MCP, hooks, task state, read-only agents, workspace access, and validation. Never copy private state or secrets."
 ---
 
 # Config Codex
+
+## Help
+
+For `$config-codex --help` or `$config-codex -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -62,10 +76,18 @@ that baseline.
   confirmation.
 - Treat full-access settings as intended only for trusted local developer
   machines.
-- If a local hook or permission guard blocks an otherwise safe local Codex
-  config patch, do not bypass the guard. Report the exact blocked surface,
-  the smallest intended change, and the manual out-of-band step the user can
-  apply after reviewing it.
+- Never evade a guard by choosing an alternate writer, using shell redirection,
+  editing only the installed payload, changing the working directory to escape
+  classification, or attempting to disable or unregister it.
+- If a repo-owned guard blocks an otherwise safe local Codex patch, first prove
+  the exact denying registration, canonical source, installed provenance, and
+  documented ownership boundary. When the request authorizes that repair,
+  reproduce the false denial in a focused test, repair canonical source first,
+  validate it, sync it through the documented installer, report the restart and
+  trust boundary, then retry the identical authorized edit.
+- If the denial is external or unrepairable in the current scope, including an
+  OS, sandbox, enterprise, unknown-provenance, conflicting, or out-of-authority
+  policy, report the smallest manual out-of-band action and do not bypass it.
 - Never create the optional task-implementer directory inside a Git worktree,
   follow a symlink for it, expose prompt contents, or loosen its `0700` mode.
 
@@ -78,11 +100,28 @@ For existing `$CODEX_HOME/AGENTS.md`:
   unchanged and do not create a backup.
 - Add a compact `config-codex` managed section only if the equivalent guidance
   is missing.
-- Keep the global remediation default, task-owned temporary cleanup rule,
-  nested-project instruction precedence/conflict policy, and task-state marker
-  preservation in that managed section so existing installations receive the
-  same policy as a newly rendered `AGENTS.md.template` without replacing
-  user-owned content.
+- Keep the task-owned temporary cleanup rule, live-product-validation
+  invariant, nested-project instruction precedence/conflict policy, and
+  task-state marker preservation in that managed section so existing
+  installations receive the same durable policy as a newly rendered
+  `AGENTS.md.template` without replacing user-owned content.
+- Keep live-product guidance compact: global instructions freeze each trial's
+  declared workflow, distinguish product execution from intervention, preserve
+  production and high-impact approval boundaries, and require owner-correct
+  repair plus clean replay from before the earliest product divergence or
+  contamination. Observation is non-intervening only when it cannot affect the
+  tested state or execution. Detailed trial, lineage, and reporting rules
+  remain in `troubleshoot`.
+- Require exactly one active live-product-validation heading across the
+  complete `AGENTS.md`; recognize ATX and Setext headings, ignore fenced code
+  examples, and reject duplicate or override-like headings outside the managed
+  section.
+- Do not duplicate `troubleshoot` attempt limits, retry-admission rules,
+  blocker-tranche semantics, or exhaustion reporting in global `AGENTS.md`.
+  The skill owns those workflow semantics and its separately owned optional
+  UserPromptSubmit/PreToolUse/Stop hook owns explicit budget authorization and
+  mechanical enforcement. Global context retains only marker-preservation
+  continuity for task-state rewrites.
 - If managed markers already exist, update only the content between those
   markers.
 - Treat empty or stale managed markers as incomplete; update the managed block
@@ -111,6 +150,11 @@ For existing `$CODEX_HOME/config.toml`:
   custom-agent config references as the minimal config surface for global
   context management. Do not add the legacy `agents.max_threads` alias or the
   undocumented `agents.max_depth` key.
+- Require every standalone custom-agent TOML to have a non-empty `name`,
+  `description`, and `developer_instructions`; keep `name` and `description`
+  aligned with its `[agents.<name>]` declaration and keep `sandbox_mode` set to
+  `read-only`. Require each configured target to be a regular non-symlink file
+  that resolves inside Codex home.
 - Treat explicit `[[skills.config]]` entries for `global-context-management`
   and `config-codex` as optional when the skills are already discoverable from
   the installed user skills directory.
@@ -211,11 +255,13 @@ recovery boundary.
     after the operator approves a content-preserving one-time mode repair. When
     prompt-workspace integration was requested, run the idempotency preflight
     with `--require-task-implementer-workspace`.
-11. Produce an alignment report that lists each checked surface as
-    `Aligned`, `Not aligned`, or `Blocked`, with exact manual remediation for
-    every `Not aligned` or `Blocked` item. Include the minimal file/scope to
-    change, whether Codex attempted the patch, whether a backup was made, and
-    which files must not be touched.
+11. Produce an alignment report that lists each checked surface as `Aligned`,
+    `Not aligned`, `Repo-owned guard repair pending`, or `Blocked external or
+    unrepairable`. For a repo-owned defect, report canonical source, installed
+    provenance, validation, install, restart, and identical authorized edit
+    retry status. Give exact manual out-of-band remediation only for a genuinely
+    external or unrepairable item. Include the minimal file/scope, whether Codex
+    attempted the patch, whether a backup was made, and files left untouched.
 12. Tell the user to restart Codex, open `/hooks`, review the two
     global-context hooks, and trust them only after confirming the paths are
     expected. If other workflows add their own hooks, review those separately
@@ -335,9 +381,11 @@ Return:
 - which values still need user-specific replacement
 - which private, plugin-managed, generated, or machine-specific config layers
   were intentionally excluded from public recovery
-- for every `Not aligned` or `Blocked` item, the exact manual out-of-band
-  action the user can take, including the narrow file or bullet to edit and
-  any files that should be left untouched
+- for every repo-owned guard denial, its owner/provenance evidence, canonical
+  source repair, installation/restart state, and identical authorized edit
+  retry; for every external or unrepairable denial, the exact manual
+  out-of-band action, including the narrow file or bullet to edit and files
+  that should be left untouched
 - how to restart Codex and trust hooks
 - whether optional hook-assisted read-only subagent delegation was enabled
 - any remaining risk or unverified runtime behavior
@@ -354,5 +402,8 @@ This skill's global-context setup owns only `SessionStart` and
   lightweight context hints. Do not route `sdlc-start`, parse requirements,
   select workflow skills, create run state, or inject large documents.
 
-Workflow-specific guardrails such as Agentic SDLC must use separate event
-hooks, for example `PreToolUse` and `Stop`.
+Workflow-specific guardrails such as Agentic SDLC must use separate reviewed
+event hooks, for example `PreToolUse` and `Stop`. A separately owned workflow
+may also use its own `UserPromptSubmit` registration for a narrow explicit
+authorization syntax and bounded private state; that does not make the global
+prompt hook a workflow router.

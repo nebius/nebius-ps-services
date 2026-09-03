@@ -1,9 +1,23 @@
 ---
 name: global-context-management
-description: "Use for complex Codex work: planning, implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, or multi-file tasks. Keep parent context concise with durable task state, targeted read-only subagents when useful, focused validation, and final risk review."
+description: "Manage complex Codex planning, implementation, debugging, refactoring, migration, review, testing, CI, or multi-file work with concise parent context, durable task state, bounded read-only helpers, focused validation, and risk review."
 ---
 
 # Global Context Management
+
+## Help
+
+For `$global-context-management --help` or `$global-context-management -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 

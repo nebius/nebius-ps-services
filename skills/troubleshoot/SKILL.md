@@ -1,9 +1,23 @@
 ---
 name: troubleshoot
-description: "Use for causal troubleshooting and repair of difficult, persistent, intermittent, cross-layer, environment-specific, regression, performance, concurrency, corruption, CI-only, production-only, installed-software, service, container, network, storage, Kubernetes, cloud, application-code, or shell-script failures. Preserve evidence, test competing hypotheses, localize the earliest divergence, prove the mechanism, apply the smallest durable fix within the user's authority, and verify it. Do not use for routine syntax, lint, formatting, dependency installation, generic review, ordinary feature work, or an already-understood mechanical fix."
+description: "Diagnose and repair difficult, persistent, intermittent, or cross-layer failures by proving the causal divergence and smallest durable fix. Not for routine lint, setup, review, feature work, or known mechanical fixes."
 ---
 
 # Troubleshoot
+
+## Help
+
+For `$troubleshoot --help` or `$troubleshoot -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -37,6 +51,10 @@ target repository's toolchain and current official language or runtime guidance.
 
 ## Inputs
 
+- Optional session budget flags immediately after the skill name:
+  `$troubleshoot --attempt-limit=N --time-limit-minutes=N <problem>`. Do not add
+  a `-- <problem>` separator. Omitted flags keep the saved session value; initial
+  defaults are 5 attempts and 120 active minutes, with maxima of 10 and 180.
 - The expected and actual behavior, error signature, request or job identifiers,
   timestamps, known-good and known-bad cases, and attempted mitigations.
 - Repository, command, service, host, container, cluster, deployment, database,
@@ -61,6 +79,17 @@ target repository's toolchain and current official language or runtime guidance.
   [infrastructure-failure-playbooks.md](references/infrastructure-failure-playbooks.md)
   for installed stacks, services, containers, networks, storage, databases,
   orchestrators, and distributed systems.
+- After stack discovery, read only the matching technology playbooks:
+  [slurm.md](references/slurm.md), [soperator.md](references/soperator.md),
+  [kubernetes.md](references/kubernetes.md), [nebius.md](references/nebius.md),
+  [linux.md](references/linux.md), [network.md](references/network.md),
+  [storage.md](references/storage.md), [gpu.md](references/gpu.md), and
+  [code-debugging.md](references/code-debugging.md). Treat their official
+  documentation links as version-sensitive starting points; pin the observed
+  version and verify the matching vendor documentation before acting.
+- Read [live-product-validation.md](references/live-product-validation.md)
+  whenever a live target is used to verify product behavior or a product test
+  failure may require target stabilization or recovery.
 - Read [technique-selection.md](references/technique-selection.md) before using
   bisection, sanitizers, tracing, profiling, fuzzing, or repeated trials.
 - Read
@@ -127,7 +156,7 @@ Follow this state progression and return to an earlier state when new evidence
 invalidates the model:
 
 ```text
-INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
+INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
        -> LOCALIZED -> PROVEN -> REMEDIATED -> VERIFIED -> REPORTED
 ```
 
@@ -136,15 +165,29 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      permissions, data sensitivity, and operational constraints.
    - Build the failure contract. Separate an active incident's stabilization
      loop from its diagnosis loop.
-2. **BASELINE**
+2. **DISCOVERY**
+   - Identify technologies, exact versions, deployment model, configuration
+     sources, components, dependencies, ports, protocols, authentication, and
+     control and data flows before selecting diagnostic commands.
+   - Compare the observed topology and active configuration with matching
+     official vendor architecture and configuration documentation. Record
+     drift, inaccessible evidence, and version ambiguity instead of assuming
+     that the design is correct.
+   - Create the component verification matrix, incident timeline, and layered
+     log-coverage ledger defined in `references/investigation-protocol.md`.
+     Verify clock synchronization before correlating timestamps across hosts.
+   - Freeze the included and excluded system boundary, exercised control and
+     data paths, and incident-window start and end. Limit every later health
+     claim to that declared scope and observation period.
+3. **BASELINE**
    - Run the narrowest existing reproducer or characterize the failure from
      affected and unaffected evidence when reproduction is unsafe or impossible.
    - Record the command, working directory, exit code, duration, input, seed,
      environment identity, frequency, and stable signature.
-3. **MODEL**
+4. **MODEL**
    - Trace only the relevant entry point, control/data flow, state, ownership,
      lifecycle, retries, caches, configuration, and process/service boundaries.
-4. **HYPOTHESES**
+5. **HYPOTHESES**
    - Keep facts, derived inferences, hypotheses, and unknowns separate.
    - Maintain three to seven plausible hypotheses when the evidence supports
      them. Give each a prediction and falsifying observation.
@@ -160,11 +203,24 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      absolute bounded window before any Grafana call. Skip observability when
      local/static evidence is conclusive, signal fit is unproven, or the query
      cannot change the next decision.
-5. **EXPERIMENTS**
-   - Run commands or instrumentation only when the result can change the next
-     decision. Change one causally relevant variable at a time.
+6. **EXPERIMENTS**
+   - Run a command, query, or instrumentation only when its result can change
+     the next decision. Before execution, state the hypothesis, expected
+     supporting and falsifying evidence, timeout or output bound, and next
+     branch for each possible result. Change one causally relevant variable at
+     a time.
    - Record the question, hypotheses addressed, prediction, falsifying result,
-     risk, observation, and ledger update. Retain negative evidence.
+     risk, observation, timeout, and ledger update. Retain negative evidence.
+   - Investigate the eight canonical log layers: component, application or job,
+     container or orchestrator, service manager, OS and kernel, network and
+     firewall, storage, and GPU or hardware. Filter by the incident window and
+     correlation identifiers. Record every layer exactly once as `examined`,
+     `unavailable`, `unsafe`, or `not applicable`; an unfiltered error search is
+     not proof of health.
+   - Treat configured component and application logs, container logs, service
+     journals, OS/kernel logs, and other primary local sources as baseline
+     evidence. Their bounded inspection is not subject to Grafana admission;
+     only remote observability-provider queries use the gates below.
    - Only after the decision-value, signal-fit, authority, selector, and window
      gates pass, invoke `$nebius-grafana-query` in evidence-provider mode. Its
      first bounded datasource discovery is the one connectivity/readiness check
@@ -186,11 +242,15 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
    - Before every remediation retry, acquire new evidence from logs, stack
      traces, code inspection, runtime state, or an equivalent observation,
      update the model, and state a genuinely new falsifiable hypothesis. If
-     either is unavailable, do not retry; transition to `REPORTED`.
-6. **LOCALIZED**
+     either is unavailable, do not retry or patch speculatively. Return to
+     `DISCOVERY`, `MODEL`, or `HYPOTHESES` and seek the next safe bounded result
+     that can change a decision. Report early only when decisive evidence is
+     unavailable with no safe alternative, authority or safety requires user
+     action, the user asks to stop, or the remediation budget is exhausted.
+7. **LOCALIZED**
    - Find the earliest divergence across temporal, spatial, input, environment,
      or state-sequence dimensions.
-7. **PROVEN**
+8. **PROVEN**
    - Establish the trigger-to-invariant-to-symptom causal chain, evidence fit,
      counterfactual, safe reintroduction when practical, alternative elimination,
      and confidence: `proven`, `high confidence`, `probable`, or `unknown`.
@@ -219,17 +279,28 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
    - In Agentic SDLC diagnostic mode, stop at the causal handoff. Emit
      `diagnosis-v1`, remove temporary instrumentation, and return to
      classification without entering `REMEDIATED`.
-8. **REMEDIATED**
+9. **REMEDIATED**
    - Restore the violated invariant at the narrowest correct boundary,
      following the completed design and `/plan` handoff when the remedy was
      design-scale. Add a regression oracle before or with the fix when feasible.
-9. **VERIFIED**
-   - Re-run the original reproducer, counterfactual, targeted tests, affected
-     integration boundaries, relevant dynamic diagnostics, and enough repeated
-     trials for intermittent failures. Confirm repository hygiene.
-10. **REPORTED**
+10. **VERIFIED**
+    - Re-run the original reproducer, counterfactual, targeted tests, affected
+      integration boundaries, relevant dynamic diagnostics, and enough repeated
+      trials for intermittent failures. Confirm repository hygiene.
+    - For live product verification, require a clean replay under
+      `references/live-product-validation.md`; recovery or a healthy final state
+      alone cannot prove the product fixed.
+11. **REPORTED**
     - Classify the outcome as `VERIFIED_FIXED`, `MITIGATED_NOT_PROVEN`,
-      `DIAGNOSED_NOT_FIXED`, `BLOCKED_MISSING_EVIDENCE`, or `UNRESOLVED`.
+      `DIAGNOSED-FIXED`, `DIAGNOSED_NOT_FIXED`,
+      `BLOCKED_MISSING_EVIDENCE`, or `UNRESOLVED`.
+    - Use `DIAGNOSED-FIXED` when the causal owner and earliest divergence are
+      proven, the owner-correct repair is applied, and the original reproducer,
+      focused regression, and source or affected-boundary checks pass for the
+      named fixed scope. Put installation, deployment, restart, or live replay
+      that was not performed under `Not verified` with one exact next action.
+      Reserve `VERIFIED_FIXED` for complete end-to-end proof. Use
+      `DIAGNOSED_NOT_FIXED` only when no owner-correct repair was applied.
     - If an attempt or time budget is exhausted, record the stop in the exact
       private task-state marker, stop all other tool use, and return the
       remediation-budget report before any user-authorized continuation.
@@ -240,6 +311,11 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   and any explicit `diagnose only`, `read only`, or `do not change` boundary.
 - When the request asks to solve a problem and does not prohibit changes, repair
   code and tests once the causal mechanism is sufficiently supported.
+- For live product verification, freeze the declared product workflow for each
+  trial and keep it separate from environment intervention. Changing the
+  declaration starts a new evidence lineage. Authorized stabilization or
+  recovery may be necessary, but it marks affected evidence as intervened and
+  never substitutes for owner-correct repair and a later clean replay.
 - In confirmed non-production, allow bounded reversible service, configuration,
   rollout, scaling, or package changes when they are necessary to resolve the
   issue; preview or dry-run first when available and observe after every change.
@@ -256,6 +332,10 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - Treat restarts, retries, rollbacks, failovers, cache clearing, timeouts, sleeps,
   concurrency reduction, and downgrades as mitigations or experimental evidence,
   not proof of root cause.
+- A temporary verbosity or subsystem-debug increase must have a narrow scope,
+  bounded duration, stated performance and availability impact, secret-redaction
+  plan, original-value capture, and verified rollback. Production and
+  unconfirmed targets still require exact authorization for the live change.
 
 ## Idempotency
 
@@ -273,10 +353,14 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - After three low-information experiments, stop and rebuild the model and
   hypothesis set before running another experiment.
 - After one remediation fails against a stable blocker, initialize the
-  remediation budget before a second repair. A blocker tranche permits no more
-  than five total remediation attempts and 120 active minutes, whichever is
-  reached first. A user may lower the attempt limit, but must not raise or
-  disable the five-attempt maximum.
+  remediation budget before a second repair. A blocker tranche starts at the
+  saved session profile: five total remediation attempts and 120 active minutes
+  by default, with hard maxima of 10 attempts and 180 minutes. The first reached
+  limit stops the tranche. Only the UserPromptSubmit authorization hook may
+  establish non-default marker values; prompt prose and `override_summary`
+  cannot. A current-task user may require an earlier workflow stop in prose. At
+  that earlier stop, leave `status: active` and `stop_trigger: null`, return a
+  normal report without `REMEDIATION_BUDGET_EXHAUSTED`, and wait.
 - Admit a retry only after new evidence obtained since the preceding failed
   attempt changes the model and supports a genuinely new hypothesis with a
   falsifiable prediction. Record them in the working ledgers before the retry
@@ -284,23 +368,41 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   verification. Rewording the same hypothesis or reusing the same evidence
   does not qualify.
 - When evidence establishes a causally independent blocker, replace the marker
-  with a fresh blocker budget: attempt 1, tranche 1, zero active time, and no
-  inherited attempts or stop trigger. This is not a continuation of the earlier
-  blocker and does not require a new user instruction.
+  with one complete canonical fresh blocker budget, including its new
+  `blocker_key` and a public-safe `blocker_summary`: tranche 1, zero active
+  time, an empty attempt ledger, active status, no stop trigger, and a null
+  `override_summary`. Keep the next remediation plan in prose; only after that
+  remediation executes and verification completes does it become attempt 1.
+  This is not a continuation of the earlier blocker and does not require a new
+  user instruction.
 - Bind every completed attempt to the exact top-level marker `blocker_key`.
   Missing, mixed, or carried attempt bindings are invalid coordination state,
   not evidence that the new blocker exhausted its budget.
 - Treat permission denials and remediation-marker validation or repair as
   coordination events, not counted remediation attempts or budget exhaustion.
-- Report failed attempts 1 through 4 to the user. After the fifth failed attempt
-  or time exhaustion, set the marker to `exhausted`, call no other tools, and
-  transition directly to `REPORTED`.
+- Report each failed attempt before another repair. At the configured attempt or
+  time limit, set the marker to `exhausted`, call no other tools, and transition
+  directly to `REPORTED`.
 - If the new-evidence or new-hypothesis gate cannot be satisfied before the
   maximum, stop without another remediation and return the structured
   investigation report with the exact missing evidence and next action.
-- Never extend or reset a tranche for the same blocker without an explicit
-  current-task user instruction. A bare `continue` after the report starts a
-  fresh default tranche for that blocker, still capped at five attempts.
+- Never extend or reset a tranche for the same blocker without a new current-task
+  user instruction. Optional flags update the saved session profile. An active
+  or resolved-state profile change is valid only when both resulting limits
+  remain strictly above the completed-attempt and consumed-active-time
+  counters. If a pending resize
+  marker becomes invalid, restore every non-profile field to its exact
+  pre-resize value and apply the authorized profile fields atomically. A
+  deleted marker cannot be reconstructed from bounded authorization metadata;
+  restore the exact prior marker or end the session and request a fresh
+  user-authorized troubleshoot session without inventing or resetting blocker
+  state. A resolved marker is completed evidence, not a terminal tool lock: a
+  bare later `$troubleshoot` keeps the saved profile and starts discovery
+  without pending authorization or marker replacement. Explicit profile flags
+  use the profile-only handshake while preserving the resolved marker core.
+  Only a post-exhaustion fresh-state handoff calls its source the prior terminal
+  marker. An exhausted tranche is never reopened; the next user instruction
+  starts fresh state using the saved profile.
 - Helper scripts must be safe to rerun and must replace only the exact output
   path selected by the user.
 
@@ -309,7 +411,10 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - If reproduction is unavailable, characterize the failure and state the exact
   evidence required to advance; do not fabricate proof.
 - If access, observability, or a safe environment is missing, return
-  `BLOCKED_MISSING_EVIDENCE` with the highest-information next experiment.
+  to non-observability evidence, a smaller safe reproducer, code inspection,
+  or another decision-changing path first. Return `BLOCKED_MISSING_EVIDENCE`
+  only when the missing evidence is decisive and no safe alternative remains;
+  name the highest-information next experiment.
 - If the evidence provider is `unavailable` or `partial`, continue with
   non-observability evidence when telemetry was optional. When the missing
   runtime signal is decisive and no safe alternative can answer the
@@ -329,10 +434,11 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   `MODEL` or `HYPOTHESES` rather than defending the earlier explanation.
 - If a remediation tranche is exhausted, return `UNRESOLVED`,
   `BLOCKED_MISSING_EVIDENCE`, or `DIAGNOSED_NOT_FIXED` as supported by the
-  evidence; do not attempt a sixth remediation before a new user instruction.
+  evidence; do not attempt another remediation before a new user instruction.
 - If a retry lacks newly acquired evidence or a genuinely new hypothesis,
-  return `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED` as supported instead of
-  repeating the prior remediation path.
+  do not repeat the prior remediation path. Rebuild the model and continue
+  safe evidence collection while a decision-changing experiment remains;
+  otherwise return `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED` as supported.
 
 ## Must Not
 
@@ -343,6 +449,9 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   incident mitigation.
 - Do not use broad logging, repository-wide searches, or full rebuilds without a
   localization question they can answer.
+- Do not use indefinite `tail -f`, arbitrary sleeps, passive terminal waiting,
+  or large unfiltered log dumps. Bound commands by time and output and make the
+  next branch explicit before execution.
 - Do not mask symptoms with sleeps, unbounded retries, exception suppression,
   disabled tests, arbitrary timeout increases, or global serialization.
 - Do not claim root cause from correlation, a hot stack frame, one passing run,
@@ -376,6 +485,22 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   cost when the path was considered.
 - No unrelated changes, diagnostic artifacts, credentials, or private data
   remain in the repository.
+- The internal component matrix covers dependency reachability,
+  authentication, DNS or service-name resolution, resource and clock state,
+  restart history, and recent changes. The internal log ledger contains all
+  eight canonical records exactly once and in order. Missing evidence stays
+  `UNKNOWN`; it does not stop the workflow while another safe bounded path can
+  change the decision.
+- The concise report accurately projects the causal result, fixed scope,
+  verified scope, material unverified scope, and exact next action. Detailed
+  matrices, timelines, log rows, and criterion verdicts stay in the working
+  evidence unless the user requests them or a hard boundary needs a bounded
+  appendix.
+- `VERIFIED_FIXED` requires the original failure contract and every applicable
+  end-to-end criterion to be proven. `DIAGNOSED-FIXED` requires proven cause,
+  applied owner repair, and passing source or affected-boundary verification,
+  but may name later activation or live proof explicitly as unverified.
+  Passing tests alone do not prove unrelated code paths or a live target.
 
 ## Learning Loop
 
@@ -388,29 +513,90 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
-Return:
+End every explicit `$troubleshoot` invocation with one concise, user-visible
+report. Lead with the result; do not make the user read the investigation
+ledger to discover whether the code was fixed.
 
-- Current workflow state using the exact state-machine name.
-- Failure contract and scope.
-- Stabilization status, if applicable.
-- Observed facts, derived inferences, remaining hypotheses, and negative evidence.
-- Earliest divergence, causal chain, confidence, and alternatives eliminated.
-- Remediation-design classification, including the `design` handoff used for a
-  design-scale change, the Agentic SDLC failure classification and coordinator
-  route when applicable, or why the repair remained local.
-- Remediation or mitigation performed, with authority and safety basis.
-- Regression oracle and verification evidence.
-- Observability decision, matching-signal provenance, readiness reuse, stage,
-  relevant structured facts, data gaps, and query cost when applicable.
-- Final outcome classification, residual uncertainty, and exact next action.
-- In Agentic SDLC diagnostic mode, the `diagnosis-v1` ID, result, confidence,
-  complete owner handoff or exact missing evidence, removal of temporary
-  instrumentation, and return route to `sdlc-classify-failure`.
-- On budget exhaustion, the exact stop trigger, `REMEDIATION_BUDGET_EXHAUSTED`,
-  the blocking error and source, every counted attempt, current state, and the
-  user action required before another tranche.
-- On an earlier retry-gate stop, the same structured investigation fields,
-  the missing evidence or hypothesis, and the highest-information next action.
+```markdown
+# Troubleshooting Report
+
+## Outcome
+- Classification: DIAGNOSED-FIXED
+- Confidence: High
+- Fixed scope:
+- Current state:
+
+## Root Cause And Fix
+- Root cause:
+- Changes made:
+
+## Verification
+- Verified:
+- Not verified:
+
+## Next Action
+- Owner:
+- Action:
+- Done when:
+```
+
+Use exactly one supported classification:
+
+- `VERIFIED_FIXED`: complete end-to-end failure-contract proof.
+- `DIAGNOSED-FIXED`: proven cause, applied owner-correct repair, and passing
+  reproducer, regression, and source or affected-boundary checks for the
+  named fixed scope; activation or live proof may remain under `Not verified`.
+- `MITIGATED_NOT_PROVEN`: impact reduced without complete causal repair proof.
+- `DIAGNOSED_NOT_FIXED`: cause diagnosed but no owner-correct repair applied.
+- `BLOCKED_MISSING_EVIDENCE`: decisive evidence unavailable with no safe
+  alternative.
+- `UNRESOLVED`: competing hypotheses remain.
+
+Use `High`, `Medium`, `Low`, or `Unknown` for confidence. For every next
+action, name the owner, exact action, and observable done condition. If
+nothing remains within a `VERIFIED_FIXED` scope, write `None within the
+declared scope.` under `Not verified`.
+
+Add `## Evidence Appendix` only when the user requests detail, the evidence
+changes a decision, a live or production boundary needs explicit accounting,
+or the remediation budget is exhausted. Keep it bounded and public-safe.
+Architecture, component, timeline, layered-log, hypothesis, code-debugging,
+and completion ledgers remain internal investigation evidence by default.
+
+The optional hook records every explicit invocation in session-private
+`troubleshoot-report-obligation.json` and finalizes delivery transactionally.
+If the host terminates before Stop, only a resumed turn in the same session can
+report that interruption. An ordinary missing,
+malformed, partial, `FAIL`, or `UNKNOWN` report is advisory: Stop continues,
+no tool is denied, and no generated fallback replaces the assistant response.
+Prefer plain inline-code repository-relative local labels such as
+`references/verification-and-reporting.md`, optionally followed by a colon and
+positive line number. Inline or Markdown destinations may use relative,
+platform-native absolute, home-relative, or constrained local `file:` syntax
+only when their decoded canonical targets remain inside the Git repository
+root derived from the event working directory; without that root, absolute,
+home-relative, and local `file:` forms are unsafe. A harmless contained format
+defect is advisory. Sensitive content, ambiguous or renderer-active link
+syntax, an outside-root target, traversal or symlink escape, or an unsafe URI
+closes as `sensitive_detected` and stops with one generic warning. The same
+resolver normalizes contained targets and atomically replaces unsafe or
+over-limit markup in strict exhausted-report fallbacks. Read
+`references/verification-and-reporting.md` before authoring local links or
+interpreting a reference warning. The hook requests no automatic replacement
+report and cannot retract output already rendered by the host. Invalid trusted
+coordination state, missing authority, peer Stop policy, and exact
+remediation-budget exhaustion remain fail-closed.
+
+At budget exhaustion, use the same concise report, add
+`REMEDIATION_BUDGET_EXHAUSTED` and the exact stop trigger under `Outcome`,
+include the bounded marker-derived blocker, blocker key, attempts, and
+evidence, and use only `UNRESOLVED`, `BLOCKED_MISSING_EVIDENCE`, or
+`DIAGNOSED_NOT_FIXED`. Return a hook-supplied redacted exhaustion report
+verbatim. A new user instruction is required before another tranche.
+
+In Agentic SDLC diagnostic mode, return the required `diagnosis-v1` to
+`sdlc-classify-failure`, including the result, confidence, owner handoff or
+exact missing evidence, instrumentation cleanup, and return route.
 
 ## References
 

@@ -1,9 +1,0 @@
-.DS_Store
-.git/
-.gitignore
-.svn/
-*.swp
-*.tmp
-*.tgz
-README.md
-CHANGELOG.md

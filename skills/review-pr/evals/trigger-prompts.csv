@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+review-pr-positive-01,true,"Review GitHub pull request 42 and report merge readiness."
+review-pr-positive-02,true,"Inspect this PR URL for checks reviews conflicts and changed-file issues."
+review-pr-positive-03,true,"Review the current branch as a pull request against its base."
+review-pr-negative-01,false,"Review my uncommitted local diff for bugs."
+review-pr-negative-02,false,"Create a pull request from this feature branch."
+review-pr-negative-03,false,"Merge this ready pull request now."

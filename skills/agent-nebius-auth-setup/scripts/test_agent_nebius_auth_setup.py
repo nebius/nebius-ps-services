@@ -110,7 +110,8 @@ if args[:2] == ["profile", "list"]:
         print("{unsupported-profile-output")
         raise SystemExit(0)
     for profile in state["profiles"]:
-        suffix = " [active]" if profile == state["active"] else ""
+        marker = state.get("profile_list_marker", "active")
+        suffix = f" [{marker}]" if profile == state["active"] else ""
         print(f"{profile}{suffix}")
     raise SystemExit(0)
 
@@ -580,6 +581,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             "membership_list_calls": 0,
             "membership_on_second_page": False,
             "profile_list_error": False,
+            "profile_list_marker": "active",
             "profile_list_malformed": False,
             "profile_write_error": False,
             "profile_service_account_ids": {
@@ -1601,6 +1603,23 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("none (read-only authentication and access verification only)", result.stderr)
         self.assertNotIn("update CLI profile", current_actions)
+
+    def test_profile_lookup_accepts_default_marker(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["profile_list_marker"] = "default"
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_dry_run()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "none (read-only authentication and access verification only)",
+            result.stderr,
+        )
 
     def test_dry_run_reports_wrong_identity_profile_rebind(self) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])

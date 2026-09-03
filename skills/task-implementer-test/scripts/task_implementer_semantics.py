@@ -409,8 +409,15 @@ def _validate_orchestration(
             raise ValueError("project and promoted heads do not match")
         if _git(project, "status", "--porcelain"):
             raise ValueError("project is not clean")
-        if _git(project, "remote"):
-            raise ValueError("project unexpectedly has a remote")
+        origin = project.parent / "origin.git"
+        if (
+            origin.is_symlink()
+            or not origin.is_dir()
+            or _git(project, "remote") != "origin"
+            or Path(_git(project, "remote", "get-url", "origin")).resolve()
+            != origin.resolve()
+        ):
+            raise ValueError("project local origin identity changed")
         worktrees = _git(project, "worktree", "list", "--porcelain")
         paths = [
             line[9:] for line in worktrees.splitlines() if line.startswith("worktree ")

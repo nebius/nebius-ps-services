@@ -1,9 +1,25 @@
 ---
 name: create-pr
-description: "Use for GitHub PR creation from local work or named branches: reuse or prepare feature branches, run format/whitespace/lint/test gates before committing, stage repo-root changes with git add -A, merge the latest base branch into the PR branch, push with explicit refspecs, open or reuse PRs, repair safe check failures, and report PR URLs/readiness. In an active Agentic SDLC run, switch to publication-only mode and publish only the clean exact promoted SHA after passing UAT. Do not use for direct commit-and-push only."
+description: "Use only when explicitly asked to create/prepare a GitHub PR from unmanaged work or a named branch: validate, commit, merge base, push, open/reuse, and report readiness. In active Agentic SDLC, publish only the exact promoted SHA after UAT. Reject managed worktrees; use commit-push when no PR is wanted."
 ---
 
 # Create PR
+
+## Help
+
+For `$create-pr --help` or `$create-pr -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Use this skill to turn local repository work or named branches into GitHub pull
 requests with a safe default-branch workflow. It can prepare a single PR or one
@@ -50,19 +66,38 @@ branch, and report the order the user should merge the PRs manually.
   remote PR branches. If local work is dirty on the active branch, move or
   commit it before updating other branches.
 
+## Managed Worktree Guard
+
+Before staging, committing, fetching for publication, pushing, or creating a
+PR, resolve the installed `worktree` skill and invoke its Python manager's
+`publication-guard --publication-action create-pr` action from the current
+checkout.
+If it reports any managed child, integration candidate, nested worker, or
+inconsistent ownership claim, stop and route to its owning local workflow.
+Only a genuinely unmanaged manual worktree may pass as `unmanaged`. This guard
+also overrides active SDLC publication mode: managed children integrate
+locally, while only an unmanaged final source branch may use the PR workflow
+below.
+
 ## Active Agentic SDLC Publication Mode
 
 When the current project has a matching active Agentic SDLC run, this mode
 overrides the generic branch-preparation, repair, and base-merge steps below.
-`create-pr` is then a publication handoff, not another implementation gate.
+This is publication-only mode: `create-pr` is a handoff, not another
+implementation gate.
 
 Before any push or PR creation/reuse:
 
 - Reload the active run, current checkpoint, feature evidence, execution
   coordinator, commit evidence, and UAT evidence.
-- Require the run to route to `create-pr`, the outer project lease to be
-  released, UAT to have passed, and the current named non-default branch to be
-  clean.
+- Require the run to route to `create-pr`, have no managed outer-integration
+  state, have passed UAT, and have a clean current named non-default branch.
+- If managed interop is `leased`, `pending`, or `integrated`, do not publish the
+  child. Route `leased` back through the active SDLC run. For `pending`, stop
+  and tell the user to switch to the recorded primary checkout and invoke the
+  exact `$worktree integrate` handoff; for `integrated`, stop and publish only
+  from the separately selected final source branch. Never invoke the
+  explicit-only `worktree` skill from `create-pr`.
 - Resolve one canonical `promoted_head` from execution and commit evidence.
   Require current `HEAD`, the recorded promoted HEAD, and any existing remote
   PR head to equal that exact SHA.
@@ -81,14 +116,19 @@ promote a new exact SHA before publication is retried.
 Immediately before each authorized push or GitHub PR creation call, write a
 short-lived `permissions/pr-authorization.json` containing at least
 `allowed: true`, `phase: "create-pr"`, the exact branch,
-`expected_head: <promoted_head>`, `uat_status: "passed"`, and `expires_at`.
+`expected_head: <promoted_head>`, the dynamically resolved
+`base_branch: <origin-default>`, `base_head: <recorded-default-head>`,
+`uat_status: "passed"`, and `expires_at`. Re-resolve the symbolic remote
+default immediately before authorization and reject either branch or HEAD
+drift.
 Publish with one direct `git push origin HEAD:<branch>` action, and create a PR
-with one direct `gh pr create --head <branch> ...` action or a PR-creation MCP
-call whose `head` is that branch. Do not use a shell wrapper, prepend or append
-another command, or omit the explicit PR head. Reuse an existing remote branch
-or PR only when its head is the exact promoted SHA; any other remote head is a
-blocker, not permission to update or overwrite it. Remove or expire the
-authorization when publication completes or stops.
+with one direct `gh pr create --base <origin-default> --head <branch> ...`
+action or a PR-creation MCP call whose `base` and `head` are those exact
+branches. Do not use a shell wrapper, prepend or append another command, or
+omit either explicit branch. Reuse an existing remote branch or PR only when
+its head is the exact promoted SHA and its base is the recorded remote default;
+any mismatch is a blocker, not permission to update or overwrite it. Remove or
+expire the authorization when publication completes or stops.
 
 ## Local Check Order
 
@@ -244,9 +284,10 @@ without rewriting branch history.
      moved nearby code, and stop when the conflict needs product or business
      judgment.
    - When multiple branches are requested, also validate the proposed merge
-     order with a throwaway local branch or worktree starting at `origin/<base>`
-     and merging the target branches in order. Do not push the throwaway
-     branch.
+     order with one temporary local branch starting at `origin/<base>` and
+     merging the target branches in order. Require a clean checkout, never
+     push that branch, and delete it with its exact expected old SHA after the
+     check. Do not create an unmanaged throwaway worktree.
    - If a later branch depends on an earlier branch, either merge the earlier
      branch into the later branch so the ordered path is conflict-free, or
      report that the later PR should be refreshed after the earlier PR lands.

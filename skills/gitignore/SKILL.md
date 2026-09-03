@@ -1,9 +1,25 @@
 ---
 name: gitignore
-description: Create or update a project's .gitignore file with sensible defaults for macOS and VS Code, then extend it for detected stacks (for example Node, Python, Go, Rust, Java, Terraform). Use when the user asks to generate, fix, or standardize .gitignore.
+description: "Create, fix, or standardize a project's .gitignore with macOS/VS Code defaults and detected stack rules for Node, Python, Go, Rust, Java, Terraform, or others."
 ---
 
 # Gitignore
+
+## Help
+
+For `$gitignore --help` or `$gitignore -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Create or update `.gitignore` at the target repository root.
 

@@ -190,7 +190,7 @@ def soperator_notifier_release_specs(
         specs.append(
             SlackNotifierSpec(
                 target_ref=row_target_ref,
-                namespace=str(row.get("namespace") or "soperator").strip() or "soperator",
+                namespace="soperator",
                 release_name=str(
                     notifier_values.get("fullnameOverride") or SOPERATOR_NOTIFIER_VALUES_KEY
                 ).strip()

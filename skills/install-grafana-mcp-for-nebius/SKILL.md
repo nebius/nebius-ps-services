@@ -1,9 +1,23 @@
 ---
 name: install-grafana-mcp-for-nebius
-description: "Install, configure, validate, or repair the official Grafana MCP server for Codex against Nebius-managed Grafana using one pinned human Nebius CLI profile. Use only when the user explicitly invokes this skill to set up mcp-grafana on macOS or Linux, wire Codex MCP config, repair the human-token wrapper, or configure explicitly requested external Grafana Nebius datasources. Routine read-only multi-tenant/project/resource metrics, logs, dashboards, and traces belong to $nebius-grafana-query."
+description: "Use only when explicitly invoked. Install, configure, validate, or repair Grafana MCP for Nebius-managed Grafana with a pinned human profile, Codex config, token wrapper, or requested datasources. Use nebius-grafana-query for queries."
 ---
 
 # Install Grafana MCP for Nebius
+
+## Help
+
+For `$install-grafana-mcp-for-nebius --help` or `$install-grafana-mcp-for-nebius -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 

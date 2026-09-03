@@ -192,10 +192,32 @@ fi
 # CRITICAL: Set forward policy to ACCEPT for VPN routing
 # Default is DROP which blocks all forwarded packets
 logger -t vpngw-firewall "Setting DEFAULT_FORWARD_POLICY to ACCEPT"
-sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("/etc/default/ufw")
+contents = path.read_text()
+updated = contents.replace(
+    'DEFAULT_FORWARD_POLICY="DROP"',
+    'DEFAULT_FORWARD_POLICY="ACCEPT"',
+)
+if 'DEFAULT_FORWARD_POLICY="ACCEPT"' not in updated:
+    raise RuntimeError("unable to set DEFAULT_FORWARD_POLICY to ACCEPT")
+if updated != contents:
+    # Write the already-mounted file directly.  systemd exposes this exact file
+    # through ReadWritePaths while keeping its parent directory read-only, so
+    # tools such as `sed -i` that create a sibling temporary file cannot work.
+    path.write_text(updated)
+PY
 
 # Enable firewall
 ufw --force enable
+
+# Preserve the exact private VM-HA mTLS peer rule across the full UFW reset.
+if [ -x /usr/local/bin/nebius-vpngw-vm-ha-peer-firewall.sh ]; then
+  /usr/local/bin/nebius-vpngw-vm-ha-peer-firewall.sh \
+    /etc/nebius-vpngw/config-resolved.yaml
+fi
 
 logger -t vpngw-firewall "UFW configuration complete"
 ufw status verbose | logger -t vpngw-firewall

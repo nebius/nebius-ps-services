@@ -1,0 +1,1377 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GPU Fundamentals for Performance Engineering</title><style>
+:root{--ink:#172033;--muted:#586176;--paper:#f7f8fb;--card:#fff;--line:#dce1ea;--navy:#16233f;--blue:#3867d6;--cyan:#137f84;--green:#2f855a;--amber:#b45309;--red:#b4232d;--code:#101827;--codeink:#dbeafe;--soft:#edf2fb}*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:1rem}body{margin:0;color:var(--ink);background:var(--paper);font:17px/1.72 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.skip-link{position:absolute;left:1rem;top:1rem;z-index:10;transform:translateY(-200%);background:#fff;color:var(--navy);padding:.65rem .9rem;border-radius:8px;font-weight:700}.skip-link:focus{transform:translateY(0)}a:focus-visible,summary:focus-visible{outline:3px solid #f59e0b;outline-offset:3px}header{background:linear-gradient(130deg,#101a31,#243d6b);color:#fff;padding:4rem max(6vw,1rem) 3.2rem;text-align:center}header p{max-width:none;color:#dbe7ff;font-size:1.15rem}.course-hours{margin:.7rem 0 0;font-size:1.1rem;letter-spacing:.02em}header code{color:var(--navy)}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.8rem;color:#9fd7ff;font-weight:700}h1{font-size:clamp(2.4rem,6vw,5rem);line-height:1.03;margin:.3rem auto 1rem;max-width:24ch}h2{font-size:2rem;line-height:1.2;margin-top:3.8rem;border-bottom:2px solid var(--line);padding-bottom:.45rem}h3{font-size:1.3rem;margin-top:2rem}h4{font-size:1.08rem;margin-bottom:.35rem}main{max-width:1180px;margin:0 auto;padding:2rem max(3vw,1rem) 5rem}nav{background:#fff;border:1px solid var(--line);border-radius:16px;padding:1.2rem 1.5rem;margin-top:-3.5rem;box-shadow:0 10px 30px #17203312}nav h2{margin-top:0}nav ol{columns:2;column-gap:2rem;margin:.5rem 0;padding-left:0;list-style:none}nav li{break-inside:avoid;margin:.3rem 0}a{color:#2359bd}code{font:.9em ui-monospace,SFMono-Regular,Menlo,monospace;background:#edf1f8;padding:.1em .3em;border-radius:4px;overflow-wrap:anywhere}pre{background:var(--code);color:var(--codeink);padding:1rem;overflow:auto;border-radius:10px;line-height:1.45}pre code{background:transparent;padding:0;overflow-wrap:normal}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}.card,.callout,.warning,.lesson-outcome,.recall,.worked-example,.exercise,.review-cue,.answer-key{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem 1.2rem;margin:1rem 0}.card h3,.course-contract h3,.worked-example h3,.exercise h3{margin-top:.2rem}.callout{border-left:5px solid var(--blue)}.lesson-outcome{border-left:5px solid var(--blue);background:#eef4ff}.recall{border-left:5px solid var(--amber);background:#fffbeb}.worked-example{border-left:5px solid var(--cyan);background:#effcfc}.exercise{border-left:5px solid var(--green);background:#f0fff4}.answer-key{border-left:5px solid var(--green)}.answer-key summary{cursor:pointer;font-weight:700}.review-cue{border-left:5px solid #6b46c1;background:#f8f5ff}.warning{border-left:5px solid var(--amber);background:#fffbeb}.sources{color:var(--muted);font-size:.9rem}.metric{font-weight:700;color:var(--blue)}table{display:block;width:100%;max-width:100%;overflow-x:auto;border-collapse:collapse;background:#fff;margin:1.2rem 0;font-size:.95rem}th,td{padding:.7rem;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:#edf2fb}figure{max-width:100%;margin:2rem 0;background:#fff;border:1px solid var(--line);border-radius:14px;padding:1rem;overflow:auto}figcaption{color:var(--muted);font-size:.93rem;margin-top:.5rem}svg{display:block;width:100%;min-width:720px;height:auto}svg text{font-size:15px}.diagram-small{font-size:12px}.diagram-label{font-size:13px}.lab{margin:2rem 0;padding:1.2rem;background:#fff;border:1px solid var(--line);border-radius:14px}.lab h3{margin-top:.35rem}.lab-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.7rem}.lab-meta>div{background:#f1f5fb;padding:.8rem;border-radius:8px}.lab-guide{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.7rem;margin-top:1rem}.lab-guide>div{border:1px solid var(--line);border-radius:8px;padding:.8rem}.lab-source summary{cursor:pointer;font-weight:700;color:var(--blue);padding:.5rem 0}.tag{display:inline-block;border-radius:999px;padding:.14rem .6rem;background:#e5edff;color:#264f9e;font-size:.82rem;font-weight:700}.checklist li{margin:.4rem 0}.refs li{margin:.65rem 0;overflow-wrap:anywhere}.small{color:var(--muted);font-size:.92rem}.part{margin-top:4.5rem;padding:.9rem 1rem;background:var(--navy);color:#fff;border-radius:10px;font-size:1.05rem;font-weight:700;letter-spacing:.02em}.part+section>h2{margin-top:2rem}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#fff;border:1px solid var(--line);padding:.8rem;border-radius:8px;overflow:auto}.course-contract{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}.course-contract>div{background:#fff;border:1px solid var(--line);padding:1rem;border-radius:12px}footer{color:var(--muted);border-top:1px solid var(--line);padding-top:2rem;margin-top:4rem}@media(max-width:700px){nav ol{columns:1}body{font-size:16px}header{padding-top:2.8rem}h2{font-size:1.65rem}.part{font-size:1rem}}@media print{body{background:#fff}nav{box-shadow:none}.answer-key[open]{display:block}.lab-source{break-inside:avoid}header{background:#16233f!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+.lesson-title{font-size:2rem;line-height:1.2;margin-top:3.8rem;border-bottom:2px solid var(--line);padding-bottom:.45rem}.part+section>.lesson-title{margin-top:2rem}h2.part{border-bottom:0;padding:.9rem 1rem;line-height:1.4}@media(max-width:700px){.lesson-title{font-size:1.65rem}}
+</style></head><body>
+<a class="skip-link" href="#course-content">Skip to course content</a>
+<header><h1>GPU Fundamentals for Performance Engineering</h1><p class="course-hours"><strong>30 guided hours</strong></p></header>
+<main id="course-content"><nav aria-label="Course contents"><h2>Course contents</h2><ol><li><a href="#cpu-gpu">1. Decide whether work belongs on a GPU</a></li><li><a href="#h100-device-architecture">2. Read the H100 device from HBM to streaming multiprocessors</a></li><li><a href="#hopper-sm-architecture">3. Look inside a Hopper streaming multiprocessor</a></li><li><a href="#execution-hierarchy">4. Read the grid, block, warp, and SM hierarchy</a></li><li><a href="#async-journey">5. Follow a PyTorch call to completed CUDA work</a></li><li><a href="#measurement-contract">6. Build a trustworthy two-node baseline</a></li><li><a href="#fundamentals-bottleneck-map">7. Map a slow result to the system’s critical path</a></li><li><a href="#latency-occupancy">8. Separate latency hiding, occupancy, and utilization</a></li><li><a href="#memory-hierarchy">9. Trace bytes through the memory hierarchy</a></li><li><a href="#layout-coalescing">10. Connect tensor layout to useful memory transactions</a></li><li><a href="#movement-streams">11. Move data deliberately and prove overlap</a></li><li><a href="#precision-tensor-cores">12. Choose precision and Tensor Core paths intentionally</a></li><li><a href="#roofline">13. Use roofline thinking to choose the next experiment</a></li><li><a href="#topology-collectives">14. Make two-node communication part of the workload</a></li><li><a href="#fundamentals-capstone">15. Diagnose a slow GPU path from first principles</a></li><li><a href="#labs">Guided labs and complete source</a></li><li><a href="#official-references">Official references</a></li></ol></nav>
+<section id="how-to-use"><h2>How to use this course</h2><p>Follow the sections in order. For each topic: retrieve the prior idea, study the worked example, write a prediction, run the linked Slurm lab, inspect structured evidence, check the answer, and revisit the review cue. The two-node preflight is the entry gate for the whole course.</p><div class="course-contract"><div><h3>Prerequisites</h3><p>Python, basic PyTorch tensors, and command-line use. CUDA C++ and advanced calculus are not required.</p></div><div><h3>Runtime contract</h3><p>The learner environment is a two-node Slurm cluster with exactly one full H100 on each node. Every lab is submitted through Slurm. Device microbenchmarks reserve one node to isolate a local effect; distributed labs reserve both nodes and launch one process per node through <code>torchrun</code>.</p></div><div><h3>Evidence contract</h3><p>No timing or speedup in this course is a promise. Portable JSON uses the canonical <code>gpu-course-result/v1</code> schema and a random run ID, never a scheduler ID. Keep raw artifacts private and attach only a separately reviewed, sanitized evidence summary to each conclusion.</p></div></div><pre><code>python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python tools/validate_course.py
+sbatch slurm/two_node.sbatch labs/00_cluster_preflight.py --profile smoke</code></pre><div class="warning"><strong>One-node and two-node allocations.</strong> The course assumes both H100 nodes are available. One-node jobs isolate local GPU phenomena; two-node jobs are required for the cluster, collective, and scaling outcomes.</div></section>
+
+<h2 class="part">Part I · GPU foundations and Hopper architecture</h2>
+<section id="cpu-gpu" class="lesson">
+  <h3 class="lesson-title">1. Decide whether work belongs on a GPU</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Explain the CPU/GPU trade and measure the crossover without hiding transfer or launch cost.</div>
+  <div class="recall"><strong>Recall first.</strong> Why can a massively parallel GPU lose to a CPU on a small tensor even when the GPU has much higher peak arithmetic throughput?</div>
+  <p>A CPU is designed to reduce the latency of a small number of complicated instruction streams. Large caches, speculative execution, and sophisticated branch prediction serve irregular control work well. A GPU devotes more area to parallel arithmetic and throughput. It wins when many similar operations can run together long enough to amortize command launch and data movement.</p><p>Three measurements answer three different questions. CPU time describes the host implementation. Resident GPU time assumes inputs and outputs already live on the device, as in a steady training loop. Transfer-inclusive GPU time includes required copies and represents one-shot offload or an application boundary. Never subtract transfers from an end-to-end claim merely because the kernel looks fast.</p><p>Batching changes the balance. Combining many small items can increase parallel work per launch, improve matrix shape, and reduce Python overhead per item. Batching can also increase queueing latency or memory pressure. “Use a larger batch” is therefore a hypothesis tied to a service objective, not a universal rule.</p><table><thead><tr><th>Workload trait</th><th>CPU is attractive</th><th>GPU is attractive</th></tr></thead><tbody><tr><td>Amount of work</td><td>Tiny or occasional</td><td>Large or repeatedly batched</td></tr><tr><td>Control flow</td><td>Irregular and branch-heavy</td><td>Regular across many elements</td></tr><tr><td>Data location</td><td>Already in host memory</td><td>Already resident on device</td></tr><tr><td>Latency goal</td><td>One small operation</td><td>High aggregate throughput</td></tr></tbody></table>
+
+  <div class="worked-example"><h3>Worked example</h3><p>A vector expression over 1,024 elements launches CUDA work but exposes little parallel work. The same expression over millions of resident elements has enough threads to occupy many SMs. If the input is copied to the GPU and the result copied back every time, the crossover moves again. The correct lab records all three paths across sizes; it does not claim one permanent threshold.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Before running Lab 01, predict which path will win for the smallest size and which cost dominates transfer-inclusive GPU time. After running, identify the first size where the ranking changes. Repeat once with a different iteration count without changing tensor values or dtypes.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>The small CPU path often wins because launch and synchronization are fixed costs. Resident GPU work should become more competitive as parallel work grows. Transfer-inclusive behavior depends on the allocation and interconnect, so the answer is the measured crossover, not a memorized number. Changing only the iteration count should affect confidence and overhead amortization, not the definition of each path.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> When a later optimization proposes offload, ask whether its comparison matches resident or transfer-inclusive use.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f6">F6</a>.</p>
+</section>
+<section id="h100-device-architecture" class="lesson">
+  <h3 class="lesson-title">2. Read the H100 device from HBM to streaming multiprocessors</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Locate the major device-wide components that move, cache, schedule, and execute a PyTorch workload.</div>
+  <div class="recall"><strong>Recall first.</strong> Which costs belong outside a GPU kernel: host preparation, launch, host-to-device transfer, and inter-node communication?</div>
+  <p>An H100 is not one large arithmetic unit. At the system boundary, a CPU prepares work and reaches the GPU through PCIe. Device memory is implemented with HBM stacks and memory controllers. A device-wide L2 cache and on-chip interconnect serve many groups of execution resources. Graphics Processing Clusters (GPCs) group Texture Processing Clusters (TPCs), and a Hopper TPC contains two Streaming Multiprocessors (SMs). CUDA thread blocks execute on SMs.</p>
+  <p>The hierarchy matters because distance and sharing change the cost. HBM is large and device-wide but farther from execution. L2 is also device-wide and can reuse data across SMs. Resources inside an SM are faster and smaller. A block normally remains on one SM for its lifetime, so its registers and ordinary shared memory do not become a device-wide store. Hopper thread-block clusters add controlled cooperation across nearby SMs within a GPC, but they do not turn every SM resource into global memory.</p>
+  <p>The full GH100 design and shipping H100 products do not enable identical numbers of GPCs, TPCs, SMs, memory controllers, or HBM stacks. The SXM and PCIe products also differ. Therefore the diagram shows containment and data paths, not an exact floorplan. Query the allocated GPU for its product name, compute capability, total memory, and SM count; do not infer disabled units from a marketing diagram.</p>
+  <figure><svg viewBox="0 0 1200 650" role="img" aria-labelledby="h100-device-title h100-device-desc"><title id="h100-device-title">Logical H100 device hierarchy</title><desc id="h100-device-desc">A logical, not-to-scale hierarchy shows host and PCI Express, HBM and memory controllers, shared L2 and on-chip fabric, replicated GPCs, TPCs, and two SMs per TPC.</desc><defs><marker id="h100-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><g text-anchor="middle"><rect x="30" y="55" width="180" height="90" rx="12" fill="#e8eefc" stroke="#3867d6" stroke-width="2"/><text x="120" y="91" font-weight="700">CPU + host RAM</text><text x="120" y="118" class="diagram-label">launches and input data</text><rect x="280" y="35" width="250" height="130" rx="12" fill="#fff3d6" stroke="#b45309" stroke-width="2"/><text x="405" y="75" font-weight="700">HBM stacks</text><text x="405" y="103" class="diagram-label">device memory</text><text x="405" y="130" class="diagram-label">capacity depends on SKU</text><rect x="600" y="35" width="250" height="130" rx="12" fill="#e1f5f3" stroke="#137f84" stroke-width="2"/><text x="725" y="72" font-weight="700">memory controllers</text><text x="725" y="100" font-weight="700">+ L2 partitions</text><text x="725" y="130" class="diagram-label">device-wide cache path</text><rect x="920" y="55" width="240" height="90" rx="12" fill="#edf7ef" stroke="#2f855a" stroke-width="2"/><text x="1040" y="91" font-weight="700">on-chip fabric</text><text x="1040" y="118" class="diagram-label">connects memory and GPCs</text></g><g fill="none" stroke="#3867d6" stroke-width="3" marker-start="url(#h100-arr)" marker-end="url(#h100-arr)"><line x1="210" y1="100" x2="280" y2="100"/><line x1="530" y1="100" x2="600" y2="100"/><line x1="850" y1="100" x2="920" y2="100"/></g><text x="245" y="84" text-anchor="middle" class="diagram-small">PCIe copy path</text><rect x="90" y="225" width="1020" height="350" rx="18" fill="#f7f9fd" stroke="#3867d6" stroke-width="2"/><text x="120" y="260" font-weight="700">Replicated GPCs</text><text x="1080" y="260" text-anchor="end" class="diagram-label">counts vary by H100 product</text><g text-anchor="middle"><rect x="145" y="290" width="420" height="230" rx="14" fill="#eef4ff" stroke="#3867d6" stroke-width="2"/><text x="355" y="326" font-weight="700">GPC example</text><rect x="190" y="350" width="330" height="125" rx="12" fill="#fff" stroke="#137f84" stroke-width="2"/><text x="355" y="382" font-weight="700">TPC</text><rect x="220" y="405" width="120" height="45" rx="8" fill="#dff1e4"/><rect x="370" y="405" width="120" height="45" rx="8" fill="#dff1e4"/><text x="280" y="433">SM</text><text x="430" y="433">SM</text><rect x="635" y="290" width="420" height="230" rx="14" fill="#eef4ff" stroke="#3867d6" stroke-width="2"/><text x="845" y="326" font-weight="700">other GPCs</text><rect x="680" y="350" width="150" height="125" rx="12" fill="#fff" stroke="#137f84"/><rect x="860" y="350" width="150" height="125" rx="12" fill="#fff" stroke="#137f84"/><text x="755" y="402">TPCs</text><text x="755" y="430" class="diagram-small">two SMs each</text><text x="935" y="402">TPCs</text><text x="935" y="430" class="diagram-small">two SMs each</text></g><path d="M1040 145 V205 H600 V225" fill="none" stroke="#3867d6" stroke-width="3" marker-end="url(#h100-arr)"/><text x="600" y="620" text-anchor="middle" fill="#586176">Logical containment and data paths; not a physical floorplan and not to scale.</text></svg><figcaption>Performance questions become more precise when they name the boundary: PCIe transfer, HBM/L2 traffic, work scheduled to SMs, or resources inside one SM. Shipping H100 configurations enable different subsets of the full GH100 design.</figcaption></figure>
+  <div class="worked-example"><h3>Worked example</h3><p>A tensor already in HBM does not pay a new PCIe copy for every kernel. A load instruction issued by an SM requests data through its cache hierarchy; an L2 hit can avoid an HBM access. A separate input pipeline may concurrently copy the next batch through PCIe. Those are different paths and require different measurements.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>From Lab 00, record the exact product name, compute capability, total memory, SM count, and MIG state. Annotate the diagram with only the properties the runtime reports. Mark GPC/TPC counts as unknown unless the specific official product documentation establishes them.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>A correct annotation separates detected facts from architecture-family facts. Compute capability 9.0 identifies Hopper H100 behavior, while the product name and runtime properties identify the allocated SKU. The logical HBM/L2/GPC/TPC/SM hierarchy is reusable; exact enabled-unit counts are not universal.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> For every later bottleneck, state whether its limiting resource is system-wide, device-wide, GPC-local, SM-wide, or local to a thread or block.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f2">F2</a>, <a href="#ref-f11">F11</a>.</p>
+</section>
+<section id="hopper-sm-architecture" class="lesson">
+  <h3 class="lesson-title">3. Look inside a Hopper streaming multiprocessor</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Distinguish per-thread, per-block, scheduler-partition, and SM-wide resources that constrain a kernel.</div>
+  <div class="recall"><strong>Recall first.</strong> Which device components are shared by all SMs, and which resources must be allocated before a block can reside on one SM?</div>
+  <p>A Hopper SM is divided into four scheduler/execution subpartitions, often called SMSPs. Each has a warp scheduler and a share of the execution pipelines and register-file implementation. At the compute-capability 9.0 programming-model level, one SM has four warp schedulers, 128 FP32 units, 64 FP64 units, 64 INT32 units, 16 special-function units, and four fourth-generation Tensor Cores. These totals describe available pipelines; they do not mean one warp uses every unit at once.</p>
+  <p>Registers are logically private to threads, but their physical capacity is finite and allocated across resident warps. Shared memory is explicitly allocated per thread block and is visible to threads in that block. Hopper implements shared memory and L1/texture caching from a unified 256 KB physical resource; the shared-memory carveout can be configured up to 228 KB per SM, with at most 227 KB available to one opted-in block. Increasing registers per thread or shared memory per block can reduce how many blocks and warps reside simultaneously.</p>
+  <p>A warp scheduler chooses among its assigned resident warps. A resident warp may be stalled, eligible, selected, or issued. The scheduler can hide one warp's latency by issuing an eligible instruction from another, but only if independent work exists and required execution pipelines are available. Tensor Cores execute eligible matrix instructions; ordinary FP/INT pipelines execute other instructions. TMA can move multidimensional tiles between global and shared memory asynchronously for compatible kernels.</p>
+  <figure><svg viewBox="0 0 1200 680" role="img" aria-labelledby="hopper-sm-title hopper-sm-desc"><title id="hopper-sm-title">Simplified Hopper SM resource model</title><desc id="hopper-sm-desc">Four scheduler and execution subpartitions each contain a warp scheduler, a register-file partition, and execution pipelines. A unified L1, texture, and shared-memory resource spans the SM, while L2 and HBM are outside it.</desc><defs><marker id="sm-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><rect x="35" y="35" width="1130" height="565" rx="18" fill="#f7f9fd" stroke="#3867d6" stroke-width="3"/><text x="65" y="75" font-size="20" font-weight="700">One Hopper SM: logical resource ownership</text><g text-anchor="middle"><rect x="80" y="110" width="250" height="270" rx="12" fill="#eef4ff" stroke="#3867d6"/><rect x="350" y="110" width="250" height="270" rx="12" fill="#eef4ff" stroke="#3867d6"/><rect x="620" y="110" width="250" height="270" rx="12" fill="#eef4ff" stroke="#3867d6"/><rect x="890" y="110" width="230" height="270" rx="12" fill="#eef4ff" stroke="#3867d6"/><g font-weight="700"><text x="205" y="142">SMSP 0</text><text x="475" y="142">SMSP 1</text><text x="745" y="142">SMSP 2</text><text x="1005" y="142">SMSP 3</text></g><g class="diagram-label"><text x="205" y="180">warp scheduler</text><text x="205" y="215">register-file partition</text><text x="205" y="250">FP / INT pipelines</text><text x="205" y="285">load/store + SFU</text><text x="205" y="320">Tensor Core resources</text><text x="475" y="180">warp scheduler</text><text x="475" y="215">register-file partition</text><text x="475" y="250">FP / INT pipelines</text><text x="475" y="285">load/store + SFU</text><text x="475" y="320">Tensor Core resources</text><text x="745" y="180">warp scheduler</text><text x="745" y="215">register-file partition</text><text x="745" y="250">FP / INT pipelines</text><text x="745" y="285">load/store + SFU</text><text x="745" y="320">Tensor Core resources</text><text x="1005" y="180">warp scheduler</text><text x="1005" y="215">register-file partition</text><text x="1005" y="250">FP / INT pipelines</text><text x="1005" y="285">load/store + SFU</text><text x="1005" y="320">Tensor Core resources</text></g><rect x="110" y="410" width="980" height="105" rx="12" fill="#dff1e4" stroke="#2f855a" stroke-width="2"/><text x="600" y="445" font-weight="700">SM-wide unified L1 / texture / shared-memory physical resource</text><text x="600" y="476" class="diagram-label">shared-memory allocations belong to blocks; cache capacity serves SM memory traffic</text><rect x="330" y="540" width="540" height="42" rx="8" fill="#fff3d6" stroke="#b45309"/><text x="600" y="567" class="diagram-label">TMA and load/store paths connect the SM to device-wide L2 and HBM</text></g><g stroke="#3867d6" stroke-width="3" fill="none" marker-end="url(#sm-arr)"><line x1="205" y1="380" x2="205" y2="410"/><line x1="475" y1="380" x2="475" y2="410"/><line x1="745" y1="380" x2="745" y2="410"/><line x1="1005" y1="380" x2="1005" y2="410"/><line x1="600" y1="515" x2="600" y2="540"/></g><text x="600" y="635" text-anchor="middle" fill="#586176">Schematic teaching view: resource totals and ownership matter more than a literal silicon floorplan.</text></svg><figcaption>The four SMSPs schedule warps and provide execution capacity. Registers are thread-private in the programming model, shared memory is block-scoped, and the unified L1/shared-memory physical capacity is allocated at the SM.</figcaption></figure>
+  <div class="worked-example"><h3>Worked example</h3><p>Suppose a kernel doubles its registers per thread. It may reduce spills and execute each warp more efficiently, but fewer warps may fit on the SM. Conversely, forcing fewer registers may raise occupancy while creating local-memory spills backed by device memory. The winning point is the measured balance, not the largest occupancy percentage.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>For one kernel from Lab 08 or 09, classify every item as thread-private, block-scoped, SMSP scheduled, SM-wide, or device-wide: registers, a warp, shared memory, L1, Tensor Core instructions, L2, and HBM. Then predict which resource could limit residency.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>Registers are logically thread-private and allocated from finite SM/SMSP capacity; a warp is assigned to a scheduler; shared memory is block-scoped and allocated from the SM carveout; L1/shared capacity is SM-wide; Tensor Core instructions issue through SM execution resources; L2 and HBM are device-wide. Registers, shared memory, threads, blocks, and architectural limits can constrain residency.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> When a kernel underperforms, ask separately whether it lacks eligible warps, waits on data, saturates a pipeline, or loses residency to resource pressure.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f2">F2</a>, <a href="#ref-f7">F7</a>, <a href="#ref-f11">F11</a>.</p>
+</section>
+<section id="execution-hierarchy" class="lesson">
+  <h3 class="lesson-title">4. Read the grid, block, warp, and SM hierarchy</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Explain how logical CUDA work is scheduled onto H100 SMs and connect that hierarchy to PyTorch kernels.</div>
+  <div class="recall"><strong>Recall first.</strong> Which unit stays on one SM for its lifetime: a grid, a thread block, a warp, or an entire PyTorch model?</div>
+  <p>A kernel launch creates a grid of thread blocks. A block is assigned to one streaming multiprocessor and does not migrate or split across SMs. Hardware groups block threads into warps of 32 threads. Warp schedulers choose eligible warps and issue instructions to execution pipelines. The same high-level PyTorch operator may launch one optimized library kernel, several kernels, or a compiled fused kernel.</p><p>Threads provide logical parallelism; blocks provide scheduling and shared-memory scope; warps are the instruction-issue group; SMs own schedulers, registers, shared memory/L1, and execution pipelines. Tensor Cores are specialized matrix units reached by eligible instructions inside suitable kernels. They are not a separate place where a tensor is stored.</p><p>Kernel names and counts are implementation details that can change with shape, dtype, PyTorch/CUDA version, and compiler decisions. Profile them to understand a measured environment; do not make a course contract depend on a vendor-internal kernel name.</p>
+  <figure><svg viewBox="0 0 1200 650" role="img" aria-labelledby="execution-map-title execution-map-desc"><title id="execution-map-title">CUDA grid, blocks, SM assignment, and warps</title><desc id="execution-map-desc">One kernel launch creates a grid of blocks. Blocks are assigned whole to available streaming multiprocessors, where block threads are grouped into 32-thread warps and scheduled on that SM. A later wave of blocks waits until resources become available.</desc><defs><marker id="execution-map-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><text x="35" y="45" font-size="20" font-weight="700">Logical launch</text><rect x="35" y="70" width="460" height="215" rx="14" fill="#eef4ff" stroke="#3867d6" stroke-width="2"/><text x="65" y="103" font-weight="700">Grid: all blocks for one kernel launch</text><g fill="#fff" stroke="#137f84" text-anchor="middle"><rect x="70" y="135" width="105" height="55" rx="7"/><rect x="195" y="135" width="105" height="55" rx="7"/><rect x="320" y="135" width="105" height="55" rx="7"/><rect x="70" y="210" width="105" height="55" rx="7"/><rect x="195" y="210" width="105" height="55" rx="7"/><rect x="320" y="210" width="105" height="55" rx="7"/></g><g text-anchor="middle" class="diagram-label"><text x="122" y="169">block 0</text><text x="247" y="169">block 1</text><text x="372" y="169">block 2</text><text x="122" y="244">block 3</text><text x="247" y="244">block 4</text><text x="372" y="244">more …</text></g><text x="760" y="45" font-size="20" font-weight="700">Physical scheduling</text><g text-anchor="middle"><rect x="585" y="70" width="250" height="215" rx="14" fill="#edf7ef" stroke="#2f855a" stroke-width="2"/><rect x="885" y="70" width="250" height="215" rx="14" fill="#edf7ef" stroke="#2f855a" stroke-width="2"/><text x="710" y="103" font-weight="700">SM A</text><text x="1010" y="103" font-weight="700">SM B</text><rect x="625" y="130" width="170" height="58" rx="8" fill="#dff1e4"/><rect x="625" y="205" width="170" height="58" rx="8" fill="#dff1e4"/><rect x="925" y="130" width="170" height="58" rx="8" fill="#dff1e4"/><rect x="925" y="205" width="170" height="58" rx="8" fill="#dff1e4"/><text x="710" y="154">resident block 0</text><text x="710" y="176" class="diagram-small">stays on SM A</text><text x="710" y="229">resident block 2</text><text x="710" y="251" class="diagram-small">if resources permit</text><text x="1010" y="154">resident block 1</text><text x="1010" y="176" class="diagram-small">stays on SM B</text><text x="1010" y="229">resident block 3</text><text x="1010" y="251" class="diagram-small">if resources permit</text></g><g stroke="#3867d6" stroke-width="3" fill="none" marker-end="url(#execution-map-arr)"><path d="M175 163 C520 155 500 145 625 155"/><path d="M300 163 C620 175 770 145 925 155"/><path d="M425 163 C530 185 560 235 625 235"/><path d="M175 238 C570 290 760 235 925 235"/></g><rect x="145" y="360" width="910" height="210" rx="14" fill="#fff" stroke="#3867d6" stroke-width="2"/><text x="175" y="397" font-size="19" font-weight="700">Zoom into one resident block on one SM</text><g text-anchor="middle"><rect x="190" y="435" width="190" height="70" rx="9" fill="#eef4ff" stroke="#3867d6"/><rect x="425" y="435" width="190" height="70" rx="9" fill="#eef4ff" stroke="#3867d6"/><rect x="660" y="435" width="190" height="70" rx="9" fill="#eef4ff" stroke="#3867d6"/><rect x="895" y="435" width="110" height="70" rx="9" fill="#eef4ff" stroke="#3867d6"/><text x="285" y="465">warp 0</text><text x="285" y="488" class="diagram-label">threads 0–31</text><text x="520" y="465">warp 1</text><text x="520" y="488" class="diagram-label">threads 32–63</text><text x="755" y="465">warp 2</text><text x="755" y="488" class="diagram-label">next 32 threads</text><text x="950" y="475">…</text></g><text x="600" y="545" text-anchor="middle" class="diagram-label">the block may contain any valid number of warps; two warps are not assumed</text><text x="600" y="620" text-anchor="middle" fill="#586176">A grid can require several waves when more blocks exist than can reside concurrently.</text></svg><figcaption>The programming hierarchy and hardware hierarchy meet at block assignment. Blocks stay whole on an SM; their threads are grouped into warps; later blocks wait for a scheduling wave.</figcaption></figure>
+  <p>CUDA and Triton expose related but different launch abstractions. A CUDA grid contains thread blocks, and each block declares physical CUDA threads. A Triton grid contains program instances; a kernel meta-parameter such as <code>BLOCK_SIZE</code> commonly declares how many tensor elements one program covers, while <code>num_warps</code> controls the program's physical warp team. Therefore <code>programs × BLOCK_SIZE</code> counts covered element lanes, not CUDA threads. A one-dimensional element offset is commonly <code>program_id × BLOCK_SIZE + lane</code>, and the final program needs a bounds mask.</p><p>CUDA threads per block and Triton elements/warps per program are separate measured choices. They can change residency, register/shared-memory pressure, occupancy, and tail waste, but a hardware limit is not a universal optimum. High-level PyTorch normally chooses library or compiler-generated geometry; a custom Triton or CUDA kernel is justified only after profiles show that library operations, layout changes, and compilation do not express the required work efficiently.</p>
+  <div class="worked-example"><h3>Worked example</h3><p>A PyTorch sequence containing matrix multiplication, layer normalization, bias addition, GELU, squaring, and reduction expresses six conceptual steps. The profiler may show library calls and multiple CUDA events. That observation links the Python program to launched work. It does not reveal block dimensions or instruction mix; those require a kernel profiler.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Run Lab 08. For each of the top CUDA events, map it to the most plausible high-level operation. Then classify each mapping as “confirmed by name,” “inferred from order/shape,” or “unknown.” Why is “unknown” a valid answer?</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>The block is the scheduling and shared-memory unit that remains on one SM. Kernel/event names may make matrix and reduction work recognizable, but fused or generic names can hide provenance. “Unknown” prevents an unsupported claim; use shapes, NVTX ranges, or a smaller controlled workload to disambiguate.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> Return to this hierarchy when a profiler reports low occupancy, divergence, many launches, or Tensor Core ineligibility.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f2">F2</a>, <a href="#ref-f7">F7</a>.</p>
+</section>
+<section id="async-journey" class="lesson">
+  <h3 class="lesson-title">5. Follow a PyTorch call to completed CUDA work</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Distinguish Python dispatch, kernel enqueue, stream ordering, device execution, and completion.</div>
+  <div class="recall"><strong>Recall first.</strong> If a Python call returns before its CUDA kernel finishes, what did a surrounding host timer actually measure?</div>
+  <p>A PyTorch expression first runs Python and dispatcher logic on the CPU. The selected CUDA implementation prepares arguments and enqueues kernels or copies onto a CUDA stream. Enqueueing is ordered within a stream, but the host normally continues without waiting for device completion. An error may surface only at a later synchronization point.</p><p>The default stream is not “the GPU”; it is one ordered work queue. Additional streams can expose independent copy or compute work, but concurrency occurs only when dependencies and hardware resources permit it. A tensor produced on one stream must not be consumed on another until the consumer waits for the producer. PyTorch records many dependencies automatically, yet custom stream code must keep tensor lifetimes and ordering correct.</p><p>Use host wall time for end-to-end application intervals that intentionally include completion. Use CUDA events for device intervals on streams. A call to <code>torch.cuda.synchronize()</code> makes a host timer honest, but synchronizing inside a production loop can destroy overlap; place it at the measurement boundary.</p>
+  <figure><svg viewBox="0 0 1000 360" role="img" aria-labelledby="async-title async-desc"><title id="async-title">Host enqueue and device execution timeline</title><desc id="async-desc">The CPU enqueues operations quickly while the GPU executes them later on CUDA streams; an explicit event marks completion.</desc><defs><marker id="async-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><text x="35" y="62" font-weight="700">CPU thread</text><line x1="160" y1="55" x2="930" y2="55" stroke="#172033" stroke-width="2"/><rect x="190" y="30" width="120" height="48" rx="8" fill="#dbe8ff"/><text x="250" y="59" text-anchor="middle">enqueue A</text><rect x="330" y="30" width="120" height="48" rx="8" fill="#dbe8ff"/><text x="390" y="59" text-anchor="middle">enqueue B</text><text x="35" y="162" font-weight="700">CUDA stream</text><line x1="160" y1="155" x2="930" y2="155" stroke="#172033" stroke-width="2"/><rect x="260" y="130" width="250" height="48" rx="8" fill="#dff1e4"/><text x="385" y="159" text-anchor="middle">kernel A executes</text><rect x="510" y="130" width="270" height="48" rx="8" fill="#dff1e4"/><text x="645" y="159" text-anchor="middle">kernel B executes</text><line x1="250" y1="78" x2="285" y2="127" stroke="#3867d6" stroke-width="3" marker-end="url(#async-arrow)"/><line x1="390" y1="78" x2="540" y2="127" stroke="#3867d6" stroke-width="3" marker-end="url(#async-arrow)"/><line x1="780" y1="155" x2="860" y2="245" stroke="#3867d6" stroke-width="3" marker-end="url(#async-arrow)"/><rect x="760" y="245" width="190" height="55" rx="8" fill="#fff3d6" stroke="#d97706"/><text x="855" y="278" text-anchor="middle">event / synchronize</text><text x="500" y="335" text-anchor="middle" fill="#586176">Host wall time without synchronization measures enqueue work, not completed device work.</text></svg><figcaption>CUDA work is normally asynchronous with respect to the host. Use CUDA events for device intervals and synchronize only where the measurement contract requires completion.</figcaption></figure>
+  <div class="worked-example"><h3>Worked example</h3><p>The CPU enqueues two matrix multiplications in a fraction of the time the device needs to finish them. A naive host timer reports only enqueue overhead. Recording a CUDA event before and after the work, then synchronizing the end event, measures the device interval. Putting independent multiplications on two streams may or may not shorten the interval because each GEMM can already occupy most execution resources.</p></div>
+  <div class="exercise"><h3>Practice</h3><ol><li>Run Lab 07 and compare host enqueue median with device median.</li><li>Explain why a lack of stream speedup does not disprove asynchrony.</li><li>Name the event or wait needed when stream B consumes stream A's result.</li></ol></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>Host enqueue time can be far smaller than completed device time. Two streams prove independent scheduling, not guaranteed overlap or improvement; saturated kernels may serialize on resources. A cross-stream consumer must wait on the producing stream or an event recorded after production. Synchronizing the entire device is correct but broader than necessary.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> Before interpreting any later timing, label it host, device, or end-to-end and mark the completion boundary.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f6">F6</a>.</p>
+</section>
+<h2 class="part">Part II · Measurement and scheduling</h2>
+<section id="measurement-contract" class="lesson">
+  <h3 class="lesson-title">6. Build a trustworthy two-node baseline</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Define a measurement that another learner can reproduce and know when the result is invalid.</div>
+  <div class="recall"><strong>Recall first.</strong> What information is missing from the statement “the GPU step took 4 ms”? Name at least five fields.</div>
+  <p>A benchmark is a controlled comparison, not a stopwatch reading. Freeze the operation, input shapes, dtypes, data placement, warm-up, number of samples, correctness rule, and primary metric before the first run. Keep scheduler job IDs, hostnames, and exact fabric details only in the private evidence package. The shareable summary uses the random course run ID plus node count, GPU family, MIG status, driver, CUDA runtime reported by PyTorch, PyTorch version, NCCL version when used, and a sanitized topology class. A later result is comparable only when the fields relevant to the hypothesis match.</p><p>Warm-up separates one-time work—CUDA context creation, library loading, allocator growth, algorithm selection, and compilation—from steady-state work. Keep first-call cost when it matters to the user, but label it separately. Preserve every timed sample; the median describes the center and a tail percentile exposes instability that a best time hides.</p><p>Correctness is part of performance. Exact copies and collective invariants can use exact checks. Reduced-precision math needs a tolerance chosen before measurement. Training needs finite loss and gradients plus an agreed quality or convergence check. A faster result that violates the gate is rejected.</p><table><thead><tr><th>Field</th><th>Why it changes interpretation</th></tr></thead><tbody><tr><td>Resident versus transferred inputs</td><td>Separates device execution from PCIe movement.</td></tr><tr><td>One node versus two ranks</td><td>Adds process launch, NCCL, and fabric traffic.</td></tr><tr><td>First call versus warmed samples</td><td>Separates setup and compilation from replay.</td></tr><tr><td>Median and p90</td><td>Shows center and variability instead of a favorable outlier.</td></tr></tbody></table>
+
+  <div class="worked-example"><h3>Worked example</h3><p>Suppose two runs report 3.8 ms and 4.2 ms. The first used resident BF16 tensors after ten warm-ups; the second included host-to-device copies and was the first call. The numbers do not rank the same workload. Rewrite the comparison as two separate questions: “device-only steady state” and “first-request end-to-end.” Then collect both under matching conditions.</p></div>
+  <div class="exercise"><h3>Practice</h3><ol><li>Copy the benchmark-record template for a planned run.</li><li>Write one primary metric and one correctness gate.</li><li>List three changes that would invalidate comparison with the baseline.</li><li>Run <code>labs/00_cluster_preflight.py</code> on both nodes before any performance lab.</li></ol></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>A complete answer names the exact workload and unit, a correctness condition, warm-up and sampling policy, the two allocated nodes and H100 identity, software versions, and artifacts. Invalidators commonly include a different shape or dtype, a different rank count or topology, including transfers in only one branch, compilation in only one branch, or a failed numerical check.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> Reopen this contract before every later lab and underline the field that the new hypothesis changes.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f6">F6</a>, <a href="#ref-f8">F8</a>.</p>
+</section>
+<section id="fundamentals-bottleneck-map" class="lesson">
+  <h3 class="lesson-title">7. Map a slow result to the system’s critical path</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Name the main limiter families and choose evidence that distinguishes one from another.</div>
+  <div class="recall"><strong>Recall first.</strong> Why can low HBM throughput mean either “the kernel does little memory work” or “the GPU is idle,” rather than proving a memory bottleneck?</div>
+  <p>A bottleneck is the resource or dependency that constrains the metric you care about at the current workload. The first step is therefore to define the metric and its boundary. Kernel latency, training-step time, request latency, and cluster throughput can have different critical paths even when they execute the same operator.</p>
+  <p>Use a timeline before a counter. Long CPU gaps suggest launch overhead, input starvation, blocking synchronization, or another host dependency. Long copies on the critical path suggest transfer work. Long, continuously executing kernels require kernel-level evidence: useful memory traffic, cache behavior, arithmetic throughput, instruction dependencies, divergence, and available parallelism. Distributed gaps add collective and fabric dependencies. Capacity is slightly different: it may prevent the desired batch or model from running even when it is not the slowest interval.</p>
+  <p>A utilization percentage is an observation, not a cause. High “GPU utilization” can include inefficient kernels; low utilization can result from short bursts separated by host work. For each first hypothesis, name one corroborating measurement and one disconfirming control. The smallest useful experiment changes one causal factor while keeping the workload and correctness contract fixed.</p>
+  <figure><svg viewBox="0 0 1200 590" role="img" aria-labelledby="fund-bmap-title fund-bmap-desc"><title id="fund-bmap-title">GPU performance bottleneck map</title><desc id="fund-bmap-desc">The learner starts with a user-visible metric, inspects the critical-path timeline, classifies host, input, transfer, memory, compute, parallelism, synchronization, communication, or capacity limits, and chooses a discriminating experiment.</desc><defs><marker id="fund-bmap-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><g text-anchor="middle"><rect x="35" y="220" width="180" height="80" rx="12" fill="#dbe8ff" stroke="#3867d6" stroke-width="2"/><text x="125" y="251" font-weight="700">user metric</text><text x="125" y="278" class="diagram-label">defined boundary</text><rect x="265" y="220" width="190" height="80" rx="12" fill="#dff1e4" stroke="#2f855a" stroke-width="2"/><text x="360" y="251" font-weight="700">critical-path</text><text x="360" y="278" class="diagram-label">timeline</text><rect x="980" y="220" width="185" height="80" rx="12" fill="#fff3d6" stroke="#b45309" stroke-width="2"/><text x="1072" y="249" font-weight="700">smallest</text><text x="1072" y="275" font-weight="700">discriminating test</text></g><g stroke="#3867d6" stroke-width="3" fill="none" marker-end="url(#fund-bmap-arr)"><line x1="215" y1="260" x2="265" y2="260"/><line x1="455" y1="260" x2="510" y2="260"/><line x1="925" y1="260" x2="980" y2="260"/></g><rect x="510" y="45" width="415" height="490" rx="16" fill="#fff" stroke="#3867d6" stroke-width="2"/><text x="718" y="78" text-anchor="middle" font-weight="700">limiter families</text><g class="diagram-label"><rect x="545" y="105" width="345" height="38" rx="7" fill="#eef4ff"/><text x="565" y="130">host dispatch and launch overhead</text><rect x="545" y="153" width="345" height="38" rx="7" fill="#eef4ff"/><text x="565" y="178">input starvation or blocking synchronization</text><rect x="545" y="201" width="345" height="38" rx="7" fill="#eef4ff"/><text x="565" y="226">host-device or interconnect transfer</text><rect x="545" y="249" width="345" height="38" rx="7" fill="#eef4ff"/><text x="565" y="274">memory bandwidth, latency, or layout</text><rect x="545" y="297" width="345" height="38" rx="7" fill="#eef4ff"/><text x="565" y="322">compute throughput or instruction dependency</text><rect x="545" y="345" width="345" height="38" rx="7" fill="#eef4ff"/><text x="565" y="370">insufficient parallelism or wave tails</text><rect x="545" y="393" width="345" height="38" rx="7" fill="#eef4ff"/><text x="565" y="418">exposed collective communication</text><rect x="545" y="455" width="345" height="48" rx="7" fill="#fff3d6"/><text x="565" y="476">capacity constraint: changes what can run,</text><text x="565" y="496">then may move the performance bottleneck</text></g><text x="600" y="570" text-anchor="middle" fill="#586176">Evidence narrows the cause; the label alone never proves it.</text></svg><figcaption>Use the map repeatedly. Start at the application metric, locate time on the critical path, classify the responsible subsystem, and design a control that can reject the hypothesis.</figcaption></figure>
+  <div class="worked-example"><h3>Worked example</h3><p>A trace shows a 20 ms training step with 11 ms of CPU and data-loader gaps, 7 ms of kernels, and 2 ms of copies. Even if one kernel reaches high HBM throughput, kernel tuning cannot recover more than the kernel portion and is unlikely to be the first experiment. A ready-data control tests whether the gap belongs to the input path.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Choose a later lab and predict its likely limiter family before running it. Write one measurement that would support your prediction and one result that would redirect you to a different family.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>A useful answer connects the metric boundary, visible timeline interval, candidate subsystem, and a disconfirming control. “GPU utilization is low” is incomplete because it does not identify why useful GPU work is absent.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> At the start of every later lesson, point to the limiter family that the lesson helps you investigate.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f3">F3</a>, <a href="#ref-f7">F7</a>.</p>
+</section>
+<section id="latency-occupancy" class="lesson">
+  <h3 class="lesson-title">8. Separate latency hiding, occupancy, and utilization</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Reason about resident warps and divergence without treating maximum occupancy as the goal.</div>
+  <div class="recall"><strong>Recall first.</strong> Can a kernel with lower occupancy be faster than one with higher occupancy? Give one reason.</div>
+  <p>When a warp waits for data or a dependency, an SM can issue an eligible instruction from another resident warp. Occupancy describes how many warps or blocks are resident relative to an architectural limit. Registers per thread, shared memory per block, threads per block, and hardware limits determine how many blocks can reside together. Hopper H100 keeps up to 64 concurrent warps per SM, has 64K 32-bit registers per SM, and supports up to 32 blocks per SM; exact residency still depends on the kernel.</p><p>More occupancy can improve latency hiding until enough independent work is available. After that point, forcing lower register use or smaller shared-memory tiles may make each warp do more work or generate extra memory traffic. The target is the fastest correct kernel, not an occupancy percentage.</p><p>Warp divergence occurs when threads in one warp follow different control paths. The warp must make progress through the required paths while masking threads that are inactive for each path. Short predicated choices can be cheap; long imbalanced branches can waste issue opportunities. Divergence between different warps is not the same problem.</p><p>Utilization is broader: a sampled busy percentage can be high while the wrong unit is saturated, and low while short bursts complete the required work. Always pair utilization with a workload timeline and specific kernel evidence.</p>
+  <figure><svg viewBox="0 0 1000 390" role="img" aria-labelledby="warp-title warp-desc"><title id="warp-title">Warp scheduling hides latency</title><desc id="warp-desc">When one warp waits for data, an SM warp scheduler can issue an eligible instruction from another resident warp.</desc><text x="40" y="65" font-weight="700">cycle</text><g fill="#586176"><text x="210" y="65">1</text><text x="350" y="65">2</text><text x="490" y="65">3</text><text x="630" y="65">4</text><text x="770" y="65">5</text><text x="910" y="65">6</text></g><g font-weight="700"><text x="45" y="125">warp 0</text><text x="45" y="195">warp 1</text><text x="45" y="265">warp 2</text><text x="45" y="335">issued</text></g><g stroke="#dce1ea"><path d="M150 85V350M290 85V350M430 85V350M570 85V350M710 85V350M850 85V350M970 85V350"/></g><rect x="165" y="95" width="110" height="45" rx="7" fill="#dbe8ff"/><text x="220" y="123" text-anchor="middle">load</text><rect x="305" y="95" width="390" height="45" rx="7" fill="#fee2e2"/><text x="500" y="123" text-anchor="middle">waiting for data</text><rect x="725" y="95" width="110" height="45" rx="7" fill="#dff1e4"/><text x="780" y="123" text-anchor="middle">math</text><rect x="305" y="165" width="110" height="45" rx="7" fill="#dbe8ff"/><text x="360" y="193" text-anchor="middle">load</text><rect x="445" y="165" width="250" height="45" rx="7" fill="#fee2e2"/><text x="570" y="193" text-anchor="middle">waiting</text><rect x="445" y="235" width="110" height="45" rx="7" fill="#dff1e4"/><text x="500" y="263" text-anchor="middle">math</text><g fill="#3867d6"><rect x="165" y="305" width="110" height="45" rx="7"/><rect x="305" y="305" width="110" height="45" rx="7"/><rect x="445" y="305" width="110" height="45" rx="7"/><rect x="725" y="305" width="110" height="45" rx="7"/></g><g fill="#fff" text-anchor="middle"><text x="220" y="333">warp 0</text><text x="360" y="333">warp 1</text><text x="500" y="333">warp 2</text><text x="780" y="333">warp 0</text></g></svg><figcaption>Occupancy supplies candidates to the scheduler. It helps only when the additional resident warps have independent work that can issue while others wait.</figcaption></figure>
+  <div class="worked-example"><h3>Worked example</h3><p>Kernel A uses many registers and reaches 50% theoretical occupancy but keeps data in registers. Kernel B is changed to use fewer registers and reaches 100% occupancy, yet spills values to device memory. Kernel B can be slower because extra memory traffic costs more than the added resident warps save. The experiment must compare time and spill/memory evidence, not occupancy alone.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Classify each statement as valid or invalid: (a) “GPU utilization is 95%, so the kernel is compute-bound”; (b) “occupancy rose, therefore latency fell”; (c) “a warp branch with equal work on both paths can cost more than uniform control”; (d) “register spills can trade occupancy for memory traffic.”</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>(a) Invalid: busy time does not identify the limiting unit. (b) Invalid without timing and resource evidence. (c) Valid: divergent paths can be serialized for the warp. (d) Valid: spills are backed by device memory and may outweigh residency gains.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> When Nsight reports occupancy, write the resource limiter beside it and ask what latency is being hidden.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f2">F2</a>, <a href="#ref-f7">F7</a>.</p>
+</section>
+<h2 class="part">Part III · Data movement and computation</h2>
+<section id="memory-hierarchy" class="lesson">
+  <h3 class="lesson-title">9. Trace bytes through the memory hierarchy</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Identify where tensors, caches, shared tiles, registers, and allocator reservations live and which movement can dominate.</div>
+  <div class="recall"><strong>Recall first.</strong> What is the difference between PyTorch memory that is allocated to live tensors and memory reserved by its caching allocator?</div>
+  <p>Host memory sits outside the GPU and normally crosses PCIe in this course environment. HBM holds the large device working set. L2 is shared by SMs. Each SM combines configurable shared memory and L1/texture caching, while registers hold per-thread values closest to execution. Capacity generally grows as data moves outward; latency and explicit control change at every level.</p><p>PyTorch's caching allocator requests larger blocks from CUDA, serves tensor allocations from them, and keeps freed blocks for reuse. <code>memory_allocated()</code> reports bytes occupied by tensors; <code>memory_reserved()</code> reports the allocator's managed pool. Memory visible in <code>nvidia-smi</code> can therefore remain high after tensors are freed. <code>empty_cache()</code> releases unused cached blocks to other applications but cannot free live tensors and is not a routine performance optimization.</p><p>Registers and shared memory are kernel resources, not PyTorch tensor placement choices. A high-level user influences them indirectly through selected operators, shapes, dtypes, compilation, and libraries. Register spilling creates local-memory traffic backed by device memory. Shared-memory tiling can turn repeated HBM reads into on-chip reuse, but large tiles may reduce resident blocks.</p><p>Hopper adds advanced kernel mechanisms at this boundary. The Tensor Memory Accelerator (TMA) can move multidimensional tiles between global and shared memory while reducing address-generation work by CUDA threads. Distributed shared memory lets blocks in a thread-block cluster address one another's shared-memory regions. Both mechanisms require compatible CUDA kernels or libraries, synchronization, and measured reuse; neither is a place where a PyTorch user can directly move a tensor. They are extension topics, not prerequisites for this course's operator-level labs.</p>
+  <figure><svg viewBox="0 0 1200 640" role="img" aria-labelledby="memory-path-title memory-path-desc"><title id="memory-path-title">Copy path and kernel memory-demand path</title><desc id="memory-path-desc">The host copy path moves data between host memory and HBM through PCI Express and a copy engine. A separate kernel-demand path moves data between HBM, device-wide L2, the SM unified L1 and shared-memory subsystem, registers, and execution pipelines.</desc><defs><marker id="memory-path-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><text x="35" y="45" font-size="20" font-weight="700">Host-device copy path</text><g text-anchor="middle"><rect x="55" y="80" width="230" height="95" rx="10" fill="#eef4ff" stroke="#3867d6"/><rect x="380" y="80" width="220" height="95" rx="10" fill="#fff3d6" stroke="#b45309"/><rect x="695" y="80" width="220" height="95" rx="10" fill="#dff1e4" stroke="#2f855a"/><text x="170" y="113" font-weight="700">host memory</text><text x="170" y="141" class="diagram-label">pageable or pinned</text><text x="490" y="113" font-weight="700">PCIe + copy engine</text><text x="490" y="141" class="diagram-label">explicit CUDA copy</text><text x="805" y="113" font-weight="700">HBM allocation</text><text x="805" y="141" class="diagram-label">PyTorch CUDA tensor storage</text></g><g stroke="#3867d6" stroke-width="3" marker-start="url(#memory-path-arr)" marker-end="url(#memory-path-arr)"><line x1="285" y1="127" x2="380" y2="127"/><line x1="600" y1="127" x2="695" y2="127"/></g><text x="1025" y="110" class="diagram-label">copies target device memory;</text><text x="1025" y="137" class="diagram-label">they do not explicitly fill</text><text x="1025" y="164" class="diagram-label">each hardware cache in order</text><text x="35" y="260" font-size="20" font-weight="700">Kernel demand and reuse path</text><g text-anchor="middle"><rect x="55" y="300" width="190" height="105" rx="10" fill="#dff1e4" stroke="#2f855a"/><rect x="310" y="300" width="160" height="105" rx="10" fill="#fff3d6" stroke="#b45309"/><rect x="535" y="280" width="275" height="145" rx="12" fill="#eef4ff" stroke="#3867d6"/><rect x="875" y="300" width="250" height="105" rx="10" fill="#f5ddff" stroke="#6b46c1"/><text x="150" y="337" font-weight="700">HBM</text><text x="150" y="366" class="diagram-label">device-wide capacity</text><text x="390" y="337" font-weight="700">L2 cache</text><text x="390" y="366" class="diagram-label">shared across SMs</text><text x="672" y="318" font-weight="700">one SM</text><text x="672" y="347" class="diagram-label">unified L1 / texture / shared capacity</text><text x="672" y="374" class="diagram-label">shared memory is block-managed;</text><text x="672" y="399" class="diagram-label">L1 caching is hardware-managed</text><text x="1000" y="337" font-weight="700">registers + execution</text><text x="1000" y="366" class="diagram-label">thread values and pipelines</text></g><g stroke="#3867d6" stroke-width="3" marker-start="url(#memory-path-arr)" marker-end="url(#memory-path-arr)"><line x1="245" y1="352" x2="310" y2="352"/><line x1="470" y1="352" x2="535" y2="352"/><line x1="810" y1="352" x2="875" y2="352"/></g><rect x="175" y="475" width="850" height="80" rx="12" fill="#fff" stroke="#dce1ea"/><text x="600" y="507" text-anchor="middle" font-weight="700">Reuse changes traffic at a named boundary</text><text x="600" y="535" text-anchor="middle" class="diagram-label">an L2 hit avoids HBM · a shared tile avoids repeated L2/HBM demand · a register value avoids repeated loads</text><text x="600" y="605" text-anchor="middle" fill="#586176">Local memory from register spills is an address space backed by device memory, not on-chip “local storage.”</text></svg><figcaption>Copies move allocations between host and device memory. Kernels then create demand through the cache and SM hierarchy. Name the boundary when estimating bytes or claiming reuse.</figcaption></figure>
+  <div class="worked-example"><h3>Worked example</h3><p>A 1 GiB tensor is deleted. Allocated bytes fall, but reserved bytes stay nearly unchanged because the allocator retains the block. A later similar tensor can reuse it without another device allocation. Calling <code>empty_cache()</code> would make more memory visible to another process but can add allocation work when the current process needs the space again.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Draw the path for a batch that starts in pageable host memory, is copied to a CUDA tensor, used by a matrix kernel, and reduced to a scalar read by Python. Label which boundaries are explicit in PyTorch and which storage levels are managed inside the kernel/hardware.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>The explicit application path is pageable host memory → possibly pinned staging → PCIe → HBM allocation → kernels → HBM result → host scalar when read. L2, L1/shared memory, and registers are on the device path but are selected by hardware and kernel implementation rather than by moving a PyTorch tensor to a named cache.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> Before treating an OOM or high memory reading as a capacity fact, separate live tensors, reserved pool, temporary workspaces, and other processes.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f2">F2</a>, <a href="#ref-f6">F6</a>.</p>
+</section>
+<section id="layout-coalescing" class="lesson">
+  <h3 class="lesson-title">10. Connect tensor layout to useful memory transactions</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Use shapes, strides, contiguity, and reuse to decide whether repacking can pay for itself.</div>
+  <div class="recall"><strong>Recall first.</strong> Why can a tensor view have the same values and shape as another tensor but very different access cost?</div>
+  <p>A tensor's shape describes logical indices; strides describe how those indices map to storage. Threads in a warp are most efficient when their addresses combine into a small number of aligned memory transactions. A contiguous elementwise traversal usually supports this. A large stride can fetch segments containing few useful bytes, reducing effective bandwidth.</p><p>Views such as transpose often change strides without moving data. Some operators can consume noncontiguous layouts directly; others make an implicit copy or select a different kernel. Calling <code>contiguous()</code> creates an explicit copy when required. The copy is an optimization only if later work reuses the packed layout enough to repay it.</p><p>Measure three branches: direct use of the view, pack plus one use, and pack plus repeated reuse. Report the copy time. Compare equivalent results, and keep the same logical work. Effective bandwidth based only on useful bytes can reveal wasted transactions but must not be mistaken for raw HBM traffic.</p>
+  <figure><svg viewBox="0 0 1200 560" role="img" aria-labelledby="coalesce-title coalesce-desc"><title id="coalesce-title">Adjacent and strided warp memory access</title><desc id="coalesce-desc">In the upper example, adjacent warp lanes request adjacent words that fit into a small set of memory sectors. In the lower example, strided lanes request one word from many separated sectors, transferring more bytes than the warp uses.</desc><text x="35" y="45" font-size="20" font-weight="700">Lane addresses determine useful bytes per transaction</text><text x="45" y="100" font-weight="700">Adjacent lanes</text><g text-anchor="middle"><g fill="#dbe8ff" stroke="#3867d6"><rect x="180" y="70" width="60" height="50"/><rect x="245" y="70" width="60" height="50"/><rect x="310" y="70" width="60" height="50"/><rect x="375" y="70" width="60" height="50"/><rect x="440" y="70" width="60" height="50"/><rect x="505" y="70" width="60" height="50"/><rect x="570" y="70" width="60" height="50"/><rect x="635" y="70" width="60" height="50"/></g><g class="diagram-small"><text x="210" y="100">lane 0</text><text x="275" y="100">lane 1</text><text x="340" y="100">lane 2</text><text x="405" y="100">lane 3</text><text x="470" y="100">lane 4</text><text x="535" y="100">lane 5</text><text x="600" y="100">lane 6</text><text x="665" y="100">lane 7</text></g></g><rect x="175" y="155" width="540" height="75" rx="8" fill="#dff1e4" stroke="#2f855a"/><g stroke="#fff" stroke-width="2"><line x1="242" y1="155" x2="242" y2="230"/><line x1="309" y1="155" x2="309" y2="230"/><line x1="376" y1="155" x2="376" y2="230"/><line x1="443" y1="155" x2="443" y2="230"/><line x1="510" y1="155" x2="510" y2="230"/><line x1="577" y1="155" x2="577" y2="230"/><line x1="644" y1="155" x2="644" y2="230"/></g><text x="445" y="198" text-anchor="middle" font-weight="700">nearby words in a small set of aligned sectors</text><text x="890" y="190" text-anchor="middle" class="diagram-label">most transferred bytes are useful</text><text x="45" y="325" font-weight="700">Large stride</text><g text-anchor="middle"><g fill="#dbe8ff" stroke="#3867d6"><rect x="180" y="295" width="60" height="50"/><rect x="310" y="295" width="60" height="50"/><rect x="440" y="295" width="60" height="50"/><rect x="570" y="295" width="60" height="50"/><rect x="700" y="295" width="60" height="50"/><rect x="830" y="295" width="60" height="50"/><rect x="960" y="295" width="60" height="50"/><rect x="1090" y="295" width="60" height="50"/></g><g class="diagram-small"><text x="210" y="325">lane 0</text><text x="340" y="325">lane 1</text><text x="470" y="325">lane 2</text><text x="600" y="325">lane 3</text><text x="730" y="325">lane 4</text><text x="860" y="325">lane 5</text><text x="990" y="325">lane 6</text><text x="1120" y="325">lane 7</text></g></g><g fill="#fff3d6" stroke="#b45309"><rect x="175" y="380" width="100" height="70" rx="7"/><rect x="305" y="380" width="100" height="70" rx="7"/><rect x="435" y="380" width="100" height="70" rx="7"/><rect x="565" y="380" width="100" height="70" rx="7"/><rect x="695" y="380" width="100" height="70" rx="7"/><rect x="825" y="380" width="100" height="70" rx="7"/><rect x="955" y="380" width="100" height="70" rx="7"/><rect x="1085" y="380" width="100" height="70" rx="7"/></g><g text-anchor="middle" class="diagram-small"><text x="225" y="412">one useful</text><text x="225" y="434">word</text><text x="355" y="412">one useful</text><text x="355" y="434">word</text><text x="485" y="412">one useful</text><text x="485" y="434">word</text><text x="615" y="412">one useful</text><text x="615" y="434">word</text><text x="745" y="412">one useful</text><text x="745" y="434">word</text><text x="875" y="412">one useful</text><text x="875" y="434">word</text><text x="1005" y="412">one useful</text><text x="1005" y="434">word</text><text x="1135" y="412">one useful</text><text x="1135" y="434">word</text></g><text x="600" y="515" text-anchor="middle" fill="#586176">The consuming kernel and exact addresses decide the transactions; “noncontiguous” alone is not a diagnosis.</text></svg><figcaption>Coalescing is about the addresses requested by lanes in a warp. A stride can make each transferred sector contain little useful data, lowering effective bandwidth even when raw traffic is high.</figcaption></figure>
+
+  <div class="worked-example"><h3>Worked example</h3><p>A transposed matrix is used once by an operation that already supports its stride. Explicit repacking adds a full copy and is unlikely to win. The same view is reused in 100 iterations by a kernel that accesses it poorly; one copy may be amortized. The break-even reuse count is the smallest count where <code>copy + packed uses</code> is faster than <code>direct strided uses</code>.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Run Lab 04 and inspect <code>stride()</code> and <code>is_contiguous()</code> for every case. Compute a measured break-even reuse count. Explain why that number belongs to the recorded environment and shape, not to “transposes” in general.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>The correct decision includes the packing cost and equivalent downstream work. The break-even point changes with shape, cache behavior, consuming operator, dtype, implementation, and GPU. A view is not slow merely because it is noncontiguous; the consuming access pattern decides.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> When a profiler shows memory pressure, inspect tensor strides and implicit copies before changing arithmetic.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f3">F3</a>, <a href="#ref-f6">F6</a>.</p>
+</section>
+<section id="movement-streams" class="lesson">
+  <h3 class="lesson-title">11. Move data deliberately and prove overlap</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Choose pageable or pinned memory, blocking or non-blocking copies, and streams based on measured pipeline behavior.</div>
+  <div class="recall"><strong>Recall first.</strong> Why does <code>non_blocking=True</code> not by itself prove that a host-to-device copy overlapped computation?</div>
+  <p>DMA engines can transfer pinned host pages directly; pageable pages generally require staging. PyTorch data loaders can produce pinned batches, and <code>non_blocking=True</code> can let the host enqueue an asynchronous copy when the source and context support it. Pinning consumes a limited host resource, so pin the batches that feed the GPU rather than an unbounded dataset.</p><p>Overlap needs four things: a copy capable of asynchronous execution, a separate stream when appropriate, independent compute, and hardware resources that can progress both. It also needs correct dependencies. A timeline is the evidence. Faster enqueue time is not overlap, and a non-blocking call followed immediately by a full synchronization cannot hide useful work.</p><p>Double buffering is a common pattern: while compute consumes device batch N, a copy stream prepares device batch N+1. An event tells the compute stream when N+1 is ready. Host data must remain alive until the asynchronous copy finishes. Start with correctness and a two-stage timeline before adding more buffers.</p>
+  <figure><svg viewBox="0 0 1200 560" role="img" aria-labelledby="buffer-title buffer-desc"><title id="buffer-title">Double-buffered copy and compute timeline</title><desc id="buffer-desc">A fill phase copies batch zero. During steady state, the copy stream transfers the next batch into the free device buffer while the compute stream consumes the current buffer. Events make each consumer wait for its batch and prevent a producer from overwriting a buffer still in use.</desc><defs><marker id="buffer-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><g font-weight="700"><text x="35" y="65">phase</text><text x="35" y="155">copy stream</text><text x="35" y="285">compute stream</text></g><g stroke="#dce1ea" stroke-width="2"><line x1="180" y1="85" x2="180" y2="390"/><line x1="400" y1="85" x2="400" y2="390"/><line x1="620" y1="85" x2="620" y2="390"/><line x1="840" y1="85" x2="840" y2="390"/><line x1="1060" y1="85" x2="1060" y2="390"/></g><g text-anchor="middle" class="diagram-label"><text x="290" y="65">fill</text><text x="510" y="65">steady state</text><text x="730" y="65">steady state</text><text x="950" y="65">drain</text></g><g text-anchor="middle"><rect x="190" y="115" width="200" height="75" rx="9" fill="#dbe8ff" stroke="#3867d6"/><text x="290" y="145" font-weight="700">copy batch 0</text><text x="290" y="171" class="diagram-label">host → device buffer A</text><rect x="410" y="115" width="200" height="75" rx="9" fill="#dbe8ff" stroke="#3867d6"/><text x="510" y="145" font-weight="700">copy batch 1</text><text x="510" y="171" class="diagram-label">host → device buffer B</text><rect x="630" y="115" width="200" height="75" rx="9" fill="#dbe8ff" stroke="#3867d6"/><text x="730" y="145" font-weight="700">copy batch 2</text><text x="730" y="171" class="diagram-label">reuse buffer A after compute 0</text><rect x="410" y="245" width="200" height="75" rx="9" fill="#dff1e4" stroke="#2f855a"/><text x="510" y="275" font-weight="700">compute batch 0</text><text x="510" y="301" class="diagram-label">consume buffer A</text><rect x="630" y="245" width="200" height="75" rx="9" fill="#dff1e4" stroke="#2f855a"/><text x="730" y="275" font-weight="700">compute batch 1</text><text x="730" y="301" class="diagram-label">consume buffer B</text><rect x="850" y="245" width="200" height="75" rx="9" fill="#dff1e4" stroke="#2f855a"/><text x="950" y="275" font-weight="700">compute batch 2</text><text x="950" y="301" class="diagram-label">consume buffer A</text></g><g fill="none" stroke="#3867d6" stroke-width="3" marker-end="url(#buffer-arr)"><path d="M390 152 C405 152 405 225 430 245"/><path d="M610 152 C625 152 625 225 650 245"/><path d="M830 152 C845 152 845 225 870 245"/><path d="M610 282 C620 282 620 205 630 190" stroke-dasharray="7 6"/></g><g class="diagram-small" fill="#586176"><text x="405" y="215">ready A</text><text x="625" y="215">ready B</text><text x="845" y="215">ready A</text><text x="646" y="226">buffer A is free only after compute 0</text></g><rect x="150" y="430" width="900" height="78" rx="12" fill="#fff" stroke="#dce1ea"/><text x="600" y="460" text-anchor="middle" font-weight="700">What the trace must prove</text><text x="600" y="488" text-anchor="middle" class="diagram-label">copy 1 overlaps compute 0 · copy 2 overlaps compute 1 · every consumer waits · every reused buffer is safe</text></svg><figcaption>Double buffering has a fill, steady-state, and drain phase. The middle phases can overlap only when copy and compute are independent and the event dependencies protect both readiness and buffer reuse.</figcaption></figure>
+
+  <div class="worked-example"><h3>Worked example</h3><p>A blocking loop performs copy(N), wait, compute(N), wait. A pipelined loop preloads batch 0, then overlaps copy(N+1) with compute(N), joining only before the consumer needs N+1. If both copy and compute take 4 ms and overlap perfectly, a long pipeline approaches about 4 ms per batch after fill—not 8 ms—but real kernels and PCIe engines may contend or fail to overlap.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Run Lab 03 for pageable/pinned and blocking/non-blocking modes, then Lab 07 for stream behavior. Write a proposed two-buffer dependency graph. Name the producer event, consumer wait, and lifetime requirement for each host buffer.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>Pinned, non-blocking copies enable the intended pipeline, but only a trace or end-to-end remeasurement proves benefit. Each host buffer must not be modified or freed until its copy completes. The compute stream waits for the ready event of the device buffer it consumes; the copy stream must not overwrite a device buffer still in use.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> Whenever “overlap” appears in a recommendation, demand a timeline that shows simultaneous useful intervals and preserved dependencies.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f2">F2</a>, <a href="#ref-f3">F3</a>, <a href="#ref-f6">F6</a>.</p>
+</section>
+<section id="precision-tensor-cores" class="lesson">
+  <h3 class="lesson-title">12. Choose precision and Tensor Core paths intentionally</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Relate FP32, TF32, BF16, FP16, and FP8 to range, storage, eligible operations, and correctness.</div>
+  <div class="recall"><strong>Recall first.</strong> Which statement is safer: “BF16 uses Tensor Cores” or “an eligible BF16 matrix operation can use a Tensor Core kernel”? Why?</div>
+  <p>FP32, BF16, FP16, and FP8 describe stored numeric formats. TF32 is an NVIDIA Tensor Core math mode for eligible FP32 matrix operations: it preserves FP32 range at the interface while using reduced mantissa precision internally. BF16 has a wide exponent range and fewer fraction bits; FP16 has more fraction bits but a narrower range. Accumulation may use wider precision than inputs.</p><p>Tensor Cores did not begin with Hopper: NVIDIA introduced them with Volta. Hopper provides fourth-generation Tensor Cores plus Transformer Engine support for FP8 workflows. Tensor Cores execute supported matrix-oriented instructions, and dtype alone is not enough: operation type, dimensions, alignment, layout, library/kernel selection, and workload size determine the path. H100 supports FP8 Tensor Core operation through appropriate libraries and scale management. H100 is not a Blackwell NVFP4 device; do not transfer FP4 claims across architectures.</p><p>Correctness duties grow as precision narrows. Compare to a defined reference, inspect maximum and distributional error, check finite outputs, and for training verify gradients, loss behavior, convergence, and downstream quality. A microbenchmark can prove kernel behavior but not model quality.</p><table><thead><tr><th>Mode</th><th>Main reason to test</th><th>Required evidence</th></tr></thead><tbody><tr><td>FP32</td><td>Reference and sensitive work</td><td>Baseline correctness and time</td></tr><tr><td>TF32</td><td>Eligible FP32 matrix throughput</td><td>Error and selected operation</td></tr><tr><td>BF16</td><td>Lower storage/traffic with broad range</td><td>Finiteness and quality</td></tr><tr><td>FP16</td><td>Lower storage with more fraction bits</td><td>Under/overflow handling</td></tr><tr><td>FP8</td><td>H100 Tensor Core path</td><td>Scaling, supported kernel, quality</td></tr></tbody></table>
+  <figure><svg viewBox="0 0 1200 560" role="img" aria-labelledby="tensor-route-title tensor-route-desc"><title id="tensor-route-title">Conditions for a Tensor Core execution path</title><desc id="tensor-route-desc">Storage format is only the first condition. The operation must be matrix-oriented, shapes and layouts must be supported, and the selected library or compiled kernel must issue a compatible Tensor Core instruction. Pointwise operations take a different execution path. Both paths require numerical and application validation.</desc><defs><marker id="tensor-route-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><g text-anchor="middle"><rect x="35" y="80" width="190" height="90" rx="10" fill="#eef4ff" stroke="#3867d6"/><text x="130" y="113" font-weight="700">input storage</text><text x="130" y="140" class="diagram-label">FP32 / BF16 / FP16 / FP8</text><rect x="290" y="65" width="210" height="120" rx="10" fill="#fff3d6" stroke="#b45309"/><text x="395" y="100" font-weight="700">eligible operation?</text><text x="395" y="128" class="diagram-label">matrix-oriented math</text><text x="395" y="153" class="diagram-label">supported shape + layout</text><rect x="565" y="65" width="230" height="120" rx="10" fill="#eef4ff" stroke="#3867d6"/><text x="680" y="100" font-weight="700">kernel selection</text><text x="680" y="128" class="diagram-label">library or compiler chooses</text><text x="680" y="153" class="diagram-label">a compatible implementation</text><rect x="860" y="65" width="285" height="120" rx="10" fill="#dff1e4" stroke="#2f855a"/><text x="1002" y="100" font-weight="700">Tensor Core path</text><text x="1002" y="128" class="diagram-label">compatible matrix instructions</text><text x="1002" y="153" class="diagram-label">declared accumulation format</text><rect x="565" y="280" width="230" height="105" rx="10" fill="#f5ddff" stroke="#6b46c1"/><text x="680" y="316" font-weight="700">general CUDA path</text><text x="680" y="344" class="diagram-label">pointwise or unsupported case</text><text x="680" y="369" class="diagram-label">may still be highly optimized</text><rect x="860" y="280" width="285" height="105" rx="10" fill="#fff" stroke="#3867d6"/><text x="1002" y="316" font-weight="700">measure the selected path</text><text x="1002" y="344" class="diagram-label">time · kernel · shape · precision</text><text x="1002" y="369" class="diagram-label">never infer from dtype alone</text></g><g fill="none" stroke="#3867d6" stroke-width="3" marker-end="url(#tensor-route-arr)"><line x1="225" y1="125" x2="290" y2="125"/><line x1="500" y1="125" x2="565" y2="125"/><line x1="795" y1="125" x2="860" y2="125"/><path d="M395 185 V332 H565"/><line x1="795" y1="332" x2="860" y2="332"/></g><text x="515" y="310" class="diagram-label">no</text><text x="525" y="107" class="diagram-label">yes</text><rect x="245" y="445" width="710" height="78" rx="12" fill="#fff" stroke="#dce1ea"/><text x="600" y="475" text-anchor="middle" font-weight="700">Acceptance gate for either path</text><text x="600" y="503" text-anchor="middle" class="diagram-label">reference error + finite values + training or task quality + end-to-end objective</text></svg><figcaption>A low-precision tensor does not guarantee Tensor Core execution. Operation semantics, shape, layout, and implementation select the path; measurement and correctness decide whether it is useful.</figcaption></figure>
+
+  <div class="worked-example"><h3>Worked example</h3><p>A BF16 matrix multiplication of large aligned dimensions can use a Tensor Core kernel. A BF16 pointwise sine operation does not become a matrix operation and should not be described as Tensor Core accelerated. A tiny BF16 matrix may also spend most time in launch/setup even if the selected kernel contains Tensor Core instructions.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Run Lab 02. For each mode, record storage bytes, error against the reference, and device time. Write one acceptance rule that is numerical and one that is application-level. Do not rank modes until both rules are stated.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>The safer statement is conditional because dtype is only one eligibility input. Numerical acceptance can use a predeclared tolerance and finiteness; application acceptance might be validation loss or task accuracy. Neither is replaced by a throughput number.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> When a later course recommends mixed precision, identify which tensors use lower-precision storage, which operations compute in lower precision, and which accumulations remain in a wider format.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f4">F4</a>, <a href="#ref-f6">F6</a>.</p>
+</section>
+<section id="roofline" class="lesson">
+  <h3 class="lesson-title">13. Use roofline thinking to choose the next experiment</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Classify low arithmetic intensity, compute ceilings, and below-roof inefficiency without treating theoretical peaks as promises.</div>
+  <div class="recall"><strong>Recall first.</strong> A vector add and a large matrix multiply move data and perform math. Which usually has higher useful operations per byte, and why?</div>
+  <p>Arithmetic intensity is useful operations divided by bytes transferred across the memory boundary being studied. A vector expression performs few operations per element and often approaches a memory-bandwidth roof. Matrix multiplication reuses each input across many multiply-accumulate operations and can reach much higher intensity. The ridge point is where the sloped bandwidth roof meets the flat compute roof.</p><p>The simple roofline is a classifier. Below the sloped roof, reduce bytes, improve layout, or increase reuse. Near the compute roof, improve eligible math throughput, shape, or instruction mix. Far below both roofs, suspect launch gaps, synchronization, insufficient parallel work, dependencies, or another subsystem. Cache behavior means the relevant byte count may be HBM, L2, or a higher level; state which one the estimate uses.</p><p>Do not divide by marketing peak and call the remainder “optimization opportunity.” Peaks depend on format and conditions, while real kernels perform instructions and transfers not counted as useful work. Use measured bandwidth and achieved work rate from a controlled lab, then profile the responsible kernel when the next decision requires it.</p>
+  <figure><svg viewBox="0 0 1000 420" role="img" aria-labelledby="roof-title roof-desc"><title id="roof-title">Roofline reasoning for two workloads</title><desc id="roof-desc">A rising bandwidth ceiling meets a flat compute ceiling; a vector workload lies on the rising side and matrix multiplication lies farther right.</desc><line x1="120" y1="340" x2="930" y2="340" stroke="#172033" stroke-width="3"/><line x1="120" y1="340" x2="120" y2="50" stroke="#172033" stroke-width="3"/><path d="M145 320L590 95H900" fill="none" stroke="#3867d6" stroke-width="6"/><circle cx="285" cy="248" r="14" fill="#b45309"/><text x="285" y="285" text-anchor="middle">vector path</text><circle cx="735" cy="95" r="14" fill="#2f855a"/><text x="735" y="135" text-anchor="middle">reuse-heavy GEMM</text><text x="520" y="397" text-anchor="middle">arithmetic intensity: useful operations per estimated byte</text><text x="30" y="205" transform="rotate(-90 30 205)" text-anchor="middle">attainable useful work rate</text><text x="365" y="150" transform="rotate(-27 365 150)" fill="#3867d6">bandwidth ceiling</text><text x="745" y="78" fill="#3867d6">compute ceiling</text></svg><figcaption>The roofline is a classification model, not proof. Measure bytes, work, shapes, and kernel behavior before accepting a limiter.</figcaption></figure>
+  <div class="worked-example"><h3>Worked example</h3><p>A vector add reads two arrays and writes one: roughly three element transfers for one addition. A large GEMM reuses rows and columns so useful operations grow roughly with the cube of width while input/output elements grow with the square. This is why the operations occupy different roofline regions, even though both touch HBM.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Run Lab 05. For each workload, state the useful-work definition, byte estimate, measured rate, and first hypothesis. Then name one observation that would disprove the classification.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>A valid answer distinguishes a bandwidth-like vector workload from a compute-intense GEMM but keeps the classification conditional. A timeline full of gaps, unexpectedly low memory throughput, or a non-Tensor-Core kernel can disprove the naive roofline label and redirect the investigation.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> Use this model only to select the next measurement; do not use it as the final causal proof.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f3">F3</a>, <a href="#ref-f7">F7</a>.</p>
+</section>
+<h2 class="part">Part IV · Multi-node scale and diagnosis</h2>
+<section id="topology-collectives" class="lesson">
+  <h3 class="lesson-title">14. Make two-node communication part of the workload</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Explain collective semantics, validate two ranks, and measure fabric cost in context.</div>
+  <div class="recall"><strong>Recall first.</strong> Why can doubling GPU count make a step slower even when each rank receives half the compute work?</div>
+  <p>The course cluster has one H100 on each of two nodes, so every multi-GPU collective crosses the inter-node fabric. NCCL provides collectives such as all-reduce, all-gather, reduce-scatter, broadcast, and all-to-all. Semantics decide the data movement: all-reduce combines and returns a result to every rank; reduce-scatter combines and leaves shards; all-gather reconstructs shards; all-to-all routes different pieces between ranks.</p><p>Collective time depends on message size, rank count, algorithm, protocol, topology, link bandwidth, software stack, and overlap. Small messages can be latency-dominated; large messages can approach a bandwidth limit. Synchronizing before every collective produces a clean isolated number but may not represent a training step that overlaps gradient communication.</p><p>Start with the two-node preflight. Prove two distinct hosts, one full H100 per host, rank/world-size identity, and an all-reduce invariant. The Slurm launcher runs one <code>torchrun</code> agent per node with one local worker, so <code>RANK</code>, <code>WORLD_SIZE</code>, and <code>LOCAL_RANK</code> come from the canonical distributed launcher.</p><p>Strong scaling reduces compute per rank at fixed global work while communication may stay significant. Report single-rank and two-rank semantics carefully: a two-rank run that doubles the global batch answers a throughput-scaling question; one that holds global batch fixed answers a strong-scaling question.</p>
+  <figure><svg viewBox="0 0 1200 590" role="img" aria-labelledby="topology-title topology-desc"><title id="topology-title">Discovered two-node communication path</title><desc id="topology-desc">Rank zero owns one H100 on node zero and rank one owns one H100 on node one. Data traverses each node's GPU-to-host or network path and the inter-node fabric. The diagram deliberately does not assume NVLink, InfiniBand, RoCE, or GPUDirect RDMA; those capabilities must be discovered and preserved as run evidence.</desc><defs><marker id="topology-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L0,8 L8,4 z" fill="#3867d6"/></marker></defs><rect x="30" y="55" width="470" height="350" rx="18" fill="#eef4ff" stroke="#3867d6" stroke-width="2"/><rect x="700" y="55" width="470" height="350" rx="18" fill="#eef4ff" stroke="#3867d6" stroke-width="2"/><g text-anchor="middle"><text x="265" y="92" font-size="21" font-weight="700">Slurm node 0 · rank 0</text><text x="935" y="92" font-size="21" font-weight="700">Slurm node 1 · rank 1</text><rect x="80" y="135" width="190" height="100" rx="10" fill="#dff1e4" stroke="#2f855a"/><text x="175" y="171" font-weight="700">one full H100</text><text x="175" y="199" class="diagram-label">CUDA device 0</text><rect x="315" y="135" width="140" height="100" rx="10" fill="#fff3d6" stroke="#b45309"/><text x="385" y="171" font-weight="700">NIC path</text><text x="385" y="199" class="diagram-label">site discovered</text><rect x="745" y="135" width="140" height="100" rx="10" fill="#fff3d6" stroke="#b45309"/><text x="815" y="171" font-weight="700">NIC path</text><text x="815" y="199" class="diagram-label">site discovered</text><rect x="930" y="135" width="190" height="100" rx="10" fill="#dff1e4" stroke="#2f855a"/><text x="1025" y="171" font-weight="700">one full H100</text><text x="1025" y="199" class="diagram-label">CUDA device 0</text><rect x="520" y="135" width="160" height="100" rx="12" fill="#f5ddff" stroke="#6b46c1" stroke-width="2"/><text x="600" y="171" font-weight="700">inter-node</text><text x="600" y="199" class="diagram-label">fabric</text></g><g fill="none" stroke="#3867d6" stroke-width="4" marker-start="url(#topology-arr)" marker-end="url(#topology-arr)"><line x1="270" y1="185" x2="315" y2="185"/><line x1="455" y1="185" x2="520" y2="185"/><line x1="680" y1="185" x2="745" y2="185"/><line x1="885" y1="185" x2="930" y2="185"/></g><g text-anchor="middle"><rect x="90" y="285" width="350" height="78" rx="10" fill="#fff" stroke="#dce1ea"/><text x="265" y="314" font-weight="700">local facts to record</text><text x="265" y="342" class="diagram-label">host · rank · device identity · PCIe/topology view</text><rect x="760" y="285" width="350" height="78" rx="10" fill="#fff" stroke="#dce1ea"/><text x="935" y="314" font-weight="700">local facts to record</text><text x="935" y="342" class="diagram-label">host · rank · device identity · PCIe/topology view</text><rect x="280" y="455" width="640" height="80" rx="12" fill="#fff" stroke="#dce1ea"/><text x="600" y="485" font-weight="700">Distributed conclusion requires end-to-end evidence</text><text x="600" y="513" class="diagram-label">NCCL path + message size curve + correctness + slowest-rank time + overlap trace</text></g><text x="600" y="425" text-anchor="middle" fill="#586176">Do not label the transport from the GPU model alone; discover the installed node and network topology.</text></svg><figcaption>The logical rank path is known, but its physical transport is a cluster property. Record topology and NCCL evidence instead of assuming NVLink, a network protocol, or GPUDirect RDMA.</figcaption></figure>
+
+  <div class="worked-example"><h3>Worked example</h3><p>Two ranks each hold a different gradient vector. An all-reduce sums both vectors and leaves the sum on both ranks; dividing by world size gives an average. Compute per rank may halve under fixed global work, but the all-reduce and synchronization are new. If their critical-path cost exceeds saved compute, elapsed time grows.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Run Labs 00 and 06. Sweep at least three message sizes. For each, record latency and effective payload rate. Then write whether the experiment is latency-focused or bandwidth-focused and whether the collective can overlap useful compute in the target workload.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>The preflight must confirm two unique nodes and exact collective output. Small messages generally expose fixed latency while larger messages better expose transfer rate, but the measured curve decides. Overlap is possible only when communication and compute have correct asynchronous dependencies and independent resources; a separate timeline is required.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> When scaling later LLM labs, define whether global tokens, per-rank tokens, or model state is held constant.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f5">F5</a>, <a href="#ref-f8">F8</a>.</p>
+</section>
+<section id="fundamentals-capstone" class="lesson">
+  <h3 class="lesson-title">15. Diagnose a slow GPU path from first principles</h3>
+  <div class="lesson-outcome"><strong>Outcome.</strong> Choose one falsifiable first hypothesis and the smallest experiment that can reject it.</div>
+  <div class="recall"><strong>Recall first.</strong> List the seven limiter families used across the courses: launch/CPU, transfer, device memory/layout, compute/shape, input, capacity, and communication.</div>
+  <p>A slow GPU workload is not yet a diagnosis. Start with the user-visible metric and correctness rule, then inspect the host/device timeline. Decide whether useful work is absent, data is moving across the wrong boundary, kernels are bandwidth- or compute-limited, the GPU is waiting for input, memory capacity forces a different shape, or collectives sit on the critical path.</p><p>Choose one first hypothesis, one measurement that supports it, and one control that can disprove it. Avoid changing batch size, precision, compilation, data pipeline, and rank count together. Keep the rejected branches; they are evidence that narrows the causal story.</p><p>The capstone is complete when another learner can reproduce both branches, validate outputs, see the same classification evidence, and understand why the accepted change addresses the measured limiter. A speedup without this chain is not a transferable GPU skill.</p>
+
+  <div class="worked-example"><h3>Worked example</h3><p>A training step shows long CPU gaps between many short kernels. HBM throughput is low because the GPU is often idle. The first hypothesis is launch/CPU bound, not memory-bound. A controlled <code>torch.compile</code> or CUDA Graph branch that reduces kernel launches or gap time—while preserving shapes and outputs—tests the cause. If gaps remain unchanged, the hypothesis is weakened.</p></div>
+  <div class="exercise"><h3>Practice</h3><p>Choose one result from any prior lab. Produce a one-page evidence package: workload contract, baseline distribution, correctness gate, profiler or structural evidence, one change, repeated distribution, decision, and one limitation. Include the two-node preflight record even for a one-node microbenchmark.</p></div>
+  <details class="answer-key"><summary>Check your reasoning</summary><p>The rubric awards one point each for reproducible environment, equivalent work, correct timing boundary, preserved sample distribution, explicit correctness, one causal hypothesis, a disconfirming control, and a bounded conclusion. Missing any of the first five makes the performance claim incomplete.</p></details>
+  <div class="review-cue"><strong>Review cue.</strong> Revisit this capstone after the optimization course and replace intuition-only labels with profiler evidence.</div>
+  <p class="sources">Official-source trail: <a href="#ref-f1">F1</a>, <a href="#ref-f3">F3</a>, <a href="#ref-f6">F6</a>, <a href="#ref-f7">F7</a>.</p>
+</section>
+<section id="labs"><h2>Guided labs and complete source</h2><p>Run the command shown for each lab, write a prediction first, preserve the generated JSON, and use the interpretation prompts before changing the workload. Site account, partition, reservation, QoS, module, container, and fabric settings belong in the <code>sbatch</code> invocation or site environment.</p><article class="lab" id="lab-00-cluster-preflight" data-lab-guide="complete"><span class="tag">two-node</span><h3>Two-node H100 and NCCL preflight</h3><p>Prove two distinct Slurm nodes, one full SM90 GPU per rank, torchrun identity, and an exact all-reduce invariant.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/two_node.sbatch labs/00_cluster_preflight.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>rank/world-size identity, GPU identity, exact NCCL all-reduce, and private Slurm placement output</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Write the expected rank, world size, local rank, and reduced tensor on each node.</p></div><div><strong>Interpret after running</strong><p>Do not continue if hosts repeat, world size is not two, MIG is detected, or the collective invariant fails.</p></div><div><strong>If the result surprises you</strong><p>Check the allocation, Slurm node list, torchrun rendezvous variables, visible devices, and site NCCL/fabric setup.</p></div></div><details class="lab-source" data-source="labs/00_cluster_preflight.py"><summary>Complete runnable source — labs/00_cluster_preflight.py</summary><pre><code>&quot;&quot;&quot;Verify the two-node, one-H100-per-node course platform.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import socket
+
+from common import (
+    add_common_args,
+    close_distributed,
+    init_nccl,
+    load_torch,
+    require_h100,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    torch = load_torch()
+    environment = require_h100(torch)
+    rank, world_size, _ = init_nccl(torch)
+    names: list[str | None] = [None] * world_size
+    torch.distributed.all_gather_object(names, socket.gethostname())
+    unique_nodes = len(set(names))
+    if unique_nodes != 2:
+        raise SystemExit(f&quot;Expected two distinct nodes, observed {unique_nodes}.&quot;)
+    probe = torch.tensor([float(rank + 1)], device=&quot;cuda&quot;)
+    torch.distributed.all_reduce(probe)
+    collective_ok = float(probe.item()) == 3.0
+    if not collective_ok:
+        raise SystemExit(&quot;NCCL all-reduce returned an unexpected value.&quot;)
+    if rank == 0:
+        environment[&quot;node_count&quot;] = unique_nodes
+        environment[&quot;rank_count&quot;] = world_size
+        target = write_result(
+            args,
+            lab_id=&quot;00_cluster_preflight&quot;,
+            environment=environment,
+            measurements={&quot;nccl_backend&quot;: torch.distributed.get_backend()},
+            correctness={&quot;two_distinct_nodes&quot;: True, &quot;all_reduce&quot;: True},
+        )
+        print(f&quot;Preflight passed; sanitized result: {target}&quot;)
+    close_distributed(torch)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-01-cpu-gpu-crossover" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>CPU/GPU crossover</h3><p>Separate CPU, GPU-resident, and transfer-inclusive execution across tensor sizes.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>median latency for three execution boundaries</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Rank the three paths at the smallest and largest sizes before running.</p></div><div><strong>Interpret after running</strong><p>Report the measured crossover and whether data movement changes the conclusion.</p></div><div><strong>If the result surprises you</strong><p>Verify the compared branches perform equal work and that GPU completion is included.</p></div></div><details class="lab-source" data-source="labs/01_cpu_gpu_crossover.py"><summary>Complete runnable source — labs/01_cpu_gpu_crossover.py</summary><pre><code>&quot;&quot;&quot;Compare CPU, transfer-inclusive GPU, and resident-GPU vector work.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import statistics
+import time
+
+from common import (
+    add_common_args,
+    cuda_times_ms,
+    load_torch,
+    require_h100,
+    seed_everything,
+    summarize_ms,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    return parser.parse_args()
+
+
+def cpu_time_ms(x: object, y: object, iterations: int) -&gt; float:
+    samples = []
+    for _ in range(iterations):
+        start = time.perf_counter()
+        _ = x * y + x
+        samples.append((time.perf_counter() - start) * 1_000)
+    return statistics.median(samples)
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    torch = load_torch()
+    environment = require_h100(torch)
+    seed_everything(torch, args.seed)
+    sizes = [1_024, 1_000_000]
+    if args.profile == &quot;h100&quot;:
+        sizes.append(32_000_000)
+    rows = []
+    all_correct = True
+    for size in sizes:
+        x_cpu = torch.randn(size, dtype=torch.float32)
+        y_cpu = torch.randn(size, dtype=torch.float32)
+        x_gpu = x_cpu.to(&quot;cuda&quot;)
+        y_gpu = y_cpu.to(&quot;cuda&quot;)
+        resident = cuda_times_ms(
+            torch,
+            lambda: x_gpu * y_gpu + x_gpu,
+            warmup=args.warmup,
+            iterations=args.iterations,
+        )
+        transfer_samples = []
+        for _ in range(args.iterations):
+            start = time.perf_counter()
+            transferred_x = x_cpu.to(&quot;cuda&quot;)
+            transferred_y = y_cpu.to(&quot;cuda&quot;)
+            result_gpu = transferred_x * transferred_y + transferred_x
+            result = result_gpu.cpu()
+            transfer_samples.append((time.perf_counter() - start) * 1_000)
+        reference = x_cpu * y_cpu + x_cpu
+        correct = bool(torch.allclose(reference, result, rtol=1e-5, atol=1e-6))
+        all_correct = all_correct and correct
+        rows.append(
+            {
+                &quot;elements&quot;: size,
+                &quot;cpu_median_ms&quot;: round(cpu_time_ms(x_cpu, y_cpu, args.iterations), 4),
+                &quot;gpu_resident&quot;: summarize_ms(resident),
+                &quot;gpu_with_transfers_median_ms&quot;: round(
+                    statistics.median(transfer_samples), 4
+                ),
+            }
+        )
+    if not all_correct:
+        raise SystemExit(&quot;CPU and GPU results diverged.&quot;)
+    target = write_result(
+        args,
+        lab_id=&quot;01_cpu_gpu_crossover&quot;,
+        environment=environment,
+        measurements={&quot;sizes&quot;: rows},
+        correctness={&quot;allclose&quot;: True},
+    )
+    print(f&quot;Completed crossover benchmark: {target}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-02-tensor-core-precision" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>Precision and Tensor Core eligibility</h3><p>Compare FP32, TF32, BF16, and FP16 matrix paths with numerical checks.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/02_tensor_core_precision.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>device timing, dtype, and error against a reference</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>State which modes may use Tensor Core kernels and the likely error ordering.</p></div><div><strong>Interpret after running</strong><p>Accept a mode only when both performance and the predeclared error gate pass.</p></div><div><strong>If the result surprises you</strong><p>Check dtype, shape, math-mode settings, warm-up, and whether the operation is matrix-oriented.</p></div></div><details class="lab-source" data-source="labs/02_tensor_core_precision.py"><summary>Complete runnable source — labs/02_tensor_core_precision.py</summary><pre><code>&quot;&quot;&quot;Measure H100 matrix multiplication across practical training precisions.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import math
+
+from common import (
+    add_common_args,
+    cuda_times_ms,
+    load_torch,
+    require_h100,
+    resolve_int_override,
+    seed_everything,
+    summarize_ms,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    parser.add_argument(&quot;--matrix-size&quot;, type=int, default=None)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    size = resolve_int_override(
+        args.matrix_size,
+        2_048 if args.profile == &quot;smoke&quot; else 8_192,
+        option=&quot;--matrix-size&quot;,
+        minimum=256,
+    )
+    torch = load_torch()
+    environment = require_h100(torch)
+    seed_everything(torch, args.seed)
+    a32 = torch.randn((size, size), device=&quot;cuda&quot;, dtype=torch.float32)
+    b32 = torch.randn((size, size), device=&quot;cuda&quot;, dtype=torch.float32)
+    torch.set_float32_matmul_precision(&quot;highest&quot;)
+    reference = a32 @ b32
+    modes = [
+        (&quot;fp32_highest&quot;, torch.float32, &quot;highest&quot;),
+        (&quot;tf32_high&quot;, torch.float32, &quot;high&quot;),
+        (&quot;bf16&quot;, torch.bfloat16, &quot;high&quot;),
+        (&quot;fp16&quot;, torch.float16, &quot;high&quot;),
+    ]
+    rows = []
+    for name, dtype, matmul_mode in modes:
+        torch.set_float32_matmul_precision(matmul_mode)
+        a = a32.to(dtype)
+        b = b32.to(dtype)
+
+        def operation(a: object = a, b: object = b) -&gt; object:
+            return a @ b
+
+        samples = cuda_times_ms(
+            torch,
+            operation,
+            warmup=args.warmup,
+            iterations=args.iterations,
+        )
+        output = operation().float()
+        median_ms = summarize_ms(samples)[&quot;median_ms&quot;]
+        tflops = 2 * size**3 / (median_ms / 1_000) / 1e12
+        relative_l2 = (output - reference).norm() / reference.norm()
+        rows.append(
+            {
+                &quot;mode&quot;: name,
+                &quot;timing&quot;: summarize_ms(samples),
+                &quot;achieved_tflops&quot;: round(float(tflops), 2),
+                &quot;relative_l2_error&quot;: round(float(relative_l2), 7),
+            }
+        )
+    torch.set_float32_matmul_precision(&quot;highest&quot;)
+    valid_errors = all(
+        math.isfinite(row[&quot;relative_l2_error&quot;]) and row[&quot;relative_l2_error&quot;] &lt; 0.1
+        for row in rows
+    )
+    if not valid_errors:
+        raise SystemExit(
+            &quot;A precision mode produced a non-finite or unexpectedly inaccurate result.&quot;
+        )
+    target = write_result(
+        args,
+        lab_id=&quot;02_tensor_core_precision&quot;,
+        environment=environment,
+        measurements={&quot;matrix_size&quot;: size, &quot;modes&quot;: rows},
+        correctness={&quot;finite_outputs_within_teaching_tolerance&quot;: True},
+    )
+    print(f&quot;Completed precision benchmark: {target}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-03-transfer-and-pinning" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>Pageable, pinned, blocking, and nonblocking copies</h3><p>Measure complete host-to-device copies without claiming overlap from flags alone.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>copy median and effective payload rate</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Explain which source/mode combination enables asynchronous transfer.</p></div><div><strong>Interpret after running</strong><p>Treat the result as copy cost; use a timeline for overlap claims.</p></div><div><strong>If the result surprises you</strong><p>Check source pinning, destination device, synchronization placement, and host memory pressure.</p></div></div><details class="lab-source" data-source="labs/03_transfer_and_pinning.py"><summary>Complete runnable source — labs/03_transfer_and_pinning.py</summary><pre><code>&quot;&quot;&quot;Compare pageable, pinned, blocking, and nonblocking host-to-device copies.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import statistics
+import time
+
+from common import (
+    add_common_args,
+    load_torch,
+    require_h100,
+    resolve_int_override,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    parser.add_argument(&quot;--size-mib&quot;, type=int, default=None)
+    return parser.parse_args()
+
+
+def measure_copy(
+    torch: object,
+    source: object,
+    destination: object,
+    non_blocking: bool,
+    warmup: int,
+    iterations: int,
+) -&gt; float:
+    for _ in range(warmup):
+        destination.copy_(source, non_blocking=non_blocking)
+    torch.cuda.synchronize()
+    samples = []
+    for _ in range(iterations):
+        start = time.perf_counter()
+        destination.copy_(source, non_blocking=non_blocking)
+        torch.cuda.synchronize()
+        samples.append((time.perf_counter() - start) * 1_000)
+    return statistics.median(samples)
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    size_mib = resolve_int_override(
+        args.size_mib,
+        64 if args.profile == &quot;smoke&quot; else 512,
+        option=&quot;--size-mib&quot;,
+    )
+    torch = load_torch()
+    environment = require_h100(torch)
+    elements = size_mib * 2**20 // 4
+    pageable = torch.randn(elements, dtype=torch.float32)
+    pinned = torch.empty(elements, dtype=torch.float32, pin_memory=True)
+    pinned.copy_(pageable)
+    destination = torch.empty(elements, device=&quot;cuda&quot;, dtype=torch.float32)
+    rows = []
+    for label, source, non_blocking in (
+        (&quot;pageable_blocking&quot;, pageable, False),
+        (&quot;pageable_nonblocking&quot;, pageable, True),
+        (&quot;pinned_blocking&quot;, pinned, False),
+        (&quot;pinned_nonblocking&quot;, pinned, True),
+    ):
+        median_ms = measure_copy(
+            torch, source, destination, non_blocking, args.warmup, args.iterations
+        )
+        rows.append(
+            {
+                &quot;mode&quot;: label,
+                &quot;median_ms&quot;: round(median_ms, 4),
+                &quot;effective_gib_per_s&quot;: round(
+                    (size_mib / 1024) / (median_ms / 1_000), 2
+                ),
+            }
+        )
+    correct = bool(torch.equal(destination.cpu(), pageable))
+    if not correct:
+        raise SystemExit(&quot;Copied data did not match the source.&quot;)
+    target = write_result(
+        args,
+        lab_id=&quot;03_transfer_and_pinning&quot;,
+        environment=environment,
+        measurements={&quot;size_mib&quot;: size_mib, &quot;modes&quot;: rows},
+        correctness={&quot;exact_copy&quot;: True},
+    )
+    print(f&quot;Completed transfer benchmark: {target}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-04-layout-and-coalescing" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>Layout, stride, and repacking</h3><p>Compare contiguous, strided, and explicitly repacked tensor access including copy cost.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>layouts and strides, raw timing distributions, useful bandwidth, repack cost, reuse break-even</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Estimate whether one use can repay an explicit contiguous copy.</p></div><div><strong>Interpret after running</strong><p>Find the measured reuse count where repacking becomes worthwhile, if any.</p></div><div><strong>If the result surprises you</strong><p>Confirm equivalent logical values, include the copy, and inspect implicit layout changes.</p></div></div><details class="lab-source" data-source="labs/04_layout_and_coalescing.py"><summary>Complete runnable source — labs/04_layout_and_coalescing.py</summary><pre><code>&quot;&quot;&quot;Measure how a strided view changes a pointwise GPU workload.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import math
+import statistics
+
+from common import (
+    add_common_args,
+    cuda_times_ms,
+    load_torch,
+    require_h100,
+    seed_everything,
+    summarize_ms,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    return parser.parse_args()
+
+
+def break_even_reuses(
+    copy_ms: float, strided_ms: float, packed_ms: float
+) -&gt; int | None:
+    per_use_savings_ms = strided_ms - packed_ms
+    if per_use_savings_ms &lt;= 0:
+        return None
+    return max(1, math.ceil(copy_ms / per_use_savings_ms))
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    torch = load_torch()
+    environment = require_h100(torch)
+    seed_everything(torch, args.seed)
+    side = 4_096 if args.profile == &quot;smoke&quot; else 8_192
+    contiguous = torch.randn((side, side), device=&quot;cuda&quot;)
+    strided = contiguous.transpose(0, 1)
+    packed = strided.contiguous()
+    operations = {
+        &quot;contiguous&quot;: lambda: torch.sin(contiguous) * 0.5 + contiguous,
+        &quot;strided_view&quot;: lambda: torch.sin(strided) * 0.5 + strided,
+        &quot;repacked_contiguous&quot;: lambda: torch.sin(packed) * 0.5 + packed,
+    }
+    timing_samples = {}
+    for name, operation in operations.items():
+        timing_samples[name] = cuda_times_ms(
+            torch,
+            operation,
+            warmup=args.warmup,
+            iterations=args.iterations,
+        )
+    timing_samples[&quot;repack_copy&quot;] = cuda_times_ms(
+        torch,
+        lambda: strided.contiguous(),
+        warmup=args.warmup,
+        iterations=args.iterations,
+    )
+    timings = {name: summarize_ms(samples) for name, samples in timing_samples.items()}
+    raw_medians = {
+        name: float(statistics.median(samples))
+        for name, samples in timing_samples.items()
+    }
+    reuse_count = break_even_reuses(
+        raw_medians[&quot;repack_copy&quot;],
+        raw_medians[&quot;strided_view&quot;],
+        raw_medians[&quot;repacked_contiguous&quot;],
+    )
+    logical_tensor_bytes = contiguous.numel() * contiguous.element_size()
+    useful_bytes = logical_tensor_bytes * 2
+    useful_bandwidth = {
+        name: round(useful_bytes / (median_ms / 1_000) / 2**30, 4)
+        for name, median_ms in raw_medians.items()
+    }
+    reference = operations[&quot;strided_view&quot;]()
+    correct = bool(
+        torch.allclose(
+            reference, operations[&quot;repacked_contiguous&quot;](), rtol=1e-5, atol=1e-6
+        )
+    )
+    if not correct:
+        raise SystemExit(&quot;Strided and packed results diverged.&quot;)
+    target = write_result(
+        args,
+        lab_id=&quot;04_layout_and_coalescing&quot;,
+        environment=environment,
+        measurements={
+            &quot;shape&quot;: [side, side],
+            &quot;dtype&quot;: str(contiguous.dtype),
+            &quot;element_size_bytes&quot;: contiguous.element_size(),
+            &quot;logical_tensor_bytes&quot;: logical_tensor_bytes,
+            &quot;useful_bytes_per_operation&quot;: useful_bytes,
+            &quot;useful_bytes_definition&quot;: &quot;logical input bytes plus output bytes&quot;,
+            &quot;layouts&quot;: {
+                &quot;contiguous&quot;: {
+                    &quot;strides&quot;: list(contiguous.stride()),
+                    &quot;is_contiguous&quot;: contiguous.is_contiguous(),
+                },
+                &quot;strided_view&quot;: {
+                    &quot;strides&quot;: list(strided.stride()),
+                    &quot;is_contiguous&quot;: strided.is_contiguous(),
+                },
+                &quot;repacked_contiguous&quot;: {
+                    &quot;strides&quot;: list(packed.stride()),
+                    &quot;is_contiguous&quot;: packed.is_contiguous(),
+                },
+            },
+            &quot;timings&quot;: timings,
+            &quot;useful_bandwidth_gib_per_s&quot;: useful_bandwidth,
+            &quot;repack&quot;: {
+                &quot;break_even_reuses&quot;: reuse_count,
+                &quot;break_even_reason&quot;: (
+                    None if reuse_count is not None else &quot;packed_not_faster&quot;
+                ),
+                &quot;calculation_median_ms&quot;: raw_medians,
+            },
+        },
+        correctness={
+            &quot;allclose&quot;: True,
+            &quot;strided_view_confirmed&quot;: not strided.is_contiguous(),
+            &quot;repacked_contiguous_confirmed&quot;: packed.is_contiguous(),
+        },
+    )
+    print(f&quot;Completed layout benchmark: {target}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-05-roofline-microbench" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>Roofline microbenchmarks</h3><p>Contrast a low-intensity vector path with a reuse-heavy matrix path.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>useful work rate, byte estimate, and timing distribution</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Classify each operation before seeing the measurement.</p></div><div><strong>Interpret after running</strong><p>Use the classification to select the next profile, not as final proof.</p></div><div><strong>If the result surprises you</strong><p>Check byte/work formulas, launch gaps, tensor residency, and Tensor Core eligibility.</p></div></div><details class="lab-source" data-source="labs/05_roofline_microbench.py"><summary>Complete runnable source — labs/05_roofline_microbench.py</summary><pre><code>&quot;&quot;&quot;Contrast a bandwidth-oriented vector kernel with a compute-oriented GEMM.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+
+from common import (
+    add_common_args,
+    cuda_times_ms,
+    load_torch,
+    require_h100,
+    seed_everything,
+    summarize_ms,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    torch = load_torch()
+    environment = require_h100(torch)
+    seed_everything(torch, args.seed)
+    vector_elements = 16_000_000 if args.profile == &quot;smoke&quot; else 128_000_000
+    matrix_size = 2_048 if args.profile == &quot;smoke&quot; else 8_192
+    x = torch.randn(vector_elements, device=&quot;cuda&quot;)
+    y = torch.randn(vector_elements, device=&quot;cuda&quot;)
+    a = torch.randn((matrix_size, matrix_size), device=&quot;cuda&quot;, dtype=torch.bfloat16)
+    b = torch.randn((matrix_size, matrix_size), device=&quot;cuda&quot;, dtype=torch.bfloat16)
+    bandwidth_samples = cuda_times_ms(
+        torch,
+        lambda: torch.add(y, x, alpha=1.25),
+        warmup=args.warmup,
+        iterations=args.iterations,
+    )
+    compute_samples = cuda_times_ms(
+        torch,
+        lambda: a @ b,
+        warmup=args.warmup,
+        iterations=args.iterations,
+    )
+    bandwidth_ms = summarize_ms(bandwidth_samples)[&quot;median_ms&quot;]
+    compute_ms = summarize_ms(compute_samples)[&quot;median_ms&quot;]
+    bytes_moved = vector_elements * 4 * 3
+    achieved_gib_s = bytes_moved / (bandwidth_ms / 1_000) / 2**30
+    achieved_tflops = 2 * matrix_size**3 / (compute_ms / 1_000) / 1e12
+    finite = bool(
+        torch.isfinite(torch.add(y, x, alpha=1.25)).all()
+        and torch.isfinite(a @ b).all()
+    )
+    if not finite:
+        raise SystemExit(&quot;A roofline workload produced non-finite output.&quot;)
+    target = write_result(
+        args,
+        lab_id=&quot;05_roofline_microbench&quot;,
+        environment=environment,
+        measurements={
+            &quot;bandwidth_kernel&quot;: {
+                &quot;timing&quot;: summarize_ms(bandwidth_samples),
+                &quot;estimated_gib_per_s&quot;: round(achieved_gib_s, 2),
+                &quot;arithmetic_intensity_flop_per_byte&quot;: round(2 / 12, 4),
+            },
+            &quot;gemm&quot;: {
+                &quot;timing&quot;: summarize_ms(compute_samples),
+                &quot;achieved_tflops&quot;: round(achieved_tflops, 2),
+            },
+        },
+        correctness={&quot;finite_outputs&quot;: True},
+    )
+    print(f&quot;Completed roofline microbenchmark: {target}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-06-distributed-collectives" data-lab-guide="complete"><span class="tag">two-node</span><h3>Two-node collective benchmark</h3><p>Measure NCCL collective behavior across message sizes on the inter-node path.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/two_node.sbatch labs/06_distributed_collectives.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>message size, collective latency, exact reduction</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Identify which sizes should expose fixed latency versus transfer rate.</p></div><div><strong>Interpret after running</strong><p>Keep topology and rank count with every number; do not project to another fabric.</p></div><div><strong>If the result surprises you</strong><p>Re-run preflight, verify one rank per node, and inspect NCCL/site fabric diagnostics.</p></div></div><details class="lab-source" data-source="labs/06_distributed_collectives.py"><summary>Complete runnable source — labs/06_distributed_collectives.py</summary><pre><code>&quot;&quot;&quot;Measure and verify a two-node NCCL all-reduce.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import statistics
+import time
+
+from common import (
+    add_common_args,
+    close_distributed,
+    init_nccl,
+    load_torch,
+    require_h100,
+    resolve_int_override,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    parser.add_argument(&quot;--payload-mib&quot;, type=int, default=None)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    payload_mib = resolve_int_override(
+        args.payload_mib,
+        8 if args.profile == &quot;smoke&quot; else 256,
+        option=&quot;--payload-mib&quot;,
+    )
+    torch = load_torch()
+    environment = require_h100(torch)
+    rank, world_size, _ = init_nccl(torch)
+    elements = payload_mib * 2**20 // 4
+    tensor = torch.empty(elements, device=&quot;cuda&quot;, dtype=torch.float32)
+    for _ in range(args.warmup):
+        tensor.fill_(rank + 1)
+        torch.distributed.all_reduce(tensor)
+    torch.cuda.synchronize()
+    samples = []
+    for _ in range(args.iterations):
+        tensor.fill_(rank + 1)
+        torch.distributed.barrier()
+        start = time.perf_counter()
+        torch.distributed.all_reduce(tensor)
+        torch.cuda.synchronize()
+        samples.append((time.perf_counter() - start) * 1_000)
+    correct = bool(torch.all(tensor == 3.0).item())
+    if not correct:
+        raise SystemExit(&quot;All-reduce result was not the sum of both ranks.&quot;)
+    if rank == 0:
+        median_ms = statistics.median(samples)
+        target = write_result(
+            args,
+            lab_id=&quot;06_distributed_collectives&quot;,
+            environment={**environment, &quot;rank_count&quot;: world_size, &quot;node_count&quot;: 2},
+            measurements={
+                &quot;payload_mib&quot;: payload_mib,
+                &quot;median_ms&quot;: round(median_ms, 4),
+                &quot;effective_payload_gib_per_s&quot;: round(
+                    (payload_mib / 1024) / (median_ms / 1_000), 2
+                ),
+            },
+            correctness={&quot;all_reduce_sum&quot;: True},
+        )
+        print(f&quot;Completed collective benchmark: {target}&quot;)
+    close_distributed(torch)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-07-async-streams" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>Asynchrony and CUDA streams</h3><p>Contrast host enqueue time, completed device time, and two independent stream schedules.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/07_async_streams.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>host enqueue, sequential device, independent-stream device</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Explain why completed device work is expected to take longer than host enqueue for this workload, why the observed ordering can vary, and why overlap is not guaranteed.</p></div><div><strong>Interpret after running</strong><p>Use the result to separate asynchrony from concurrency and speedup.</p></div><div><strong>If the result surprises you</strong><p>Check event placement, stream waits, tensor lifetimes, and whether each GEMM saturates the device.</p></div></div><details class="lab-source" data-source="labs/07_async_streams.py"><summary>Complete runnable source — labs/07_async_streams.py</summary><pre><code>&quot;&quot;&quot;Contrast host enqueue time, device time, and independent CUDA streams.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import statistics
+import time
+
+from common import (
+    add_common_args,
+    load_torch,
+    require_h100,
+    seed_everything,
+    summarize_ms,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    torch = load_torch()
+    environment = require_h100(torch)
+    seed_everything(torch, args.seed)
+    width = 1_024 if args.profile == &quot;smoke&quot; else 4_096
+    tensors = [
+        torch.randn((width, width), device=&quot;cuda&quot;, dtype=torch.bfloat16)
+        for _ in range(4)
+    ]
+    a, b, c, d = tensors
+    stream_a = torch.cuda.Stream()
+    stream_b = torch.cuda.Stream()
+
+    def sequential() -&gt; tuple[object, object]:
+        return a @ b, c @ d
+
+    def concurrent() -&gt; tuple[object, object]:
+        ready = torch.cuda.Event()
+        ready.record()
+        stream_a.wait_event(ready)
+        stream_b.wait_event(ready)
+        with torch.cuda.stream(stream_a):
+            first = a @ b
+        with torch.cuda.stream(stream_b):
+            second = c @ d
+        current = torch.cuda.current_stream()
+        current.wait_stream(stream_a)
+        current.wait_stream(stream_b)
+        return first, second
+
+    for _ in range(args.warmup):
+        sequential()
+        concurrent()
+    torch.cuda.synchronize()
+
+    host_enqueue_samples = []
+    sequential_samples = []
+    concurrent_samples = []
+    sequential_result = None
+    concurrent_result = None
+    for _ in range(args.iterations):
+        host_started = time.perf_counter()
+        sequential_result = sequential()
+        host_enqueue_samples.append((time.perf_counter() - host_started) * 1_000)
+        torch.cuda.synchronize()
+
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        sequential_result = sequential()
+        end.record()
+        end.synchronize()
+        sequential_samples.append(float(start.elapsed_time(end)))
+
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        concurrent_result = concurrent()
+        end.record()
+        end.synchronize()
+        concurrent_samples.append(float(start.elapsed_time(end)))
+
+    assert sequential_result is not None and concurrent_result is not None
+    correct = all(
+        torch.allclose(expected, observed, rtol=2e-2, atol=2e-2)
+        for expected, observed in zip(sequential_result, concurrent_result, strict=True)
+    )
+    if not correct:
+        raise SystemExit(&quot;Sequential and stream-based results diverged.&quot;)
+    target = write_result(
+        args,
+        lab_id=&quot;07_async_streams&quot;,
+        environment=environment,
+        measurements={
+            &quot;matrix_width&quot;: width,
+            &quot;host_enqueue_median_ms&quot;: round(statistics.median(host_enqueue_samples), 4),
+            &quot;sequential_device&quot;: summarize_ms(sequential_samples),
+            &quot;independent_streams_device&quot;: summarize_ms(concurrent_samples),
+        },
+        correctness={&quot;allclose&quot;: True},
+    )
+    print(f&quot;Completed asynchronous stream experiment: {target}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-08-operator-to-kernels" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>PyTorch operator-to-kernel map</h3><p>Profile a composed PyTorch workload and list the CUDA kernel activity that implements it.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/08_operator_to_kernels.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>CPU/CUDA event count, calls, and self device time</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Estimate how many conceptual operations may become separate kernels.</p></div><div><strong>Interpret after running</strong><p>Map events cautiously; kernel names and fusion decisions are version-specific.</p></div><div><strong>If the result surprises you</strong><p>Confirm CUDA profiler activity, warm-up, shapes, and a finite result.</p></div></div><details class="lab-source" data-source="labs/08_operator_to_kernels.py"><summary>Complete runnable source — labs/08_operator_to_kernels.py</summary><pre><code>&quot;&quot;&quot;Map a PyTorch operator chain to CPU launches and CUDA kernel activity.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+
+from common import (
+    add_common_args,
+    load_torch,
+    require_h100,
+    seed_everything,
+    validate_common_args,
+    write_result,
+)
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    validate_common_args(args)
+    torch = load_torch()
+    environment = require_h100(torch)
+    seed_everything(torch, args.seed)
+    width = 1_024 if args.profile == &quot;smoke&quot; else 4_096
+    batch = 64 if args.profile == &quot;smoke&quot; else 256
+    values = torch.randn((batch, width), device=&quot;cuda&quot;, dtype=torch.bfloat16)
+    weight = torch.randn((width, width), device=&quot;cuda&quot;, dtype=torch.bfloat16)
+    bias = torch.randn((width,), device=&quot;cuda&quot;, dtype=torch.bfloat16)
+
+    def workload() -&gt; object:
+        projected = values @ weight
+        normalized = torch.nn.functional.layer_norm(projected, (width,))
+        return torch.nn.functional.gelu(normalized + bias).square().mean()
+
+    for _ in range(args.warmup):
+        workload()
+    torch.cuda.synchronize()
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        record_shapes=True,
+    ) as profiler:
+        loss = None
+        for _ in range(args.iterations):
+            loss = workload()
+            profiler.step()
+    assert loss is not None
+    events = profiler.key_averages()
+    cuda_events = [event for event in events if event.self_cuda_time_total &gt; 0]
+    top_cuda = sorted(
+        cuda_events, key=lambda event: event.self_cuda_time_total, reverse=True
+    )[:10]
+    rows = [
+        {
+            &quot;event&quot;: event.key,
+            &quot;calls&quot;: int(event.count),
+            &quot;self_cuda_time_us&quot;: round(float(event.self_cuda_time_total), 3),
+        }
+        for event in top_cuda
+    ]
+    finite = bool(torch.isfinite(loss).item())
+    if not finite or not rows:
+        raise SystemExit(&quot;Profiler did not capture finite CUDA work.&quot;)
+    target = write_result(
+        args,
+        lab_id=&quot;08_operator_to_kernels&quot;,
+        environment=environment,
+        measurements={
+            &quot;shape&quot;: [batch, width],
+            &quot;unique_profile_events&quot;: len(events),
+            &quot;cuda_events_with_device_time&quot;: len(cuda_events),
+            &quot;top_cuda_events&quot;: rows,
+        },
+        correctness={&quot;finite_loss&quot;: True, &quot;captured_cuda_events&quot;: True},
+    )
+    print(events.table(sort_by=&quot;self_cuda_time_total&quot;, row_limit=10))
+    print(f&quot;Completed operator-to-kernel map: {target}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><article class="lab" id="lab-09-triton-launch-geometry" data-lab-guide="complete"><span class="tag">one-node isolation</span><h3>Python Triton launch geometry</h3><p>Write a masked vector kernel, sweep element tile sizes, and connect programs, covered elements, physical warps, tail masks, correctness, and bandwidth.</p><div class="lab-meta"><div><strong>Run through Slurm</strong><pre><code>sbatch slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile smoke</code></pre></div><div><strong>Primary evidence</strong><p>program count, covered/masked elements, warps and CUDA threads per program, timing distributions, exact output</p></div></div><div class="lab-guide"><div><strong>Predict before running</strong><p>Calculate program count and masked tail elements for each <code>BLOCK_SIZE</code>; keep that count separate from the fixed physical warp team.</p></div><div><strong>Interpret after running</strong><p>Treat element tile size and <code>num_warps</code> as distinct measured kernel choices; no one value is universally optimal.</p></div><div><strong>If the result surprises you</strong><p>Check Triton/PyTorch compatibility, SM90 detection, grid calculation, bounds mask, warp count, and exact reference output.</p></div></div><details class="lab-source" data-source="labs/09_triton_launch_geometry.py"><summary>Complete runnable source — labs/09_triton_launch_geometry.py</summary><pre><code>&quot;&quot;&quot;Write and sweep a small Python Triton kernel to expose launch geometry.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+
+from common import (
+    add_common_args,
+    cuda_times_ms,
+    load_torch,
+    require_h100,
+    seed_everything,
+    summarize_ms,
+    validate_common_args,
+    write_result,
+)
+
+try:
+    import triton
+    import triton.language as tl
+except ImportError:
+    triton = None
+    tl = None
+
+
+if triton is not None and tl is not None:
+
+    @triton.jit
+    def scale_kernel(
+        source,
+        target,
+        element_count,
+        scale,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        program = tl.program_id(axis=0)
+        offsets = program * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets &lt; element_count
+        values = tl.load(source + offsets, mask=mask)
+        tl.store(target + offsets, values * scale, mask=mask)
+else:
+    scale_kernel = None
+
+
+def main() -&gt; None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_common_args(parser)
+    args = parser.parse_args()
+    validate_common_args(args)
+    torch = load_torch()
+    environment = require_h100(torch)
+    seed_everything(torch, args.seed)
+    if triton is None or scale_kernel is None:
+        raise SystemExit(
+            &quot;This lab needs the Triton package supplied with a compatible &quot;
+            &quot;Linux CUDA PyTorch environment.&quot;
+        )
+
+    element_count = 8_000_003 if args.profile == &quot;smoke&quot; else 64_000_003
+    source = torch.randn(element_count, device=&quot;cuda&quot;, dtype=torch.float32)
+    target = torch.empty_like(source)
+    reference = source * 1.25
+    measurements: dict[str, object] = {&quot;elements&quot;: element_count, &quot;sweeps&quot;: {}}
+    correctness: dict[str, bool] = {}
+    warps_per_program = 4
+    for block_size in (128, 256, 512):
+        grid = (triton.cdiv(element_count, block_size),)
+
+        def launch() -&gt; None:
+            scale_kernel[grid](
+                source,
+                target,
+                element_count,
+                1.25,
+                BLOCK_SIZE=block_size,
+                num_warps=warps_per_program,
+            )
+
+        samples = cuda_times_ms(
+            torch,
+            launch,
+            warmup=args.warmup,
+            iterations=args.iterations,
+        )
+        launch()
+        torch.cuda.synchronize()
+        correct = bool(torch.equal(target, reference))
+        if not correct:
+            raise SystemExit(f&quot;BLOCK_SIZE={block_size} produced an incorrect result.&quot;)
+        summary = summarize_ms(samples)
+        median_seconds = summary[&quot;median_ms&quot;] / 1_000
+        logical_bytes = 2 * element_count * source.element_size()
+        measurements[&quot;sweeps&quot;][str(block_size)] = {
+            &quot;programs&quot;: triton.cdiv(element_count, block_size),
+            &quot;elements_per_program&quot;: block_size,
+            &quot;covered_element_lanes&quot;: triton.cdiv(element_count, block_size)
+            * block_size,
+            &quot;masked_tail_elements&quot;: (
+                triton.cdiv(element_count, block_size) * block_size - element_count
+            ),
+            &quot;warps_per_program&quot;: warps_per_program,
+            &quot;cuda_threads_per_program&quot;: warps_per_program * 32,
+            &quot;time&quot;: summary,
+            &quot;logical_gib_per_second&quot;: round(logical_bytes / median_seconds / 2**30, 3),
+        }
+        correctness[f&quot;block_{block_size}_exact&quot;] = True
+    target_path = write_result(
+        args,
+        lab_id=&quot;09_triton_launch_geometry&quot;,
+        environment=environment,
+        measurements=measurements,
+        correctness=correctness,
+    )
+    print(f&quot;Completed Triton launch-geometry sweep: {target_path}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre></details></article><h3>Shared lab helpers</h3><details class="lab-source" data-source="labs/common.py"><summary>Shared helper — labs/common.py</summary><pre><code>&quot;&quot;&quot;Shared, dependency-light helpers for the GPU Fundamentals labs.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import random
+import re
+import secrets
+import statistics
+from pathlib import Path
+from typing import IO, Any, Callable
+
+
+def add_common_args(parser: argparse.ArgumentParser) -&gt; None:
+    parser.add_argument(
+        &quot;--profile&quot;,
+        choices=(&quot;smoke&quot;, &quot;h100&quot;),
+        default=&quot;smoke&quot;,
+        help=&quot;Use short correctness sizes or H100-oriented benchmark sizes.&quot;,
+    )
+    parser.add_argument(&quot;--seed&quot;, type=int, default=17, help=&quot;Random seed.&quot;)
+    parser.add_argument(&quot;--warmup&quot;, type=int, default=5, help=&quot;Untimed warmup steps.&quot;)
+    parser.add_argument(&quot;--iterations&quot;, type=int, default=20, help=&quot;Timed steps.&quot;)
+    parser.add_argument(
+        &quot;--output-dir&quot;,
+        type=Path,
+        default=Path(&quot;results&quot;),
+        help=&quot;Directory for sanitized JSON results.&quot;,
+    )
+
+
+def validate_common_args(args: argparse.Namespace) -&gt; None:
+    if args.warmup &lt; 0:
+        raise SystemExit(&quot;--warmup must be non-negative&quot;)
+    if args.iterations &lt; 1:
+        raise SystemExit(&quot;--iterations must be positive&quot;)
+    os.umask(0o077)
+    args.run_id = resolve_run_id(getattr(args, &quot;run_id&quot;, None))
+
+
+def resolve_run_id(value: str | None = None) -&gt; str:
+    run_id = value if value is not None else os.environ.get(&quot;COURSE_RUN_ID&quot;)
+    if run_id is None:
+        run_id = secrets.token_hex(6)
+    if re.fullmatch(r&quot;[0-9a-f]{12}&quot;, run_id) is None:
+        raise SystemExit(&quot;COURSE_RUN_ID must be exactly 12 lowercase hex characters&quot;)
+    return run_id
+
+
+def resolve_int_override(
+    value: int | None,
+    default: int,
+    *,
+    option: str,
+    minimum: int = 1,
+) -&gt; int:
+    resolved = default if value is None else value
+    if resolved &lt; minimum:
+        raise SystemExit(f&quot;{option} must be at least {minimum}&quot;)
+    return resolved
+
+
+def load_torch() -&gt; Any:
+    try:
+        import torch
+    except ImportError as exc:
+        raise SystemExit(
+            &quot;PyTorch is required. Follow the course environment setup before running this lab.&quot;
+        ) from exc
+    return torch
+
+
+def seed_everything(torch: Any, seed: int) -&gt; None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def require_h100(torch: Any) -&gt; dict[str, Any]:
+    if not torch.cuda.is_available():
+        raise SystemExit(
+            &quot;CUDA is unavailable; this course requires an NVIDIA H100 GPU.&quot;
+        )
+    index = torch.cuda.current_device()
+    props = torch.cuda.get_device_properties(index)
+    name = props.name
+    if (
+        &quot;H100&quot; not in name
+        or &quot;MIG&quot; in name.upper()
+        or (props.major, props.minor) != (9, 0)
+    ):
+        raise SystemExit(
+            f&quot;Expected one full H100 (SM90); detected {name!r} with &quot;
+            f&quot;compute capability {props.major}.{props.minor}.&quot;
+        )
+    return {
+        &quot;gpu_family&quot;: &quot;NVIDIA H100&quot;,
+        &quot;compute_capability&quot;: &quot;9.0&quot;,
+        &quot;memory_gib&quot;: round(props.total_memory / 2**30, 1),
+        &quot;torch_version&quot;: torch.__version__,
+        &quot;cuda_version&quot;: torch.version.cuda,
+    }
+
+
+def cuda_times_ms(
+    torch: Any,
+    operation: Callable[[], Any],
+    *,
+    warmup: int,
+    iterations: int,
+) -&gt; list[float]:
+    for _ in range(warmup):
+        operation()
+    torch.cuda.synchronize()
+    samples: list[float] = []
+    for _ in range(iterations):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        operation()
+        end.record()
+        end.synchronize()
+        samples.append(float(start.elapsed_time(end)))
+    return samples
+
+
+def summarize_ms(samples: list[float]) -&gt; dict[str, float]:
+    ordered = sorted(samples)
+    p90_index = max(0, min(len(ordered) - 1, math.ceil(0.9 * len(ordered)) - 1))
+    return {
+        &quot;median_ms&quot;: round(statistics.median(ordered), 4),
+        &quot;min_ms&quot;: round(ordered[0], 4),
+        &quot;p90_ms&quot;: round(ordered[p90_index], 4),
+    }
+
+
+def write_result(
+    args: argparse.Namespace,
+    *,
+    lab_id: str,
+    environment: dict[str, Any],
+    measurements: dict[str, Any],
+    correctness: dict[str, Any],
+) -&gt; Path:
+    failed_checks = sorted(key for key, value in correctness.items() if value is False)
+    if failed_checks:
+        raise SystemExit(&quot;Failed correctness checks: &quot; + &quot;, &quot;.join(failed_checks))
+    run_id = resolve_run_id(getattr(args, &quot;run_id&quot;, None))
+    target = args.output_dir / f&quot;{lab_id}-run-{run_id}.json&quot;
+    payload = {
+        &quot;schema&quot;: &quot;gpu-course-result/v1&quot;,
+        &quot;lab_id&quot;: lab_id,
+        &quot;profile&quot;: args.profile,
+        &quot;run_id&quot;: run_id,
+        &quot;seed&quot;: args.seed,
+        &quot;environment&quot;: environment,
+        &quot;measurements&quot;: measurements,
+        &quot;correctness&quot;: correctness,
+    }
+    write_json_exclusive(target, payload)
+    return target
+
+
+def open_private_exclusive(target: Path, *, binary: bool = False) -&gt; IO[Any]:
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        descriptor = os.open(target, flags, 0o600)
+    except FileExistsError as exc:
+        raise SystemExit(
+            f&quot;Refusing to overwrite an existing artifact: {target}&quot;
+        ) from exc
+    if binary:
+        return os.fdopen(descriptor, &quot;wb&quot;)
+    return os.fdopen(descriptor, &quot;w&quot;, encoding=&quot;utf-8&quot;)
+
+
+def write_json_exclusive(target: Path, payload: dict[str, Any]) -&gt; Path:
+    document = json.dumps(payload, indent=2, sort_keys=True) + &quot;\n&quot;
+    with open_private_exclusive(target) as stream:
+        stream.write(document)
+    return target
+
+
+def configure_slurm_distributed_env() -&gt; tuple[int, int, int]:
+    rank = int(os.environ.get(&quot;RANK&quot;, os.environ.get(&quot;SLURM_PROCID&quot;, &quot;0&quot;)))
+    world_size = int(os.environ.get(&quot;WORLD_SIZE&quot;, os.environ.get(&quot;SLURM_NTASKS&quot;, &quot;1&quot;)))
+    local_rank = int(os.environ.get(&quot;LOCAL_RANK&quot;, os.environ.get(&quot;SLURM_LOCALID&quot;, &quot;0&quot;)))
+    os.environ.setdefault(&quot;RANK&quot;, str(rank))
+    os.environ.setdefault(&quot;WORLD_SIZE&quot;, str(world_size))
+    os.environ.setdefault(&quot;LOCAL_RANK&quot;, str(local_rank))
+    return rank, world_size, local_rank
+
+
+def init_nccl(torch: Any, *, expected_world_size: int = 2) -&gt; tuple[int, int, int]:
+    rank, world_size, local_rank = configure_slurm_distributed_env()
+    if world_size != expected_world_size:
+        raise SystemExit(
+            f&quot;Expected {expected_world_size} distributed ranks; received {world_size}. &quot;
+            &quot;Use slurm/two_node.sbatch.&quot;
+        )
+    for required in (&quot;MASTER_ADDR&quot;, &quot;MASTER_PORT&quot;):
+        if not os.environ.get(required):
+            raise SystemExit(f&quot;{required} is missing; use the supplied Slurm launcher.&quot;)
+    torch.cuda.set_device(local_rank)
+    torch.distributed.init_process_group(backend=&quot;nccl&quot;, init_method=&quot;env://&quot;)
+    return rank, world_size, local_rank
+
+
+def close_distributed(torch: Any) -&gt; None:
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+</code></pre></details></section>
+<section id="official-references"><h2>Official references</h2><p>Only public official vendor or project documentation is cited. Source identifiers used in lessons resolve here so the explanatory flow stays readable and the complete URL list remains at the end.</p><ol class="refs"><li id="ref-f1"><a href="https://docs.nvidia.com/cuda/hopper-tuning-guide/">NVIDIA Hopper Tuning Guide</a> — H100 SM resources, occupancy, TMA, memory, and Hopper guidance</li><li id="ref-f2"><a href="https://docs.nvidia.com/cuda/cuda-programming-guide/">NVIDIA CUDA Programming Guide</a> — CUDA execution, memory, streams, and synchronization model</li><li id="ref-f3"><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/">NVIDIA CUDA C++ Best Practices Guide</a> — coalescing, transfers, occupancy, and performance practice</li><li id="ref-f4"><a href="https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html">NVIDIA Matrix Multiplication Background User’s Guide</a> — matrix arithmetic intensity, dimensions, and Tensor Core considerations</li><li id="ref-f5"><a href="https://docs.nvidia.com/deeplearning/nccl/">NVIDIA NCCL Documentation</a> — collective semantics and NCCL operation</li><li id="ref-f6"><a href="https://docs.pytorch.org/docs/stable/notes/cuda.html">PyTorch CUDA Semantics</a> — asynchrony, streams, events, allocator behavior, TF32, and CUDA Graphs</li><li id="ref-f7"><a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/">NVIDIA Nsight Compute Profiling Guide</a> — kernel resource, occupancy, memory, and compute evidence</li><li id="ref-f8"><a href="https://slurm.schedmd.com/gres.html">Slurm Generic Resource Scheduling</a> — GPU resource requests and allocation semantics</li><li id="ref-f9"><a href="https://docs.pytorch.org/docs/stable/amp.html">PyTorch Automatic Mixed Precision</a> — mixed-precision execution and scaling APIs</li><li id="ref-f10"><a href="https://docs.pytorch.org/tutorials/recipes/torch_compile_user_defined_triton_kernel_tutorial.html">PyTorch User-Defined Triton Kernel Tutorial</a> — Python kernel definition, launch grids, and compiler integration</li><li id="ref-f11"><a href="https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/">NVIDIA Hopper Architecture In-Depth</a> — public GH100 and H100 hierarchy, SM, Tensor Core, memory, and product-configuration context</li></ol></section>
+<footer><p>Static course validation does not prove H100 execution, NCCL fabric behavior, profiler-counter access, numerical acceptance, or a speedup. Run the smoke sequence on the intended two-node allocation and keep the evidence package before making those claims.</p></footer></main></body></html>

@@ -2495,7 +2495,6 @@ def test_soperator_partition_choices_are_selected_profile_scoped() -> None:
     assert [choice.value for choice in cpu_choices] == [
         "shape-default",
         "with-debug-long",
-        "with-qos-preemption",
     ]
     assert (
         cpu_choices[0].label
@@ -2509,18 +2508,16 @@ def test_soperator_partition_choices_are_selected_profile_scoped() -> None:
         gpu_choices[1].label
         == "Add debug/long queues on the same GPU workers; accounting enabled; no QoS objects"
     )
-    assert "requires SlurmDBD QOS/account objects" in gpu_choices[2].label
     assert [choice.value for choice in mixed_choices] == [
         "shape-default",
         "with-debug-long",
-        "with-qos-preemption",
         "with-h100-infiniband-debug-long",
     ]
     assert mixed_choices[0].label == (
         "Baseline queues: cpu/gpu shape partitions; accounting enabled; no QoS/preemption"
     )
     assert mixed_choices[0].recommended is True
-    assert "H100/InfiniBand feature partitions" in mixed_choices[3].label
+    assert "H100/InfiniBand feature partitions" in mixed_choices[2].label
 
 
 def test_soperator_topology_choices_are_selected_profile_scoped() -> None:
@@ -2631,7 +2628,6 @@ def test_soperator_node_group_mapping_choices_use_external_target_inventory() ->
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
                     "profile": "nebius-gpu-v1",
                 }
             ]

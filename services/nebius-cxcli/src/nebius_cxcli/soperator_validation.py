@@ -19,7 +19,6 @@ from .duration_utils import parse_go_duration_seconds
 from .runtime_config import to_plain_data
 from .soperator_gpu_driver_jail import (
     SOPERATOR_GPU_DRIVER_JAIL_HOST_PATH,
-    SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME,
     SOPERATOR_GPU_DRIVER_JAIL_MOUNT_NAME,
     SOPERATOR_GPU_DRIVER_JAIL_MOUNT_PATH,
     soperator_nodeset_is_gpu_worker,
@@ -96,7 +95,6 @@ _SOPERATOR_POD_UNHEALTHY_TERMINATED_REASONS = {
     "Error",
     "OOMKilled",
 }
-_GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION = "4.0.2-ps.3"
 
 
 def _smoke_script(
@@ -574,27 +572,6 @@ def _gpu_allocation_evidence(stdout: str) -> dict[str, str]:
     return dict(sorted(evidence_by_host.items()))
 
 
-def _slurm_allocation_unavailable(result: SoperatorValidationCommandResult) -> bool:
-    output = "\n".join(part for part in (result.stdout, result.stderr) if part).lower()
-    markers = (
-        "requested node configuration is not available",
-        "resources are not available",
-        "resource temporarily unavailable",
-        "unable to allocate",
-        "job allocation disabled",
-        "job request does not match any supported policy",
-        "still queued and hence no node list",
-        "job submit/allocate failed",
-        "requested nodes are busy",
-        "nodes required for job are down",
-    )
-    return (
-        result.returncode != 0
-        and _GPU_ALLOCATION_MARKER not in result.stdout
-        and any(marker in output for marker in markers)
-    )
-
-
 def _slurm_partition_hostname_transient_failure(
     result: SoperatorValidationCommandResult,
 ) -> bool:
@@ -685,21 +662,6 @@ def _partition_node_counts(stdout: str) -> tuple[tuple[str, int], ...]:
         partition = _partition_name(parts[0])
         node_count = _parse_positive_int(parts[1])
         if not partition or partition == "hidden" or node_count <= 0:
-            continue
-        counts[partition] = counts.get(partition, 0) + node_count
-    return tuple((partition, count) for partition, count in counts.items() if count > 0)
-
-
-def _gpu_partition_node_counts(stdout: str) -> tuple[tuple[str, int], ...]:
-    counts: dict[str, int] = {}
-    for line in (stdout or "").splitlines():
-        parts = [item.strip() for item in line.split("|")]
-        if len(parts) < 3:
-            continue
-        partition = _partition_name(parts[0])
-        node_count = _parse_positive_int(parts[1])
-        gpu_count = _gpu_count_from_gres(parts[2])
-        if not partition or partition == "hidden" or node_count <= 0 or gpu_count <= 0:
             continue
         counts[partition] = counts.get(partition, 0) + node_count
     return tuple((partition, count) for partition, count in counts.items() if count > 0)
@@ -1379,7 +1341,17 @@ def _exec_login(
     if not pod:
         return SoperatorValidationCommandResult(tuple(args), 1, "", "login pod not found")
     return runner(
-        _kubectl_args(spec, "-n", namespace, "exec", pod, "--", *[str(item) for item in args]),
+        _kubectl_args(
+            spec,
+            "-n",
+            namespace,
+            "exec",
+            pod,
+            "--",
+            "chroot",
+            "/mnt/jail",
+            *[str(item) for item in args],
+        ),
         timeout_seconds=timeout_seconds,
         check=False,
     )
@@ -1413,7 +1385,7 @@ def _append_check(
     checks.append(item)
 
 
-def _check_soperator_manager_deployment(
+def _check_sconfigcontroller_deployment(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
@@ -1425,7 +1397,7 @@ def _check_soperator_manager_deployment(
         namespace,
         "get",
         "deployment",
-        "soperator-manager",
+        "sconfigcontroller",
         "-o",
         "json",
     )
@@ -1433,9 +1405,9 @@ def _check_soperator_manager_deployment(
     if result.returncode != 0:
         _append_check(
             checks,
-            name="Soperator manager deployment",
+            name="Soperator SConfigController deployment",
             status="failed",
-            summary="soperator-manager deployment is not readable.",
+            summary="sconfigcontroller deployment is not readable.",
             command=command,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -1446,9 +1418,9 @@ def _check_soperator_manager_deployment(
     except json.JSONDecodeError as exc:
         _append_check(
             checks,
-            name="Soperator manager deployment",
+            name="Soperator SConfigController deployment",
             status="failed",
-            summary=f"soperator-manager deployment returned invalid JSON: {exc}.",
+            summary=f"sconfigcontroller deployment returned invalid JSON: {exc}.",
             command=command,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -1456,51 +1428,16 @@ def _check_soperator_manager_deployment(
         return
     spec_payload = _as_mapping(_as_mapping(payload).get("spec"))
     status_payload = _as_mapping(_as_mapping(payload).get("status"))
-    metadata_payload = _as_mapping(_as_mapping(payload).get("metadata"))
     desired = int(spec_payload.get("replicas") or status_payload.get("replicas") or 0)
     ready = int(status_payload.get("readyReplicas") or 0)
     available = int(status_payload.get("availableReplicas") or 0)
     updated = int(status_payload.get("updatedReplicas") or 0)
     if desired <= 0:
-        pause = _as_mapping(spec.get("checkpointed_manager_pause"))
-        generation = int(metadata_payload.get("generation") or 0)
-        observed_generation = int(status_payload.get("observedGeneration") or 0)
-        if (
-            pause.get("schema") == "nebius-cxcli/checkpointed-manager-pause-v1"
-            and pause.get("status") == "verified"
-            and str(pause.get("deployment_uid") or "") == str(metadata_payload.get("uid") or "")
-            and int(pause.get("original_replicas") or 0) > 0
-            and str(pause.get("bridge_stage") or "")
-            in {
-                "source-ha-active",
-                "target-ha-active",
-                "bridge-fenced",
-                "target-singleton-active",
-            }
-            and generation > 0
-            and observed_generation >= generation
-            and int(status_payload.get("replicas") or 0) == 0
-            and ready == 0
-            and available == 0
-            and updated == 0
-        ):
-            _append_check(
-                checks,
-                name="Soperator manager deployment",
-                status="passed",
-                summary=(
-                    "soperator-manager is at the exact checkpointed zero-replica rollback "
-                    "hold while the controller bridge remains authoritative."
-                ),
-                command=command,
-                extra={"checkpointed_pause": True},
-            )
-            return
         _append_check(
             checks,
-            name="Soperator manager deployment",
+            name="Soperator SConfigController deployment",
             status="failed",
-            summary="soperator-manager deployment has no desired replicas.",
+            summary="sconfigcontroller deployment has no desired replicas.",
             command=command,
             stdout=result.stdout,
         )
@@ -1508,10 +1445,10 @@ def _check_soperator_manager_deployment(
     if available <= 0 or ready <= 0:
         _append_check(
             checks,
-            name="Soperator manager deployment",
+            name="Soperator SConfigController deployment",
             status="failed",
             summary=(
-                "soperator-manager deployment has no available ready replicas "
+                "sconfigcontroller deployment has no available ready replicas "
                 f"(ready={ready}/{desired}, available={available}/{desired}, "
                 f"updated={updated}/{desired})."
             ),
@@ -1521,10 +1458,10 @@ def _check_soperator_manager_deployment(
         return
     _append_check(
         checks,
-        name="Soperator manager deployment",
+        name="Soperator SConfigController deployment",
         status="passed",
         summary=(
-            "soperator-manager deployment is visible with "
+            "sconfigcontroller deployment is visible with "
             f"ready={ready}/{desired}, available={available}/{desired}, "
             f"updated={updated}/{desired}."
         ),
@@ -2404,42 +2341,6 @@ def _resource_item_name(item: Mapping[str, Any]) -> str:
     return str(_as_mapping(item.get("metadata")).get("name", "") or "").strip()
 
 
-def _chart_version_key(value: Any) -> tuple[tuple[int, ...], int] | None:
-    text = str(value or "").strip().removeprefix("v")
-    match = re.search(r"([0-9]+(?:\.[0-9]+){1,3})(?:-ps\.(\d+))?", text)
-    if match is None:
-        return None
-    core = tuple(int(part) for part in match.group(1).split("."))
-    ps_suffix = int(match.group(2)) if match.group(2) is not None else -1
-    return core, ps_suffix
-
-
-def _chart_version_at_least(value: Any, minimum: str) -> bool | None:
-    value_key = _chart_version_key(value)
-    minimum_key = _chart_version_key(minimum)
-    if value_key is None or minimum_key is None:
-        return None
-    value_core, value_ps = value_key
-    minimum_core, minimum_ps = minimum_key
-    core_len = max(len(value_core), len(minimum_core))
-    normalized_value_core = value_core + (0,) * (core_len - len(value_core))
-    normalized_minimum_core = minimum_core + (0,) * (core_len - len(minimum_core))
-    if normalized_value_core != normalized_minimum_core:
-        return normalized_value_core > normalized_minimum_core
-    return value_ps >= minimum_ps
-
-
-def _gpu_driver_jail_nodeset_contract_required(spec: Mapping[str, Any]) -> bool:
-    target_version = str(spec.get("target_version", "") or "").strip()
-    if not target_version:
-        return True
-    required = _chart_version_at_least(
-        target_version,
-        _GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION,
-    )
-    return True if required is None else required
-
-
 def _nodeset_gpu_driver_jail_mount_ok(spec: Mapping[str, Any]) -> bool:
     volumes = _as_mapping(_as_mapping(spec.get("slurmd")).get("volumes"))
     mounts = volumes.get("customVolumeMounts")
@@ -2462,41 +2363,11 @@ def _nodeset_gpu_driver_jail_mount_ok(spec: Mapping[str, Any]) -> bool:
     return False
 
 
-def _nodeset_gpu_driver_jail_init_ok(spec: Mapping[str, Any]) -> bool:
-    containers = spec.get("customInitContainers")
-    if not isinstance(containers, Sequence) or isinstance(containers, (str, bytes, bytearray)):
-        return False
-    for raw_container in containers:
-        if not isinstance(raw_container, Mapping):
-            continue
-        if str(raw_container.get("name", "") or "").strip() == (
-            SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME
-        ):
-            return True
-    return False
-
-
 def _check_gpu_driver_jail_nodeset_contract(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
 ) -> None:
-    target_version = str(spec.get("target_version", "") or "").strip()
-    if not _gpu_driver_jail_nodeset_contract_required(spec):
-        _append_check(
-            checks,
-            name="GPU driver jail NodeSet contract",
-            status="skipped",
-            summary=(
-                f"Soperator chart version {target_version} predates the chart-owned "
-                "GPU driver jail NodeSet contract."
-            ),
-            extra={
-                "target_version": target_version,
-                "minimum_contract_version": _GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION,
-            },
-        )
-        return
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
     command = _kubectl_args(spec, "-n", namespace, "get", "nodesets", "-o", "json")
     result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)
@@ -2534,15 +2405,13 @@ def _check_gpu_driver_jail_nodeset_contract(
             continue
         name = _resource_item_name(item) or "worker"
         mount_ok = _nodeset_gpu_driver_jail_mount_ok(nodeset_spec)
-        init_ok = _nodeset_gpu_driver_jail_init_ok(nodeset_spec)
         gpu_nodesets.append(
             {
                 "name": name,
                 "driver_root_mount": mount_ok,
-                "driver_jail_init": init_ok,
             }
         )
-        if not mount_ok or not init_ok:
+        if not mount_ok:
             failed.append(name)
     if not gpu_nodesets:
         _append_check(
@@ -2560,9 +2429,8 @@ def _check_gpu_driver_jail_nodeset_contract(
             name="GPU driver jail NodeSet contract",
             status="failed",
             summary=(
-                "GPU worker NodeSet(s) are missing the chart-owned "
-                f"{SOPERATOR_GPU_DRIVER_JAIL_MOUNT_NAME} mount or "
-                f"{SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME} init guard: "
+                "GPU worker NodeSet(s) are missing the adapter-owned read-only "
+                f"{SOPERATOR_GPU_DRIVER_JAIL_MOUNT_NAME} host driver root mount: "
                 + ", ".join(failed)
                 + "."
             ),
@@ -2574,10 +2442,7 @@ def _check_gpu_driver_jail_nodeset_contract(
         checks,
         name="GPU driver jail NodeSet contract",
         status="passed",
-        summary=(
-            "GPU worker NodeSets include the chart-owned read-only host driver root mount "
-            "and GPU driver jail init guard."
-        ),
+        summary=("GPU worker NodeSets include the adapter-owned read-only host driver root mount."),
         command=command,
         extra={"gpu_driver_jail_nodesets": gpu_nodesets},
     )
@@ -3931,7 +3796,7 @@ def run_soperator_cluster_validations(
         checks: list[dict[str, Any]] = []
         try:
             deploy_mode = mode == SOPERATOR_DEPLOY_SMOKE_MODE
-            _check_soperator_manager_deployment(runner, spec, checks)
+            _check_sconfigcontroller_deployment(runner, spec, checks)
             if bool(spec.get("check_old_source_flux", False)):
                 _check_old_source_flux_desired_state(runner, spec, checks)
             if not deploy_mode:

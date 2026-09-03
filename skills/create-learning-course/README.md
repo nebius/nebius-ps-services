@@ -16,7 +16,8 @@ and built around explicit publication and security review.
   guidance, HTML safety, high-stakes limitations, and review statuses.
 - `assets/course-workspace-template/`: starter course files and HTML lesson
   template.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental explicit-workflow and runtime cases.
 
 ## Boundaries
 

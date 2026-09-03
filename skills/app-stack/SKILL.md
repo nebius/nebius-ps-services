@@ -1,9 +1,23 @@
 ---
 name: app-stack
-description: "Use for selecting, reviewing, simplifying, modernizing, or implementing an application technology stack when the stack is undecided or under review; do not use for isolated implementation when the stack is already fixed. Classify the application and quality attributes, choose the smallest justified architecture, mark optional components, verify volatile choices with official docs, and coordinate matching specialist skills when implementation is requested."
+description: "Select or review an undecided application stack and smallest justified architecture. Route AI layers to ai-stack; not for a fixed stack or isolated implementation."
 ---
 
 # App Stack
+
+## Help
+
+For `$app-stack --help` or `$app-stack -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -31,6 +45,9 @@ duplicate specialist workflows inside this skill.
   application.
 - Do not replace `brainstorm` for open-ended ideation, `research` for deep
   technology due diligence, or `design` for a complete solution design.
+- Do not own the AI-specific model, training, inference, agent, MCP/A2A,
+  retrieval, or evaluation stack; use `ai-stack` for those undecided layers and
+  retain ownership of the surrounding product stack.
 - When `design` invokes this skill for a scoped stack decision, return that
   decision to the active design workflow instead of routing back to `design`.
 - Do not take over isolated framework work when the user has already fixed the
@@ -67,6 +84,9 @@ duplicate specialist workflows inside this skill.
 - Verify version-sensitive product behavior against current official vendor
   documentation. Use `research` for unfamiliar, disputed, high-cost, or
   recommendation-changing choices.
+- When AI-specific layers are undecided or under review, use `ai-stack` for that
+  scoped decision. Do not copy its workload, compatibility, or evidence
+  framework into this skill.
 
 ## Workflow
 
@@ -90,6 +110,11 @@ Capture only inputs that can change the decision: client platforms, rendering
 and offline needs, data ownership, transaction boundaries, workload shape,
 integrations, quality attributes, delivery constraints, team skills, and
 operational capacity.
+
+For an AI-enabled application, separate the surrounding product journey and
+ordinary application layers from model access, training, inference, agent,
+interoperability, retrieval, and AI evaluation. Give the latter to `ai-stack`
+when they are not fixed, then bring its scoped result back into this decision.
 
 ### 3. Select Architecture Before Products
 
@@ -145,6 +170,8 @@ Return:
 - rejected alternatives and why;
 - reliability, security, observability, recovery, and ownership requirements;
 - validation needed before adoption;
+- `ai-stack` decision for undecided AI-specific layers, or the fixed/skipped
+  rationale;
 - when repository scaffolding is required, a scaffold handoff containing the
   logical components, closed component classes, canonical technology names,
   technology profiles and versions, runtime requirements, capability

@@ -34,7 +34,6 @@ three_tier_semantics = importlib.util.module_from_spec(SEMANTICS_SPEC)
 SEMANTICS_SPEC.loader.exec_module(three_tier_semantics)
 
 REQUIRED_SDLC_SKILLS = (
-    "sdlc-align-specs",
     "sdlc-auto-steering",
     "sdlc-classify-failure",
     "sdlc-commit",
@@ -56,9 +55,9 @@ REQUIRED_SDLC_SKILLS = (
     "sdlc-validate-codes",
 )
 REQUIRED_RUNTIME_SUPPORT_SKILLS = (
+    "align",
     "worktree",
     "nebius-grafana-query",
-    "project-agent-instructions",
     "troubleshoot",
 )
 SOURCE_PARITY_SKILLS = (
@@ -66,8 +65,82 @@ SOURCE_PARITY_SKILLS = (
     *REQUIRED_RUNTIME_SUPPORT_SKILLS,
     "sdlc-workflow-test",
 )
+DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS = 120
+CAPABILITY_SUITE_TIMEOUT_SECONDS = {
+    "worktree": 300,
+    "task-waves": 900,
+}
 
 DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
+LEGACY_SPEC_OWNER_TERMS = (
+    "Only `sdlc-create-requirements` writes",
+    "Only `sdlc-create-design` writes",
+    "ownership-receipted v2",
+    "v2-managed selected-project",
+    'created_by_skill: "sdlc-create-requirements"',
+    'updated_by_skill: "sdlc-create-requirements"',
+    'created_by_skill: "sdlc-create-design"',
+    'updated_by_skill: "sdlc-create-design"',
+    "Agentic SDLC-owned `docs/design.md`",
+)
+MARKDOWNLINT_TEMPLATE_ENVELOPE = "MD003 MD022 MD033 MD041"
+DESIGN_REQUIRED_TERMS = (
+    "There is no workflow CLI",
+    "sdlc-start",
+    "sdlc-auto-steering",
+    "sdlc-update-documents",
+    "sdlc-prepare-execution",
+    "Feature execution plane",
+    "one direct-child commit",
+    "WORKFLOW_UPGRADE_REQUIRED",
+    "steering/auto-steering.json",
+    "documents.md",
+    "requirements-change",
+    "design-change",
+    "project-agent-instructions-change",
+    "docs-update",
+    "PreToolUse",
+    "Stop",
+    "Private local run state",
+    "Resume And Idempotency",
+    "Workflow Verification",
+    "Quick preflight test",
+    "Full workflow test",
+    "Real three-tier application test",
+    "$sdlc-workflow-test",
+    "--resume",
+    "$sdlc-start",
+    "$sdlc-start workspace init [project-folder]",
+    "$sdlc-start run <prompt-ref-or-file>",
+    "agentic-sdlc/prompt-v3",
+    "Only `## Ask` is required",
+    "requirements refinement",
+    "refinement gate binds the latest accepted",
+    "FIFO queue",
+    "ALREADY_COMPLETE",
+    "allow_implicit_invocation: false",
+    "~/.codex/sdlc-verification/report.md",
+    "does not deny filesystem targets by path",
+    "Ordinary outbound network commands",
+    "secret-bearing",
+    "MCP payloads",
+    "guarded Git or GitHub actions",
+    "source-installed parity",
+    "exact manual",
+    "task-recover",
+    "replan-future",
+    "sequential fallback",
+    "v4 outer",
+    "verification-live-results-v3",
+    "predefined runtime operational criterion",
+    "non-Grafana provenance",
+    "installed `nebius-grafana-query`",
+    "project lifecycle evidence is advisory",
+    "publication-only mode",
+    "findings-and-readiness-only mode",
+    'phase: "create-pr"',
+    'uat_status: "passed"',
+)
 DEFAULT_PROJECT_ID = "sdlc-verification-project"
 DEFAULT_RUN_ID = "active"
 DESIGN_RELATIVE = Path("docs") / "agentic-sdlc-design.md"
@@ -94,7 +167,6 @@ GOLDEN_PHASE_SEQUENCE = (
     "sdlc-start",
     "sdlc-gather-context",
     "sdlc-create-design",
-    "project-agent-instructions",
     "sdlc-auto-steering",
     "sdlc-create-plan",
     "sdlc-prepare-execution",
@@ -104,7 +176,7 @@ GOLDEN_PHASE_SEQUENCE = (
     "sdlc-unit-tests",
     "sdlc-evaluate",
     "sdlc-update-documents",
-    "sdlc-align-specs",
+    "align",
     "sdlc-commit",
     "sdlc-uat-tests",
 )
@@ -162,7 +234,7 @@ LIVE_LANE_REQUIRED_ASSERTIONS = {
 SKILL_EVIDENCE_BASES = {skill: "live" for skill in REQUIRED_SDLC_SKILLS}
 SKILL_EVIDENCE_BASES.update(
     {
-        "project-agent-instructions": "live",
+        "align": "live",
         "sdlc-start": "deterministic",
         "sdlc-prepare-execution": "deterministic",
         "sdlc-implement-plan": "deterministic",
@@ -171,7 +243,7 @@ SKILL_EVIDENCE_BASES.update(
 )
 REQUIRED_EVIDENCE_SKILLS = tuple(SKILL_EVIDENCE_BASES)
 SKILL_REQUIRED_ASSERTIONS = {
-    "sdlc-align-specs": [
+    "align": [
         "requirements_design_traceability",
         "implemented_behavior_alignment",
     ],
@@ -197,10 +269,6 @@ SKILL_REQUIRED_ASSERTIONS = {
     "sdlc-implement-plan": ["worker_contract_tests", "scoped_integration"],
     "sdlc-merge-pr": ["merge_guardrails_tested", "no_real_merge_performed"],
     "sdlc-prepare-execution": ["execution_scheduler_tests", "recovery_contract_tests"],
-    "project-agent-instructions": [
-        "conditional_decision_recorded",
-        "instruction_ownership_preserved",
-    ],
     "sdlc-start": ["two_command_surface_tests", "prompt_bound_state_tests"],
     "sdlc-tdd": ["tests_preceded_implementation", "slice_contract_covered"],
     "sdlc-tui-test": ["disposable_tui_smoke", "terminal_state_asserted"],
@@ -219,7 +287,7 @@ EVIDENCE_PROFILES = {
     "safety",
 }
 PROFILE_SOURCE_SCHEMAS = {
-    "lightweight": "agentic-sdlc/prompt-binding-v1",
+    "lightweight": "agentic-sdlc/prompt-binding-v2",
     "three-tier": "agentic-sdlc/three-tier-results-v2",
 }
 SKILL_REQUIRED_PROFILES = {
@@ -247,17 +315,21 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "prompt.history",
         "prompt.rename",
         "prompt.lifecycle",
+        "spec.validation-receipt",
     },
     "sdlc-prepare-execution": {
         "execution.scope",
         "execution.sessions-recovery",
         "execution.replan",
         "execution.secret-gate",
+        "git.promotion-safety",
     },
     "sdlc-implement-plan": {
         "execution.sequential-fallback",
-        "interop.outer-lease-v2",
+        "execution.worker-liveness",
+        "interop.outer-lease-v4",
         "interop.task-implementer-compatibility",
+        "interop.task-implementer-promotion",
     },
 }
 SKILL_LANE_REQUIREMENTS = {
@@ -270,7 +342,7 @@ SKILL_LANE_REQUIREMENTS.update(
         "sdlc-auto-steering": {"auto-steering"},
         "sdlc-classify-failure": {"failure-routing"},
         "sdlc-update-documents": {"documentation-update"},
-        "sdlc-align-specs": {"golden-path", "documentation-update"},
+        "align": {"golden-path", "documentation-update"},
         "sdlc-tui-test": {"golden-path"},
     }
 )
@@ -838,65 +910,223 @@ def check_design(ctx: Context) -> None:
             f"Missing or unreadable: {ctx.design_path}",
         )
         return
-    required_terms = [
-        "There is no workflow CLI",
-        "sdlc-start",
-        "sdlc-auto-steering",
-        "sdlc-update-documents",
-        "sdlc-prepare-execution",
-        "Feature execution plane",
-        "one direct-child commit",
-        "WORKFLOW_UPGRADE_REQUIRED",
-        "steering/auto-steering.json",
-        "documents.md",
-        "requirements-change",
-        "design-change",
-        "project-agent-instructions-change",
-        "docs-update",
-        "PreToolUse",
-        "Stop",
-        "Private local run state",
-        "Resume And Idempotency",
-        "Workflow Verification",
-        "Quick preflight test",
-        "Full workflow test",
-        "Real three-tier application test",
-        "$sdlc-workflow-test",
-        "--resume",
-        "$sdlc-start",
-        "$sdlc-start workspace init [project-folder]",
-        "$sdlc-start run <prompt-path-or-unique-filename>",
-        "agentic-sdlc/prompt-v1",
-        "ALREADY_COMPLETE",
-        "allow_implicit_invocation: false",
-        "~/.codex/sdlc-verification/report.md",
-        "does not deny filesystem targets by path",
-        "Ordinary outbound network commands",
-        "secret-bearing",
-        "MCP payloads",
-        "guarded Git or GitHub actions",
-        "source-installed parity",
-        "exact manual",
-        "task-recover",
-        "replan-future",
-        "sequential fallback",
-        "v2 outer",
-        "verification-live-results-v3",
-        "predefined runtime operational criterion",
-        "non-Grafana provenance",
-        "installed `nebius-grafana-query`",
-        "installed\n  `project-agent-instructions`",
-        "publication-only mode",
-        "findings-and-readiness-only mode",
-        'phase: "create-pr"',
-        'uat_status: "passed"',
+    normalized_text = " ".join(text.split())
+    missing = [
+        term
+        for term in DESIGN_REQUIRED_TERMS
+        if " ".join(term.split()) not in normalized_text
     ]
-    missing = [term for term in required_terms if term not in text]
     status = "PASS" if not missing else "FAIL"
     detail = "Design document contains core SDLC and verification contract terms."
     if missing:
         detail = "Missing expected design terms: " + ", ".join(missing)
     ctx.add("Environment checked", "Design contract", status, detail)
+
+
+def check_source_phase_contract(ctx: Context) -> None:
+    problems: list[str] = []
+    for required in REQUIRED_SDLC_SKILLS:
+        folder = ctx.skills_root / required
+        skill_md = folder / "SKILL.md"
+        meta = frontmatter(skill_md)
+        if meta.get("name") != required:
+            problems.append(f"{required}: invalid or missing source name")
+        description = meta.get("description", "")
+        if not description.startswith(DESCRIPTION_PREFIX):
+            problems.append(f"{required}: source description prefix is invalid")
+        policy = openai_invocation_policy(folder / "agents" / "openai.yaml")
+        if policy != "false":
+            problems.append(f"{required}: source invocation policy is not false")
+    ctx.add(
+        "Environment checked",
+        "Source phase-skill contract",
+        "PASS" if not problems else "FAIL",
+        "All required source phase skills have canonical metadata and explicit-only policy."
+        if not problems
+        else "; ".join(problems),
+        capability_id="source.phase-contract",
+    )
+
+
+def check_source_catalog_validation(ctx: Context) -> None:
+    validator = (
+        ctx.skills_root / "align-skill" / "scripts" / "validate-skill-structure.py"
+    )
+    if not validator.is_file():
+        ctx.add(
+            "Environment checked",
+            "Source catalog structure",
+            "FAIL",
+            f"Shared source-catalog validator is missing: {validator}",
+            capability_id="source.catalog-structure",
+        )
+        return
+    result = run(
+        [sys.executable, "-B", str(validator), str(ctx.skills_root)],
+        cwd=ctx.skills_root,
+        timeout=120,
+    )
+    output = (result.stdout + result.stderr).strip().splitlines()
+    summary = output[-1] if output else "Validator returned no output."
+    ctx.add(
+        "Environment checked",
+        "Source catalog structure",
+        "PASS" if result.returncode == 0 else "FAIL",
+        summary,
+        capability_id="source.catalog-structure",
+    )
+
+
+def check_spec_ownership_contract(ctx: Context) -> None:
+    problems: list[str] = []
+
+    def normalized(path: Path) -> str:
+        return " ".join(read_text(path).split())
+
+    design = normalized(ctx.design_path)
+    design_terms = (
+        "`maintain-project-specs` is the single semantic, schema, template, validation, and receipt owner",
+        "`sdlc-create-requirements` and `sdlc-create-design` are routed authoring adapters",
+        "adapter invokes that shared validator only to produce an advisory snapshot",
+    )
+    for term in design_terms:
+        if term not in design:
+            problems.append(f"design contract missing: {term}")
+
+    adapters = {
+        "sdlc-create-requirements": "This skill may write requirements only while routed as its Agentic SDLC authoring adapter",
+        "sdlc-create-design": "This skill may write design only while routed as its Agentic SDLC authoring adapter",
+    }
+    for skill, term in adapters.items():
+        text = normalized(ctx.skills_root / skill / "SKILL.md")
+        if term not in text or "`maintain-project-specs` owns both canonical documents" not in text:
+            problems.append(f"{skill}: shared-owner adapter invariant is missing")
+
+    common_owner_term = (
+        "`maintain-project-specs` is the sole semantic, schema, and validation "
+        "owner of both canonical specs"
+    )
+    common_phases = set(REQUIRED_SDLC_SKILLS) - {
+        "sdlc-create-requirements",
+        "sdlc-create-design",
+        "sdlc-start",
+    }
+    for skill in sorted(common_phases):
+        text = normalized(ctx.skills_root / skill / "SKILL.md")
+        if common_owner_term not in text:
+            problems.append(f"{skill}: positive shared-owner invariant is missing")
+
+    start = normalized(ctx.skills_root / "sdlc-start" / "SKILL.md")
+    if (
+        "`maintain-project-specs` is the sole semantic, schema, and validation owner" not in start
+        or "write only as its Agentic SDLC adapters" not in start
+    ):
+        problems.append("sdlc-start: shared-owner coordinator invariant is missing")
+
+    owner = normalized(ctx.skills_root / "maintain-project-specs" / "SKILL.md")
+    if (
+        "It is the only semantic owner of project spec schemas" not in owner
+        or "traceability rules, and the strict validator" not in owner
+    ):
+        problems.append("maintain-project-specs: authoritative owner contract is missing")
+
+    adapter = normalized(
+        ctx.skills_root / "sdlc-start" / "scripts" / "validate_project_specs.py"
+    )
+    if (
+        "Advisory Agentic SDLC adapter for project-spec inspection" not in adapter
+        or '"maintain-project-specs" / "scripts"' not in adapter
+        or "except ProjectSpecError as error" not in adapter
+        or '"status": "advisory"' not in adapter
+    ):
+        problems.append("sdlc-start: shared project-spec validator adapter is invalid")
+
+    workflow_test = normalized(ctx.skills_root / "sdlc-workflow-test" / "SKILL.md")
+    workflow_sequence = "`sdlc-create-design`, `sdlc-auto-steering`"
+    if workflow_sequence not in workflow_test:
+        problems.append(
+            "sdlc-workflow-test: auto-steering is missing after design"
+        )
+
+    readme = read_text(ctx.skills_root / "sdlc-create-requirements" / "README.md")
+    boundary_match = re.search(
+        r"^## Main Boundaries\s*$\n(?P<body>.*?)(?=^## |\Z)",
+        readme,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    boundary_lines = (
+        [
+            line.strip()
+            for line in boundary_match.group("body").splitlines()
+            if line.strip().startswith("-")
+        ]
+        if boundary_match
+        else []
+    )
+    if not boundary_lines or any(
+        not line.startswith("- Do not ") for line in boundary_lines
+    ):
+        problems.append("sdlc-create-requirements README boundaries are not prohibitions")
+
+    template_contracts = {
+        "requirements": ctx.skills_root
+        / "sdlc-create-requirements"
+        / "assets"
+        / "templates"
+        / "requirements.md.template",
+        "design": ctx.skills_root
+        / "sdlc-create-design"
+        / "assets"
+        / "templates"
+        / "design.md.template",
+    }
+    for kind, path in template_contracts.items():
+        text = read_text(path)
+        lines = text.splitlines()
+        expected_disable = (
+            f"<!-- markdownlint-disable {MARKDOWNLINT_TEMPLATE_ENVELOPE} -->"
+        )
+        expected_enable = (
+            f"<!-- markdownlint-enable {MARKDOWNLINT_TEMPLATE_ENVELOPE} -->"
+        )
+        required_terms = (
+            f"<!-- maintain-project-specs:{kind}:start schema=maintain-project-specs/{kind}-v1 -->",
+            f"<!-- maintain-project-specs:{kind}:end -->",
+            'created_by_skill: "maintain-project-specs"',
+            'updated_by_skill: "maintain-project-specs"',
+        )
+        if (
+            not lines
+            or lines[0] != expected_disable
+            or lines[-1] != expected_enable
+            or any(term not in text for term in required_terms)
+        ):
+            problems.append(f"{kind} template ownership or lint envelope is invalid")
+
+    legacy_paths = [
+        ctx.design_path,
+        ctx.skills_root / "README.md",
+        ctx.skills_root
+        / "sdlc-start"
+        / "references"
+        / "prompt-requirements-refinement.md",
+        *(ctx.skills_root / skill / "SKILL.md" for skill in REQUIRED_SDLC_SKILLS),
+    ]
+    for path in legacy_paths:
+        text = read_text(path)
+        for term in LEGACY_SPEC_OWNER_TERMS:
+            if term in text:
+                problems.append(f"{path}: legacy ownership term remains: {term}")
+
+    ctx.add(
+        "Environment checked",
+        "Canonical spec ownership",
+        "PASS" if not problems else "FAIL",
+        "Shared spec ownership, routed adapters, template envelopes, and workflow ordering are canonical."
+        if not problems
+        else "; ".join(problems),
+        capability_id="spec.ownership-contract",
+    )
 
 
 def check_vertical_slice_contract(ctx: Context) -> None:
@@ -1079,12 +1309,12 @@ def check_vertical_slice_contract(ctx: Context) -> None:
                 "Source evidence",
             ],
         ),
-        "sdlc-align-specs skill": (
-            ctx.skills_root / "sdlc-align-specs" / "SKILL.md",
+        "align skill": (
+            ctx.skills_root / "align" / "SKILL.md",
             [
-                "end-to-end slice evidence",
-                "Vertical flow, layer map, locked slice",
-                "Slice mismatch maps to the earliest owner",
+                "requirements, architecture/design, implementation",
+                "Review alignment and build the smallest repair set",
+                "Run focused validators, tests, linters",
             ],
         ),
     }
@@ -1122,10 +1352,14 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "one fresh worker agent per task",
                 "sequential `codex exec` fallback",
                 "task-recover",
+                "task-arm",
+                "task-requeue",
+                "task-heartbeat",
+                "task-watch",
                 "replan-future",
                 "git merge --no-ff --no-edit",
                 "git merge --ff-only",
-                "agentic-sdlc/execution-coordinator-v4",
+                "agentic-sdlc/execution-coordinator-v7",
             ],
         ),
         "locked plan task graph": (
@@ -1153,17 +1387,23 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "workspace-write",
             ],
         ),
-        "workflow state v2 with execution coordinator v4": (
+        "workflow state v2 with execution coordinator v7": (
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "agentic-sdlc/execution-coordinator-v4",
+                "agentic-sdlc/execution-coordinator-v7",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
                 "sessions/<session-hash>.json",
                 'phase: "create-pr"',
                 "expected_head",
+                "base_head",
                 'uat_status: "passed"',
+                "outer-integration-pending",
+                "recorded primary path",
+                "$worktree integrate",
+                "fresh explicit user invocation",
+                "from that primary checkout",
                 "WORKFLOW_UPGRADE_REQUIRED",
             ],
         ),
@@ -1176,9 +1416,26 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "PR_HEAD_DRIFT",
                 "sdlc-classify-failure",
                 "expected_head: <promoted_head>",
+                "base_head: <recorded-default-head>",
                 'uat_status: "passed"',
-                "gh pr create --head <branch>",
+                "gh pr create --base <origin-default> --head <branch>",
                 "Do not use a shell wrapper",
+            ],
+        ),
+        "commit-push managed publication guard": (
+            ctx.skills_root / "commit-push" / "SKILL.md",
+            [
+                "publication-guard --publication-action push",
+                "before staging, committing, fetching, or pushing",
+                "Publish only from the accumulated source branch",
+            ],
+        ),
+        "create-pr managed publication guard": (
+            ctx.skills_root / "create-pr" / "SKILL.md",
+            [
+                "publication-guard --publication-action create-pr",
+                "Before staging, committing, fetching for publication",
+                "Only a genuinely unmanaged manual worktree may pass as `unmanaged`",
             ],
         ),
         "active SDLC PR review mode": (
@@ -1198,6 +1455,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "exact promoted and reviewed SHA",
                 "--match-head-commit <promoted-sha>",
                 "exact_command",
+                "base_head: <recorded-default-head>",
                 "explicit_user_request: true",
                 "explicit PR number or URL",
                 "--admin",
@@ -1237,8 +1495,8 @@ def check_execution_plane_contract(ctx: Context) -> None:
             [
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
-                "coordinator schema v1, v2, or v3",
-                "sdlc-update-documents, then sdlc-align-specs",
+                "coordinator schema v1 through v6",
+                "sdlc-update-documents, then align",
             ],
         ),
     }
@@ -1257,10 +1515,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
 def check_repair_loop_contract(ctx: Context) -> None:
     checks = {
         "repair-control helper": (
-            ctx.skills_root
-            / "sdlc-classify-failure"
-            / "scripts"
-            / "repair_control.py",
+            ctx.skills_root / "sdlc-classify-failure" / "scripts" / "repair_control.py",
             [
                 "agentic-sdlc/failure-event-v1",
                 "agentic-sdlc/diagnosis-v1",
@@ -1416,6 +1671,10 @@ def check_skill_discovery(ctx: Context) -> None:
         )
 
     support_checks = {
+        "align": (
+            "General alignment runtime dependency",
+            "runtime.align-dependency",
+        ),
         "worktree": (
             "Managed worktree runtime dependency",
             "runtime.worktree-dependency",
@@ -1427,10 +1686,6 @@ def check_skill_discovery(ctx: Context) -> None:
         "troubleshoot": (
             "Conditional diagnosis runtime dependency",
             "runtime.troubleshoot-dependency",
-        ),
-        "project-agent-instructions": (
-            "Project agent instructions runtime dependency",
-            "runtime.project-agent-instructions-dependency",
         ),
     }
     for support_name in REQUIRED_RUNTIME_SUPPORT_SKILLS:
@@ -2116,14 +2371,18 @@ def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
     write_json(
         run_dir / "prompt.json",
         {
-            "schema": "agentic-sdlc/prompt-binding-v1",
+            "schema": "agentic-sdlc/prompt-binding-v2",
             "run_id": DEFAULT_RUN_ID,
             "prompt_id": "prompt-" + "1" * 32,
             "prompt_filename": prompt_filename,
+            "lineage_root": DEFAULT_RUN_ID,
+            "predecessor": None,
             "revisions": [
                 {
                     "revision": "r0001",
                     "sha256": "a" * 64,
+                    "intent_sha256": "b" * 64,
+                    "kind": "initial",
                     "snapshot": "inputs/r0001/prompt.md",
                     "steering_status": "initial",
                 }
@@ -2228,6 +2487,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 "-v",
                 "sdlc-start/scripts/test_prompt_workspace.py",
                 "sdlc-start/scripts/test_sdlc_start_contract.py",
+                "sdlc-start/scripts/test_validate_project_specs.py",
             ],
             ctx.skills_root,
         ),
@@ -2262,8 +2522,16 @@ def check_capability_regressions(ctx: Context) -> None:
             [sys.executable, "scripts/test-worktree-manager.py", "-v"],
             ctx.skills_root / "worktree",
         ),
+        "git-promotion": (
+            [sys.executable, "scripts/test-git-promotion.py", "-v"],
+            ctx.skills_root / "worktree",
+        ),
         "task-implementer": (
             [sys.executable, "scripts/test-worktree-interoperability.py", "-v"],
+            ctx.skills_root / "task-implementer",
+        ),
+        "task-waves": (
+            [sys.executable, "scripts/test-task-waves.py", "-v"],
             ctx.skills_root / "task-implementer",
         ),
         "hooks": (
@@ -2374,7 +2642,10 @@ def check_capability_regressions(ctx: Context) -> None:
     }
     results: dict[str, tuple[subprocess.CompletedProcess[str], set[str], set[str]]] = {}
     for suite, (command, cwd) in suites.items():
-        result = run(command, cwd=cwd, env=env, timeout=120)
+        timeout = CAPABILITY_SUITE_TIMEOUT_SECONDS.get(
+            suite, DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS
+        )
+        result = run(command, cwd=cwd, env=env, timeout=timeout)
         passed, skipped = parse_unittest_results(result.stderr + result.stdout)
         results[suite] = (result, passed, skipped)
 
@@ -2485,6 +2756,18 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("prompt", "test_concurrent_init_creates_one_starter_prompt"),
             ),
         ),
+        "spec.validation-receipt": (
+            "Owner-issued project-spec validation receipt",
+            (
+                (
+                    "prompt",
+                    "test_valid_specs_emit_current_advisory_snapshot",
+                ),
+                ("prompt", "test_ready_feature_with_placeholder_is_rejected"),
+                ("prompt", "test_unknown_requirement_mapping_is_rejected"),
+                ("prompt", "test_foreign_owner_marker_is_rejected"),
+            ),
+        ),
         "prompt.history": (
             "Prompt metadata history",
             (
@@ -2528,6 +2811,14 @@ def check_capability_regressions(ctx: Context) -> None:
                     "execution",
                     "test_claim_outside_nested_project_scope_fails_before_resources",
                 ),
+                (
+                    "execution",
+                    "test_claim_crossing_gitlink_fails_before_resources",
+                ),
+                (
+                    "execution",
+                    "test_prefix_claim_containing_tracked_symlink_fails_before_resources",
+                ),
             ),
         ),
         "execution.sessions-recovery": (
@@ -2540,9 +2831,26 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("execution", "test_interrupted_worker_recovery_accepts_clean_base"),
                 (
                     "execution",
-                    "test_interrupted_worker_recovery_accepts_one_clean_direct_child",
+                    "test_interrupted_worker_recovery_rejects_worker_created_commit",
                 ),
                 ("execution", "test_one_worker_session_cannot_own_two_tasks"),
+                ("execution", "test_parallel_session_claim_is_atomic"),
+                (
+                    "execution",
+                    "test_session_claim_is_complete_before_atomic_publication",
+                ),
+                (
+                    "execution",
+                    "test_failed_session_claim_publication_leaves_no_partial_claim",
+                ),
+                (
+                    "execution",
+                    "test_task_finish_recovers_commit_before_result_write",
+                ),
+                (
+                    "execution",
+                    "test_task_finish_recovers_result_before_task_state_write",
+                ),
             ),
         ),
         "execution.replan": (
@@ -2572,24 +2880,97 @@ def check_capability_regressions(ctx: Context) -> None:
                     "test_first_failure_stops_later_dispatch_and_retains_concise_error",
                 ),
                 ("dispatch", "test_missing_codex_is_environment_blocker"),
+                ("dispatch", "test_terminal_watch_interrupts_worker"),
+                ("dispatch", "test_legacy_assignment_requires_upgrade"),
+                ("dispatch", "test_watch_failure_stops_worker_process_group"),
             ),
         ),
-        "interop.outer-lease-v2": (
+        "execution.worker-liveness": (
+            "Armed and monitored Agentic worker lifecycle",
+            (
+                ("execution", "test_worker_must_be_armed_before_start"),
+                ("execution", "test_arm_start_heartbeat_and_watch_liveness"),
+                ("execution", "test_prestart_mutation_and_timeout_fail_closed"),
+                (
+                    "execution",
+                    "test_confirmed_prestart_requeue_allows_a_fresh_arm",
+                ),
+                (
+                    "execution",
+                    "test_prestart_scope_violations_use_scope_error",
+                ),
+                ("execution", "test_progress_does_not_bypass_maximum_runtime"),
+                ("dispatch", "test_terminal_watch_interrupts_worker"),
+            ),
+        ),
+        "git.promotion-safety": (
+            "Verified remote-default, local-source, and exact promotion safety",
+            (
+                (
+                    "git-promotion",
+                    "test_resolves_symbolic_remote_default_without_name_guessing",
+                ),
+                (
+                    "git-promotion",
+                    "test_recorded_remote_default_head_drift_is_rejected",
+                ),
+                (
+                    "git-promotion",
+                    "test_ff_only_promotion_and_exact_branch_deletion",
+                ),
+                (
+                    "git-promotion",
+                    "test_promotion_lock_regular_file_fails_with_structured_error",
+                ),
+                (
+                    "worktree",
+                    "test_add_uses_clean_local_source_branch_and_exact_head",
+                ),
+            ),
+        ),
+        "interop.outer-lease-v4": (
             "Managed outer-worktree lease lifecycle",
             (
                 (
                     "worktree",
-                    "test_agentic_sdlc_owner_uses_v2_lease_and_releases_before_publication",
+                    "test_task_lease_blocks_integration_until_release",
                 ),
-                ("worktree", "test_unfinished_v1_lease_requires_workflow_upgrade"),
+                (
+                    "worktree",
+                    "test_old_manifest_and_reservation_schemas_fail_closed",
+                ),
+                (
+                    "worktree",
+                    "test_remove_deletes_terminal_lease_receipt",
+                ),
+                (
+                    "worktree",
+                    "test_remove_retry_deletes_terminal_receipt_after_git_cleanup",
+                ),
+                (
+                    "worktree",
+                    "test_internal_coordinators_do_not_call_public_lifecycle_actions",
+                ),
                 (
                     "execution",
-                    "test_managed_outer_execution_releases_before_publication",
+                    "test_managed_outer_execution_releases_to_local_source_integration",
+                ),
+                (
+                    "execution",
+                    "test_private_interop_rejects_public_lifecycle_before_subprocess",
+                ),
+                (
+                    "hooks",
+                    "test_stop_does_not_continue_worktree_integration",
+                ),
+                (
+                    "hooks",
+                    "test_stop_does_not_continue_worktree_next_skill",
                 ),
             ),
         ),
         "interop.task-implementer-compatibility": (
-            "Task Implementer lease compatibility",
+            "Task Implementer persistent-lane coexistence",
             (
                 (
                     "task-implementer",
@@ -2597,7 +2978,68 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "task-implementer",
-                    "test_managed_write_claim_cannot_escape_outer_scope",
+                    "test_private_interop_rejects_public_lifecycle_before_subprocess",
+                ),
+                (
+                    "task-implementer",
+                    "test_managed_write_claim_may_span_the_full_checkout",
+                ),
+                (
+                    "task-implementer",
+                    "test_resume_repairs_exact_terminal_receipt_and_rejects_stale_sha",
+                ),
+                (
+                    "task-implementer",
+                    "test_successive_promotions_advance_the_outer_lease_history",
+                ),
+                (
+                    "task-implementer",
+                    "test_replan_claims_block_a_conflicting_live_lane_before_state_write",
+                ),
+                (
+                    "task-implementer",
+                    "test_exclusive_domain_classes_conflict_across_lanes_with_distinct_keys",
+                ),
+                (
+                    "task-waves",
+                    "test_repository_claims_add_every_exclusive_class_sentinel",
+                ),
+                (
+                    "worktree",
+                    "test_task_lane_rejects_ordinary_task_lease_without_state_mutation",
+                ),
+                (
+                    "worktree",
+                    "test_task_lane_missing_branch_identity_fails_closed_without_lease",
+                ),
+                (
+                    "execution",
+                    "test_private_interop_rejects_task_lane_before_state_write",
+                ),
+                (
+                    "execution",
+                    "test_task_lane_rejection_leaves_next_task_generation_available",
+                ),
+            ),
+        ),
+        "interop.task-implementer-promotion": (
+            "Task Implementer exact promotion and cleanup lifecycle",
+            (
+                (
+                    "task-waves",
+                    "test_full_repository_worktrees_ordered_merge_ff_promotion_and_cleanup",
+                ),
+                (
+                    "task-waves",
+                    "test_remote_default_head_drift_does_not_affect_lane_promotion",
+                ),
+                (
+                    "task-waves",
+                    "test_branch_advance_race_retains_worker_ref_and_blocks_promotion",
+                ),
+                (
+                    "task-waves",
+                    "test_legacy_wave_and_interop_schemas_are_rejected",
                 ),
             ),
         ),
@@ -2626,6 +3068,14 @@ def check_capability_regressions(ctx: Context) -> None:
                     "hooks",
                     "test_pretool_denies_gh_pr_create_without_explicit_head",
                 ),
+                (
+                    "hooks",
+                    "test_pretool_denies_gh_pr_create_without_exact_base",
+                ),
+                (
+                    "hooks",
+                    "test_pretool_denies_gh_pr_create_when_remote_default_head_advanced",
+                ),
                 ("hooks", "test_pretool_denies_compound_gh_pr_create"),
                 ("hooks", "test_pretool_guards_only_github_pr_creation_writes"),
             ),
@@ -2635,6 +3085,10 @@ def check_capability_regressions(ctx: Context) -> None:
             (
                 ("hooks", "test_pretool_denies_gh_pr_merge_without_authorization"),
                 ("hooks", "test_pretool_allows_exact_authorized_gh_pr_merge"),
+                (
+                    "hooks",
+                    "test_pretool_denies_merge_when_remote_default_head_advanced",
+                ),
                 (
                     "hooks",
                     "test_pretool_allows_exact_authorized_merge_queue_command",
@@ -2666,6 +3120,14 @@ def check_capability_regressions(ctx: Context) -> None:
             "Verifier contract self-tests",
             (
                 ("verifier", "test_any_deterministic_failure_forces_fail"),
+                ("verifier", "test_source_phase_contract_rejects_bad_source_prefix"),
+                ("verifier", "test_source_catalog_validation_rejects_missing_reference"),
+                ("verifier", "test_spec_ownership_contract_accepts_canonical_sources"),
+                ("verifier", "test_spec_ownership_contract_rejects_legacy_owner"),
+                ("verifier", "test_spec_ownership_contract_rejects_missing_owner_dependency"),
+                ("verifier", "test_spec_ownership_contract_rejects_missing_phase_invariant"),
+                ("verifier", "test_spec_ownership_contract_rejects_unsafe_readme_boundary"),
+                ("verifier", "test_spec_ownership_contract_rejects_missing_template_envelope"),
                 ("verifier", "test_missing_live_evidence_is_partial"),
                 ("verifier", "test_valid_live_evidence_is_accepted"),
                 (
@@ -2717,6 +3179,10 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 ("verifier", "test_report_path_rejects_symlinked_parent"),
                 ("verifier", "test_report_path_rejects_symlinked_file"),
+                (
+                    "verifier",
+                    "test_capability_requirements_resolve_to_declared_tests",
+                ),
             ),
         ),
     }
@@ -3752,6 +4218,13 @@ def final_status(ctx: Context) -> str:
 
 def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
     capability_rows = [
+        ("Source phase-skill contract", "source.phase-contract"),
+        ("Source catalog structure", "source.catalog-structure"),
+        ("Canonical spec ownership", "spec.ownership-contract"),
+        (
+            "Canonical project-spec owner dependency",
+            "runtime.project-spec-owner-dependency",
+        ),
         ("Installed worktree dependency", "runtime.worktree-dependency"),
         ("Source-installed parity", "runtime.skill-parity"),
         ("Public two-command interface", "public.interface"),
@@ -3764,7 +4237,7 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ("Future-wave replan", "execution.replan"),
         ("Secret persistence gate", "execution.secret-gate"),
         ("Sequential fallback", "execution.sequential-fallback"),
-        ("Managed outer lease", "interop.outer-lease-v2"),
+        ("Managed outer lease", "interop.outer-lease-v4"),
         ("Task Implementer interoperability", "interop.task-implementer-compatibility"),
         ("Steering continuation", "steering.continuation"),
         ("Verifier self-tests", "verifier.self-tests"),
@@ -3886,11 +4359,14 @@ def report(ctx: Context) -> str:
     lines.extend(["", "## Validation commands", ""])
     lines.extend(
         [
-            "- `python3 -m unittest -v sdlc-start/scripts/test_prompt_workspace.py sdlc-start/scripts/test_sdlc_start_contract.py`",
+            "- `python3 align-skill/scripts/validate-skill-structure.py .`",
+            "- `python3 -m unittest -v sdlc-start/scripts/test_prompt_workspace.py sdlc-start/scripts/test_sdlc_start_contract.py sdlc-start/scripts/test_validate_project_specs.py`",
             "- `python3 -m unittest discover -v -s sdlc-prepare-execution/scripts -p 'test_*.py'`",
             "- `python3 sdlc-implement-plan/scripts/test_worker_dispatch.py -v`",
             "- `python3 worktree/scripts/test-worktree-manager.py -v`",
+            "- `python3 worktree/scripts/test-git-promotion.py -v`",
             "- `python3 task-implementer/scripts/test-worktree-interoperability.py -v`",
+            "- `python3 task-implementer/scripts/test-task-waves.py -v`",
             "- `python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py -v`",
             "- `python3 sdlc-evaluate/scripts/test_observability_contract.py -v`",
             "- `python3 sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py -v`",
@@ -3979,6 +4455,9 @@ def main(argv: list[str]) -> int:
         print(root_problem, file=sys.stderr)
         return 2
     check_design(ctx)
+    check_source_phase_contract(ctx)
+    check_source_catalog_validation(ctx)
+    check_spec_ownership_contract(ctx)
     check_vertical_slice_contract(ctx)
     check_execution_plane_contract(ctx)
     check_repair_loop_contract(ctx)

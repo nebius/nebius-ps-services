@@ -1,9 +1,25 @@
 ---
 name: attach-ubuntu
-description: Launch or reuse an Ubuntu Docker container for the current project, bind-mount it at /workdir, preconfigure VS Code attached-container defaults, and best-effort open the project in a new VS Code Dev Containers window. Use when users want a disposable Ubuntu test environment on macOS with Docker Desktop and the Dev Containers extension.
+description: "Use only when explicitly asked for a disposable Ubuntu Docker test environment on macOS: mount the project at /workdir, configure VS Code Dev Containers, and best-effort open a new window."
 ---
 
 # Attach Ubuntu
+
+## Help
+
+For `$attach-ubuntu --help` or `$attach-ubuntu -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Use this skill when the user wants a quick Ubuntu test container for the current
 project without adding a repo-local `.devcontainer/` as the primary path.

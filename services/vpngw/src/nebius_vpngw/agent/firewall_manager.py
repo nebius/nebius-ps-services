@@ -153,6 +153,8 @@ def reload_firewall() -> bool:
 def update_firewall_from_config(
     cfg: dict[str, Any],
     mgmt_cidrs: list[str] | None = None,
+    *,
+    require_reload: bool = False,
 ) -> None:
     """Update firewall configuration from gateway config.
 
@@ -176,7 +178,8 @@ def update_firewall_from_config(
         mgmt_cidrs_changed = update_management_cidrs(mgmt_cidrs)
 
     # Reload firewall if anything changed
-    if peer_ips_changed or mgmt_cidrs_changed or local_prefixes_changed:
-        reload_firewall()
+    if peer_ips_changed or mgmt_cidrs_changed or local_prefixes_changed or require_reload:
+        if not reload_firewall():
+            raise RuntimeError("required firewall reload failed")
     else:
         print("[FirewallMgr] No firewall changes needed")

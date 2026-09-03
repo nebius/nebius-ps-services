@@ -1,3 +1,5 @@
+name = "repo_mapper"
+description = "Read-only codebase explorer for relevant files, symbols, execution paths, dependencies, and conventions."
 sandbox_mode = "read-only"
 model_reasoning_effort = "medium"
 developer_instructions = """

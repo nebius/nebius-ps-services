@@ -1,9 +1,23 @@
 ---
 name: optimize-pytest
-description: "Use for pytest suite performance measurement, review, and safe optimization in existing Python applications, especially large suites: distinguish startup, collection, setup, call, and teardown costs; inspect fixtures, imports, parametrization, plugins, coverage, selection, parallelism, and CI lanes; rank cumulative bottlenecks; and verify like-for-like improvements. Use when pytest collection or execution is slow, fixtures repeat expensive work, test lanes need scaling, or xdist, testmon, and sharding are under evaluation. Do not use for generic failing-test diagnosis, flaky-test root cause, Python project scaffolding, or production-code performance unless pytest-suite speed is the primary request."
+description: "Measure and safely optimize slow pytest suites by separating startup, collection, fixture, call, and teardown costs and proving like-for-like gains. Not for generic failures, flakiness, scaffolding, or production performance."
 ---
 
 # Optimize Pytest
+
+## Help
+
+For `$optimize-pytest --help` or `$optimize-pytest -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -176,4 +190,4 @@ Return:
   rubric.
 - `references/scaling-and-ci.md`: parallelism, affected-test selection, lanes,
   sharding, coverage, governance, and Pants escalation.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.

@@ -231,27 +231,3 @@ def soperator_cluster_report_dir(
     command_dir: str,
 ) -> Path:
     return soperator_cluster_reports_root(project_dir, identity) / command_dir
-
-
-def soperator_cluster_backup_dir(
-    project_dir: Path,
-    backup_dir: Path | None,
-    identity: SoperatorClusterArtifactIdentity,
-) -> Path:
-    root = backup_dir if backup_dir is not None else project_dir / "backups"
-    return root / SOPERATOR_CLUSTER_ARTIFACTS_DIR_NAME / identity.cluster_key
-
-
-def soperator_cluster_checkpoint_path(
-    project_dir: Path,
-    identity: SoperatorClusterArtifactIdentity,
-    command_dir: str,
-) -> Path:
-    return (
-        project_dir
-        / ".nebius-cxcli"
-        / SOPERATOR_CLUSTER_ARTIFACTS_DIR_NAME
-        / identity.cluster_key
-        / command_dir
-        / "checkpoint.json"
-    )

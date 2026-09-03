@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+terraform-positive-01,true,"Scaffold a production-grade Terraform module with validation examples and CI."
+terraform-positive-02,true,"Harden this Terraform environment root with remote state and bounded versions."
+terraform-positive-03,true,"Review this module interface security controls and test strategy."
+terraform-negative-01,false,"Write Nebius SDK automation for these resources."
+terraform-negative-02,false,"Create a Helm chart for this application."
+terraform-negative-03,false,"Fix nebius-cxcli component catalog wiring."

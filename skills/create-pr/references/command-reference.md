@@ -69,8 +69,9 @@ checks, or PR creation.
   - `git merge --no-edit <first-branch-or-origin/first-branch>`
   - `git merge --no-edit <next-branch-or-origin/next-branch>`
   - if a simulation merge conflicts: `git merge --abort`
+  - record the exact simulation tip with `git rev-parse HEAD`
   - `git switch <original-branch>`
-  - `git branch -D tmp/pr-order-check-<short-id>`
+  - `git update-ref -d refs/heads/tmp/pr-order-check-<short-id> <observed-simulation-tip>`
 
 ## Pull Request
 

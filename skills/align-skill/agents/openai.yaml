@@ -1,6 +1,6 @@
 interface:
   display_name: "Align Skill"
-  short_description: "Review and harden Codex skill folders"
-  default_prompt: "Use $align-skill to review and standardize an existing or scaffolded Codex skill folder."
+  short_description: "Align Codex skills with lean guidance and evals"
+  default_prompt: "Use $align-skill to make this existing or scaffolded Codex skill lean, safe, and independently evaluable."
 policy:
   allow_implicit_invocation: true

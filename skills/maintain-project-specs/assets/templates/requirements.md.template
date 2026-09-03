@@ -1,0 +1,34 @@
+<!-- markdownlint-disable MD001 MD024 -->
+<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
+# Project Requirements
+
+<!-- REQUIREMENT: REQ-001 status=draft priority=P0 type=feature -->
+### REQ-001: <Observable outcome>
+
+#### User Story
+
+<Who needs what outcome and why.>
+
+#### Acceptance Criteria
+
+- AC-001: <Observable success criterion.>
+
+#### Negative Criteria
+
+- NC-001: <Behavior that must not occur.>
+
+#### Validation Method
+
+<How the outcome will be validated.>
+
+#### Test Method
+
+<Tests that prove the criterion.>
+
+#### Evaluation Method
+
+<Evidence used to judge completion.>
+
+<!-- /REQUIREMENT: REQ-001 -->
+<!-- maintain-project-specs:requirements:end -->
+<!-- markdownlint-enable MD001 MD024 -->

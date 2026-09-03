@@ -14,7 +14,6 @@ from typing import Any
 from .component_instances import (
     component_instance_id,
     component_type_id,
-    normalize_component_token,
 )
 from .mk8s_node_groups import (
     gpu_cluster_fabric,
@@ -25,7 +24,6 @@ from .mk8s_node_groups import (
 
 _LINUX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 _SOPERATOR_APP_ID = "soperator"
-_SOPERATOR_DEFAULT_PARTITION_PROFILE = "shape-default"
 
 
 def _coerce_int(value: Any, *, default: int = 0) -> int:
@@ -105,7 +103,7 @@ def validate_component_runtime_rules(
         if entry.id == "grafana" or str(entry.chart_name or "").strip().lower() == "grafana"
     }
     _validate_grafana_replicas(payload, grafana_component_ids)
-    validate_soperator_qos_partition_profiles(payload, as_text)
+    validate_soperator_upstream_values(payload)
 
 
 def _validate_postgresql(
@@ -127,158 +125,29 @@ def _validate_linux_user_name(value: str, *, field_label: str) -> None:
         )
 
 
-def _mapping_segment_value(node: Mapping[str, Any], segment: str) -> Any:
-    for candidate in (segment, segment.replace("-", "_"), segment.replace("_", "-")):
-        if candidate in node:
-            return node[candidate]
-    return None
-
-
-def _mapping_path_value(node: Mapping[str, Any], dotted_path: str) -> Any:
-    current: Any = node
-    for raw_segment in dotted_path.split("."):
-        segment = raw_segment.strip()
-        if not segment or not isinstance(current, Mapping):
-            return None
-        current = _mapping_segment_value(current, segment)
-        if current is None:
-            return None
-    return current
-
-
-def _mapping_child(node: Mapping[str, Any], key: str) -> Mapping[str, Any]:
-    value = node.get(key)
-    return value if isinstance(value, Mapping) else {}
-
-
-def _soperator_nodesets_profiles() -> tuple[str, Mapping[str, Mapping[str, Any]]]:
-    from .component_sources import helm_chart_source_by_id
-
-    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
-    settings = getattr(chart, "soperator_nodesets", None)
-    default = str(getattr(settings, "default", "") or "").strip() if settings is not None else ""
-    profiles = getattr(settings, "profiles", {}) if settings is not None else {}
-    if not isinstance(profiles, Mapping):
-        profiles = {}
-    return default, profiles
-
-
-def _soperator_profile_requires_qos_configuration(
-    partition_profile: Mapping[str, Any],
-    values: Mapping[str, Any],
-) -> bool:
-    wizard = _mapping_child(partition_profile, "wizard")
-    if wizard.get("requires_qos_configuration") is True:
-        return True
-    profile_values = _mapping_child(partition_profile, "values")
-    for source in (values, profile_values):
-        preempt_type = normalize_component_token(
-            _mapping_path_value(source, "schedulingConfig.preemptType")
-        )
-        if preempt_type == "preempt/qos":
-            return True
-    return False
-
-
-def _qos_names_from_partitions(values: Mapping[str, Any]) -> set[str]:
-    partitions = _mapping_path_value(values, "partitionConfiguration.partitions")
-    if not isinstance(partitions, list):
-        return set()
-    names: set[str] = set()
-    for partition in partitions:
-        if not isinstance(partition, Mapping):
-            continue
-        policy = _mapping_child(partition, "policy")
-        allow_qos = policy.get("allowQos")
-        if allow_qos is None:
-            allow_qos = policy.get("allowQOS")
-        if isinstance(allow_qos, str):
-            candidates = [item.strip() for item in allow_qos.split(",")]
-        elif isinstance(allow_qos, list):
-            candidates = [str(item).strip() for item in allow_qos]
-        else:
-            candidates = []
-        names.update(item for item in candidates if item)
-    return names
-
-
-def _configured_qos_names(qos_configuration: Mapping[str, Any]) -> set[str]:
-    raw_qos = qos_configuration.get("qos")
-    if not isinstance(raw_qos, list):
-        return set()
-    names: set[str] = set()
-    for item in raw_qos:
-        if not isinstance(item, Mapping):
-            continue
-        name = str(item.get("name", "") or "").strip()
-        if name:
-            names.add(name)
-    return names
-
-
-def validate_soperator_qos_partition_profiles(
-    payload: Mapping[str, Any],
-    as_text: Callable[[Any], str],
-) -> None:
+def validate_soperator_upstream_values(payload: Mapping[str, Any]) -> None:
+    """Reject values that existed only in the removed downstream chart."""
     apps_node = payload.get("apps")
     chart_rows = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
     if not isinstance(chart_rows, list):
         return
 
-    default_profile, profiles = _soperator_nodesets_profiles()
+    removed_keys = ("qosConfiguration", "schedulingConfig")
     for index, row in enumerate(chart_rows):
         if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
             continue
         if component_type_id(row) != _SOPERATOR_APP_ID:
             continue
-
         values = row.get("values")
-        values = values if isinstance(values, Mapping) else {}
-        profile_name = as_text(row.get("profile")) or default_profile
-        profile = profiles.get(profile_name)
-        if not isinstance(profile, Mapping):
+        if not isinstance(values, Mapping):
             continue
-
-        partition_profile_name = (
-            as_text(_mapping_path_value(values, "partitionProfile"))
-            or _SOPERATOR_DEFAULT_PARTITION_PROFILE
-        )
-        chart_profile = _mapping_child(profile, "chart")
-        partition_profiles = _mapping_child(chart_profile, "partition_profiles")
-        partition_profile = partition_profiles.get(partition_profile_name)
-        if not isinstance(partition_profile, Mapping):
-            continue
-        if not _soperator_profile_requires_qos_configuration(partition_profile, values):
-            continue
-
-        field_prefix = f"apps.charts[{index}].values"
-        qos_configuration = _mapping_path_value(values, "qosConfiguration")
-        if (
-            not isinstance(qos_configuration, Mapping)
-            or qos_configuration.get("enabled") is not True
-        ):
-            raise ValueError(
-                f"{field_prefix}.partitionProfile='{partition_profile_name}' uses "
-                "Slurm preempt/qos and partition AllowQos lists. Matching SlurmDBD "
-                "QOS objects must exist before slurmctld starts; set "
-                f"{field_prefix}.qosConfiguration.enabled=true for cxcli-managed "
-                "self-deployment, or choose shape-default/with-debug-long."
-            )
-
-        profile_values = _mapping_child(partition_profile, "values")
-        required_qos = _qos_names_from_partitions(values) or _qos_names_from_partitions(
-            profile_values
-        )
-        if not required_qos:
-            continue
-        configured_qos = _configured_qos_names(qos_configuration)
-        missing_qos = sorted(required_qos - configured_qos)
-        if missing_qos:
-            raise ValueError(
-                f"{field_prefix}.qosConfiguration.qos is missing QOS objects required "
-                f"by partition profile '{partition_profile_name}': "
-                f"{', '.join(missing_qos)}"
-            )
+        for key in removed_keys:
+            if key in values:
+                raise ValueError(
+                    f"apps.charts[{index}].values.{key} is a removed downstream-only "
+                    "Soperator field; use values supported by the official "
+                    "nebius/soperator release"
+                )
 
 
 def _validate_mk8s_gpu(

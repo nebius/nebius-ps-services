@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import ast
-import copy
 import inspect
 import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
 import threading
 import time
 import types
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -23,17 +23,12 @@ from typing import Any, cast
 
 import pytest
 import yaml
-from click.testing import CliRunner as ClickCliRunner
-from typer.main import get_command as get_typer_command
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
-import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.flux_ops as flux_ops
-import nebius_cxcli.soperator_migration as soperator_migration
 from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_sources import (
-    ComponentOutput,
     SourceProfile,
     reset_component_sources_cache,
     set_component_sources_file_override,
@@ -60,8 +55,6 @@ from nebius_cxcli.quota_checks import (
     QuotaRequirement,
     RegionalQuotaAvailability,
 )
-from nebius_cxcli.soperator_jail_capacity import GIB, evaluate_jail_capacity
-from nebius_cxcli.soperator_populate_jail import PopulateJailProgress, PopulateJailSnapshot
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -69,6 +62,8 @@ _COPY_PASTE_COMMAND_STYLE_RE = re.compile(r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<
 _RICH_BOX_RE = re.compile(r"[\u2500-\u257f]")
 _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_AUTH_CREDENTIALS_FILE",
+    "NEBIUS_IAM_TOKEN",
+    "CXCLI_NEBIUS_DELEGATE_ID",
     "NEBIUS_SA_ID",
     "NEBIUS_AUTH_PUBLIC_KEY_ID",
     "NEBIUS_AUTH_PRIVATE_KEY_FILE",
@@ -77,7 +72,42 @@ _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_S3_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
+    cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV,
 )
+_REAL_ENSURE_RUNTIME_AUTH_MATERIAL = cli._ensure_runtime_auth_material
+_REAL_LOAD_SOURCE_PAYLOAD = cli._load_source_payload
+_REAL_LOAD_CONFIG_PAYLOAD = cli._load_config_payload
+
+
+def _deliver_test_credentials(delivery: Any, value: Any) -> Any:
+    intent = delivery.prepare(
+        value,
+        operation_id="d" * 32,
+        credentials=(("auth-public-key", "publickey-test"),),
+    )
+    delivery.deliver(value, intent)
+    return value
+
+
+def _load_source_payload_without_auth(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise ValueError(f"Config file not found: {path}")
+    if path.is_dir():
+        raise ValueError(
+            "Expected a project config.yaml file path, but got a directory: "
+            f"{path}. Pass <tenant-folder>/<project-folder>/config.yaml."
+        )
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError("config.yaml root must be a mapping")
+    return payload
+
+
+def _load_config_payload_without_auth(path: Path) -> dict[str, Any]:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise RuntimeError("config.yaml root must be a mapping")
+    return payload
 
 
 def _bundled_tool_versions() -> tuple[str, str]:
@@ -121,9 +151,7 @@ def test_action_confirmations_never_default_to_no() -> None:
         default = keywords.get("default")
         if function_name == "typer.confirm":
             direct_confirm_defaults.append(
-                default.value
-                if isinstance(default, ast.Constant)
-                else "<missing-or-dynamic>"
+                default.value if isinstance(default, ast.Constant) else "<missing-or-dynamic>"
             )
         elif (
             function_name == "_wizard_continue_phase"
@@ -159,25 +187,6 @@ def _mk8s_ready_status(version: str = "1.33", *, nodes: int = 1) -> SimpleNamesp
     )
 
 
-def _stub_managed_mk8s_completed_reconciliation(
-    monkeypatch: pytest.MonkeyPatch,
-    calls: list[object],
-) -> None:
-    def _reconcile(**kwargs: object) -> cli._ManagedMk8sResumeReconciliation:
-        calls.append(("mk8s-reconciliation", kwargs))
-        return cli._ManagedMk8sResumeReconciliation(
-            cli._MANAGED_MK8S_RECONCILIATION_COMPLETED,
-            "Managed MK8s node-template reconciliation verified.",
-            provider_status_lines=(
-                "Provider node groups (source=Nebius API, groups=1)",
-                "group   state    k8s",
-                "worker  RUNNING  1.33",
-            ),
-        )
-
-    monkeypatch.setattr(cli, "_managed_soperator_mk8s_reconcile_live", _reconcile)
-
-
 def _empty_quota_report() -> cli.QuotaReport:
     return cli.QuotaReport(
         tenant_id="tenant-123",
@@ -204,263 +213,13 @@ def _config_with_enabled_mk8s(*, charts: list[dict[str, Any]] | None = None) -> 
     }
 
 
-def _soperator_upgrade_report_dir(paths: cli.ProjectPaths) -> Path:
-    return paths.reports_dir / "soperator-clusters" / "mk8s" / "soperator-upgrade"
-
-
-def _soperator_upgrade_report_path(paths: cli.ProjectPaths) -> Path:
-    return _soperator_upgrade_report_dir(paths) / "report.md"
-
-
-def _soperator_upgrade_report_json_path(paths: cli.ProjectPaths) -> Path:
-    return _soperator_upgrade_report_dir(paths) / "report.json"
-
-
-def _soperator_upgrade_checkpoint_path(paths: cli.ProjectPaths) -> Path:
-    return (
-        paths.project_dir
-        / ".nebius-cxcli"
-        / "soperator-clusters"
-        / "mk8s"
-        / "soperator-upgrade"
-        / "checkpoint.json"
-    )
-
-
-def _external_soperator_chart_upgrade_campaign() -> dict[str, Any]:
-    migration_profile_id = "legacy-v1-to-target"
-    migration_profile = cli.soperator_migration_profile_group(migration_profile_id)
-    identity = {
-        "project_id": "project-456",
-        "cluster_id": "mk8scluster-123",
-        "cluster_name": "external-cluster",
-        "target_ref": "external-cluster",
-        "kubernetes_uid": "kubernetes-uid-123",
-        "soperator_uid": "soperator-uid-123",
-        "slurmcluster_uid": "slurmcluster-uid-123",
-        "jail_filesystem_id": "filesystem-123",
-    }
-    jail_rootfs = {
-        "current_image": "cr.example/populate-jail:4.0.2",
-        "current_version": "4.0.2",
-        "current_source": "completed-populate-jail-job",
-        "current_job_name": "external-cluster-populate-jail",
-        "live_desired_image": "cr.example/populate-jail:4.0.2",
-        "live_desired_version": "4.0.2",
-        "live_desired_source": "slurmcluster.spec.populateJail.image",
-        "slurmcluster_name": "external-cluster",
-        "target_image": "cr.example/populate-jail:4.0.2",
-        "target_version": "4.0.2",
-        "target_cuda_version": "12.9.0",
-        "target_digest": "",
-        "target_identity_warning": "Artifact digest unavailable; exact tag is pinned.",
-        "target_source": "pinned-chart-defaults",
-        "refresh_required": False,
-        "reason": "current image matches the campaign target",
-    }
-    segment = {
-        "id": "segment-1-soperator-1-22-3-4-0-2-ps-3",
-        "index": 1,
-        "depends_on": [],
-        "kind": "soperator-upgrade",
-        "title": "Soperator chart 1.22.3 -> 4.0.2-ps.3",
-        "current_k8s_version": "1.32",
-        "target_k8s_version": "1.32",
-        "soperator_app": {
-            "current_version": "1.22.3",
-            "target_version": "4.0.2",
-            "upgrade_required": True,
-        },
-        "soperator_chart": {
-            "current_version": "1.22.3",
-            "target_version": "4.0.2-ps.3",
-            "upgrade_required": True,
-        },
-        "jail_rootfs": copy.deepcopy(jail_rootfs),
-        "k8s_upgrade_required": False,
-        "soperator_upgrade_required": True,
-        "mk8s": {
-            "control_plane": {
-                "source_version": "1.32",
-                "target_version": "1.32",
-            },
-            "node_groups": [],
-        },
-        "actions": ["upgrade-soperator"],
-    }
-    campaign = {
-        "schema": cli._SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
-        "locked": True,
-        "identity": identity,
-        "source_provenance": {
-            "discovery": "live-kubernetes-and-nebius-sdk",
-            "provider_capabilities": "nebius-sdk-list-versions-and-compatibility-matrix",
-            "component_catalog": "component_sources.yaml",
-            "support_policy": "committed-soperator-upgrade-support-policy",
-            "source_contract": "campaign-source-waypoints",
-        },
-        "catalog_fingerprint": "a" * 64,
-        "capabilities_source": "nebius-sdk",
-        "source_k8s_version": "1.32",
-        "target_k8s_version": "1.32",
-        "mk8s": {
-            "control_plane": {"source_version": "1.32", "target_version": "1.32"},
-            "node_groups": [],
-        },
-        "soperator_app": copy.deepcopy(segment["soperator_app"]),
-        "soperator_chart": copy.deepcopy(segment["soperator_chart"]),
-        "jail_rootfs": copy.deepcopy(jail_rootfs),
-        "support_status": "supported",
-        "support_rule_id": "k8s-before-1-33-soperator-1-22-plus-supported",
-        "recommended_order": ["Soperator chart 1.22.3 -> 4.0.2-ps.3"],
-        "recommended_order_policy": {},
-        "final_targets": {
-            "kubernetes": "1.32",
-            "soperator_app": "4.0.2",
-            "soperator_chart": "4.0.2-ps.3",
-            "jail_rootfs_image": "cr.example/populate-jail:4.0.2",
-            "jail_rootfs_version": "4.0.2",
-            "jail_cuda_version": "12.9.0",
-            "jail_artifact_digest": "",
-            "jail_artifact_identity_warning": ("Artifact digest unavailable; exact tag is pinned."),
-        },
-        "managed_operators": {
-            "gpu": {
-                "component_id": "nvidia-gpu-operator",
-                "chart_version": "25.3.0",
-                "chart": "gpu-operator",
-                "repository": "oci://example.invalid/charts",
-                "release_name": "gpu-operator",
-                "namespace": "nvidia-gpu-operator",
-            },
-            "network": {
-                "component_id": "nvidia-network-operator",
-                "chart_version": "25.1.0",
-                "chart": "network-operator",
-                "repository": "oci://example.invalid/charts",
-                "release_name": "network-operator",
-                "namespace": "nvidia-network-operator",
-            },
-        },
-        "migration_profile": {
-            "id": migration_profile_id,
-            "execution_contract": copy.deepcopy(migration_profile["execution_contract"]),
-        },
-        "rollout": {
-            "strategy": "zero-surge",
-            "service_role_strategy": "zero-surge",
-            "slurm_scheduling_pause": True,
-            "service_role_group_strategy": {
-                "max_surge_count": 0,
-                "max_unavailable_count": 1,
-                "drain_timeout": "none",
-            },
-            "worker_group_strategy": {
-                "max_surge_count": 0,
-                "max_unavailable_count": 1,
-                "drain_timeout": "none",
-            },
-            "global_unavailable_percent": 5,
-            "per_group_unavailable_percent": 5,
-            "per_group_unavailable_cap": 25,
-            "max_concurrent_worker_groups": 8,
-            "hard_concurrent_worker_group_ceiling": 32,
-            "failure_domain_budgeting": ["partition", "zone", "gpu"],
-            "service_role_mode": "serial",
-            "paused_worker_max_surge": 0,
-            "provider_drain_timeout": "unset",
-        },
-        "segments": [segment],
-    }
-    return cli.finalize_soperator_upgrade_campaign(
-        campaign,
-        created_at="2026-07-11T12:00:00+00:00",
-    )
-
-
-def _campaign_managed_operator_app_rows(
-    campaign: Mapping[str, Any],
-    *,
-    target_ref: str = "external-cluster",
-) -> list[dict[str, Any]]:
-    managed_operators = campaign["managed_operators"]
-    return [
-        {
-            "id": pin["component_id"],
-            "instance_id": target_ref,
-            "enabled": True,
-            "version": pin["chart_version"],
-            "chart": pin["chart"],
-            "repo": pin["repository"],
-        }
-        for role in ("gpu", "network")
-        for pin in (managed_operators[role],)
-    ]
-
-
-@pytest.mark.parametrize(
-    ("phase_id", "expected_stage"),
-    [
-        ("slurm-job-drain", "MK8s Node Upgrades"),
-        ("mk8s-node-template", "MK8s Node Upgrades"),
-        ("post-mk8s-validation", "MK8s Node Upgrades"),
-        ("backup", "Soperator Upgrade"),
-        ("soperator-chart", "Soperator Upgrade"),
-        ("populate-jail-refresh", "Jail Upgrade"),
-        ("shared-safety-verification", "Soperator Upgrade"),
-        ("completed", "Soperator Upgrade"),
-    ],
-)
-def test_soperator_upgrade_top_level_stage_groups_known_phases(
-    phase_id: str,
-    expected_stage: str,
-) -> None:
-    assert cli._soperator_upgrade_top_level_stage(phase_id) == expected_stage
-
-
 @pytest.fixture(autouse=True)
 def _reset_component_sources_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
-
-    class _TestClusterLease:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        def __enter__(self) -> _TestClusterLease:
-            return self
-
-        def assert_held(self) -> None:
-            return None
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-    monkeypatch.setattr(cli, "SoperatorMigrationClusterLease", _TestClusterLease)
-    monkeypatch.setattr(
-        component_sources,
-        "_discover_terraform_outputs",
-        lambda _source: (
-            ComponentOutput(
-                name="cluster_id",
-                kind="terraform_output",
-                source_path="cluster_id",
-                sensitive=False,
-            ),
-            ComponentOutput(
-                name="cluster_ca_certificate",
-                kind="terraform_output",
-                source_path="cluster_ca_certificate",
-                sensitive=True,
-            ),
-            ComponentOutput(
-                name="instance_id",
-                kind="terraform_output",
-                source_path="instance_id",
-                sensitive=False,
-            ),
-        ),
-    )
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_load_source_payload", _load_source_payload_without_auth)
+    monkeypatch.setattr(cli, "_load_config_payload", _load_config_payload_without_auth)
     monkeypatch.setattr(cli, "assess_live_quotas", lambda *_args, **_kwargs: _empty_quota_report())
     set_component_sources_file_override(None)
     set_component_sources_profile_override(None)
@@ -480,6 +239,7 @@ def _help_contains_option(help_text: str, option: str) -> bool:
 def _clear_runtime_auth_env() -> None:
     for name in _RUNTIME_AUTH_ENV_KEYS:
         os.environ.pop(name, None)
+    cli._RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT = None
 
 
 def _fake_paths(tmp_path: Path) -> ProjectPaths:
@@ -497,1080 +257,6 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
-
-
-def _stub_soperator_upgrade_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-    paths: ProjectPaths,
-    calls: list[object],
-    *,
-    populate_jail_image_changed: bool = True,
-    command_calls: list[tuple[tuple[str, ...], str | None]] | None = None,
-) -> None:
-    backup_path = paths.project_dir / "backups" / "soperator-upgrade-test.tar.gz"
-
-    def _backup(**_kwargs: object) -> cli._SoperatorUpgradeBackupResult:
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
-        backup_path.write_text("backup", encoding="utf-8")
-        return cli._SoperatorUpgradeBackupResult(
-            path=backup_path,
-            size_bytes=6,
-            sha256="archive-sha",
-            included_categories=(
-                "accounting",
-                "generated",
-                "kubernetes",
-                "recreation",
-                "slurm",
-                "soperator",
-                "source",
-            ),
-            secret_material_included=True,
-            accounting_db_included=True,
-            manifest_sha256="manifest-sha",
-        )
-
-    fingerprint = cli._SoperatorUpgradeConfigFingerprint(
-        values_sha256="values",
-        slurm_policy_sha256="slurm",
-        accounting_policy_sha256="accounting",
-        node_mapping_sha256="nodes",
-    )
-
-    monkeypatch.setattr(cli, "_create_restore_capable_soperator_upgrade_backup", _backup)
-    monkeypatch.setattr(
-        cli,
-        "_capture_soperator_upgrade_config_fingerprint",
-        lambda **_kwargs: fingerprint,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_compare_soperator_upgrade_config_fingerprints",
-        lambda **_kwargs: {"status": "matched"},
-    )
-
-    def _discover(**_kwargs: object) -> Path:
-        path = paths.reports_dir / "soperator-clusters" / "mk8s" / "discovery" / "manifest.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"schema": "discovery"}\n', encoding="utf-8")
-        return path
-
-    monkeypatch.setattr(cli, "_run_managed_soperator_discovery_command", _discover)
-    monkeypatch.setattr(
-        cli,
-        "load_soperator_discovery_bundle",
-        lambda _path: {
-            "cluster_id": "mk8s",
-            "snapshot": {"kubernetes_nodes": []},
-        },
-    )
-
-    def _verify_bridge_substrate(**kwargs: object) -> None:
-        checkpoint = kwargs["checkpoint"]
-        assert isinstance(checkpoint, dict)
-        binding = checkpoint["managed_bridge_binding"]
-        assert isinstance(binding, dict)
-        binding["status"] = "verified"
-
-    monkeypatch.setattr(
-        cli,
-        "_verify_managed_controller_bridge_substrate",
-        _verify_bridge_substrate,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_controller_bridge_placement_domains",
-        lambda _checkpoint: (),
-    )
-
-    class _BridgeApi:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(cli, "_SdkSoperatorMigrationNebiusApi", _BridgeApi)
-
-    class _ClusterLease:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        def __enter__(self) -> _ClusterLease:
-            return self
-
-        def assert_held(self) -> None:
-            pass
-
-        def __exit__(self, *_args: object) -> None:
-            pass
-
-    monkeypatch.setattr(cli, "SoperatorMigrationClusterLease", _ClusterLease)
-
-    def _source_bridge(**kwargs: object) -> tuple[bool, list[str]]:
-        checkpoint = kwargs["checkpoint"]
-        assert isinstance(checkpoint, dict)
-        checkpoint["controller_bridge"] = {
-            "schema": cli.CONTROLLER_BRIDGE_SCHEMA,
-            "stage": cli.BridgeStage.SOURCE_HA_ACTIVE.value,
-            "authority": {"first_bridge_write_at": "2026-07-15T00:00:00Z"},
-        }
-        return True, ["source bridge active"]
-
-    monkeypatch.setattr(cli, "_execute_controller_ha_bridge_phase", _source_bridge)
-    monkeypatch.setattr(
-        cli,
-        "_target_values_gated_by_controller_bridge",
-        lambda **kwargs: dict(cast(Mapping[str, Any], kwargs["values"])),
-    )
-
-    def _target_bridge(**kwargs: object) -> list[str]:
-        checkpoint = kwargs["checkpoint"]
-        assert isinstance(checkpoint, dict)
-        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.TARGET_HA_ACTIVE.value
-        return ["target bridge active"]
-
-    monkeypatch.setattr(cli, "_upgrade_controller_bridge_to_target_version", _target_bridge)
-
-    def _target_handoff(**kwargs: object) -> list[str]:
-        checkpoint = kwargs["checkpoint"]
-        assert isinstance(checkpoint, dict)
-        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.HANDOFF_VALIDATED.value
-        return ["target singleton active"]
-
-    monkeypatch.setattr(cli, "_handoff_controller_bridge_to_target_singleton", _target_handoff)
-
-    def _restore_bridge_partitions(**kwargs: object) -> tuple[bool, list[str]]:
-        checkpoint = cast(dict[str, Any], kwargs["checkpoint"])
-        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.PARTITIONS_RESTORED.value
-        final_health_revalidator = cast(
-            Callable[[Mapping[str, Any]], None], kwargs["final_health_revalidator"]
-        )
-        final_health_revalidator(
-            {
-                "authority_epoch": "target-epoch",
-                "pre_target_generation": 0,
-                "target_generation": 1,
-            }
-        )
-        return True, ["partitions restored"]
-
-    def _cleanup_bridge(**kwargs: object) -> tuple[bool, list[str]]:
-        checkpoint = cast(dict[str, Any], kwargs["checkpoint"])
-        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.CLEANED.value
-        return True, ["bridge cleaned"]
-
-    monkeypatch.setattr(
-        cli,
-        "_restore_slurm_partitions_before_controller_bridge_cleanup",
-        _restore_bridge_partitions,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_cleanup_controller_bridge_after_final_health",
-        _cleanup_bridge,
-    )
-
-    before_state = cli.ProtectedCustomerState(
-        target_ref="mk8s",
-        namespace="soperator",
-        captured_at="before",
-        sections={"pods": {"available": True, "items": []}},
-    )
-    after_state = cli.ProtectedCustomerState(
-        target_ref="mk8s",
-        namespace="soperator",
-        captured_at="after",
-        sections={"pods": {"available": True, "items": []}},
-    )
-
-    monkeypatch.setattr(
-        cli,
-        "_managed_soperator_upgrade_capture_protected_state",
-        lambda **_kwargs: before_state,
-    )
-
-    def _post_verification(**_kwargs: object) -> SimpleNamespace:
-        payload = {
-            "status": "passed",
-            "passed": True,
-            "checks": [{"name": "pods-running-or-completed", "status": "passed"}],
-        }
-        return SimpleNamespace(
-            status="passed",
-            passed=True,
-            checks=tuple(payload["checks"]),
-            protected_state=after_state,
-            comparison={
-                "status": "matched",
-                "before_hash": before_state.content_hash,
-                "after_hash": after_state.content_hash,
-                "deltas": [],
-                "blocked_count": 0,
-                "approval_required_count": 0,
-            },
-            command_audit=(),
-            heavy_validation_followups=(),
-            zero_downtime_eligibility={"status": "passed", "eligible": True},
-            as_payload=lambda: payload,
-        )
-
-    monkeypatch.setattr(cli, "_managed_soperator_upgrade_run_post_verification", _post_verification)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: (),
-    )
-    target_populate_jail_image = (
-        "registry.example/populate-jail:new"
-        if populate_jail_image_changed
-        else "registry.example/populate-jail:old"
-    )
-    populate_snapshots = [
-        PopulateJailSnapshot(
-            slurmcluster_name="mk8s",
-            image="registry.example/populate-jail:old",
-            job_name="mk8s-populate-jail",
-            job_uid="old-job",
-            job_complete=True,
-            job_image="registry.example/populate-jail:old",
-            status="collected",
-        ),
-        PopulateJailSnapshot(
-            slurmcluster_name="mk8s",
-            image=target_populate_jail_image,
-            job_name="mk8s-populate-jail",
-            job_uid="old-job",
-            job_complete=True,
-            job_image="registry.example/populate-jail:old",
-            status="collected",
-        ),
-    ]
-
-    def _inspect_populate_jail(*_args: object, **_kwargs: object) -> PopulateJailSnapshot:
-        if populate_snapshots:
-            return populate_snapshots.pop(0)
-        return PopulateJailSnapshot(
-            slurmcluster_name="mk8s",
-            image=target_populate_jail_image,
-            job_name="mk8s-populate-jail",
-            job_uid="new-job",
-            job_complete=True,
-            job_image=target_populate_jail_image,
-            status="collected",
-        )
-
-    monkeypatch.setattr(cli, "inspect_populate_jail", _inspect_populate_jail)
-
-    def _wait_for_active_passive_populate_jail_job(
-        *_args: object,
-        **kwargs: object,
-    ) -> PopulateJailSnapshot:
-        on_progress = kwargs.get("on_progress")
-        if callable(on_progress):
-            on_progress(
-                PopulateJailProgress(
-                    status="completed",
-                    observed_at="2026-07-15T00:00:00+00:00",
-                    job_name=str(kwargs["job_name"]),
-                    job_uid=str(kwargs["expected_job_uid"]),
-                    job_started_at="2026-07-15T00:00:00Z",
-                    deadline_at="2026-07-15T00:45:00+00:00",
-                    pod_name="populate-jail-pod",
-                    pod_uid="populate-jail-pod-uid",
-                    pod_phase="Succeeded",
-                    container_state="terminated",
-                    exit_code=0,
-                    log_status="collected",
-                    log_line_count=2,
-                    log_sha256="a" * 64,
-                    total_files=20,
-                    files_restored=20,
-                    total_bytes=100,
-                    bytes_restored=100,
-                    summary_seen=True,
-                    summary_complete=True,
-                )
-            )
-        return PopulateJailSnapshot(
-            slurmcluster_name="mk8s",
-            image=target_populate_jail_image,
-            job_name="mk8s-populate-jail-passive-slotb",
-            job_uid="new-job",
-            job_complete=True,
-            job_image=target_populate_jail_image,
-            status="collected",
-        )
-
-    monkeypatch.setattr(
-        cli,
-        "wait_for_active_passive_populate_jail_job",
-        _wait_for_active_passive_populate_jail_job,
-    )
-    monkeypatch.setattr(
-        cli,
-        "wait_for_login_service_ready_endpoints",
-        lambda *_args, **_kwargs: {
-            "service_names": ["login"],
-            "ready_endpoints": 1,
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "wait_for_login_statefulset_rollout_with_ready_endpoint_guard",
-        lambda *_args, **_kwargs: {
-            "service_names": ["login"],
-            "ready_endpoints": 1,
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_target_rootfs_handoff_consumers",
-        lambda **_kwargs: [
-            {
-                "kind": "login-statefulset",
-                "name": "login",
-                "status": "verified",
-                "rootfs_observed": True,
-                "missing_mounts": [],
-            },
-            {
-                "kind": "worker-nodeset",
-                "name": "worker",
-                "status": "verified",
-                "rootfs_observed": True,
-                "missing_mounts": [],
-            },
-        ],
-    )
-    monkeypatch.setattr(
-        cli,
-        "_wait_for_live_home_mount_probe_coverage",
-        lambda **_kwargs: (
-            {"name": "live /home mount", "status": "passed", "summary": "verified"},
-        ),
-    )
-
-    runtime_state: dict[str, Any] = {
-        "maintenance": "none",
-        "live_jobs": {},
-        "pods": [
-            {
-                "metadata": {
-                    "name": "login-0",
-                    "labels": {"app.kubernetes.io/component": "login"},
-                },
-                "status": {"phase": "Running"},
-            }
-        ],
-    }
-    running_pods = copy.deepcopy(runtime_state["pods"])
-
-    def _run_upgrade_process(
-        args: Sequence[str],
-        *,
-        input_text: str | None = None,
-        timeout_seconds: int = 120,
-        check: bool = True,
-        extra_env: Mapping[str, str] | None = None,
-    ) -> cli._SoperatorUpgradeCommandResult:
-        del timeout_seconds, check, extra_env
-        arg_text = tuple(str(arg) for arg in args)
-        if command_calls is not None:
-            command_calls.append((arg_text, input_text))
-        stdout = ""
-        slurmcluster_resource = next(
-            (item for item in arg_text if item.startswith("slurmcluster/")),
-            "",
-        )
-        if "get" in arg_text and slurmcluster_resource:
-            stdout = json.dumps(
-                {
-                    "metadata": {
-                        "name": slurmcluster_resource.split("/", 1)[1],
-                        "namespace": "soperator-prod",
-                        "uid": "managed-slurmcluster-uid",
-                    },
-                    "spec": {"maintenance": runtime_state["maintenance"]},
-                    "status": {"phase": "Available"},
-                }
-            )
-        elif "get" in arg_text and "slurmcluster" in arg_text:
-            cluster_name = arg_text[arg_text.index("slurmcluster") + 1]
-            stdout = json.dumps(
-                {
-                    "metadata": {
-                        "name": cluster_name,
-                        "namespace": "soperator-prod",
-                        "uid": "managed-slurmcluster-uid",
-                    },
-                    "spec": {"maintenance": runtime_state["maintenance"]},
-                    "status": {"phase": "Available"},
-                }
-            )
-        elif "patch" in arg_text and slurmcluster_resource and "-p" in arg_text:
-            patch = json.loads(arg_text[arg_text.index("-p") + 1])
-            maintenance = str(
-                patch.get("spec", {}).get("maintenance") or runtime_state["maintenance"]
-            )
-            runtime_state["maintenance"] = maintenance
-            runtime_state["pods"] = (
-                [] if maintenance == "downscale" else copy.deepcopy(running_pods)
-            )
-            stdout = "{}"
-        elif "get" in arg_text and "persistentvolumeclaim" in arg_text:
-            pvc_name = arg_text[arg_text.index("persistentvolumeclaim") + 1]
-            stdout = json.dumps(
-                {
-                    "metadata": {
-                        "name": pvc_name,
-                        "namespace": "soperator-prod",
-                        "uid": f"{pvc_name}-uid",
-                    },
-                    "status": {"phase": "Bound"},
-                }
-            )
-        elif "get" in arg_text and any(item.startswith("pvc/") for item in arg_text):
-            pvc_name = next(item.split("/", 1)[1] for item in arg_text if item.startswith("pvc/"))
-            stdout = json.dumps(
-                {
-                    "metadata": {
-                        "name": pvc_name,
-                        "namespace": "soperator-prod",
-                        "uid": f"{pvc_name}-uid",
-                    },
-                    "status": {"phase": "Bound"},
-                }
-            )
-        elif "get" in arg_text and "nodeset" in arg_text:
-            nodeset_name = arg_text[arg_text.index("nodeset") + 1]
-            stdout = json.dumps(
-                {
-                    "metadata": {
-                        "name": nodeset_name,
-                        "namespace": "soperator-prod",
-                        "annotations": {
-                            "cxcli.test/rootfs-tokens": (
-                                "jail-rootfs-slot-b jail-rootfs-slot-b-pvc "
-                                "/home /data /scripts /models"
-                            )
-                        },
-                    },
-                    "spec": {"replicas": 1},
-                    "status": {
-                        "phase": "Ready",
-                        "readyReplicas": 1,
-                        "conditions": [{"type": "PodsReady", "status": "True"}],
-                    },
-                }
-            )
-        elif (
-            "get" in arg_text
-            and any(arg == "statefulsets.apps.kruise.io" for arg in arg_text)
-            and "login" in arg_text
-        ):
-            stdout = json.dumps(
-                {
-                    "metadata": {
-                        "name": "login",
-                        "namespace": "soperator-prod",
-                        "annotations": {
-                            "cxcli.test/rootfs-tokens": (
-                                "jail-rootfs-slot-b jail-rootfs-slot-b-pvc "
-                                "/home /data /scripts /models"
-                            )
-                        },
-                    }
-                }
-            )
-        elif arg_text[-3:] == ("apply", "-f", "-") and input_text:
-            try:
-                applied = json.loads(input_text)
-            except json.JSONDecodeError:
-                applied = yaml.safe_load(input_text) or {}
-            for item in applied.get("items", []):
-                if not isinstance(item, Mapping) or item.get("kind") != "Job":
-                    continue
-                live_job = copy.deepcopy(dict(item))
-                metadata = live_job.setdefault("metadata", {})
-                name = str(metadata.get("name") or "")
-                namespace = str(metadata.get("namespace") or "soperator-prod")
-                job_uid = str(metadata.setdefault("uid", f"job-uid-{name}"))
-                job_spec = live_job.setdefault("spec", {})
-                job_spec.setdefault("selector", {}).setdefault("matchLabels", {}).update(
-                    {"batch.kubernetes.io/controller-uid": job_uid}
-                )
-                template = job_spec.setdefault("template", {})
-                template_labels = template.setdefault("metadata", {}).setdefault("labels", {})
-                template_labels.update(
-                    {
-                        "batch.kubernetes.io/controller-uid": job_uid,
-                        "batch.kubernetes.io/job-name": name,
-                    }
-                )
-                live_job.setdefault("status", {}).update(
-                    {
-                        "succeeded": 1,
-                        "conditions": [{"type": "Complete", "status": "True"}],
-                    }
-                )
-                runtime_state["live_jobs"][(namespace, name)] = live_job
-                containers = template.get("spec", {}).get("containers", [])
-                container_name = str(
-                    containers[0].get("name")
-                    if containers and isinstance(containers[0], Mapping)
-                    else ""
-                )
-                if container_name == "persistent-mount-migration":
-                    runtime_state["pods"].append(
-                        {
-                            "metadata": {
-                                "name": f"{name}-pod",
-                                "namespace": namespace,
-                                "uid": f"pod-uid-{name}",
-                                "ownerReferences": [
-                                    {
-                                        "apiVersion": "batch/v1",
-                                        "kind": "Job",
-                                        "name": name,
-                                        "uid": job_uid,
-                                        "controller": True,
-                                    }
-                                ],
-                            },
-                            "status": {
-                                "phase": "Succeeded",
-                                "containerStatuses": [
-                                    {
-                                        "name": container_name,
-                                        "state": {"terminated": {"exitCode": 0}},
-                                    }
-                                ],
-                            },
-                        }
-                    )
-            stdout = "{}"
-        elif "get" in arg_text and any(arg.startswith("job/") for arg in arg_text):
-            job_name = next(arg.split("/", 1)[1] for arg in arg_text if arg.startswith("job/"))
-            namespace = arg_text[arg_text.index("-n") + 1] if "-n" in arg_text else "soperator-prod"
-            live_job = runtime_state["live_jobs"].get((namespace, job_name))
-            if live_job is None:
-                return cli._SoperatorUpgradeCommandResult(
-                    args=arg_text,
-                    returncode=1,
-                    stdout="",
-                    stderr="NotFound",
-                )
-            stdout = json.dumps(live_job)
-        elif "get" in arg_text and "pods" in arg_text:
-            stdout = json.dumps({"items": runtime_state["pods"]})
-        elif "exec" in arg_text and "login-0" in arg_text:
-            stdout = "0\n"
-        elif "logs" in arg_text and any("jail-capacity-probe" in arg for arg in arg_text):
-            stdout = "active_used_kib=1048576\npassive_available_kib=209715200\n"
-        elif "logs" in arg_text and any("jail-persistent-source-probe" in arg for arg in arg_text):
-            stdout = "\n".join(
-                json.dumps(
-                    {
-                        "mount_path": mount_path,
-                        "source_path": f"/mnt/jail-store{mount_path}",
-                        "target_path": f"/mnt/jail-store/shared/{mount_path.strip('/')}",
-                        "marker_path": (
-                            "/mnt/jail-store/.cxcli/persistent-migrations/"
-                            f"{mount_path.strip('/')}.json"
-                        ),
-                        "source_status": "present",
-                        "marker_status": "none",
-                        "marker_present": False,
-                    }
-                )
-                for mount_path in ("/home", "/data", "/scripts", "/models")
-            )
-        elif "logs" in arg_text and any("jail-persistent-migration" in arg for arg in arg_text):
-            stdout = "\n".join(
-                f"persistent mount migration copied: {mount_path}"
-                for mount_path in ("/home", "/data", "/scripts", "/models")
-            )
-        return cli._SoperatorUpgradeCommandResult(
-            args=arg_text,
-            returncode=0,
-            stdout=stdout,
-            stderr="",
-        )
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_process", _run_upgrade_process)
-
-
-def test_soperator_upgrade_config_fingerprint_ignores_transient_node_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_fingerprint_from_source",
-        lambda *_args, **_kwargs: "values-sha",
-    )
-
-    def _login_command(
-        _namespace: str,
-        command: str,
-        *,
-        timeout_seconds: int,
-    ) -> cli._SoperatorUpgradeCommandResult:
-        del timeout_seconds
-        commands.append(command)
-        assert "scontrol show nodes" not in command
-        if command.startswith("sinfo "):
-            assert "%t" not in command
-            stdout = "worker-cpu-0-0|cpu*|cpu|(null)\nworker-gpu-0-0|gpu|gpu,cuda|gpu:1(S:0)\n"
-        elif "scontrol show partition" in command:
-            stdout = "PartitionName=cpu Nodes=worker-cpu-0-0 State=UP\n"
-        elif "scontrol show config" in command:
-            stdout = "SelectType=select/cons_tres\nSchedulerType=sched/backfill\n"
-        else:
-            stdout = "accounting-policy\n"
-        return cli._SoperatorUpgradeCommandResult(
-            args=("bash", "-lc", command),
-            returncode=0,
-            stdout=stdout,
-            stderr="",
-        )
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
-
-    fingerprint = cli._capture_soperator_upgrade_config_fingerprint(
-        source_payload={},
-        target=cli._HelmChartUpgradeTarget(
-            selector="apps:soperator@mk8s",
-            chart_id="soperator",
-            target_ref="mk8s",
-        ),
-        namespace="soperator",
-    )
-
-    assert fingerprint.values_sha256 == "values-sha"
-    assert any(command.startswith("sinfo -h -N -o '%N|%P|%f|%G'") for command in commands)
-    assert not any("scontrol show nodes" in command for command in commands)
-
-
-def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> None:
-    args = cli._soperator_upgrade_command_args(
-        config_path=tmp_path / "config.yaml",
-        target_ref="mk8s",
-        to_chart_version="4.0.2-ps.3",
-        to_k8s_version="1.34",
-        to_os=None,
-        to_gpu_stack_preset=None,
-        node_group="",
-        disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-        drain_timeout="none",
-        strategy_max_surge_count=None,
-        zero_surge_max_unavailable="all",
-        max_parallel_worker_groups=8,
-        backup_dir=None,
-        populate_jail_refresh="auto",
-        jail_persistent_mounts=("/data=/mnt/jail-store/shared/data",),
-        jail_sfs_resize_policy="fail",
-        jail_sfs_resize_to_gib=None,
-        job_policy="requeue-selected",
-        cancel_job=("17",),
-        requeue_job=("42", "43"),
-        job_wait_timeout="45m",
-        job_refresh_interval="10s",
-        slurm_scheduling_pause=True,
-        login_session_policy="target-ready",
-        login_session_drain_timeout="0s",
-        dry_run=False,
-        approve_remediation=False,
-    )
-
-    assert "--cancel-job" in args
-    assert "--preserve-jail-home" not in args
-    assert args[args.index("--jail-persistent-mount") + 1] == ("/data=/mnt/jail-store/shared/data")
-    assert "--jail-sfs-resize-policy" in args
-    assert args[args.index("--jail-sfs-resize-policy") + 1] == "fail"
-    assert "--home-sfs-size-multiplier" not in args
-    assert "--home-sfs-size-gib" not in args
-    assert "--confirm-jail-rootfs-overwrite" not in args
-    assert "--slurm-scheduling-pause" in args
-    assert args[args.index("--cancel-job") + 1] == "17"
-    assert "--login-session-policy" not in args
-    assert "--login-session-drain-timeout" not in args
-    assert args[args.index("--node-group-strategy") + 1] == "zero-surge"
-    assert args[args.index("--zero-surge-max-unavailable") + 1] == "all"
-    assert args[args.index("--worker-drain-timeout") + 1] == "none"
-    assert args[args.index("--max-parallel-worker-groups") + 1] == "8"
-    assert "--execute" in args
-    assert "--approve" in args
-    assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
-        "42",
-        "43",
-    ]
-
-
-def test_soperator_upgrade_command_omitted_pause_flag_defaults_true(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def _run(**kwargs: Any) -> None:
-        captured.update(kwargs)
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_command", _run)
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "upgrade",
-            str(tmp_path / "config.yaml"),
-            "--target",
-            "mk8s",
-            "--dry-run",
-            "--no-interactive",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert captured["slurm_scheduling_pause"] is True
-
-
-def test_ext_soperator_scale_execute_requires_approve_before_discovery() -> None:
-    result = runner.invoke(
-        cli.app,
-        [
-            "ext-soperator",
-            "scale-up",
-            "--project-id",
-            "project",
-            "--cluster-id",
-            "mk8scluster",
-            "--kube-context",
-            "ctx",
-            "--nodeset",
-            "worker",
-            "--to-workers",
-            "1",
-            "--execute",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "ext-soperator scale-up --execute requires --approve" in result.output
-
-
-def test_managed_non_ephemeral_scale_aligns_desired_state_without_live_patch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    source_payload: dict[str, Any] = {}
-    plan = cli.SoperatorWorkerScalePlan(
-        request=cli.SoperatorWorkerScaleRequest(
-            ownership=cli.SOPERATOR_SCALE_OWNERSHIP_MANAGED,
-            direction=cli.SOPERATOR_SCALE_DOWN,
-            target_ref="mk8s",
-            namespace="soperator",
-            nodeset="worker",
-            to_workers=2,
-        ),
-        current_replicas=4,
-        desired_replicas=2,
-        ephemeral=False,
-        current_active_ordinals=(0, 1, 2, 3),
-        desired_active_ordinals=(0, 1),
-        affected_ordinals=(2, 3),
-        affected_pods=("worker-2", "worker-3"),
-        node_group=None,
-        warnings=(),
-    )
-    writes: list[Path] = []
-    renders: list[tuple[Path, bool]] = []
-
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
-    monkeypatch.setattr(
-        cli,
-        "_prompt_soperator_upgrade_target_if_needed",
-        lambda **_kwargs: "mk8s",
-    )
-    monkeypatch.setattr(cli, "_soperator_scale_namespace", lambda *_args, **_kwargs: "soperator")
-    monkeypatch.setattr(cli, "_soperator_scale_command_runner", lambda: object())
-    monkeypatch.setattr(cli, "build_worker_scale_plan", lambda *_args, **_kwargs: plan)
-    monkeypatch.setattr(cli, "_soperator_scale_print_plan", lambda *_args, **_kwargs: None)
-    job_gate_calls: list[dict[str, Any]] = []
-
-    def _slurm_node_filter(**kwargs: Any) -> tuple[str, ...]:
-        assert kwargs["node_names"] == ("worker-2", "worker-3")
-        return ("slurm-worker-2", "slurm-worker-3")
-
-    def _handle_running_jobs(**kwargs: Any) -> tuple[str, ...]:
-        job_gate_calls.append(kwargs)
-        return ()
-
-    monkeypatch.setattr(cli, "_soperator_upgrade_slurm_node_filter", _slurm_node_filter)
-    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _handle_running_jobs)
-    monkeypatch.setattr(
-        cli,
-        "_managed_soperator_update_worker_config",
-        lambda **_kwargs: ("inputs.node_groups.worker.node_count -> 2",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_write_runtime_payload_config",
-        lambda path, _payload: writes.append(path),
-    )
-    monkeypatch.setattr(cli, "render_command", lambda path, *, force: renders.append((path, force)))
-
-    def _unexpected_live_patch(*_args: object, **_kwargs: object) -> tuple[str, ...]:
-        raise AssertionError("managed non-ephemeral scale must not live-patch NodeSet")
-
-    monkeypatch.setattr(cli, "execute_worker_scale_plan", _unexpected_live_patch)
-    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
-
-    cli._run_managed_soperator_worker_scale(
-        config_path=config_path,
-        target_ref="mk8s",
-        namespace=None,
-        kube_context=None,
-        nodeset="worker",
-        to_workers=2,
-        worker_ordinals=(),
-        direction=cli.SOPERATOR_SCALE_DOWN,
-        dry_run=False,
-        approve=True,
-        interactive=False,
-    )
-
-    assert writes == [config_path.resolve()]
-    assert renders == [(config_path.resolve(), True)]
-    assert job_gate_calls
-    assert job_gate_calls[0]["node_names"] == ("slurm-worker-2", "slurm-worker-3")
-    assert job_gate_calls[0]["drain_nodes"] is False
-
-
-def test_managed_ephemeral_scale_lower_autoscaling_min_preserves_max() -> None:
-    source_payload: dict[str, Any] = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "mk8s",
-                    "enabled": True,
-                    "inputs": {
-                        "node_groups": {
-                            "worker": {
-                                "nodeset_name": "worker",
-                                "autoscaling": {
-                                    "enabled": True,
-                                    "min_node_count": 3,
-                                    "max_node_count": 5,
-                                },
-                            }
-                        },
-                        "soperator": {
-                            "worker_node_groups": {
-                                "worker": {
-                                    "autoscaling": {
-                                        "enabled": True,
-                                        "min_node_count": 3,
-                                        "max_node_count": 5,
-                                    },
-                                    "ephemeral_nodes": {"enabled": True},
-                                }
-                            }
-                        },
-                    },
-                }
-            ]
-        }
-    }
-
-    changes = cli._managed_soperator_lower_ephemeral_worker_autoscaling_min(
-        source_payload=source_payload,
-        target_ref="mk8s",
-        nodeset="worker",
-        to_workers=1,
-    )
-    inputs = source_payload["infra"]["components"][0]["inputs"]
-
-    assert changes == (
-        "inputs.node_groups.worker.autoscaling.min_node_count -> 1",
-        "inputs.soperator.worker_node_groups.worker.autoscaling.min_node_count -> 1",
-    )
-    assert inputs["node_groups"]["worker"]["autoscaling"] == {
-        "enabled": True,
-        "min_node_count": 1,
-        "max_node_count": 5,
-    }
-    assert inputs["soperator"]["worker_node_groups"]["worker"]["autoscaling"] == {
-        "enabled": True,
-        "min_node_count": 1,
-        "max_node_count": 5,
-    }
-
-
-def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> None:
-    args = cli._external_soperator_upgrade_command_args(
-        config_path=tmp_path / "config.yaml",
-        target_ref="external",
-        backup_dir=None,
-        populate_jail_refresh="auto",
-        jail_persistent_mounts=("/data=/mnt/jail/shared/data",),
-        jail_sfs_resize_policy="apply",
-        jail_sfs_resize_to_gib=2304,
-        job_policy="requeue-hold-selected",
-        cancel_job=("17",),
-        requeue_job=("42", "43"),
-        job_wait_timeout="45m",
-        job_refresh_interval="10s",
-        slurm_scheduling_pause=False,
-        dry_run=False,
-        approve=True,
-        approve_remediation=False,
-        interactive=False,
-    )
-
-    assert args[:5] == (
-        "nebius-cxcli",
-        "ext-soperator",
-        "upgrade",
-        str(tmp_path / "config.yaml"),
-        "--target",
-    )
-    assert "--cancel-job" in args
-    assert "--preserve-jail-home" not in args
-    assert args[args.index("--jail-persistent-mount") + 1] == "/data=/mnt/jail/shared/data"
-    assert args[args.index("--jail-sfs-resize-policy") + 1] == "apply"
-    assert args[args.index("--jail-sfs-resize-to-gib") + 1] == "2304"
-    assert "--no-slurm-scheduling-pause" in args
-    assert "--home-sfs-size-multiplier" not in args
-    assert "--home-sfs-size-gib" not in args
-    assert "--confirm-jail-rootfs-overwrite" not in args
-    assert args[args.index("--target") + 1] == "external"
-    assert args[args.index("--cancel-job") + 1] == "17"
-    assert "--login-session-policy" not in args
-    assert "--login-session-drain-timeout" not in args
-    assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
-        "42",
-        "43",
-    ]
-    assert "--execute" in args
-    assert "--approve" in args
-    assert "--approve-service-role-downtime" not in args
-
-
-def _run_soperator_upgrade_for_test(
-    *,
-    config_path: Path,
-    target_ref: str | None = "mk8s",
-    to_chart_version: str | None = "0.26.0",
-    to_k8s_version: str | None = None,
-    to_os: str | None = None,
-    to_gpu_stack_preset: str | None = None,
-    node_group: str = "",
-    job_policy: str | None = None,
-    populate_jail_refresh: str = "auto",
-    jail_persistent_mounts: Sequence[str] = (),
-    login_session_policy: str = "target-ready",
-    login_session_drain_timeout: str = "0s",
-    slurm_scheduling_pause: bool = True,
-    dry_run: bool = False,
-    interactive: bool = False,
-) -> None:
-    cli._run_soperator_upgrade_command(
-        config_path=config_path,
-        target_ref=target_ref,
-        to_chart_version=to_chart_version,
-        to_k8s_version=to_k8s_version,
-        to_os=to_os,
-        to_gpu_stack_preset=to_gpu_stack_preset,
-        node_group=node_group,
-        disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-        drain_timeout="none",
-        strategy_max_surge_count=None,
-        zero_surge_max_unavailable="all",
-        max_parallel_worker_groups=8,
-        backup_dir=None,
-        populate_jail_refresh=populate_jail_refresh,
-        jail_persistent_mounts=jail_persistent_mounts,
-        jail_sfs_resize_policy=None,
-        jail_sfs_resize_to_gib=None,
-        job_policy=job_policy,
-        cancel_job=(),
-        requeue_job=(),
-        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
-        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-        slurm_scheduling_pause=slurm_scheduling_pause,
-        login_session_policy=login_session_policy,
-        login_session_drain_timeout=login_session_drain_timeout,
-        dry_run=dry_run,
-        interactive=interactive,
-    )
-
-
-def _iter_registered_help_args(
-    typer_app: Any, prefix: tuple[str, ...] = ()
-) -> tuple[tuple[str, ...], ...]:
-    help_args: list[tuple[str, ...]] = [(*prefix, "--help")]
-    for command_info in getattr(typer_app, "registered_commands", ()):
-        if getattr(command_info, "hidden", False) is True:
-            continue
-        name = getattr(command_info, "name", None)
-        if name:
-            help_args.append((*prefix, name, "--help"))
-    for group_info in getattr(typer_app, "registered_groups", ()):
-        if getattr(group_info, "hidden", False) is True:
-            continue
-        name = getattr(group_info, "name", None)
-        nested_typer = getattr(group_info, "typer_instance", None)
-        if name and nested_typer is not None:
-            help_args.extend(_iter_registered_help_args(nested_typer, (*prefix, name)))
-    return tuple(help_args)
-
-
-_HELP_EXAMPLE_SECTION_HEADINGS = frozenset(
-    {
-        "Examples:",
-        "Example:",
-        "Quickstart:",
-        "CXCLI managed workflow:",
-        "Workflow:",
-    }
-)
-_HELP_EXAMPLE_SECTION_END_HEADINGS = frozenset(
-    {
-        "Arguments",
-        "Options",
-        "Commands",
-        "Comments:",
-    }
-)
-
-
-def _assert_example_commands_are_prefixed(help_text: str, args: tuple[str, ...]) -> None:
-    in_examples = False
-    for line in help_text.splitlines():
-        stripped = line.strip()
-        for heading in _HELP_EXAMPLE_SECTION_HEADINGS:
-            if stripped.startswith(heading):
-                if stripped != heading:
-                    pytest.fail(f"{args} has inline example text after {heading}: {stripped}")
-                in_examples = True
-                break
-        else:
-            if in_examples and stripped in _HELP_EXAMPLE_SECTION_END_HEADINGS:
-                in_examples = False
-                continue
-            if in_examples and stripped.startswith("nebius-cxcli "):
-                pytest.fail(f"{args} has an unprefixed example command line: {stripped}")
-            if (
-                in_examples
-                and stripped.startswith("| nebius-cxcli ")
-                and re.search(r"\s+\([^)]", stripped)
-            ):
-                pytest.fail(f"{args} has inline comments in an example command: {stripped}")
-            continue
 
 
 def _mk8s_gpu_fabric_payload(*, fabric: str = "fabric-4") -> dict[str, Any]:
@@ -1635,7 +321,7 @@ def test_render_blocks_direct_mk8s_gpu_fabric_drift(
         lambda _manifest: _mk8s_gpu_fabric_payload(fabric="fabric-4"),
     )
 
-    with pytest.raises(RuntimeError, match="upgrade node-group"):
+    with pytest.raises(RuntimeError, match="migrate node-group"):
         cli._raise_on_render_gpu_fabric_drift(
             _mk8s_gpu_fabric_payload(fabric="fabric-6"),
             paths,
@@ -1670,7 +356,7 @@ def test_terraform_apply_blocks_mk8s_gpu_fabric_drift(
         )
 
 
-def test_upgrade_node_group_fabric_dry_run_prints_repeatable_plan(
+def test_migrate_node_group_fabric_dry_run_prints_repeatable_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1709,12 +395,16 @@ def test_upgrade_node_group_fabric_dry_run_prints_repeatable_plan(
     result = runner.invoke(
         cli.app,
         [
-            "upgrade",
+            "migrate",
             "node-group",
             str(paths.config_path),
             "infra:mk8s@cluster1",
             "--node-group",
             "worker",
+            "--replacement-node-group",
+            "worker-b200",
+            "--replacement-name",
+            "worker-b200",
             "--to-fabric",
             "fabric-6",
             "--dry-run",
@@ -1732,83 +422,25 @@ def test_upgrade_node_group_fabric_dry_run_prints_repeatable_plan(
     assert "--execute --approve" in result.output
 
 
-def test_upgrade_node_group_execute_writes_command_report_before_executor_gate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            nebius=SimpleNamespace(
-                tenant_id="tenant-1",
-                project_id="project-1",
-                region_id="eu-north1",
-            )
-        )
-    )
-    source_payload = _mk8s_gpu_fabric_payload(fabric="fabric-4")
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
-    monkeypatch.setattr(
-        cli,
-        "_load_deploy_context_readonly",
-        lambda _path: (generated_config, paths, {"render": {"module_sources": []}}),
-    )
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
-    monkeypatch.setattr(cli, "_node_group_migration_quota_report", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "_mk8s_gpu_fabric_specs_from_terraform_state",
-        lambda **_kwargs: {
-            ("cluster1", "workers"): cli._Mk8sGpuFabricSpec(
-                instance_id="cluster1",
-                gpu_cluster_key="workers",
-                fabric="fabric-4",
-                node_groups=(),
-            )
-        },
-    )
-
+def test_migrate_node_group_execute_requires_approval(tmp_path: Path) -> None:
     result = runner.invoke(
         cli.app,
         [
-            "upgrade",
+            "migrate",
             "node-group",
-            str(paths.config_path),
+            str(tmp_path / "missing-config.yaml"),
             "infra:mk8s@cluster1",
             "--node-group",
             "worker",
-            "--to-platform",
-            "gpu-b200-sxm",
-            "--to-preset",
-            "8gpu-160vcpu-1792gb",
-            "--to-fabric",
-            "fabric-6",
             "--execute",
-            "--approve",
         ],
     )
 
     assert result.exit_code == 1, result.output
-    assert "approved pre-mutation gate" in _plain_output(result.output)
-    assert "Node-group upgrade report:" in _plain_output(result.output)
-    report_path = paths.reports_dir / cli.UPGRADE_NODE_GROUP_REPORT_FILENAME
-    report_json_path = paths.reports_dir / cli.UPGRADE_NODE_GROUP_REPORT_JSON_FILENAME
-    assert report_path.exists()
-    assert report_json_path.exists()
-    report = report_path.read_text(encoding="utf-8")
-    assert "# MK8s Node-Group Upgrade Report" in report
-    assert "- Status: `APPROVED-PRE-MUTATION`" in report
-    assert "- Effective target fabric: `fabric-6`" in report
-    payload = json.loads(report_json_path.read_text(encoding="utf-8"))
-    assert payload["schema"] == "nebius-cxcli-upgrade-node-group-report/v1"
-    assert payload["status"] == "approved-pre-mutation"
-    assert payload["target"] == "infra:mk8s@cluster1"
-    assert payload["fabric"]["effective_target"] == "fabric-6"
-    assert payload["shared_storage_evidence"] == ["sfs_filesystem_keys:jail"]
-    assert Path(payload["checkpoint"]).exists()
+    assert "--execute requires --approve" in _plain_output(result.output)
 
 
-def test_upgrade_node_group_omitted_fabric_inherits_current_fabric(
+def test_migrate_node_group_omitted_fabric_inherits_current_fabric(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1847,12 +479,16 @@ def test_upgrade_node_group_omitted_fabric_inherits_current_fabric(
     result = runner.invoke(
         cli.app,
         [
-            "upgrade",
+            "migrate",
             "node-group",
             str(paths.config_path),
             "infra:mk8s@cluster1",
             "--node-group",
             "worker",
+            "--replacement-node-group",
+            "worker-b200",
+            "--replacement-name",
+            "worker-b200",
             "--to-platform",
             "gpu-b200-sxm",
             "--to-preset",
@@ -1871,7 +507,7 @@ def test_upgrade_node_group_omitted_fabric_inherits_current_fabric(
     assert "--to-fabric" not in result.output
 
 
-def test_upgrade_node_group_same_fabric_keeps_explicit_flag(
+def test_migrate_node_group_same_fabric_keeps_explicit_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1910,12 +546,16 @@ def test_upgrade_node_group_same_fabric_keeps_explicit_flag(
     result = runner.invoke(
         cli.app,
         [
-            "upgrade",
+            "migrate",
             "node-group",
             str(paths.config_path),
             "infra:mk8s@cluster1",
             "--node-group",
             "worker",
+            "--replacement-node-group",
+            "worker-b200",
+            "--replacement-name",
+            "worker-b200",
             "--to-platform",
             "gpu-b200-sxm",
             "--to-preset",
@@ -2098,6 +738,146 @@ def test_managed_mk8s_handoff_uses_preferred_kube_context_without_terraform_outp
     assert env[cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV] == context_name
 
 
+def test_long_running_handoff_replaces_existing_context_with_renewable_exec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-456"),
+        )
+    )
+    paths = _fake_paths(tmp_path)
+    context_name = "existing-context"
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [
+                    {
+                        "name": "old-cluster",
+                        "cluster": {"server": "https://old.example.invalid"},
+                    }
+                ],
+                "users": [
+                    {
+                        "name": "old-user",
+                        "user": {
+                            "exec": {
+                                "apiVersion": "client.authentication.k8s.io/v1",
+                                "command": "/stale/checkout/.venv/bin/nebius-cxcli",
+                            }
+                        },
+                    }
+                ],
+                "contexts": [
+                    {
+                        "name": context_name,
+                        "context": {"cluster": "old-cluster", "user": "old-user"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
+    captured: dict[str, object] = {}
+    renewable_spec = cli._Mk8sKubeconfigSpec(
+        cluster_entry_name="cluster-entry",
+        user_entry_name="user-entry",
+        context_name="renewable-context",
+        server="https://mk8s.example.invalid",
+        ca_pem="FAKE-CA",
+        exec_command=sys.executable,
+        exec_args=("-m", "nebius_cxcli", "mk8s-token", "--require-renewable-auth"),
+    )
+
+    monkeypatch.setattr(cli, "_renewable_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_cluster_handoff_spec",
+        lambda _config, *, cluster_id, access, require_renewable_auth=False: (
+            captured.update(
+                {
+                    "cluster_id": cluster_id,
+                    "access": access,
+                    "require_renewable_auth": require_renewable_auth,
+                }
+            )
+            or renewable_spec
+        ),
+    )
+
+    with ExitStack() as stack:
+        env = cli._prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target={
+                "component_id": "mk8s",
+                "target_ref": "mk8s",
+                cli.DEPLOY_TARGET_KIND_FIELD: cli.EXTERNAL_MK8S_TARGET_KIND,
+                "access": "external",
+                "cluster_id": "mk8scluster-123",
+                "kube_context": context_name,
+            },
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+            allow_terraform_output=False,
+            require_renewable_auth=True,
+        )
+        assert env is not None
+        payload = yaml.safe_load(Path(env["KUBECONFIG"]).read_text(encoding="utf-8"))
+
+    assert captured == {
+        "cluster_id": "mk8scluster-123",
+        "access": "external",
+        "require_renewable_auth": True,
+    }
+    assert env[cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV] == "renewable-context"
+    assert payload["users"][0]["user"]["exec"]["command"] == sys.executable
+    assert payload["users"][0]["user"]["exec"]["args"][:4] == [
+        "-m",
+        "nebius_cxcli",
+        "mk8s-token",
+        "--require-renewable-auth",
+    ]
+
+
+def test_long_running_handoff_requires_immutable_cluster_id(
+    tmp_path: Path,
+) -> None:
+    config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-456"),
+        )
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="requires an immutable cluster_id"),
+        ExitStack() as stack,
+    ):
+        cli._prepare_cluster_handoff_kube_env(
+            config,
+            _fake_paths(tmp_path),
+            stack=stack,
+            target={
+                "component_id": "mk8s",
+                "target_ref": "mk8s",
+                "access": "external",
+                "kube_context": "existing-context",
+            },
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+            allow_terraform_output=False,
+            require_renewable_auth=True,
+        )
+
+
 def test_managed_mk8s_handoff_rejects_missing_context_when_terraform_output_disabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2148,6 +928,15 @@ def test_upgrade_node_template_config_only_guided_dry_run_prompts_required_value
     paths.config_path.write_text(
         yaml.safe_dump(
             {
+                "client_info": {
+                    "client_name": "test-client",
+                    "nebius": {
+                        "tenant_id": "tenant-1",
+                        "project_id": "project-1",
+                        "region_id": "eu-north1",
+                    },
+                    "notifications": {},
+                },
                 "infra": {
                     "components": [
                         {
@@ -2179,7 +968,7 @@ def test_upgrade_node_template_config_only_guided_dry_run_prompts_required_value
                             },
                         }
                     ]
-                }
+                },
             }
         ),
         encoding="utf-8",
@@ -2378,6 +1167,15 @@ def test_upgrade_node_template_guided_backtracks_across_setup_prompts(
     paths.config_path.write_text(
         yaml.safe_dump(
             {
+                "client_info": {
+                    "client_name": "test-client",
+                    "nebius": {
+                        "tenant_id": "tenant-1",
+                        "project_id": "project-1",
+                        "region_id": "eu-north1",
+                    },
+                    "notifications": {},
+                },
                 "infra": {
                     "components": [
                         {
@@ -2409,7 +1207,7 @@ def test_upgrade_node_template_guided_backtracks_across_setup_prompts(
                             },
                         }
                     ]
-                }
+                },
             }
         ),
         encoding="utf-8",
@@ -3938,99 +2736,6 @@ def test_node_template_version_choices_explain_sequential_minor_policy() -> None
     ]
 
 
-def test_upgrade_helm_chart_rejects_soperator_selector_with_canonical_command(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator-prod",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    prompt_paths: list[str] = []
-    rich_console = cli.Console(record=True, width=300)
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-        **_kwargs: object,
-    ) -> tuple[object, bool]:
-        del current, type_hint, required, unset_on_skip
-        answers: dict[str, Any] = {
-            "upgrade.helm_chart.target": "apps:soperator@mk8s",
-            "upgrade.helm_chart.to_version": "0.26.0",
-            "upgrade.helm_chart.dry_run": True,
-        }
-        prompt_paths.append(path_label)
-        value = answers[path_label]
-        if choices:
-            assert value in {choice.value for choice in choices}
-        return value, False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    with pytest.raises(cli.typer.Exit) as exc_info:
-        cli.upgrade_helm_chart_command(paths.config_path)
-
-    rendered = rich_console.export_text()
-    rendered_flat = " ".join(rendered.split())
-    assert exc_info.value.exit_code == 1
-    assert prompt_paths == [
-        "upgrade.helm_chart.target",
-        "upgrade.helm_chart.to_version",
-    ]
-    assert "Soperator chart upgrades use the canonical command" in rendered
-    assert (
-        f"nebius-cxcli soperator upgrade {paths.config_path} --target mk8s "
-        "--to-chart-version 0.26.0"
-    ) in rendered_flat
-    assert "only upgrades non-Soperator app charts" in rendered_flat
-    assert "Soperator upgrade plan" not in rendered_flat
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-
-
 def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4110,5978 +2815,9 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "helm-ready",
-    ]
-
-
-def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator-prod",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    command_calls: list[tuple[tuple[str, ...], str | None]] = []
-    rendered_maintenance: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-
-    def _record_render(*_args: object, **_kwargs: object) -> None:
-        calls.append("render")
-        rendered = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        rendered_maintenance.append(
-            rendered["apps"]["charts"][0].get("values", {}).get("maintenance")
-        )
-
-    monkeypatch.setattr(cli, "render_command", _record_render)
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls, command_calls=command_calls)
-    rich_console = cli.Console(record=True, width=300)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.soperator_upgrade_command(
-        paths.config_path,
-        target_ref="mk8s",
-        to_chart_version="0.26.0",
-        execute=True,
-        approve=True,
-    )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    assert payload["apps"]["charts"][0]["version"] == "0.26.0"
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"},
-        {"mountPath": "/data", "localPath": "/mnt/jail-store/shared/data"},
-        {"mountPath": "/scripts", "localPath": "/mnt/jail-store/shared/scripts"},
-        {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
-    ]
-    assert values["jailRootfs"]["adoption"]["activeSource"] == "slot"
-    assert values["jailRootfs"]["adoption"]["rollbackSource"] == "legacy-rootfs"
-    assert rendered_maintenance[-2:] == ["downscale", "none"]
-    assert "jail_home" not in values
-    assert "home" not in values["jailRootfs"]
-    assert calls == [
-        "migration-guard",
-        ("validate", "Soperator cluster upgrade preflight"),
-        "soperator-static-ready",
-        ("soperator-validation", "Preflight"),
-        "render",
-        ("validate", "Validate gated Soperator staging at 0.26.0"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        "render",
-        ("validate", "Validate rendered Soperator active/passive jail rootfs refresh"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        "render",
-        ("validate", "Validate rendered Soperator jail rootfs active slot switch"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        ("soperator-validation", "Postflight"),
-    ]
-
-    def _command_namespace(command: tuple[str, ...]) -> str:
-        return command[command.index("-n") + 1] if "-n" in command else ""
-
-    namespace_sensitive_commands = [
-        command
-        for command, _input_text in command_calls
-        if (
-            "jail-persistent" in " ".join(command)
-            or "statefulsets.apps.kruise.io/login" in command
-            or ("get" in command and "pods" in command)
-            or ("get" in command and "nodeset" in command)
-            or ("get" in command and "slurmcluster" in command)
-            or ("exec" in command and "login-0" in command)
-        )
-    ]
-    assert namespace_sensitive_commands
-    assert {_command_namespace(command) for command in namespace_sensitive_commands} == {
-        "soperator-prod"
-    }
-    maintenance_patches = [
-        json.loads(command[command.index("-p") + 1])["spec"]["maintenance"]
-        for command, _input_text in command_calls
-        if "patch" in command and "slurmcluster/mk8s" in command and "-p" in command
-    ]
-    assert maintenance_patches == ["downscale", "none"]
-    assert not any(
-        "scale" in command and "statefulsets.apps.kruise.io/login" in command
-        for command, _input_text in command_calls
-    )
-    assert not any(
-        "patch" in command and any(item.startswith("nodeset/") for item in command)
-        for command, _input_text in command_calls
-    )
-
-    applied_jobs: dict[str, Mapping[str, Any]] = {}
-    for command, input_text in command_calls:
-        if command[-3:] != ("apply", "-f", "-") or not input_text:
-            continue
-        try:
-            payload_text = json.loads(input_text)
-        except json.JSONDecodeError:
-            payload_text = yaml.safe_load(input_text) or {}
-        for item in payload_text.get("items", []):
-            if not isinstance(item, Mapping) or item.get("kind") != "Job":
-                continue
-            component = str(
-                item.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/component", "")
-            )
-            if component:
-                applied_jobs[component] = item
-    for component in (
-        "jail-persistent-source-probe",
-        "jail-persistent-migration",
-        "populate-jail",
-    ):
-        assert applied_jobs[component]["metadata"]["namespace"] == "soperator-prod"
-
-    report = json.loads(_soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8"))
-    assert report["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
-    assert report["upgrade_safety"]["terminal_verification"] == {
-        "status": "passed",
-        "passed": True,
-        "after_hash": report["protected_customer_state"]["after_hash"],
-        "verified_at": report["upgrade_safety"]["terminal_verification"]["verified_at"],
-        "later_cluster_mutations_permitted": False,
-    }
-    assert report["protected_customer_state"]["before_hash"]
-    assert report["protected_customer_state"]["after_hash"]
-    assert report["fast_smoke"]["status"] == "passed"
-    stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
-    assert stage_verification["soperator-chart"]["status"] == "passed"
-    assert stage_verification["postflight-validation"]["status"] == "passed"
-    assert stage_verification["shared-safety-verification"]["status"] == "passed"
-    assert stage_verification["mk8s-node-template"]["status"] == "skipped"
-    assert stage_verification["post-mk8s-validation"]["status"] == "skipped"
-    assert stage_verification["mk8s-node-template"]["verified_at"]
-    assert report["persistent_jail_mounts"]["auto_preserve_paths"] == [
-        "/home",
-        "/data",
-        "/scripts",
-        "/models",
-    ]
-    assert report["persistent_jail_mounts"]["first_adoption"] is True
-    assert report["populate_jail_refresh"]["legacy_active_rootfs"] is True
-    assert (
-        report["populate_jail_refresh"]["legacy_persistent_mount_migration"]["status"]
-        == "completed"
-    )
-    assert (
-        report["populate_jail_refresh"]["persistent_migration_writer_hold"]["status"] == "restored"
-    )
-    phase_state = report["phase_state"]
-    populate_execution = phase_state["populate-jail-refresh"]["execution"]
-    assert populate_execution["status"] == "completed"
-    assert populate_execution["started_at"]
-    assert populate_execution["last_resumed_at"]
-    assert populate_execution["completed_at"]
-    populate_monitor = phase_state["populate-jail-refresh"]["passive_slot_populate_monitor"]
-    assert populate_monitor["status"] == "completed"
-    assert populate_monitor["progress"]["summary_complete"] is True
-    assert populate_monitor["log"] == {
-        "status": "collected",
-        "line_count": 2,
-        "sha256": "a" * 64,
-    }
-    for phase_id in cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
-        verification = phase_state[phase_id]["fast_verification"]
-        assert verification["status"] in {"passed", "skipped"}
-        assert verification["verified_at"]
-        assert verification["checks"]
-    assert report["current_phase"]["id"] == "completed"
-    assert report["current_phase"]["top_level_stage"] == "Soperator Upgrade"
-    assert report["current_phase"]["component"].startswith("apps:soperator")
-    assert any(item["id"] == "backup" for item in report["phase_history"])
-    assert any(
-        item["id"] == "soperator-chart" and item["top_level_stage"] == "Soperator Upgrade"
-        for item in report["phase_history"]
-    )
-    assert any(
-        item["id"] == "populate-jail-refresh" and item["top_level_stage"] == "Jail Upgrade"
-        for item in report["phase_history"]
-    )
-    assert any(item["id"] == "shared-safety-verification" for item in report["phase_history"])
-    markdown_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
-    assert "- Current phase: `completed`" in markdown_report
-    assert "top-level stage: `Soperator Upgrade`" in markdown_report
-    assert "for `apps:soperator" in markdown_report
-    assert "## Phase History" in markdown_report
-    assert "## Jail Upgrade" in markdown_report
-    assert "## Stage Fast Verification" in markdown_report
-    assert "`soperator-chart`: `PASS`" in markdown_report
-    assert "`mk8s-node-template`: `SKIP`" in markdown_report
-    assert "`backup`" in markdown_report
-    assert "`shared-safety-verification`" in markdown_report
-    rendered = rich_console.export_text()
-    assert "Phase validation preflight: PASS" in rendered
-    assert "Phase validation backup: PASS" in rendered
-    assert "Phase validation mk8s-node-template: SKIP" in rendered
-    assert "Phase validation shared-safety-verification: PASS" in rendered
-
-
-@pytest.mark.parametrize("replacement_boundary", ["during-wait", "before-switch"])
-def test_soperator_upgrade_rejects_passive_job_replaced_before_switch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    replacement_boundary: str,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator-prod",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    deploy_manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    command_calls: list[tuple[tuple[str, ...], str | None]] = []
-    rendered_active_slots: list[str] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_load_deploy_context_readonly",
-        lambda _path: (generated_config, paths, deploy_manifest),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_load_deploy_context",
-        lambda _path: (generated_config, paths, deploy_manifest),
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_a, **_k: {})
-
-    def _record_render(*_args: object, **_kwargs: object) -> None:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        values = payload["apps"]["charts"][0].get("values", {})
-        rendered_active_slots.append(cli.active_passive_jail_rootfs_slots(values).active_slot)
-
-    monkeypatch.setattr(cli, "render_command", _record_render)
-    monkeypatch.setattr(cli, "flux_apply_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **_kwargs: (),
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        command_calls=command_calls,
-    )
-    run_upgrade_process = cli._run_soperator_upgrade_process
-    expected_job: dict[str, Any] = {}
-    replacement_active = False
-    expected_job_complete = False
-
-    def _run_with_passive_job_replacement(
-        args: Sequence[str],
-        *,
-        input_text: str | None = None,
-        timeout_seconds: int = 120,
-        check: bool = True,
-        extra_env: Mapping[str, str] | None = None,
-    ) -> cli._SoperatorUpgradeCommandResult:
-        command = tuple(str(item) for item in args)
-        if command[-3:] == ("apply", "-f", "-") and input_text:
-            try:
-                payload = json.loads(input_text)
-            except json.JSONDecodeError:
-                payload = yaml.safe_load(input_text) or {}
-            for item in payload.get("items", []):
-                if (
-                    item.get("kind") == "Job"
-                    and item.get("metadata", {})
-                    .get("labels", {})
-                    .get("app.kubernetes.io/component")
-                    == "populate-jail"
-                ):
-                    expected_job.clear()
-                    expected_job.update(copy.deepcopy(item))
-        if expected_job and "get" in command:
-            job_name = str(expected_job["metadata"]["name"])
-            if f"job/{job_name}" in command:
-                live_job = copy.deepcopy(expected_job)
-                live_job["metadata"]["uid"] = (
-                    "foreign-passive-job-uid" if replacement_active else f"job-uid-{job_name}"
-                )
-                if replacement_active:
-                    live_job["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"][
-                        "claimName"
-                    ] = "foreign-passive-pvc"
-                    live_job["status"] = {
-                        "succeeded": 1,
-                        "conditions": [{"type": "Complete", "status": "True"}],
-                    }
-                else:
-                    live_job["status"] = (
-                        {
-                            "succeeded": 1,
-                            "conditions": [{"type": "Complete", "status": "True"}],
-                        }
-                        if expected_job_complete
-                        else {"active": 1}
-                    )
-                return cli._SoperatorUpgradeCommandResult(
-                    args=command,
-                    returncode=0,
-                    stdout=json.dumps(live_job),
-                    stderr="",
-                )
-        return run_upgrade_process(
-            args,
-            input_text=input_text,
-            timeout_seconds=timeout_seconds,
-            check=check,
-            extra_env=extra_env,
-        )
-
-    def _replace_during_wait(*_args: object, **kwargs: object) -> PopulateJailSnapshot:
-        nonlocal expected_job_complete, replacement_active
-        expected_job_complete = True
-        replacement_active = replacement_boundary == "during-wait"
-        return PopulateJailSnapshot(
-            slurmcluster_name="mk8s",
-            image="registry.example/populate-jail:new",
-            job_name=str(kwargs["job_name"]),
-            job_uid=(
-                "foreign-passive-job-uid" if replacement_active else f"job-uid-{kwargs['job_name']}"
-            ),
-            job_complete=True,
-            job_image="registry.example/populate-jail:new",
-            status="collected",
-        )
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_process", _run_with_passive_job_replacement)
-    monkeypatch.setattr(
-        cli,
-        "wait_for_active_passive_populate_jail_job",
-        _replace_during_wait,
-    )
-    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
-
-    def _replace_after_completion_validation(**kwargs: Any) -> None:
-        nonlocal replacement_active
-        ensure_writer_hold(**kwargs)
-        if (
-            replacement_boundary == "before-switch"
-            and kwargs.get("boundary") == "passive rootfs population completion"
-        ):
-            replacement_active = True
-
-    monkeypatch.setattr(
-        cli,
-        "_ensure_persistent_migration_writer_hold_intact_after_copy",
-        _replace_after_completion_validation,
-    )
-
-    def _reraise_upgrade_error(exc: Exception) -> None:
-        raise exc
-
-    monkeypatch.setattr(cli, "_exit_with_error", _reraise_upgrade_error)
-
-    with pytest.raises(cli.SoperatorMigrationPhasePending, match="UID no longer matches"):
-        cli.soperator_upgrade_command(
-            paths.config_path,
-            target_ref="mk8s",
-            to_chart_version="0.26.0",
-            execute=True,
-            approve=True,
-        )
-
-    checkpoint_path = cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s")
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    assert phase["passive_slot_populate_job"]["uid"].startswith("job-uid-")
-    if replacement_boundary == "during-wait":
-        assert "job_completed_at" not in phase
-    else:
-        assert "job_completed_at" in phase
-    assert "consumer_switch_applied_at" not in phase
-    assert "slot-b" not in rendered_active_slots
-
-
-def test_soperator_upgrade_stale_copy_restores_managed_desired_maintenance(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator-prod",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                            "values": {"volume": {"jail": {"name": "customer-jail"}}},
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    command_calls: list[tuple[tuple[str, ...], str | None]] = []
-    rendered_maintenance: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-
-    def _record_render(*_args: object, **_kwargs: object) -> None:
-        rendered = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        rendered_maintenance.append(
-            rendered["apps"]["charts"][0].get("values", {}).get("maintenance")
-        )
-
-    monkeypatch.setattr(cli, "render_command", _record_render)
-    monkeypatch.setattr(cli, "flux_apply_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        command_calls=command_calls,
-    )
-    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
-    drift_injected = False
-
-    def _inject_post_refresh_drift(**kwargs: Any) -> None:
-        nonlocal drift_injected
-        if kwargs["boundary"] == "passive rootfs population completion" and not drift_injected:
-            drift_injected = True
-            kwargs["command_runner"](
-                (
-                    "kubectl",
-                    "-n",
-                    "soperator-prod",
-                    "patch",
-                    "slurmcluster/mk8s",
-                    "--type=merge",
-                    "-p",
-                    json.dumps({"spec": {"maintenance": "none"}}),
-                ),
-                timeout_seconds=300,
-            )
-        ensure_writer_hold(**kwargs)
-
-    monkeypatch.setattr(
-        cli,
-        "_ensure_persistent_migration_writer_hold_intact_after_copy",
-        _inject_post_refresh_drift,
-    )
-
-    with pytest.raises(
-        cli.SoperatorMigrationPhasePending,
-        match="passive rootfs population completion",
-    ):
-        _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    assert drift_injected is True
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["maintenance"] == "none"
-    assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
-    assert values["jailRootfs"]["adoption"]["legacyPvcName"] == "customer-jail-pvc"
-    assert values["jailRootfs"]["refresh"]["status"] == "planned"
-    assert rendered_maintenance[-2:] == ["downscale", "none"]
-
-    checkpoint = json.loads(
-        cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s").read_text(
-            encoding="utf-8"
-        )
-    )
-    phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    cleanup = phase["stale_persistent_copy_cleanup"]
-    assert cleanup["status"] == "restored"
-    assert cleanup["desired_state"]["status"] == "restored"
-    assert cleanup["desired_state"]["maintenance"] == "none"
-    assert phase["persistent_migration_writer_hold"]["status"] == "restored"
-    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
-    assert phase["legacy_jail_pvc"] == "customer-jail-pvc"
-    assert phase["legacy_jail_pvc_uid"] == "customer-jail-pvc-uid"
-    migration_inputs = "\n".join(
-        input_text or "" for _command, input_text in command_calls if input_text
-    )
-    assert "customer-jail-pvc" in migration_inputs
-    assert not re.search(r'claimName["\s:]+jail-pvc(?:"|\s|$)', migration_inputs)
-
-
-def _prepare_managed_stale_copy_resume_case(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[
-    ProjectPaths,
-    Path,
-    list[tuple[tuple[str, ...], str | None]],
-    list[object],
-    list[object],
-]:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator-prod",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                            "values": {"volume": {"jail": {"name": "customer-jail"}}},
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    command_calls: list[tuple[tuple[str, ...], str | None]] = []
-    render_calls: list[object] = []
-    flux_calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        cli,
-        "render_command",
-        lambda *_args, **_kwargs: render_calls.append(
-            yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: flux_calls.append((args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        command_calls=command_calls,
-    )
-    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
-    drift_injected = False
-
-    def _inject_post_refresh_drift(**kwargs: Any) -> None:
-        nonlocal drift_injected
-        if kwargs["boundary"] == "passive rootfs population completion" and not drift_injected:
-            drift_injected = True
-            kwargs["command_runner"](
-                (
-                    "kubectl",
-                    "-n",
-                    "soperator-prod",
-                    "patch",
-                    "slurmcluster/mk8s",
-                    "--type=merge",
-                    "-p",
-                    json.dumps({"spec": {"maintenance": "none"}}),
-                ),
-                timeout_seconds=300,
-            )
-        ensure_writer_hold(**kwargs)
-
-    monkeypatch.setattr(
-        cli,
-        "_ensure_persistent_migration_writer_hold_intact_after_copy",
-        _inject_post_refresh_drift,
-    )
-
-    with pytest.raises(
-        cli.SoperatorMigrationPhasePending,
-        match="passive rootfs population completion",
-    ):
-        _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    checkpoint_path = cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s")
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
-    return paths, checkpoint_path, command_calls, render_calls, flux_calls
-
-
-def _managed_live_pre_switch_checks(
-    *,
-    values: Mapping[str, Any],
-    recorded_active_slot: str,
-) -> list[dict[str, Any]]:
-    active_slot = cli.active_passive_jail_rootfs_slots(values).active_slot
-    observed = active_slot == recorded_active_slot
-    return [
-        {
-            "kind": kind,
-            "name": name,
-            "status": "verified" if observed else "pending",
-            "rootfs_observed": observed,
-            "missing_mounts": [],
-            **({} if observed else {"reason": "active rootfs slot reference not found"}),
-        }
-        for kind, name in (
-            ("login-statefulset", "login"),
-            ("worker-nodeset", "worker"),
-        )
-    ]
-
-
-def _managed_completed_copy_resume_checkpoint(
-    checkpoint_path: Path,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    migration_state = phase["legacy_persistent_mount_migration"]
-    migration_state["status"] = "completed"
-    for key in ("stale_at", "stale_boundary", "stale_reason"):
-        migration_state.pop(key, None)
-    writer_state = phase["persistent_migration_writer_hold"]
-    writer_state["status"] = "held"
-    for key in ("drift", "drift_boundary", "drift_detected_at", "restored_at"):
-        writer_state.pop(key, None)
-    phase.pop("stale_persistent_copy_cleanup", None)
-    phase.pop("persistent_migration_failure_boundary", None)
-    phase.pop("refresh_failure_cleanup_errors", None)
-    checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"] = copy.deepcopy(
-        migration_state
-    )
-    checkpoint["populate_jail_refresh"]["persistent_migration_writer_hold"] = copy.deepcopy(
-        writer_state
-    )
-    return checkpoint, phase
-
-
-@pytest.mark.parametrize(
-    ("identity_failure", "expected_error"),
-    [
-        pytest.param(
-            "missing-binding",
-            "requires exactly one checkpointed SlurmCluster maintenance binding",
-            id="missing-maintenance-binding",
-        ),
-        pytest.param(
-            "uid-mismatch",
-            "target SlurmCluster identity changed after it was checkpointed",
-            id="uid-mismatch",
-        ),
-    ],
-)
-def test_soperator_upgrade_stale_copy_cleanup_identity_preflight_blocks_mutation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    identity_failure: str,
-    expected_error: str,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator-prod",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                            "values": {"volume": {"jail": {"name": "customer-jail"}}},
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    command_calls: list[tuple[tuple[str, ...], str | None]] = []
-    render_calls: list[object] = []
-    flux_calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        cli,
-        "render_command",
-        lambda *_args, **_kwargs: render_calls.append(
-            yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: flux_calls.append((args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        command_calls=command_calls,
-    )
-    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
-    drift_injected = False
-
-    def _inject_post_refresh_drift(**kwargs: Any) -> None:
-        nonlocal drift_injected
-        if kwargs["boundary"] == "passive rootfs population completion" and not drift_injected:
-            drift_injected = True
-            kwargs["command_runner"](
-                (
-                    "kubectl",
-                    "-n",
-                    "soperator-prod",
-                    "patch",
-                    "slurmcluster/mk8s",
-                    "--type=merge",
-                    "-p",
-                    json.dumps({"spec": {"maintenance": "none"}}),
-                ),
-                timeout_seconds=300,
-            )
-        ensure_writer_hold(**kwargs)
-
-    monkeypatch.setattr(
-        cli,
-        "_ensure_persistent_migration_writer_hold_intact_after_copy",
-        _inject_post_refresh_drift,
-    )
-
-    with pytest.raises(
-        cli.SoperatorMigrationPhasePending,
-        match="passive rootfs population completion",
-    ):
-        _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    checkpoint_path = cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s")
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
-    writer_state = phase["persistent_migration_writer_hold"]
-    if identity_failure == "missing-binding":
-        writer_state["resources"] = []
-    else:
-        maintenance_binding = next(
-            item
-            for item in writer_state["resources"]
-            if item.get("kind") == "slurmcluster-maintenance"
-        )
-        maintenance_binding["uid"] = "replacement-slurmcluster-uid"
-    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
-
-    config_before_retry = paths.config_path.read_text(encoding="utf-8")
-    render_calls.clear()
-    flux_calls.clear()
-    command_calls.clear()
-    config_write_calls: list[Path] = []
-    write_text_atomic = cli._write_text_atomic
-
-    def _track_atomic_write(
-        path: Path,
-        content: str,
-        *,
-        encoding: str = "utf-8",
-    ) -> None:
-        if path.resolve() == paths.config_path.resolve():
-            config_write_calls.append(path)
-        write_text_atomic(path, content, encoding=encoding)
-
-    monkeypatch.setattr(cli, "_write_text_atomic", _track_atomic_write)
-
-    with pytest.raises(
-        cli.SoperatorMigrationPhasePending,
-        match="steady-state writer cleanup remains pending",
-    ):
-        _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    assert paths.config_path.read_text(encoding="utf-8") == config_before_retry
-    assert config_write_calls == []
-    assert render_calls == []
-    assert flux_calls == []
-    mutating_verbs = {"apply", "create", "delete", "patch", "replace", "scale"}
-    assert not [
-        command for command, _input_text in command_calls if mutating_verbs.intersection(command)
-    ]
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    cleanup = checkpoint["phase_state"]["populate-jail-refresh"]["stale_persistent_copy_cleanup"]
-    assert cleanup["status"] == "pending"
-    assert expected_error in cleanup["errors"][0]
-
-
-def test_soperator_upgrade_switch_marker_without_live_handoff_checks_hold_before_jobs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths, checkpoint_path, command_calls, render_calls, flux_calls = (
-        _prepare_managed_stale_copy_resume_case(tmp_path, monkeypatch)
-    )
-    checkpoint, phase = _managed_completed_copy_resume_checkpoint(checkpoint_path)
-    recorded_active_slot = str(phase["rootfs_slots"]["active_slot"])
-    phase["consumer_switch_applied_at"] = "2026-07-10T00:00:00Z"
-    phase.pop("active_slot", None)
-    phase.pop("rootfs_handoff_verification", None)
-    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
-    monkeypatch.setattr(
-        cli,
-        "_verify_target_rootfs_handoff_consumers",
-        lambda *, values, **_kwargs: _managed_live_pre_switch_checks(
-            values=values,
-            recorded_active_slot=recorded_active_slot,
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_ensure_passive_populate_job",
-        lambda **_kwargs: pytest.fail(
-            "marker-only resume must not reconcile the passive Job before hold cleanup"
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "wait_for_active_passive_populate_jail_job",
-        lambda *_args, **_kwargs: pytest.fail(
-            "marker-only resume must not wait for the passive Job before hold cleanup"
-        ),
-    )
-    command_calls.clear()
-    render_calls.clear()
-    flux_calls.clear()
-
-    with pytest.raises(cli.SoperatorMigrationPhasePending) as raised:
-        _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    assert "mixed or uncertain live login/worker consumers" not in str(raised.value)
-    job_mutations: list[tuple[str, ...]] = []
-    mutating_verbs = {"apply", "create", "delete", "patch", "replace"}
-    for command, input_text in command_calls:
-        command_and_input = " ".join((*command, input_text or "")).lower()
-        if mutating_verbs.intersection(command) and "job" in command_and_input:
-            job_mutations.append(command)
-    assert job_mutations == []
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
-    assert phase["stale_persistent_copy_cleanup"]["status"] == "restored"
-    assert phase["persistent_migration_writer_hold"]["status"] == "restored"
-
-
-@pytest.mark.parametrize(
-    ("job_drift", "drift_on_lookup", "expected_error"),
-    [
-        pytest.param(
-            "uid",
-            1,
-            "UID no longer matches",
-            id="uid-mismatch",
-        ),
-        pytest.param(
-            "contract",
-            1,
-            "exact contract",
-            id="contract-mismatch",
-        ),
-        pytest.param(
-            "uid",
-            2,
-            "UID no longer matches",
-            id="uid-replaced-at-switch-boundary",
-        ),
-    ],
-)
-def test_soperator_upgrade_config_ahead_validates_completed_job_before_desired_mutation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    job_drift: str,
-    drift_on_lookup: int,
-    expected_error: str,
-) -> None:
-    paths, checkpoint_path, command_calls, render_calls, flux_calls = (
-        _prepare_managed_stale_copy_resume_case(tmp_path, monkeypatch)
-    )
-    checkpoint, phase = _managed_completed_copy_resume_checkpoint(checkpoint_path)
-    for key in (
-        "consumer_switch_applied_at",
-        "active_slot",
-        "rootfs_handoff_verification",
-    ):
-        phase.pop(key, None)
-    recorded_active_slot = str(phase["rootfs_slots"]["active_slot"])
-    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
-
-    cli._run_soperator_upgrade_process(
-        (
-            "kubectl",
-            "-n",
-            "soperator-prod",
-            "patch",
-            "slurmcluster/mk8s",
-            "--type=merge",
-            "-p",
-            json.dumps({"spec": {"maintenance": "downscale"}}),
-        ),
-        timeout_seconds=300,
-    )
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    switched_values = cli.switch_active_passive_jail_rootfs_values(
-        payload["apps"]["charts"][0]["values"]
-    )
-    switched_values["maintenance"] = "downscale"
-    payload["apps"]["charts"][0]["values"] = switched_values
-    paths.config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
-
-    checkpointed_job = phase["passive_slot_populate_job"]
-    job_name = str(checkpointed_job["name"])
-    run_upgrade_process = cli._run_soperator_upgrade_process
-    live_job_result = run_upgrade_process(
-        (
-            "kubectl",
-            "-n",
-            "soperator-prod",
-            "get",
-            f"job/{job_name}",
-            "-o",
-            "json",
-        ),
-        check=False,
-    )
-    assert live_job_result.returncode == 0
-    live_job = json.loads(live_job_result.stdout)
-    assert live_job["metadata"]["uid"] == checkpointed_job["uid"]
-    drifted_live_job = copy.deepcopy(live_job)
-    if job_drift == "uid":
-        drifted_live_job["metadata"]["uid"] = "replacement-passive-job-uid"
-    else:
-        drifted_live_job["spec"]["template"]["spec"]["containers"][0]["image"] = (
-            "registry.example/populate-jail:tampered"
-        )
-    job_lookups = 0
-
-    def _run_with_live_passive_job(
-        args: Sequence[str],
-        *,
-        input_text: str | None = None,
-        timeout_seconds: int = 120,
-        check: bool = True,
-        extra_env: Mapping[str, str] | None = None,
-    ) -> cli._SoperatorUpgradeCommandResult:
-        nonlocal job_lookups
-        command = tuple(str(arg) for arg in args)
-        if "get" in command and f"job/{job_name}" in command:
-            job_lookups += 1
-            command_calls.append((command, input_text))
-            return cli._SoperatorUpgradeCommandResult(
-                args=command,
-                returncode=0,
-                stdout=json.dumps(drifted_live_job if job_lookups >= drift_on_lookup else live_job),
-                stderr="",
-            )
-        return run_upgrade_process(
-            args,
-            input_text=input_text,
-            timeout_seconds=timeout_seconds,
-            check=check,
-            extra_env=extra_env,
-        )
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_process", _run_with_live_passive_job)
-    monkeypatch.setattr(
-        cli,
-        "_verify_target_rootfs_handoff_consumers",
-        lambda *, values, **_kwargs: _managed_live_pre_switch_checks(
-            values=values,
-            recorded_active_slot=recorded_active_slot,
-        ),
-    )
-    config_before_retry = paths.config_path.read_text(encoding="utf-8")
-    command_calls.clear()
-    render_calls.clear()
-    flux_calls.clear()
-    config_write_calls: list[Path] = []
-    write_text_atomic = cli._write_text_atomic
-
-    def _track_atomic_write(
-        path: Path,
-        content: str,
-        *,
-        encoding: str = "utf-8",
-    ) -> None:
-        if path.resolve() == paths.config_path.resolve():
-            config_write_calls.append(path)
-        write_text_atomic(path, content, encoding=encoding)
-
-    monkeypatch.setattr(cli, "_write_text_atomic", _track_atomic_write)
-
-    with pytest.raises(cli.SoperatorMigrationPhasePending, match=expected_error):
-        _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    assert paths.config_path.read_text(encoding="utf-8") == config_before_retry
-    assert config_write_calls == []
-    assert render_calls == []
-    assert flux_calls == []
-    assert job_lookups == drift_on_lookup
-    mutating_verbs = {"apply", "create", "delete", "patch", "replace", "scale"}
-    assert not [
-        command for command, _input_text in command_calls if mutating_verbs.intersection(command)
-    ]
-
-
-def test_soperator_upgrade_target_ready_does_not_wait_for_managed_first_adoption_hold(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "flux_apply_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
-    )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, [])
-
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        login_session_policy="target-ready",
-    )
-
-    checkpoint = json.loads(
-        cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s").read_text(
-            encoding="utf-8"
-        )
-    )
-    phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    policy = phase["persistent_migration_login_hold_policy"]
-    assert policy["status"] == "allowed"
-    assert policy["session_drain"]["status"] == "skipped"
-    assert "do not gate" in policy["reason"]
-
-
-def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_update_source_helm_chart_version",
-        lambda *_args, **_kwargs: True,
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        populate_jail_image_changed=False,
-    )
-    rich_console = cli.Console(record=True, width=300)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    with pytest.raises(RuntimeError, match="fast stage verification failed after soperator-chart"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version="0.26.0",
-        )
-
-    assert ("soperator-validation", "Postflight") not in calls
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    chart_verification = checkpoint["stage_verification"]["soperator-chart"]["fast_verification"]
-    assert chart_verification["status"] == "failed"
-    assert chart_verification["passed"] is False
-    assert checkpoint["status"] == "failed"
-    assert checkpoint["pending_phase"] == "soperator-chart"
-
-    report = json.loads(_soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8"))
-    stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
-    assert stage_verification["soperator-chart"]["status"] == "failed"
-    assert stage_verification["soperator-chart"]["verified_at"]
-    assert stage_verification["soperator-chart"]["checks"][0]["summary"]
-    assert stage_verification["postflight-validation"]["status"] == "not_run"
-    assert report["pending_phase"] == "soperator-chart"
-    assert report["pending_reason"]
-    assert "Phase validation soperator-chart: FAIL" in rich_console.export_text()
-
-
-def test_soperator_upgrade_runtime_error_keeps_current_phase_pending_and_resumes_same_phase(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    flux_apply_calls = 0
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-
-    def _flux_apply(*args: object, **kwargs: object) -> None:
-        nonlocal flux_apply_calls
-        flux_apply_calls += 1
-        calls.append(("flux-apply", args, kwargs))
-        if flux_apply_calls == 1:
-            raise RuntimeError("chart apply failed mid-phase")
-
-    monkeypatch.setattr(cli, "flux_apply_command", _flux_apply)
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        populate_jail_image_changed=False,
-    )
-
-    with pytest.raises(RuntimeError, match="chart apply failed mid-phase"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version="0.26.0",
-        )
-
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "soperator-chart"
-    assert checkpoint["pending_reason"] == "chart apply failed mid-phase"
-    assert checkpoint["completed_phases"] == [
-        "preflight",
-        "discovery",
-        "backup",
-        "protected-state-capture",
-        "activechecks-suspend",
-        "soperator-preflight-validation",
-        "controller-ha-bridge",
-        "slurm-job-drain",
-        "mk8s-node-template",
-        "post-mk8s-validation",
-    ]
-    assert "soperator-chart" not in checkpoint["completed_phases"]
-    assert checkpoint["status"] == "failed"
-    assert _soperator_upgrade_report_json_path(paths).exists()
-
-    calls.clear()
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version="0.26.0",
-    )
-
-    assert flux_apply_calls >= 2
-    assert ("validate", "Soperator cluster upgrade preflight") not in calls
-    assert ("validate", "Validate gated Soperator staging at 0.26.0") in calls
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "none"
-    assert checkpoint["status"] == "completed"
-    assert "soperator-chart" in checkpoint["completed_phases"]
-
-
-def test_soperator_upgrade_keyboard_interrupt_keeps_current_phase_pending_and_resumes_same_phase(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    flux_apply_calls = 0
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-
-    def _flux_apply(*args: object, **kwargs: object) -> None:
-        nonlocal flux_apply_calls
-        flux_apply_calls += 1
-        calls.append(("flux-apply", args, kwargs))
-        if flux_apply_calls == 1:
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(cli, "flux_apply_command", _flux_apply)
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        populate_jail_image_changed=False,
-    )
-
-    with pytest.raises(cli.typer.Exit) as exc_info:
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version="0.26.0",
-        )
-    assert exc_info.value.exit_code == 130
-
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "soperator-chart"
-    assert checkpoint["pending_reason"] == "interrupted by user"
-    assert checkpoint["completed_phases"] == [
-        "preflight",
-        "discovery",
-        "backup",
-        "protected-state-capture",
-        "activechecks-suspend",
-        "soperator-preflight-validation",
-        "controller-ha-bridge",
-        "slurm-job-drain",
-        "mk8s-node-template",
-        "post-mk8s-validation",
-    ]
-    assert "soperator-chart" not in checkpoint["completed_phases"]
-    assert checkpoint["status"] == "failed"
-
-    calls.clear()
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version="0.26.0",
-    )
-
-    assert flux_apply_calls >= 2
-    assert ("validate", "Soperator cluster upgrade preflight") not in calls
-    assert ("validate", "Validate gated Soperator staging at 0.26.0") in calls
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "none"
-    assert checkpoint["status"] == "completed"
-    assert "soperator-chart" in checkpoint["completed_phases"]
-
-
-def test_soperator_upgrade_runs_node_template_phase_without_raw_kubectl_drain(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "version": "1.22.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "_run_internal_render_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: ("worker-1",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_ensure_slurm_quiet",
-        lambda **_kwargs: (calls.append("slurm-jobs") or [], ()),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_mk8s_node_template_phase",
-        lambda **kwargs: calls.append(("mk8s-node-template", kwargs)),
-    )
-    _stub_managed_mk8s_completed_reconciliation(monkeypatch, calls)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_restore_slurm_nodes",
-        lambda **kwargs: calls.append(("slurm-restore", kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_kubectl_cluster",
-        lambda *args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError(f"raw kubectl call was not expected: {args}")
-        ),
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        populate_jail_image_changed=False,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: ("worker-1",),
-    )
-
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version="4.0.2-ps.4",
-        to_k8s_version="1.32",
-        job_policy="fail",
-    )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    assert payload["apps"]["charts"][0]["version"] == "4.0.2-ps.4"
-    assert "slurm-jobs" in calls
-    mk8s_calls = [
-        call for call in calls if isinstance(call, tuple) and call[0] == "mk8s-node-template"
-    ]
-    assert len(mk8s_calls) == 1
-    assert mk8s_calls[0][1]["to_k8s_version"] == "1.32"
-    assert mk8s_calls[0][1]["node_group"] == ""
-    assert not any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert any(
-        item["id"] == "mk8s-node-template" and item["top_level_stage"] == "MK8s Node Upgrades"
-        for item in checkpoint["phase_history"]
-    )
-    assert any(
-        item["id"] == "post-mk8s-validation" and item["top_level_stage"] == "MK8s Node Upgrades"
-        for item in checkpoint["phase_history"]
-    )
-    checkpoint_stage_verification = checkpoint["stage_verification"]
-    assert (
-        checkpoint_stage_verification["mk8s-node-template"]["fast_verification"]["status"]
-        == "passed"
-    )
-    assert (
-        checkpoint_stage_verification["post-mk8s-validation"]["fast_verification"]["status"]
-        == "passed"
-    )
-    report = json.loads(_soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8"))
-    report_stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
-    assert report_stage_verification["mk8s-node-template"]["status"] == "passed"
-    assert report_stage_verification["post-mk8s-validation"]["status"] == "passed"
-    assert report_stage_verification["soperator-chart"]["status"] == "passed"
-    markdown_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
-    assert "`mk8s-node-template` (top-level stage: `MK8s Node Upgrades`)" in markdown_report
-    assert "`soperator-chart` (top-level stage: `Soperator Upgrade`)" in markdown_report
-
-
-def test_soperator_upgrade_shared_safety_failure_after_bridge_write_keeps_slurm_fenced(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "1.22.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    pause_record = _cli_slurm_pause_record("main")
-
-    def _pause_slurm_jobs(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
-        calls.append("slurm-jobs")
-        kwargs["slurm_decision_recorder"](
-            {
-                "at": "2026-07-10T12:00:00Z",
-                "action": "scheduling-pause-applied",
-                "partitions": [pause_record.as_payload()],
-                "pending_jobs": "queued-not-blocking",
-            }
-        )
-        return [], (pause_record,)
-
-    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _pause_slurm_jobs)
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_mk8s_node_template_phase",
-        lambda **kwargs: calls.append(("mk8s-node-template", kwargs)),
-    )
-    _stub_managed_mk8s_completed_reconciliation(monkeypatch, calls)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_restore_slurm_nodes",
-        lambda **kwargs: calls.append(("slurm-restore", kwargs)),
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        populate_jail_image_changed=False,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: ("worker-1",),
-    )
-    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _pause_slurm_jobs)
-    monkeypatch.setattr(
-        cli,
-        "_managed_soperator_upgrade_run_post_verification",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("shared safety failed")),
-    )
-
-    with pytest.raises(RuntimeError, match="shared safety failed"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version="4.0.2-ps.4",
-            to_k8s_version="1.32",
-            job_policy="fail",
-        )
-
-    assert not any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "shared-safety-verification"
-    assert checkpoint["failure"]["slurm_restore"] == "left-changed"
-    assert checkpoint["slurm"]["partition_restore_manual_command"]
-
-
-def test_soperator_upgrade_dry_run_blocks_skipped_k8s_minor_before_mutation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {"cluster": {"k8s_version": "1.31"}},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": cli._soperator_onboarding_target_version_default(),
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    rich_console = cli.Console(record=True, width=300)
-    calls: list[object] = []
-
-    monkeypatch.setattr(cli, "console", rich_console)
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_mk8s_node_template_phase",
-        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_managed_soperator_upgrade_dry_run_discovery",
-        lambda **_kwargs: calls.append("live-discovery"),
-    )
-
-    with pytest.raises(RuntimeError, match="Run the next hop first"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version=None,
-            to_k8s_version="1.33",
-            dry_run=True,
-        )
-
-    rendered = " ".join(rich_console.export_text().split())
-    assert "Managed Kubernetes hop (execution blocked)" in rendered
-    assert "Current Kubernetes version: `1.31`" in rendered
-    assert "Requested Kubernetes target: `1.33`" in rendered
-    assert "Requested path would skip multiple live operations: 1.31 -> 1.32 -> 1.33" in (rendered)
-    assert "Run the next hop first with --to-k8s-version 1.32" in rendered
-    assert calls == ["migration-guard", "live-discovery"]
-
-
-def test_soperator_upgrade_execute_blocks_skipped_k8s_minor_before_checkpoint(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {"cluster": {"k8s_version": "1.31"}},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": cli._soperator_onboarding_target_version_default(),
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_mk8s_node_template_phase",
-        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
-    )
-    with pytest.raises(RuntimeError, match="Run the next hop first with --to-k8s-version 1.32"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version=None,
-            to_k8s_version="1.33",
-        )
-
-    assert calls == ["migration-guard"]
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    assert not checkpoint_path.exists()
-
-
-def test_soperator_upgrade_dry_run_blocks_k8s_boundary_before_chart_upgrade(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    target_chart_version = cli._soperator_onboarding_target_version_default()
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {"cluster": {"k8s_version": "1.32"}},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "1.22.3",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    rich_console = cli.Console(record=True, width=300)
-    calls: list[object] = []
-
-    monkeypatch.setattr(cli, "console", rich_console)
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_mk8s_node_template_phase",
-        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_managed_soperator_upgrade_dry_run_discovery",
-        lambda **_kwargs: calls.append("live-discovery"),
-    )
-
-    with pytest.raises(RuntimeError, match="chart-first run"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version=target_chart_version,
-            to_k8s_version="1.33",
-            dry_run=True,
-        )
-
-    rendered = " ".join(rich_console.export_text().split())
-    assert "Managed upgrade order (execution blocked)" in rendered
-    assert "Current Kubernetes version: `1.32`" in rendered
-    assert "Requested Kubernetes target: `1.33`" in rendered
-    assert f"Soperator chart: `1.22.3` -> `{target_chart_version}`" in rendered
-    assert (
-        f"nebius-cxcli soperator upgrade {paths.config_path} --target mk8s "
-        f"--to-chart-version {target_chart_version}"
-    ) in rendered
-    assert "--to-k8s-version 1.33" in rendered
-    assert calls == ["migration-guard", "live-discovery"]
-
-
-def test_soperator_upgrade_execute_blocks_k8s_boundary_before_chart_upgrade(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    target_chart_version = cli._soperator_onboarding_target_version_default()
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {"cluster": {"k8s_version": "1.32"}},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "1.22.3",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_mk8s_node_template_phase",
-        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
-    )
-
-    with pytest.raises(RuntimeError, match="chart-first run"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version=target_chart_version,
-            to_k8s_version="1.33",
-        )
-
-    assert calls == ["migration-guard"]
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    assert not checkpoint_path.exists()
-
-
-def test_soperator_upgrade_allows_k8s_to_order_boundary_before_chart_upgrade(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    target_chart_version = cli._soperator_onboarding_target_version_default()
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {"cluster": {"k8s_version": "1.31"}},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "1.22.3",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    rich_console = cli.Console(record=True, width=300)
-
-    monkeypatch.setattr(cli, "console", rich_console)
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_managed_soperator_upgrade_dry_run_discovery",
-        lambda **_kwargs: None,
-    )
-
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version=target_chart_version,
-        to_k8s_version="1.32",
-        dry_run=True,
-    )
-
-    rendered = " ".join(rich_console.export_text().split())
-    assert "Managed upgrade order (execution blocked)" not in rendered
-    assert "Soperator upgrade path: status=supported" in rendered
-
-
-def test_soperator_upgrade_chart_only_job_policy_fail_blocks_before_chart_apply(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(cli, "_update_source_helm_chart_version", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-
-    def _job_gate(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
-        calls.append(("slurm-gate", kwargs["node_names"], kwargs["job_policy"]))
-        raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
-
-    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _job_gate)
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-
-    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version="0.26.0",
-            job_policy="fail",
-        )
-
-    assert ("slurm-gate", ("worker-gpu-0-0",), "fail") in calls
-    assert "render" not in calls
-    assert not any(isinstance(call, tuple) and call[0] == "flux-apply" for call in calls)
-
-
-def test_soperator_upgrade_force_populate_jail_refresh_job_policy_fail_blocks_before_overwrite(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.26.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_load_deploy_context",
-        lambda _path: (generated_config, paths, manifest),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(cli, "_update_source_helm_chart_version", lambda *_args, **_kwargs: False)
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls, populate_jail_image_changed=False)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-
-    def _job_gate(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
-        calls.append(("slurm-gate", kwargs["node_names"], kwargs["job_policy"]))
-        raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
-
-    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _job_gate)
-
-    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            to_chart_version="0.26.0",
-            populate_jail_refresh="force",
-            job_policy="fail",
-        )
-
-    assert ("slurm-gate", ("worker-gpu-0-0",), "fail") in calls
-    assert (
-        "validate",
-        "Validate rendered Soperator active/passive jail rootfs refresh",
-    ) not in calls
-    assert sum(1 for call in calls if isinstance(call, tuple) and call[0] == "flux-apply") == 1
-
-
-def test_soperator_upgrade_slurm_node_filter_maps_worker_pod_and_instance_aliases(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-
-    def _login_command(
-        _namespace: str,
-        command: str,
-        **_kwargs: Any,
-    ) -> cli._SoperatorUpgradeCommandResult:
-        commands.append(command)
-        assert command == "scontrol show nodes"
-        return cli._SoperatorUpgradeCommandResult(
-            args=("kubectl", "exec"),
-            returncode=0,
-            stdout="\n".join(
-                (
-                    "NodeName=worker-3 NodeHostName=worker-gpu-0-0 NodeAddr=10.1.18.140",
-                    "   InstanceId=computeinstance-e00e8ctxvehgkyged0",
-                    "NodeName=worker-4 NodeHostName=worker-gpu-0-1 NodeAddr=10.1.18.141",
-                )
-            ),
-            stderr="",
-        )
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
-
-    nodes = cli._soperator_upgrade_slurm_node_filter(
-        namespace="soperator",
-        node_names=("worker-gpu-0-0", "computeinstance-e00e8ctxvehgkyged0", "worker-4"),
-    )
-
-    assert nodes == ("worker-3", "worker-4")
-    assert commands == ["scontrol show nodes"]
-
-
-def _soperator_slurm_job(
-    job_id: str = "42",
-    *,
-    user: str = "alice",
-    state: str = "RUNNING",
-    partition: str = "gpu",
-    allocated_nodes: str = "worker-gpu-0-0",
-    requested_nodes: str = "",
-    scheduled_nodes: str = "",
-    reason: str = "",
-    elapsed: str = "00:05",
-    limit: str = "30:00",
-    remaining: str = "25:00",
-    name: str = "restartable-train",
-    impact_scope: str = "allocated-node",
-) -> cli.AffectedSlurmJob:
-    return cli.AffectedSlurmJob(
-        job_id=job_id,
-        user=user,
-        state=state,
-        partition=partition,
-        allocated_nodes=allocated_nodes,
-        requested_nodes=requested_nodes,
-        scheduled_nodes=scheduled_nodes,
-        reason=reason,
-        elapsed=elapsed,
-        limit=limit,
-        remaining=remaining,
-        name=name,
-        impact_scope=impact_scope,
-    )
-
-
-def test_soperator_upgrade_job_policy_defaults_by_terminal_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-
-    assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "fail"
-    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "fail"
-    assert cli._soperator_runtime_job_policy(None) == "wait-then-cancel"
-
-    with pytest.raises(RuntimeError, match="interactive terminal"):
-        cli._soperator_upgrade_job_policy(policy="interactive", interactive=True)
-    with pytest.raises(RuntimeError, match="interactive terminal"):
-        cli._soperator_runtime_job_policy("interactive")
-    with pytest.raises(RuntimeError, match="wait-to-finish"):
-        cli._soperator_upgrade_job_policy(policy="wait", interactive=False)
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-
-    assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "interactive"
-    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "fail"
-    assert (
-        cli._soperator_upgrade_job_policy(policy="wait-to-finish", interactive=True)
-        == "wait-to-finish"
-    )
-    assert cli._soperator_runtime_job_policy(None) == "interactive"
-
-
-def test_soperator_upgrade_interactive_policy_rejects_non_tty_before_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    prompted: list[str] = []
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: (_soperator_slurm_job(job_id="12"),),
-    )
-    monkeypatch.setattr(
-        cli.typer,
-        "prompt",
-        lambda *_args, **_kwargs: prompted.append("prompted") or "",
-    )
-
-    with pytest.raises(RuntimeError, match="interactive terminal"):
-        cli._handle_soperator_upgrade_running_jobs(
-            namespace="soperator",
-            node_group="",
-            policy="interactive",
-            cancel_job_ids=(),
-            requeue_job_ids=(),
-            wait_timeout_seconds=0,
-            refresh_interval_seconds=1,
-            checkpoint_id="checkpoint",
-        )
-
-    assert prompted == []
-
-
-def test_soperator_upgrade_wait_then_cancel_requires_positive_timeout() -> None:
-    with pytest.raises(RuntimeError, match="positive --job-wait-timeout"):
-        cli._handle_soperator_upgrade_running_jobs(
-            namespace="soperator",
-            node_group="",
-            policy="wait-then-cancel",
-            cancel_job_ids=(),
-            requeue_job_ids=(),
-            wait_timeout_seconds=0,
-            refresh_interval_seconds=1,
-            checkpoint_id="checkpoint",
-        )
-
-
-def test_soperator_upgrade_prompt_selector_includes_pending_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def _prompt_slurm_job_control(*args: object, **kwargs: object) -> tuple[str, tuple[str, ...]]:
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return ("cancel-selected", ("12",))
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    monkeypatch.setattr(cli, "prompt_slurm_job_control", _prompt_slurm_job_control)
-
-    action, selected = cli._prompt_soperator_upgrade_job_control(
-        (
-            _soperator_slurm_job(
-                job_id="12",
-                state="PENDING",
-                partition="main",
-                allocated_nodes="",
-                reason="Priority",
-                remaining="unknown",
-                name="pending-train",
-                impact_scope="pending-partition",
-            ),
-        )
-    )
-
-    assert action == "cancel-selected"
-    assert selected == ("12",)
-    captured_jobs = captured["args"][0]
-    assert captured_jobs == (
-        _soperator_slurm_job(
-            job_id="12",
-            state="PENDING",
-            partition="main",
-            allocated_nodes="",
-            reason="Priority",
-            remaining="unknown",
-            name="pending-train",
-            impact_scope="pending-partition",
-        ),
-    )
-    assert captured["kwargs"]["is_tty"] is True
-    assert captured["kwargs"]["jobs_provider"] is None
-    assert captured["kwargs"]["action_handler"] is None
-
-
-def test_soperator_upgrade_fail_policy_does_not_drain_when_jobs_exist(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = _soperator_slurm_job()
-    drained: list[str] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: drained.append("drain") or ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: (job,),
-    )
-
-    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
-        cli._handle_soperator_upgrade_running_jobs(
-            namespace="soperator",
-            node_group="",
-            policy="fail",
-            cancel_job_ids=(),
-            requeue_job_ids=(),
-            wait_timeout_seconds=0,
-            refresh_interval_seconds=1,
-            checkpoint_id="checkpoint",
-        )
-
-    assert drained == []
-
-
-def test_soperator_upgrade_pending_job_blocks_fail_policy_without_drain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = _soperator_slurm_job(
-        job_id="12",
-        state="PENDING",
-        partition="main",
-        allocated_nodes="",
-        reason="Priority",
-        remaining="unknown",
-        impact_scope="pending-partition",
-    )
-    drained: list[str] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: drained.append("drain") or ("worker-0",),
-    )
-    monkeypatch.setattr(cli, "_soperator_upgrade_affected_jobs", lambda **_kwargs: (job,))
-
-    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
-        cli._handle_soperator_upgrade_running_jobs(
-            namespace="soperator",
-            node_group="",
-            policy="fail",
-            cancel_job_ids=(),
-            requeue_job_ids=(),
-            wait_timeout_seconds=0,
-            refresh_interval_seconds=1,
-            checkpoint_id="checkpoint",
-        )
-
-    assert drained == []
-
-
-def _cli_slurm_partition_state(
-    name: str,
-    state: str,
-    *,
-    fields: Mapping[str, str] | None = None,
-) -> cli.SlurmPartitionState:
-    line = " ".join(
-        (
-            f"PartitionName={name}",
-            f"State={state}",
-            "Nodes=worker-[0-1]",
-            *(f"{key}={value}" for key, value in (fields or {}).items()),
-        )
-    )
-    parsed = cli.parse_scontrol_show_partition_states(line)
-    assert len(parsed) == 1
-    return parsed[0]
-
-
-def _cli_slurm_pause_record(
-    partition: str,
-    *,
-    applied: bool = True,
-    fields: Mapping[str, str] | None = None,
-) -> cli.SlurmPartitionPauseRecord:
-    previous = _cli_slurm_partition_state(partition, "UP", fields=fields)
-    record = cli.SlurmPartitionPauseRecord(
-        partition=partition,
-        previous_state="UP",
-        previous_record=previous.record,
-        previous_record_fingerprint=previous.record_fingerprint,
-        applied_state="DOWN",
-    )
-    return (
-        record.with_applied_observation(
-            _cli_slurm_partition_state(partition, "DOWN", fields=fields)
-        )
-        if applied
-        else record
-    )
-
-
-def test_soperator_upgrade_pause_treats_pending_jobs_as_queued(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    include_pending_values: list[bool] = []
-    decisions: list[Mapping[str, Any]] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_pause_slurm_partitions",
-        lambda **_kwargs: (_cli_slurm_pause_record("main"),),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-0",),
-    )
-
-    def _affected_jobs(**kwargs: Any) -> tuple[Any, ...]:
-        include_pending_values.append(bool(kwargs["include_pending"]))
-        return ()
-
-    monkeypatch.setattr(cli, "_soperator_upgrade_affected_jobs", _affected_jobs)
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="fail",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=0,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-        slurm_scheduling_pause=True,
-        decision_recorder=decisions.append,
-    )
-
-    assert restored == ("worker-0",)
-    assert include_pending_values == [False, False]
-    assert decisions[0]["action"] == "scheduling-pause-applied"
-    assert decisions[0]["pending_jobs"] == "queued-not-blocking"
-
-
-@pytest.mark.parametrize(
-    "stderr",
-    [
-        "scontrol: error: _parse_next_key: Parsing error at unrecognized key: MetricsType",
-        "scontrol: error: PluginDir: bad value",
-    ],
-)
-def test_post_jail_pre_release_rejects_slurm_config_errors_while_paused(
-    monkeypatch: pytest.MonkeyPatch,
-    stderr: str,
-) -> None:
-    calls: list[tuple[str, ...]] = []
-    checkpoints: list[str] = []
-
-    def _exec_login(**kwargs: object) -> soperator_migration.SoperatorMigrationCommandResult:
-        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
-        calls.append(args)
-        if args[0] == "scontrol":
-            return soperator_migration.SoperatorMigrationCommandResult(args, 0, "ok\n", "")
-        if args[0] == "sbatch":
-            return soperator_migration.SoperatorMigrationCommandResult(args, 1, "", stderr)
-        pytest.fail(f"pre-release checks continued after the config error: {args}")
-
-    monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
-    phase: dict[str, Any] = {
-        "slurm_quiet_at": "2026-07-10T12:00:00Z",
-        "slurm_paused_partitions": [_cli_slurm_pause_record("main").as_payload()],
-    }
-
-    with pytest.raises(
-        soperator_migration.SoperatorMigrationPhasePending,
-        match="pre-release check failed",
-    ):
-        soperator_migration._ensure_post_jail_slurm_pre_release_checks(  # noqa: SLF001
-            phase=phase,
-            command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner"),
-            kube_context="external-context",
-            checkpoint_writer=lambda: checkpoints.append("checkpoint"),
-        )
-
-    pre_release = phase["post_jail_slurm_smoke"]["pre_release"]
-    assert pre_release["status"] == "failed"
-    assert pre_release["failed_check"] == "sbatch-test-only"
-    assert "accepted_paused_scheduling_result" not in pre_release["checks"][-1]
-    assert phase["slurm_paused_partitions"][0]["applied_state"] == "DOWN"
-    assert "slurm_resumed_at" not in phase
-    assert calls == [
-        ("scontrol", "ping"),
-        ("sbatch", "--test-only", "--wrap=/bin/true"),
-    ]
-    assert checkpoints == ["checkpoint"]
-
-
-def test_managed_pre_release_config_failure_keeps_slurm_paused_without_restore(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator-prod",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    restore_mutations: list[str] = []
-    pause_record = _cli_slurm_pause_record("main")
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_a, **_k: {})
-    monkeypatch.setattr(cli, "render_command", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "flux_apply_command", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "_verify_soperator_static_upgrade_ready", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", lambda *_a, **_k: ())
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
-        lambda **_kwargs: ("worker-0",),
-    )
-
-    def _pause_running_jobs(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
-        kwargs["slurm_decision_recorder"](
-            {
-                "at": "2026-07-10T12:00:00Z",
-                "action": "scheduling-pause-applied",
-                "partitions": [pause_record.as_payload()],
-                "pending_jobs": "queued-not-blocking",
-            }
-        )
-        return [], (pause_record,)
-
-    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _pause_running_jobs)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_restore_slurm_partitions",
-        lambda **_kwargs: restore_mutations.append("partition"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_restore_slurm_nodes",
-        lambda **_kwargs: restore_mutations.append("node"),
-    )
-
-    def _exec_login(**kwargs: object) -> soperator_migration.SoperatorMigrationCommandResult:
-        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
-        if args[0] == "scontrol":
-            return soperator_migration.SoperatorMigrationCommandResult(args, 0, "ok\n", "")
-        if args[0] == "sbatch":
-            return soperator_migration.SoperatorMigrationCommandResult(
-                args,
-                1,
-                "",
-                "scontrol: error: Parsing error at unrecognized key: MetricsType",
-            )
-        pytest.fail(f"pre-release checks continued after MetricsType failed: {args}")
-
-    monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
-
-    with pytest.raises(
-        soperator_migration.SoperatorMigrationPhasePending,
-        match="pre-release check failed",
-    ):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            job_policy="fail",
-        )
-
-    checkpoint = json.loads(_soperator_upgrade_checkpoint_path(paths).read_text(encoding="utf-8"))
-    pre_release = checkpoint["phase_state"]["populate-jail-refresh"]["post_jail_slurm_smoke"][
-        "pre_release"
-    ]
-    assert pre_release["status"] == "failed"
-    assert restore_mutations == []
-    assert checkpoint["slurm"]["paused_partitions"] == [pause_record.as_payload()]
-    assert checkpoint["failure"]["slurm_restore"] == "left-changed"
-    assert "slurm-partitions-kept-paused-after-bridge-write-failure" in {
-        event["event"] for event in checkpoint["events"]
-    }
-
-
-def test_post_jail_pre_release_accepts_partition_down_sbatch_test_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, ...]] = []
-
-    def _exec_login(**kwargs: object) -> soperator_migration.SoperatorMigrationCommandResult:
-        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
-        calls.append(args)
-        if args[0] == "sbatch":
-            return soperator_migration.SoperatorMigrationCommandResult(
-                args,
-                1,
-                "",
-                "sbatch: error: Batch job submission failed: Nodes required for job are DOWN",
-            )
-        return soperator_migration.SoperatorMigrationCommandResult(args, 0, "ok\n", "")
-
-    monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
-    phase: dict[str, Any] = {}
-
-    lines = soperator_migration._ensure_post_jail_slurm_pre_release_checks(  # noqa: SLF001
-        phase=phase,
-        command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner"),
-        kube_context="external-context",
-    )
-
-    pre_release = phase["post_jail_slurm_smoke"]["pre_release"]
-    assert pre_release["status"] == "passed"
-    sbatch_check = next(
-        check for check in pre_release["checks"] if check["name"] == "sbatch-test-only"
-    )
-    assert sbatch_check["status"] == "passed"
-    assert sbatch_check["returncode"] == 1
-    assert sbatch_check["accepted_paused_scheduling_result"] is True
-    assert calls == [
-        ("scontrol", "ping"),
-        ("sbatch", "--test-only", "--wrap=/bin/true"),
-        ("sacctmgr", "-nP", "show", "qos", "format=name"),
-    ]
-    assert "user scheduling remained paused" in " ".join(lines)
-
-
-def test_post_jail_slurm_release_order_defers_restore_until_final_gates() -> None:
-    external_source = inspect.getsource(
-        soperator_migration._execute_populate_jail_refresh_phase  # noqa: SLF001
-    )
-    pre_release_token = "_ensure_post_jail_slurm_pre_release_checks("
-    full_smoke_token = "_ensure_post_jail_slurm_smoke("
-    pre_release_positions = [
-        match.start() for match in re.finditer(re.escape(pre_release_token), external_source)
-    ]
-
-    assert len(pre_release_positions) == 2
-    for pre_release_position in pre_release_positions:
-        smoke_position = external_source.find(full_smoke_token, pre_release_position)
-        assert pre_release_position < smoke_position
-    assert "_restore_external_upgrade_slurm_partitions(" not in external_source
-    assert 'phase["slurm_partition_restore_status"] = "deferred"' in external_source
-    assert "records restore before destructive bridge cleanup" in external_source
-
-    restore_source = inspect.getsource(
-        soperator_migration._restore_slurm_partitions_before_controller_bridge_cleanup  # noqa: SLF001
-    )
-    bridge_gate_position = restore_source.find('bridge.get("stage")')
-    action_gate_position = restore_source.find("_finalize_controller_bridge_target_actions(")
-    final_restore_position = restore_source.find("_restore_external_upgrade_slurm_partitions(")
-    stage_advance_position = restore_source.find(
-        "advance_bridge_stage(bridge, BridgeStage.PARTITIONS_RESTORED)"
-    )
-    assert bridge_gate_position < action_gate_position < final_restore_position
-    assert final_restore_position < stage_advance_position
-    assert 'login_handoff.get("state") != "complete"' in restore_source
-    assert 'final_health.get("status") != "passed"' in restore_source
-
-    action_finalize_source = inspect.getsource(
-        soperator_migration._finalize_controller_bridge_target_actions  # noqa: SLF001
-    )
-    accept_only_position = action_finalize_source.find(
-        'set_slurm_action_broker_mode(action_journal, "accept-only")'
-    )
-    admission_closed_position = action_finalize_source.find(
-        "set_slurm_action_broker_mode(action_journal, SLURM_ACTION_ADMISSION_CLOSED)"
-    )
-    terminal_gate_position = action_finalize_source.find(
-        "slurm_action_finalization_blockers(action_journal)"
-    )
-    freeze_position = action_finalize_source.find(
-        "finalize_target_slurm_action_generation(action_journal)"
-    )
-    assert (
-        accept_only_position < admission_closed_position < terminal_gate_position < freeze_position
-    )
-
-    managed_source = inspect.getsource(  # noqa: SLF001
-        cli._run_managed_soperator_cluster_upgrade_locked
-    )
-    managed_pre_release_position = managed_source.find(pre_release_token)
-    managed_target_position = managed_source.find('"target-controller-bridge"')
-    managed_safety_position = managed_source.find('"shared-safety-verification"')
-    managed_restore_position = managed_source.find('"slurm-restore"', managed_safety_position)
-    assert (
-        managed_pre_release_position
-        < managed_target_position
-        < managed_safety_position
-        < managed_restore_position
-    )
-    assert "_restore_managed_slurm_before_post_jail_smoke(" not in managed_source
-    assert full_smoke_token not in managed_source
-    assert (
-        "if slurm_pause_records and not post_jail_pre_release_failed and not roll_forward_only:"
-        in managed_source
-    )
-    assert "slurm-partitions-kept-paused-after-bridge-write-failure" in managed_source
-
-    full_smoke_source = inspect.getsource(
-        soperator_migration._ensure_post_jail_slurm_smoke  # noqa: SLF001
-    )
-    assert "_run_post_jail_live_job_smoke(" in full_smoke_source
-
-
-def test_soperator_upgrade_pause_restores_partial_partition_on_apply_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    partition_states = {"main": "UP", "gpu": "UP"}
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_partitions",
-        lambda **_kwargs: ("main", "gpu"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_partition_state_snapshot",
-        lambda **_kwargs: tuple(
-            _cli_slurm_partition_state(name, state) for name, state in partition_states.items()
-        ),
-    )
-
-    def _login_command(
-        _namespace: str,
-        command: str,
-        **_kwargs: Any,
-    ) -> SimpleNamespace:
-        commands.append(command)
-        if "PartitionName=gpu State=DOWN" in command:
-            return SimpleNamespace(stdout="", stderr="scontrol update failed", returncode=1)
-        match = re.search(r"PartitionName=(\S+) State=(\S+)", command)
-        if match:
-            partition_states[match.group(1)] = match.group(2)
-        return SimpleNamespace(stdout="", stderr="", returncode=0)
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
-
-    with pytest.raises(RuntimeError, match="scontrol update failed"):
-        cli._soperator_upgrade_pause_slurm_partitions(
-            namespace="soperator",
-            node_names=("worker-0",),
-            record_recorder=lambda _record: None,
-        )
-
-    assert commands == [
-        "scontrol update PartitionName=main State=DOWN",
-        "scontrol update PartitionName=gpu State=DOWN",
-        "scontrol update PartitionName=main State=UP",
-    ]
-
-
-def test_soperator_upgrade_restore_accepts_already_restored_partition(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-
-    def _login_command(
-        _namespace: str,
-        command: str,
-        **_kwargs: Any,
-    ) -> SimpleNamespace:
-        commands.append(command)
-        if "PartitionName=main State=UP" in command:
-            raise RuntimeError("scontrol: fatal: Could not establish a configuration source")
-        return SimpleNamespace(stdout="", stderr="", returncode=0)
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_partition_state_snapshot",
-        lambda **_kwargs: (_cli_slurm_partition_state("main", "UP"),),
-    )
-
-    cli._soperator_upgrade_restore_slurm_partitions(
-        namespace="soperator",
-        records=(_cli_slurm_pause_record("main"),),
-    )
-
-    assert commands == []
-
-
-def test_soperator_upgrade_restore_allows_derived_topology_changes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    state = "DOWN"
-    fields = {
-        "MaxTime": "01:00:00",
-        "TotalNodes": "4",
-        "TotalCPUs": "448",
-        "TRES": "cpu=448,gres/gpu=32,node=4",
-        "NodeIndices": "8-11",
-    }
-    commands: list[str] = []
-    record = _cli_slurm_pause_record(
-        "gpu",
-        fields={
-            "MaxTime": "01:00:00",
-            "TotalNodes": "2",
-            "TotalCPUs": "224",
-            "TRES": "cpu=224,gres/gpu=16,node=2",
-            "NodeIndices": "0-1",
-        },
-    )
-
-    def _login_command(
-        _namespace: str,
-        command: str,
-        **_kwargs: Any,
-    ) -> SimpleNamespace:
-        nonlocal state
-        commands.append(command)
-        match = re.search(r"PartitionName=(\S+) State=(\S+)", command)
-        if match:
-            state = match.group(2)
-        return SimpleNamespace(stdout="", stderr="", returncode=0)
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_partition_state_snapshot",
-        lambda **_kwargs: (_cli_slurm_partition_state("gpu", state, fields=fields),),
-    )
-
-    cli._soperator_upgrade_restore_slurm_partitions(
-        namespace="soperator",
-        records=(record,),
-    )
-
-    assert state == "UP"
-    assert commands == ["scontrol update PartitionName=gpu State=UP"]
-
-
-def test_soperator_upgrade_affected_jobs_include_scoped_pending_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-
-    def _login_command(
-        _namespace: str,
-        command: str,
-        **_kwargs: Any,
-    ) -> cli._SoperatorUpgradeCommandResult:
-        commands.append(command)
-        if command == "scontrol show node worker-0 -o":
-            return cli._SoperatorUpgradeCommandResult(
-                args=("kubectl", "exec"),
-                returncode=0,
-                stdout="NodeName=worker-0 Partitions=main State=IDLE",
-                stderr="",
-            )
-        if f"-t {cli._SOPERATOR_UPGRADE_ACTIVE_SQUEUE_STATES}" in command:
-            return cli._SoperatorUpgradeCommandResult(
-                args=("kubectl", "exec"),
-                returncode=0,
-                stdout=(
-                    "9|root|RUNNING|main|worker-0|||None|0:08|35:00|34:52|active\n"
-                    "10|root|SUSPENDED|main|worker-0|||None|0:09|35:00|34:51|suspended\n"
-                ),
-                stderr="",
-            )
-        if "-t PENDING" in command and "-p main" in command:
-            return cli._SoperatorUpgradeCommandResult(
-                args=("kubectl", "exec"),
-                returncode=0,
-                stdout="12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n",
-                stderr="",
-            )
-        if "-t PENDING" in command:
-            return cli._SoperatorUpgradeCommandResult(
-                args=("kubectl", "exec"),
-                returncode=0,
-                stdout=(
-                    "12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n"
-                    "13|root|PENDING|other||||Resources|0:00|35:00|35:00|unrelated\n"
-                    "14|root|PENDING|other||worker-0||Priority|0:00|35:00|35:00|pending-node\n"
-                ),
-                stderr="",
-            )
-        raise AssertionError(command)
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
-
-    jobs = cli._soperator_upgrade_affected_jobs(
-        namespace="soperator",
-        node_names=("worker-0",),
-    )
-
-    assert [job.job_id for job in jobs] == ["9", "10", "12", "14"]
-    assert jobs[1].state == "SUSPENDED"
-    assert jobs[2].impact_scope == "pending-partition"
-    assert jobs[3].impact_scope == "pending-node"
-    assert any("-p main" in command for command in commands if "-t PENDING" in command)
-    assert any("-p main" not in command for command in commands if "-t PENDING" in command)
-
-
-def test_soperator_upgrade_affected_jobs_fail_closed_when_partition_lookup_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-
-    def _login_command(
-        _namespace: str,
-        command: str,
-        **_kwargs: Any,
-    ) -> cli._SoperatorUpgradeCommandResult:
-        commands.append(command)
-        if command == "scontrol show node worker-0 -o":
-            return cli._SoperatorUpgradeCommandResult(
-                args=("kubectl", "exec"),
-                returncode=1,
-                stdout="",
-                stderr="slurmctld unavailable",
-            )
-        raise AssertionError(command)
-
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
-
-    with pytest.raises(RuntimeError, match="could not inspect Slurm partitions"):
-        cli._soperator_upgrade_affected_jobs(
-            namespace="soperator",
-            node_names=("worker-0",),
-        )
-
-    assert commands == ["scontrol show node worker-0 -o"]
-
-
-def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    queue_results = [
-        (
-            _soperator_slurm_job(
-                job_id="42",
-                user="alice",
-                state="RUNNING",
-                partition="gpu",
-                allocated_nodes="worker-gpu-0-0",
-                elapsed="00:05",
-                limit="30:00",
-                remaining="25:00",
-                name="restartable-train",
-            ),
-        ),
-        (),
-        (),
-    ]
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="cancel-selected",
-        cancel_job_ids=("42",),
-        requeue_job_ids=(),
-        wait_timeout_seconds=0,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scancel 42"]
-
-
-def test_soperator_upgrade_cancel_selected_waits_for_completing_job_to_clear(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    running_job = _soperator_slurm_job(job_id="42", state="RUNNING")
-    completing_job = _soperator_slurm_job(job_id="42", state="COMPLETING")
-    queue_results = [(running_job,), (completing_job,), (), ()]
-    sleeps: list[int] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="cancel-selected",
-        cancel_job_ids=("42",),
-        requeue_job_ids=(),
-        wait_timeout_seconds=30,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scancel 42"]
-    assert sleeps == [1]
-    assert queue_results == []
-
-
-def test_soperator_upgrade_cancel_selected_policy_cancels_pending_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    queue_results = [
-        (
-            _soperator_slurm_job(
-                job_id="12",
-                state="PENDING",
-                partition="main",
-                allocated_nodes="",
-                reason="Priority",
-                impact_scope="pending-partition",
-            ),
-        ),
-        (),
-        (),
-    ]
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="cancel-selected",
-        cancel_job_ids=("12",),
-        requeue_job_ids=(),
-        wait_timeout_seconds=0,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-0",)
-    assert commands == ["scancel 12"]
-
-
-def test_soperator_upgrade_requeue_selected_rejects_pending_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    job = _soperator_slurm_job(
-        job_id="12",
-        state="PENDING",
-        partition="main",
-        allocated_nodes="",
-        reason="Priority",
-        impact_scope="pending-partition",
-    )
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-0",),
-    )
-    monkeypatch.setattr(cli, "_soperator_upgrade_affected_jobs", lambda **_kwargs: (job,))
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="cannot requeue pending Slurm job"):
-        cli._handle_soperator_upgrade_running_jobs(
-            namespace="soperator",
-            node_group="",
-            policy="requeue-selected",
-            cancel_job_ids=(),
-            requeue_job_ids=("12",),
-            wait_timeout_seconds=0,
-            refresh_interval_seconds=1,
-            checkpoint_id="checkpoint",
-        )
-
-    assert commands == []
-
-
-def test_soperator_upgrade_cancel_all_policy_cancels_all_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    queue_results = [
-        (
-            _soperator_slurm_job(
-                job_id="42",
-                user="alice",
-                state="RUNNING",
-                partition="gpu",
-                allocated_nodes="worker-gpu-0-0",
-                elapsed="00:05",
-                limit="30:00",
-                remaining="25:00",
-                name="restartable-train",
-            ),
-            _soperator_slurm_job(
-                job_id="43",
-                user="bob",
-                state="RUNNING",
-                partition="gpu",
-                allocated_nodes="worker-gpu-0-0",
-                elapsed="00:02",
-                limit="30:00",
-                remaining="28:00",
-                name="restartable-eval",
-            ),
-        ),
-        (),
-        (),
-    ]
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="cancel-all",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=0,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scancel 42 43"]
-
-
-def test_soperator_upgrade_wait_to_finish_policy_waits_until_jobs_clear(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = _soperator_slurm_job(
-        job_id="42",
-        user="alice",
-        state="RUNNING",
-        partition="gpu",
-        allocated_nodes="worker-gpu-0-0",
-        elapsed="00:05",
-        limit="30:00",
-        remaining="25:00",
-        name="restartable-train",
-    )
-    queue_results = [(job,), (job,), (), ()]
-    sleeps: list[int] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="wait-to-finish",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=30,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert sleeps == [1]
-    assert queue_results == []
-
-
-def test_soperator_upgrade_interactive_wait_completed_drains_after_tui_wait(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = _soperator_slurm_job(job_id="42")
-    queue_results = [(job,), ()]
-    prompted: list[tuple[str, tuple[str, ...]]] = []
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-
-    def _prompt(
-        jobs: Sequence[cli.AffectedSlurmJob],
-        **_kwargs: object,
-    ) -> tuple[str, tuple[str, ...]]:
-        prompted.append(("prompted", tuple(job.job_id for job in jobs)))
-        return cli.SLURM_JOB_CONTROL_WAIT_COMPLETED, ()
-
-    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="interactive",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=30,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert prompted == [("prompted", ("42",))]
-    assert queue_results == []
-
-
-def test_soperator_upgrade_interactive_wait_timeout_raises_without_drain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = _soperator_slurm_job(job_id="42")
-    drained: list[tuple[str, ...]] = []
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: drained.append(("drained",)) or ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: (job,),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prompt_soperator_upgrade_job_control",
-        lambda _jobs, **_kwargs: (cli.SLURM_JOB_CONTROL_WAIT_TIMEOUT, ("42",)),
-    )
-
-    with pytest.raises(RuntimeError, match="Timed out waiting for Slurm jobs"):
-        cli._handle_soperator_upgrade_running_jobs(
-            namespace="soperator",
-            node_group="",
-            policy="interactive",
-            cancel_job_ids=(),
-            requeue_job_ids=(),
-            wait_timeout_seconds=30,
-            refresh_interval_seconds=1,
-            checkpoint_id="checkpoint",
-        )
-
-    assert drained == []
-
-
-def test_soperator_upgrade_interactive_callback_cancels_in_tui_without_reprompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    job = _soperator_slurm_job(job_id="42")
-    queue_results = [(job,), (), ()]
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    def _prompt(
-        jobs: Sequence[cli.AffectedSlurmJob],
-        **kwargs: object,
-    ) -> tuple[str, tuple[str, ...]]:
-        action_handler = cast(
-            Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
-        )
-        assert action_handler("cancel", ("42",), tuple(jobs)) == ()
-        return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
-
-    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="interactive",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=30,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scancel 42"]
-    assert queue_results == []
-
-
-def test_soperator_upgrade_interactive_callback_requeue_holds_in_tui(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    job = _soperator_slurm_job(job_id="42")
-    queue_results = [(job,), (), (), ()]
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    def _prompt(
-        jobs: Sequence[cli.AffectedSlurmJob],
-        **kwargs: object,
-    ) -> tuple[str, tuple[str, ...]]:
-        action_handler = cast(
-            Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
-        )
-        assert action_handler("requeue-hold", ("42",), tuple(jobs)) == ()
-        return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
-
-    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="interactive",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=30,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scontrol requeuehold 42"]
-    assert queue_results == []
-
-
-def test_soperator_upgrade_interactive_hold_uses_canonical_tui_action(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = _soperator_slurm_job(job_id="42")
-    queue_results = [(job,), (job,), ()]
-    commands: list[str] = []
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    def _prompt(
-        jobs: Sequence[cli.AffectedSlurmJob],
-        **kwargs: object,
-    ) -> tuple[str, tuple[str, ...]]:
-        action_handler = cast(
-            Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
-        )
-        assert action_handler("hold", ("42",), tuple(jobs)) == (job,)
-        return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
-
-    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="interactive",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=30,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scontrol hold 42"]
-    assert queue_results == []
-
-
-def test_soperator_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    active_job = _soperator_slurm_job(job_id="42")
-    pending_job = _soperator_slurm_job(
-        job_id="43",
-        state="PENDING",
-        allocated_nodes="",
-        requested_nodes="worker-gpu-0-0",
-        reason="Priority",
-        impact_scope="pending-node",
-    )
-    queue_results = [(active_job, pending_job), (active_job, pending_job), ()]
-    wait_results = [(active_job, pending_job), ()]
-    commands: list[str] = []
-    decisions: list[Mapping[str, object]] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_wait_for_jobs_until_timeout",
-        lambda **_kwargs: wait_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="wait-then-cancel",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=3600,
-        refresh_interval_seconds=30,
-        checkpoint_id="checkpoint",
-        decision_recorder=decisions.append,
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scancel 42 43"]
-    assert [decision["action"] for decision in decisions] == [
-        "blocking-jobs-detected",
-        "wait-then-cancel-wait-started",
-        "wait-then-cancel-timeout",
-        "wait-then-cancel-auto-cancel",
-        "wait-then-cancel-cleared",
-    ]
-
-
-def test_soperator_upgrade_requeue_selected_policy_requeues_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    queue_results = [
-        (
-            _soperator_slurm_job(
-                job_id="42",
-                user="alice",
-                state="RUNNING",
-                partition="gpu",
-                allocated_nodes="worker-gpu-0-0",
-                elapsed="00:05",
-                limit="30:00",
-                remaining="25:00",
-                name="restartable-train",
-            ),
-        ),
-        (),
-        (),
-        (),
-    ]
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="requeue-selected",
-        cancel_job_ids=(),
-        requeue_job_ids=("42",),
-        wait_timeout_seconds=0,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scontrol requeue 42"]
-
-
-def test_soperator_upgrade_requeue_hold_selected_policy_holds_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    queue_results = [
-        (
-            _soperator_slurm_job(
-                job_id="42",
-                user="alice",
-                state="RUNNING",
-                partition="gpu",
-                allocated_nodes="worker-gpu-0-0",
-                elapsed="00:05",
-                limit="30:00",
-                remaining="25:00",
-                name="restartable-train",
-            ),
-        ),
-        (),
-        (),
-        (),
-    ]
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="requeue-hold-selected",
-        cancel_job_ids=(),
-        requeue_job_ids=("42",),
-        wait_timeout_seconds=0,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scontrol requeuehold 42"]
-
-
-def test_soperator_upgrade_requeue_hold_all_policy_holds_all_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    queue_results = [
-        (
-            _soperator_slurm_job(
-                job_id="42",
-                user="alice",
-                state="RUNNING",
-                partition="gpu",
-                allocated_nodes="worker-gpu-0-0",
-                elapsed="00:05",
-                limit="30:00",
-                remaining="25:00",
-                name="restartable-train",
-            ),
-            _soperator_slurm_job(
-                job_id="43",
-                user="bob",
-                state="RUNNING",
-                partition="gpu",
-                allocated_nodes="worker-gpu-0-0",
-                elapsed="00:02",
-                limit="30:00",
-                remaining="28:00",
-                name="restartable-eval",
-            ),
-        ),
-        (),
-        (),
-        (),
-    ]
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="requeue-hold-all",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=0,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scontrol requeuehold 42 43"]
-
-
-def test_soperator_upgrade_release_jobs_uses_scontrol_release(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[str] = []
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-
-    cli._soperator_upgrade_release_jobs(  # noqa: SLF001
-        "soperator",
-        ("42", "43"),
-        kube_context="ctx",
-    )
-
-    assert commands == ["scontrol release 42 43"]
-
-
-def test_soperator_upgrade_requeue_policy_waits_for_slurm_transition(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = _soperator_slurm_job(
-        job_id="42",
-        user="alice",
-        state="RUNNING",
-        partition="gpu",
-        allocated_nodes="worker-gpu-0-0",
-        elapsed="00:05",
-        limit="30:00",
-        remaining="25:00",
-        name="restartable-train",
-    )
-    commands: list[str] = []
-    queue_results = [
-        (job,),
-        (job,),
-        (),
-        (),
-        (),
-    ]
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_nodes_for_rollout",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_drain_slurm_nodes",
-        lambda **_kwargs: ("worker-gpu-0-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_affected_jobs",
-        lambda **_kwargs: queue_results.pop(0),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: (
-            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
-        ),
-    )
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
-
-    restored = cli._handle_soperator_upgrade_running_jobs(
-        namespace="soperator",
-        node_group="",
-        policy="requeue-all",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        wait_timeout_seconds=30,
-        refresh_interval_seconds=1,
-        checkpoint_id="checkpoint",
-    )
-
-    assert restored == ("worker-gpu-0-0",)
-    assert commands == ["scontrol requeue 42"]
-    assert queue_results == []
-
-
-def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                            "values": {
-                                "soperator-activechecks": {
-                                    "enabled": True,
-                                    "waitForChecks": {"enabled": True},
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: (
-            calls.append("live-activechecks-suspend")
-            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
-        ),
-    )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
-
-    cli._run_soperator_upgrade_command(
-        config_path=paths.config_path,
-        target_ref="mk8s",
-        to_chart_version="0.26.0",
-        to_k8s_version=None,
-        to_os=None,
-        to_gpu_stack_preset=None,
-        node_group="",
-        disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-        drain_timeout="none",
-        strategy_max_surge_count=None,
-        zero_surge_max_unavailable="all",
-        max_parallel_worker_groups=8,
-        backup_dir=None,
-        populate_jail_refresh="auto",
-        jail_persistent_mounts=(),
-        jail_sfs_resize_policy=None,
-        jail_sfs_resize_to_gib=None,
-        job_policy=None,
-        cancel_job=(),
-        requeue_job=(),
-        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
-        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-        slurm_scheduling_pause=True,
-        login_session_policy="target-ready",
-        login_session_drain_timeout="0s",
-        dry_run=False,
-        interactive=False,
-    )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    chart = payload["apps"]["charts"][0]
-    assert chart["version"] == "0.26.0"
-    assert chart["values"]["soperator-activechecks"]["enabled"] is True
-    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
-    assert calls == [
-        "migration-guard",
-        ("validate", "Soperator cluster upgrade preflight"),
-        "soperator-static-ready",
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks suspension"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        "live-activechecks-suspend",
-        ("soperator-validation", "Preflight"),
-        "render",
-        ("validate", "Validate gated Soperator staging at 0.26.0"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        "render",
-        ("validate", "Validate rendered Soperator active/passive jail rootfs refresh"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        "render",
-        ("validate", "Validate rendered Soperator jail rootfs active slot switch"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        ("soperator-validation", "Postflight"),
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks restore"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-    ]
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["status"] == "completed"
-    assert checkpoint["activechecks"]["required"] is True
-    assert checkpoint["activechecks"]["live_suspend"]["status"] == "suspended"
-    assert checkpoint["planned_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
-    assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
-    assert checkpoint["pending_phase"] == "none"
-    event_names = [event["event"] for event in checkpoint["events"]]
-    for event_name in (
-        "planned",
-        "activechecks-suspended",
-        "chart-applied",
-        "populate-jail-refresh-completed",
-        "activechecks-restored",
-        "shared-safety-verified",
-        "completed",
-    ):
-        assert event_name in event_names
-    assert "phase-completed" in event_names
-    assert checkpoint["backup"]["sha256"] == "archive-sha"
-    assert checkpoint["backup"]["accounting_db_dump"] is True
-    stage_verification = checkpoint["stage_verification"]
-    assert stage_verification["activechecks-suspend"]["fast_verification"]["status"] == "passed"
-    assert stage_verification["soperator-chart"]["fast_verification"]["status"] == "passed"
-    assert stage_verification["activechecks-restore"]["fast_verification"]["status"] == "passed"
-    assert (
-        stage_verification["shared-safety-verification"]["fast_verification"]["status"] == "passed"
-    )
-    upgrade_json = json.loads(
-        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
-    )
-    report_stage_verification = {
-        item["phase_id"]: item for item in upgrade_json["stage_verification"]
-    }
-    assert report_stage_verification["activechecks-suspend"]["status"] == "passed"
-    assert report_stage_verification["activechecks-restore"]["status"] == "passed"
-    upgrade_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
-    assert "checkpointed suspend/restore was required" in upgrade_report
-    assert "## Stage Fast Verification" in upgrade_report
-    assert "`activechecks-suspend`: `PASS`" in upgrade_report
-    assert "`activechecks-restore`: `PASS`" in upgrade_report
-    assert "`activechecks-restored`" in upgrade_report
-    assert "`completed`" in upgrade_report
-
-
-def test_soperator_upgrade_resume_late_pending_phase_skips_completed_late_phases(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                            "values": {
-                                "soperator-activechecks": {
-                                    "enabled": True,
-                                    "waitForChecks": {"enabled": True},
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: (
-            calls.append("live-activechecks-suspend")
-            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
-        ),
-    )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
-
-    before_state = cli.ProtectedCustomerState(
-        target_ref="mk8s",
-        namespace="soperator",
-        captured_at="before",
-        sections={"pods": {"available": True, "items": []}},
-    )
-    after_state = cli.ProtectedCustomerState(
-        target_ref="mk8s",
-        namespace="soperator",
-        captured_at="after",
-        sections={"pods": {"available": True, "items": []}},
-    )
-
-    def _post_verification(**_kwargs: object) -> SimpleNamespace:
-        calls.append("shared-safety")
-        payload = {
-            "status": "passed",
-            "passed": True,
-            "checks": [{"name": "pods-running-or-completed", "status": "passed"}],
-        }
-        return SimpleNamespace(
-            status="passed",
-            passed=True,
-            checks=tuple(payload["checks"]),
-            protected_state=after_state,
-            comparison={
-                "status": "matched",
-                "before_hash": before_state.content_hash,
-                "after_hash": after_state.content_hash,
-                "deltas": [],
-                "blocked_count": 0,
-                "approval_required_count": 0,
-            },
-            command_audit=(),
-            heavy_validation_followups=(),
-            zero_downtime_eligibility={"status": "passed", "eligible": True},
-            as_payload=lambda: payload,
-        )
-
-    monkeypatch.setattr(cli, "_managed_soperator_upgrade_run_post_verification", _post_verification)
-
-    _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    checkpoint["completed_phases"] = [
-        phase for phase in checkpoint["completed_phases"] if phase != "shared-safety-verification"
-    ]
-    checkpoint["pending_phase"] = "shared-safety-verification"
-    checkpoint["pending_reason"] = "simulated interruption"
-    checkpoint["status"] = "failed"
-    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
-
-    calls.clear()
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version="0.26.0",
-    )
-
-    assert calls == ["migration-guard", "shared-safety", "shared-safety"]
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "none"
-    assert checkpoint["status"] == "completed"
-    assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
-
-
-def test_soperator_upgrade_resume_demotes_completed_phase_missing_fast_verification(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
-
-    before_state = cli.ProtectedCustomerState(
-        target_ref="mk8s",
-        namespace="soperator",
-        captured_at="before",
-        sections={"pods": {"available": True, "items": []}},
-    )
-    after_state = cli.ProtectedCustomerState(
-        target_ref="mk8s",
-        namespace="soperator",
-        captured_at="after",
-        sections={"pods": {"available": True, "items": []}},
-    )
-
-    def _post_verification(**_kwargs: object) -> SimpleNamespace:
-        calls.append("shared-safety")
-        payload = {
-            "status": "passed",
-            "passed": True,
-            "checks": [{"name": "pods-running-or-completed", "status": "passed"}],
-        }
-        return SimpleNamespace(
-            status="passed",
-            passed=True,
-            checks=tuple(payload["checks"]),
-            protected_state=after_state,
-            comparison={
-                "status": "matched",
-                "before_hash": before_state.content_hash,
-                "after_hash": after_state.content_hash,
-                "deltas": [],
-                "blocked_count": 0,
-                "approval_required_count": 0,
-            },
-            command_audit=(),
-            heavy_validation_followups=(),
-            zero_downtime_eligibility={"status": "passed", "eligible": True},
-            as_payload=lambda: payload,
-        )
-
-    monkeypatch.setattr(cli, "_managed_soperator_upgrade_run_post_verification", _post_verification)
-
-    _run_soperator_upgrade_for_test(config_path=paths.config_path)
-
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    phase_state = checkpoint["phase_state"]["shared-safety-verification"]
-    phase_state.pop("fast_verification", None)
-    checkpoint["stage_verification"].pop("shared-safety-verification", None)
-    for item in checkpoint["phase_history"]:
-        if item.get("id") == "shared-safety-verification":
-            item.pop("fast_verification", None)
-    checkpoint["pending_phase"] = "none"
-    checkpoint["pending_reason"] = ""
-    checkpoint["status"] = "completed"
-    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
-
-    calls.clear()
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version="0.26.0",
-    )
-
-    assert calls == ["migration-guard", "shared-safety", "shared-safety"]
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "none"
-    assert checkpoint["status"] == "completed"
-    assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
-    verification = checkpoint["phase_state"]["shared-safety-verification"]["fast_verification"]
-    assert verification["status"] == "passed"
-    assert "completed-phase-reverify-required" in {event["event"] for event in checkpoint["events"]}
-
-    discovery_path = Path(checkpoint["discovery"]["path"])
-    discovery_path.unlink()
-
-    def _rediscover(**_kwargs: object) -> Path:
-        calls.append("discovery")
-        discovery_path.parent.mkdir(parents=True, exist_ok=True)
-        discovery_path.write_text('{"schema": "discovery"}\n', encoding="utf-8")
-        return discovery_path
-
-    monkeypatch.setattr(cli, "_run_managed_soperator_discovery_command", _rediscover)
-
-    calls.clear()
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version="0.26.0",
-    )
-
-    assert calls == ["migration-guard", "discovery", "shared-safety"]
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["pending_phase"] == "none"
-    assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
-    assert Path(checkpoint["discovery"]["path"]).exists()
-    assert any(
-        event["event"] == "completed-phase-reverify-required"
-        and "discovery: discovery manifest is missing" in event.get("reason", "")
-        for event in checkpoint["events"]
-    )
-
-
-def test_soperator_upgrade_keeps_activechecks_suspended_after_bridge_write_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                            "values": {
-                                "soperator-activechecks": {
-                                    "enabled": True,
-                                    "waitForChecks": {"enabled": True},
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    def validation_phase(*_args: Any, **kwargs: Any) -> tuple[Path, ...]:
-        phase = kwargs["phase_label"]
-        calls.append(("soperator-validation", phase))
-        if phase == "Postflight":
-            raise RuntimeError("postflight failed")
-        return ()
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", validation_phase)
-    monkeypatch.setattr(
-        cli,
-        "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: (
-            calls.append("live-activechecks-suspend")
-            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
-        ),
-    )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
-
-    with pytest.raises(RuntimeError, match="postflight failed"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-        )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    chart = payload["apps"]["charts"][0]
-    assert chart["version"] == "0.26.0"
-    assert chart["values"]["soperator-activechecks"]["enabled"] is False
-    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is False
-    assert (
-        "validate",
-        "Validate rendered Soperator ActiveChecks restore after failed upgrade",
-    ) not in calls
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["status"] == "failed"
-    assert checkpoint["failure"] == {
-        "error": "postflight failed",
-        "interrupted": False,
-        "pending_phase": "postflight-validation",
-        "activechecks_restore": "retained-suspended-roll-forward-only",
-        "slurm_restore": "not-required",
-    }
-    assert "activechecks-retained-after-bridge-write-failure" in [
-        event["event"] for event in checkpoint["events"]
-    ]
-    upgrade_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
-    assert "- Status: `failed`" in upgrade_report
-    assert "`activechecks-retained-after-bridge-write-failure`" in upgrade_report
-
-
-def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
-                            "values": {
-                                "soperator-activechecks": {
-                                    "enabled": True,
-                                    "waitForChecks": {"enabled": True},
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    def generated_validation(*_args: Any, **kwargs: Any) -> dict[str, Any]:
-        title = kwargs["title"]
-        calls.append(("validate", title))
-        if title == "Validate rendered Soperator ActiveChecks suspension":
-            raise RuntimeError("suspension validation failed")
-        return {}
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", generated_validation)
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
-
-    with pytest.raises(RuntimeError, match="suspension validation failed"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-        )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    chart = payload["apps"]["charts"][0]
-    assert chart["version"] == "0.25.0"
-    assert chart["values"]["soperator-activechecks"]["enabled"] is True
-    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
-    assert calls == [
-        "migration-guard",
-        ("validate", "Soperator cluster upgrade preflight"),
-        "soperator-static-ready",
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks suspension"),
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks restore after failed upgrade"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-    ]
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["status"] == "failed"
-    assert checkpoint["failure"] == {
-        "error": "suspension validation failed",
-        "interrupted": False,
-        "pending_phase": "activechecks-suspend",
-        "activechecks_restore": "restored",
-        "slurm_restore": "not-required",
-    }
-    assert "activechecks-restored-after-failure" in [
-        event["event"] for event in checkpoint["events"]
-    ]
-
-
-def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.26.0",
-                            "values": {
-                                "soperator-activechecks": {
-                                    "enabled": False,
-                                    "waitForChecks": {"enabled": False},
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    target = cli._HelmChartUpgradeTarget(
-        selector="apps:soperator@mk8s",
-        chart_id="soperator",
-        target_ref="mk8s",
-    )
-    checkpoint_plan = cli._HelmChartUpgradePlan(
-        target=target,
-        instance_id="mk8s",
-        namespace="soperator",
-        release_name="soperator",
-        current_version="0.25.0",
-        target_version="0.26.0",
-    )
-    lifecycle = cli._SoperatorActiveChecksLifecycle(
-        required=True,
-        snapshots=(
-            cli._SoperatorUpgradeValueSnapshot(
-                path="values.soperator-activechecks.enabled",
-                present=True,
-                value=True,
-            ),
-            cli._SoperatorUpgradeValueSnapshot(
-                path="values.soperator-activechecks.waitForChecks.enabled",
-                present=True,
-                value=True,
-            ),
-        ),
-    )
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = cli._new_soperator_upgrade_checkpoint(
-        plan=checkpoint_plan,
-        lifecycle=lifecycle,
-        checkpoint_path=checkpoint_path,
-        paths=paths,
-        source_payload=yaml.safe_load(paths.config_path.read_text(encoding="utf-8")),
-    )
-    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspend-started")
-    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspended")
-    cli._write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
-
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: (
-            calls.append("live-activechecks-suspend")
-            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
-        ),
-    )
-    _stub_soperator_upgrade_runtime(
-        monkeypatch,
-        paths,
-        calls,
-        populate_jail_image_changed=False,
-    )
-
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-    )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    chart = payload["apps"]["charts"][0]
-    assert chart["version"] == "0.26.0"
-    assert chart["values"]["soperator-activechecks"]["enabled"] is True
-    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
-    assert calls == [
-        "migration-guard",
-        ("validate", "Soperator cluster upgrade preflight"),
-        "soperator-static-ready",
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks suspension"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        "live-activechecks-suspend",
-        ("soperator-validation", "Preflight"),
-        "render",
-        ("validate", "Validate gated Soperator staging at 0.26.0"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-        ("soperator-validation", "Postflight"),
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks restore"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-    ]
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    event_names = [event["event"] for event in checkpoint["events"]]
-    assert "resumed" in event_names
-    assert "activechecks-restored" in event_names
-    assert checkpoint["status"] == "completed"
-    assert checkpoint["current_version"] == "0.26.0"
-    assert checkpoint["target_version"] == "0.26.0"
-
-
-def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.26.0",
-                            "values": {
-                                "soperator-activechecks": {
-                                    "enabled": False,
-                                    "waitForChecks": {"enabled": False},
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    target = cli._HelmChartUpgradeTarget(
-        selector="apps:soperator@mk8s",
-        chart_id="soperator",
-        target_ref="mk8s",
-    )
-    checkpoint_plan = cli._HelmChartUpgradePlan(
-        target=target,
-        instance_id="mk8s",
-        namespace="soperator",
-        release_name="soperator",
-        current_version="0.25.0",
-        target_version="0.26.0",
-    )
-    lifecycle = cli._SoperatorActiveChecksLifecycle(
-        required=True,
-        snapshots=(
-            cli._SoperatorUpgradeValueSnapshot(
-                path="values.soperator-activechecks.enabled",
-                present=True,
-                value=True,
-            ),
-            cli._SoperatorUpgradeValueSnapshot(
-                path="values.soperator-activechecks.waitForChecks.enabled",
-                present=True,
-                value=True,
-            ),
-        ),
-    )
-    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
-    checkpoint = cli._new_soperator_upgrade_checkpoint(
-        plan=checkpoint_plan,
-        lifecycle=lifecycle,
-        checkpoint_path=checkpoint_path,
-        paths=paths,
-        source_payload=yaml.safe_load(paths.config_path.read_text(encoding="utf-8")),
-    )
-    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspend-started")
-    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspended")
-    cli._write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
-
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-
-    def generated_validation(*_args: Any, **kwargs: Any) -> dict[str, Any]:
-        title = kwargs["title"]
-        calls.append(("validate", title))
-        if title == "Soperator cluster upgrade preflight":
-            raise RuntimeError("preflight failed")
-        return {}
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: calls.append("migration-guard"),
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", generated_validation)
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(
-        cli,
-        "flux_apply_command",
-        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_soperator_static_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: (
-            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: (
-            calls.append("live-activechecks-suspend")
-            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="preflight failed"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-        )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    chart = payload["apps"]["charts"][0]
-    assert chart["version"] == "0.26.0"
-    assert chart["values"]["soperator-activechecks"]["enabled"] is True
-    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
-    assert calls == [
-        "migration-guard",
-        ("validate", "Soperator cluster upgrade preflight"),
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks restore after failed upgrade"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-    ]
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["status"] == "failed"
-    assert checkpoint["failure"] == {
-        "error": "preflight failed",
-        "interrupted": False,
-        "pending_phase": "preflight",
-        "activechecks_restore": "restored",
-        "slurm_restore": "not-required",
-    }
-    event_names = [event["event"] for event in checkpoint["events"]]
-    assert "resumed" in event_names
-    assert "activechecks-restored-after-failure" in event_names
-    upgrade_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
-    assert "- Status: `failed`" in upgrade_report
-    assert "`activechecks-restored-after-failure`" in upgrade_report
-
-
-def test_soperator_upgrade_live_activechecks_cleanup_is_cluster_scoped(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    target = cli._HelmChartUpgradeTarget(
-        selector="apps:soperator@mk8s",
-        chart_id="soperator",
-        target_ref="mk8s",
-    )
-    plan = cli._HelmChartUpgradePlan(
-        target=target,
-        instance_id="mk8s",
-        namespace="soperator",
-        release_name="soperator",
-        current_version="0.25.0",
-        target_version="0.25.0",
-    )
-    source_payload = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "mk8s",
-                    "enabled": True,
-                    "target_ref": "mk8s",
-                    "values": {"clusterName": "cluster-a"},
-                }
-            ]
-        }
-    }
-    kubectl_calls: list[tuple[str, ...]] = []
-
-    def fake_run(cmd: list[str], **_kwargs: Any) -> SimpleNamespace:
-        assert cmd == [
-            "kubectl",
-            "-n",
-            "soperator",
-            "get",
-            "activechecks.slurm.nebius.ai",
-            "-o",
-            "json",
-        ]
-        return SimpleNamespace(
-            returncode=0,
-            stderr="",
-            stdout=json.dumps(
-                {
-                    "items": [
-                        {
-                            "metadata": {"name": "nccl"},
-                            "spec": {"slurmClusterRefName": "cluster-a"},
-                            "status": {"k8sJobsStatus": {"lastJobName": "nccl-job"}},
-                        },
-                        {
-                            "metadata": {"name": "other"},
-                            "spec": {"slurmClusterRefName": "cluster-b"},
-                        },
-                    ]
-                }
-            ),
-        )
-
-    monkeypatch.setattr(
-        cli,
-        "_resolve_selected_deploy_targets",
-        lambda *_args, **_kwargs: [_mk8s_target(paths)],
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "test"},
-    )
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        cli,
-        "_run_post_flux_kubectl",
-        lambda cmd, **_kwargs: kubectl_calls.append(tuple(cmd)),
-    )
-
-    result = cli._suspend_live_soperator_activechecks(
-        SimpleNamespace(),
-        paths,
-        {"deploy": {"targets": [_mk8s_target(paths)]}},
-        plan,
-        source_payload=source_payload,
-    )
-
-    selector = "app.kubernetes.io/component=soperatorchecks,app.kubernetes.io/instance=cluster-a"
-    assert result["status"] == "suspended"
-    assert result["patched"] == ["nccl"]
-    assert result["skipped"] == ["other"]
-    assert result["workload_cleanup"] == {
-        "scope": "cluster_ref",
-        "namespace": "soperator",
-        "cluster_ref": "cluster-a",
-        "activecheck_job_names": ["nccl-job"],
-    }
-    assert kubectl_calls == [
-        (
-            "kubectl",
-            "-n",
-            "soperator",
-            "patch",
-            "activechecks.slurm.nebius.ai",
-            "nccl",
-            "--type=merge",
-            "-p",
-            json.dumps({"spec": {"suspend": True, "runAfterCreation": False}}),
-        ),
-        (
-            "kubectl",
-            "-n",
-            "soperator",
-            "delete",
-            "cronjob.batch",
-            "-l",
-            selector,
-            "--ignore-not-found=true",
-            "--wait=false",
-        ),
-        (
-            "kubectl",
-            "-n",
-            "soperator",
-            "delete",
-            "job.batch,pod",
-            "-l",
-            selector,
-            "--ignore-not-found=true",
-            "--wait=false",
-        ),
-        (
-            "kubectl",
-            "-n",
-            "soperator",
-            "delete",
-            "job.batch/nccl-job",
-            "--ignore-not-found=true",
-            "--wait=false",
-        ),
-        (
-            "kubectl",
-            "-n",
-            "soperator",
-            "delete",
-            "pod",
-            "-l",
-            "job-name=nccl-job",
-            "--ignore-not-found=true",
-            "--wait=false",
-        ),
-    ]
-
-
-def test_soperator_upgrade_live_activechecks_list_failure_blocks_upgrade(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    target = cli._HelmChartUpgradeTarget(
-        selector="apps:soperator@mk8s",
-        chart_id="soperator",
-        target_ref="mk8s",
-    )
-    plan = cli._HelmChartUpgradePlan(
-        target=target,
-        instance_id="mk8s",
-        namespace="soperator",
-        release_name="soperator",
-        current_version="0.25.0",
-        target_version="0.25.0",
-    )
-    source_payload = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "mk8s",
-                    "enabled": True,
-                    "target_ref": "mk8s",
-                    "values": {"clusterName": "cluster-a"},
-                }
-            ]
-        }
-    }
-    kubectl_calls: list[tuple[str, ...]] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_resolve_selected_deploy_targets",
-        lambda *_args, **_kwargs: [_mk8s_target(paths)],
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "test"},
-    )
-    monkeypatch.setattr(
-        cli.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=1,
-            stderr="Error from server (Forbidden): activechecks is forbidden",
-            stdout="",
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_post_flux_kubectl",
-        lambda cmd, **_kwargs: kubectl_calls.append(tuple(cmd)),
-    )
-
-    with pytest.raises(RuntimeError, match="Cannot suspend live Soperator ActiveChecks"):
-        cli._suspend_live_soperator_activechecks(
-            SimpleNamespace(),
-            paths,
-            {"deploy": {"targets": [_mk8s_target(paths)]}},
-            plan,
-            source_payload=source_payload,
-        )
-    assert kubectl_calls == []
-
-
-def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    prompt_paths: list[str] = []
-    prompt_hints: dict[str, str | None] = {}
-    prompt_defaults: dict[str, object] = {}
-    rich_console = cli.Console(record=True, width=300)
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-        **_kwargs: object,
-    ) -> tuple[object, bool]:
-        del choices, type_hint, required, unset_on_skip
-        prompt_paths.append(path_label)
-        prompt_hints[path_label] = cast(str | None, _kwargs.get("prompt_hint"))
-        prompt_defaults[path_label] = current
-        if path_label == "soperator.upgrade.to_chart_version":
-            return current, False
-        raise AssertionError(f"unexpected prompt: {path_label}")
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(cli, "_soperator_upgrade_catalog_to_version_default", lambda: "0.26.0")
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(
-        cli,
-        "_raise_if_soperator_upgrade_would_bypass_migration",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_managed_soperator_upgrade_dry_run_discovery",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.soperator_upgrade_command(paths.config_path, dry_run=True)
-
-    rendered = rich_console.export_text()
-    assert prompt_paths == [
-        "soperator.upgrade.to_chart_version",
-    ]
-    assert prompt_hints["soperator.upgrade.to_chart_version"] == "current: 0.25.0"
-    assert prompt_defaults["soperator.upgrade.to_chart_version"] == "0.26.0"
-    assert "Soperator upgrade plan" in rendered
-    assert "- chart version: 0.25.0 -> 0.26.0" in rendered
-    assert "Dry run only" in rendered
-    assert f"nebius-cxcli soperator upgrade {paths.config_path}" in rendered
-    assert "--target mk8s --to-chart-version 0.26.0" in rendered
-    assert "--no-interactive --dry-run" in rendered
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-
-
-def test_soperator_upgrade_catalog_to_version_default_prefers_portable_pin(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    chart = SimpleNamespace(
-        version="local-chart-version",
-        portable_source=SimpleNamespace(version="0.26.0"),
-    )
-
-    monkeypatch.setattr(cli, "helm_chart_source_by_id", lambda _component_id: chart)
-
-    assert cli._soperator_upgrade_catalog_to_version_default() == "0.26.0"
-
-
-def test_soperator_upgrade_no_interactive_requires_version_before_prompt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.config_path.parent.mkdir(parents=True, exist_ok=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
-                    ]
-                },
-                "apps": {
-                    "charts": [
-                        {
-                            "id": "soperator",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "version": "0.25.0",
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    prompted = False
-
-    def _prompt_scalar(*_args: object, **_kwargs: object) -> tuple[object, bool]:
-        nonlocal prompted
-        prompted = True
-        return "", False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-
-    with pytest.raises(RuntimeError, match="Missing target change flag"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            target_ref="mk8s",
-            to_chart_version=None,
-        )
-    assert prompted is False
-
-
-def test_soperator_upgrade_validation_specs_select_target_and_require_manifest() -> None:
-    manifest = {
-        "deploy": {
-            "validations": [
-                {
-                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-                    "target_ref": "mk8s",
-                    "name": "Soperator smoke",
-                    "report_file": "soperator-smoke.json",
-                },
-                {
-                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-                    "target_ref": "other",
-                    "name": "Other Soperator smoke",
-                },
-                {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
-            ]
-        }
-    }
-
-    selected = cli._soperator_upgrade_validation_specs(manifest, target_ref="mk8s")
-
-    assert selected == [
-        {
-            "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-            "target_ref": "mk8s",
-            "name": "Soperator smoke",
-            "report_file": "soperator-smoke.json",
-        }
-    ]
-    with pytest.raises(RuntimeError, match="does not declare the required"):
-        cli._soperator_upgrade_validation_specs(manifest, target_ref="missing")
-
-
-def test_soperator_upgrade_postflight_writes_separate_validation_reports(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.reports_dir.mkdir(parents=True)
-    deploy_report = paths.reports_dir / "deploy-report.md"
-    deploy_report.write_text("# Existing Deploy Report\n", encoding="utf-8")
-    validation = {
-        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-        "target_ref": "mk8s",
-        "name": "Soperator smoke",
-        "report_file": "soperator-smoke.json",
-    }
-    manifest = {
-        "deploy": {
-            "targets": [_mk8s_target(paths)],
-            "validations": [validation],
-        }
-    }
-    plan = cli._HelmChartUpgradePlan(
-        target=cli._HelmChartUpgradeTarget(
-            selector="apps:soperator@mk8s",
-            chart_id="soperator",
-            target_ref="mk8s",
-        ),
-        instance_id="mk8s",
-        namespace="soperator",
-        release_name="soperator",
-        current_version="0.25.0",
-        target_version="0.26.0",
-    )
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_ensure_terraform_backend_ready",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "fake"},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_deploy_validations",
-        lambda validations, **kwargs: (
-            calls.append(
-                ("run-validations", validations, kwargs["reports_dir"], kwargs["extra_env"])
-            )
-            or [paths.reports_dir / "soperator-smoke.json"]
-        ),
-    )
-    monkeypatch.setattr(cli, "write_inventory", lambda *_args, **_kwargs: pytest.fail())
-    monkeypatch.setattr(
-        cli, "build_deploy_validation_report", lambda *_args, **_kwargs: pytest.fail()
-    )
-
-    reports = cli._run_soperator_upgrade_validation_phase(
-        SimpleNamespace(),
-        paths,
-        manifest,
-        plan,
-        phase_label="Postflight",
-        persist_reports=True,
-    )
-
-    assert reports == (paths.reports_dir / "soperator-smoke.json",)
-    assert deploy_report.read_text(encoding="utf-8") == "# Existing Deploy Report\n"
-    assert calls == [
-        ("run-validations", [validation], paths.reports_dir, {"KUBECONFIG": "fake"}),
     ]
 
 
@@ -10130,102 +2866,6 @@ def test_upgrade_helm_chart_readiness_requires_generated_target(
             {"deploy": {"targets": []}},
             plan,
         )
-
-
-def test_soperator_static_upgrade_readiness_uses_chart_labels_without_helm(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    manifest = {
-        "deploy": {
-            "targets": [_mk8s_target(paths)],
-            "validations": [
-                {
-                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-                    "target_ref": "mk8s",
-                    "namespace": "soperator",
-                    "cluster_name": "mk8s",
-                }
-            ],
-        }
-    }
-    plan = cli._HelmChartUpgradePlan(
-        target=cli._HelmChartUpgradeTarget(
-            selector="apps:soperator@mk8s",
-            chart_id="soperator",
-            target_ref="mk8s",
-        ),
-        instance_id="mk8s",
-        namespace="soperator",
-        release_name="soperator",
-        current_version="4.0.1-ps.2",
-        target_version="4.0.2-ps.1",
-    )
-    calls: list[list[str]] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_ensure_terraform_backend_ready",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "fake"},
-    )
-
-    def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        calls.append(list(args))
-        if "rollout" in args:
-            return subprocess.CompletedProcess(args, 0, "deployment rolled out", "")
-        payload = {
-            "metadata": {
-                "labels": {
-                    "helm.sh/chart": "soperator-4.0.2-ps.1",
-                }
-            }
-        }
-        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
-
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
-
-    cli._verify_soperator_static_upgrade_ready(SimpleNamespace(), paths, manifest, plan)
-
-    assert calls[:3] == [
-        [
-            "kubectl",
-            "-n",
-            "soperator",
-            "rollout",
-            "status",
-            "deployment/soperator-manager",
-            "--timeout=10m",
-        ],
-        [
-            "kubectl",
-            "-n",
-            "soperator",
-            "get",
-            "deployment",
-            "soperator-manager",
-            "-o",
-            "json",
-        ],
-        [
-            "kubectl",
-            "-n",
-            "soperator",
-            "get",
-            "slurmcluster.slurm.nebius.ai",
-            "mk8s",
-            "-o",
-            "json",
-        ],
-    ]
-    assert calls[3][:7] == ["kubectl", "-n", "soperator", "exec", "login-0", "--", "bash"]
-    assert "scontrol update" in calls[3][-1]
-    assert not any(call and call[0] == "helm" for call in calls)
 
 
 def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> None:
@@ -10304,11 +2944,11 @@ def test_removed_upgrade_commands_are_not_registered(tmp_path: Path, command: st
     assert "Config file not found" not in result.output
 
 
-def test_upgrade_node_group_accepts_to_gpu_stack_preset_flag_name(tmp_path: Path) -> None:
+def test_migrate_node_group_accepts_to_gpu_stack_preset_flag_name(tmp_path: Path) -> None:
     result = runner.invoke(
         cli.app,
         [
-            "upgrade",
+            "migrate",
             "node-group",
             str(tmp_path / "missing-config.yaml"),
             "infra:mk8s@mk8s",
@@ -10346,6 +2986,7 @@ def test_upgrade_helm_chart_no_interactive_requires_explicit_target_and_version(
 def _mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, str]:
     return {
         "component_id": "mk8s",
+        "ownership": "managed",
         "instance_id": target_ref,
         "target_ref": target_ref,
         "cluster_id_output_name": f"{target_ref.replace('-', '_')}_cluster_id",
@@ -10370,6 +3011,24 @@ def _external_mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> d
 
 def _target_paths(paths: ProjectPaths, *, target_ref: str = "mk8s") -> ProjectPaths:
     return replace(paths, flux_dir=flux_target_dir(paths, target_ref))
+
+
+def test_manifest_target_flux_dir_requires_exact_canonical_target_path(
+    tmp_path: Path,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    target = _mk8s_target(fake_paths, target_ref="cluster1")
+    assert (
+        cli._manifest_target_flux_dir(paths=fake_paths, target=target)
+        == flux_target_dir(
+            fake_paths,
+            "cluster1",
+        ).resolve()
+    )
+
+    target["flux_dir"] = str(flux_target_dir(fake_paths, "cluster2"))
+    with pytest.raises(RuntimeError, match="canonical target ownership"):
+        cli._manifest_target_flux_dir(paths=fake_paths, target=target)
 
 
 def test_manifest_deploy_targets_require_internal_target_ref_to_match_instance_id(
@@ -10534,7 +3193,7 @@ def test_validate_command_runs_strict_checks_by_default(
     result = runner.invoke(cli.app, ["validate", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    output = _plain_output(result.output)
+    output = " ".join(_plain_output(result.output).split())
     assert "Runtime validation:" in output
     assert "Load config and component catalog" in output
     assert "Validate active component catalog/settings" in output
@@ -10554,66 +3213,6 @@ def test_validate_command_runs_strict_checks_by_default(
     assert quota_called["config"] is captured["config"]
     assert quota_called["paths"] == fake_paths
     assert quota_called["phase"] == "validate"
-
-
-def test_validate_command_rejects_malformed_soperator_onboarding_before_live_checks(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        yaml.safe_dump(
-            {
-                "version": "v1",
-                "client_info": {
-                    "client_name": "client-a",
-                    "nebius": {
-                        "project_id": "project-456",
-                        "region_id": "eu-north1",
-                    },
-                    "notifications": {"email_enabled": False, "email": None},
-                },
-                "deploy": {
-                    "targets": [
-                        {
-                            "instance_id": "external-cluster",
-                            "kind": "external-mk8s",
-                            "ownership": "external",
-                            "kube_context": "external-context",
-                            "soperator_onboarding": {
-                                "accepted": True,
-                                "state": "no-soperator-detected",
-                                "actions": "upgrade-soperator",
-                            },
-                        }
-                    ]
-                },
-                "infra": {"components": []},
-                "apps": {"charts": []},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    later_phases: list[str] = []
-
-    def _unexpected_later_phase(*_args: object, **_kwargs: object) -> None:
-        later_phases.append("called")
-        raise AssertionError("validate must fail during config loading")
-
-    monkeypatch.setattr(cli, "_validate_active_component_sources", _unexpected_later_phase)
-    monkeypatch.setattr(cli, "rendered_module_sources", _unexpected_later_phase)
-    monkeypatch.setattr(cli, "_validate_strict_config", _unexpected_later_phase)
-    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", _unexpected_later_phase)
-    monkeypatch.setattr(cli, "_raise_on_config_live_quota_issues", _unexpected_later_phase)
-
-    result = runner.invoke(cli.app, ["validate", str(config_path)])
-
-    assert result.exit_code != 0
-    output = _plain_output(result.output)
-    assert "deploy.targets[0].soperator_onboarding.actions must be a list" in output
-    assert later_phases == []
-    assert "Validate live Nebius quota/capacity" not in output
 
 
 def test_validate_command_rejects_removed_strict_flag(
@@ -11920,590 +4519,6 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     )
 
 
-@pytest.mark.parametrize(
-    "actions",
-    (["approve-external-soperator-upgrade"], ["upgrade-soperator"]),
-)
-def test_render_command_points_migration_required_soperator_to_migrate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    actions: list[str],
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    payload = {
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "external-cluster",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                }
-            ]
-        },
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "external-cluster",
-                    "kind": "external-mk8s",
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "actions": actions,
-                    },
-                }
-            ]
-        },
-    }
-    fake_paths.config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
-    monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
-    monkeypatch.setattr(cli, "reset_generated_bundle", lambda _paths: None)
-    monkeypatch.setattr(
-        cli,
-        "_ensure_deployments_gitignore",
-        lambda deployments_root: SimpleNamespace(path=None, wrote=False),
-    )
-    monkeypatch.setattr(cli, "render_terraform_artifacts", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        cli,
-        "_write_generated_runtime_manifest",
-        lambda config, paths, *, source_profile, **kwargs: (
-            paths.generated_dir / "nebius-cxcli-manifest.json"
-        ),
-    )
-
-    result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
-
-    assert result.exit_code == 0, result.output
-    plain_output = _plain_output(result.output)
-    normalized_output = " ".join(plain_output.split())
-    config_arg = str(fake_paths.config_path.resolve())
-    lines = plain_output.splitlines()
-    assert (
-        f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster --dry-run"
-    ) in lines
-    assert (
-        f"nebius-cxcli ext-soperator upgrade {config_arg} "
-        "--target external-cluster --execute --approve"
-    ) in lines
-    assert "Accepted onboarding actions:" in plain_output
-    if "upgrade-soperator" in actions:
-        assert "Soperator chart upgrade" in plain_output
-    else:
-        assert "external Soperator upgrade approval" in plain_output
-    assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" not in (
-        normalized_output
-    )
-    assert f"nebius-cxcli deploy {config_arg}" not in lines
-
-
-def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("deploy: {}\n", encoding="utf-8")
-    payload: dict[str, Any] = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "external-cluster",
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "actions": ["upgrade-soperator"],
-                    },
-                }
-            ]
-        }
-    }
-    backup_called = False
-
-    @contextmanager
-    def _no_status(_message: str):
-        yield
-
-    def _backup(**_kwargs: object) -> object:
-        nonlocal backup_called
-        backup_called = True
-        raise AssertionError("backup must not be created before job-policy validation")
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
-    monkeypatch.setattr(
-        cli,
-        "_resolve_soperator_migration_target_ref",
-        lambda _payload, *, target_ref: target_ref or "external-cluster",
-    )
-    monkeypatch.setattr(
-        cli,
-        "legacy_soperator_migration_checkpoint_path",
-        lambda _config_path, _target_ref: tmp_path / "missing-checkpoint.json",
-    )
-    monkeypatch.setattr(
-        cli, "validate_soperator_onboarding_acceptance", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli,
-        "soperator_onboarding_target",
-        lambda _payload, *, target_ref: payload["deploy"]["targets"][0],
-    )
-    monkeypatch.setattr(cli, "_command_status", _no_status)
-    monkeypatch.setattr(
-        cli,
-        "_run_external_soperator_discovery_command",
-        lambda **_kwargs: tmp_path / "manifest.json",
-    )
-    monkeypatch.setattr(
-        cli,
-        "_load_soperator_source_discovery_report",
-        lambda **_kwargs: {"report": {}},
-    )
-    monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
-    monkeypatch.setattr(cli, "_create_external_soperator_upgrade_backup", _backup)
-    monkeypatch.setattr(
-        cli,
-        "execute_soperator_migration",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("execution must not start before job-policy validation")
-        ),
-    )
-
-    with pytest.raises(cli.typer.Exit) as excinfo:
-        cli.soperator_external_upgrade_command(
-            config_path=config_path,
-            target_ref_opt="external-cluster",
-            backup_dir=None,
-            job_policy="interactive",
-            cancel_job=None,
-            requeue_job=None,
-            job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
-            job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-            dry_run=False,
-            execute=True,
-            approve=True,
-            approve_remediation=False,
-            interactive=True,
-        )
-
-    assert excinfo.value.exit_code == 1
-    assert backup_called is False
-
-
-@pytest.mark.parametrize(
-    ("tty", "interactive", "expected_policy"),
-    [(True, True, "preserve"), (False, True, "preserve"), (True, False, "preserve")],
-)
-def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    tty: bool,
-    interactive: bool,
-    expected_policy: str,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("deploy: {}\n", encoding="utf-8")
-    locked_upgrade_path = _external_soperator_chart_upgrade_campaign()
-    payload: dict[str, Any] = {
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {"project_id": "project-456"},
-            "notifications": {},
-        },
-        "apps": {"charts": _campaign_managed_operator_app_rows(locked_upgrade_path)},
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "external-cluster",
-                    "kind": "external-mk8s",
-                    "cluster_id": "mk8scluster-123",
-                    "kube_context": "external-context",
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "actions": ["upgrade-soperator"],
-                        "source_version": "1.22.3",
-                        "target_version": "4.0.2-ps.3",
-                        "upgrade_path": locked_upgrade_path,
-                    },
-                }
-            ]
-        },
-    }
-    captured: dict[str, Any] = {}
-    events: list[str] = []
-    rich_console = cli.Console(record=True, width=300)
-
-    @contextmanager
-    def _no_status(_message: str):
-        yield
-
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: tty)
-    monkeypatch.setattr(soperator_migration, "_external_upgrade_is_tty_session", lambda: False)
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
-    monkeypatch.setattr(
-        cli,
-        "_resolve_soperator_migration_target_ref",
-        lambda _payload, *, target_ref: target_ref or "external-cluster",
-    )
-    monkeypatch.setattr(
-        cli,
-        "legacy_soperator_migration_checkpoint_path",
-        lambda _config_path, _target_ref: tmp_path / "missing-checkpoint.json",
-    )
-    monkeypatch.setattr(
-        cli, "validate_soperator_onboarding_acceptance", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli,
-        "soperator_onboarding_target",
-        lambda _payload, *, target_ref: payload["deploy"]["targets"][0],
-    )
-    monkeypatch.setattr(cli, "_command_status", _no_status)
-    monkeypatch.setattr(cli, "console", rich_console)
-    monkeypatch.setattr(
-        cli,
-        "_run_external_soperator_discovery_command",
-        lambda **_kwargs: tmp_path / "manifest.json",
-    )
-    monkeypatch.setattr(
-        cli,
-        "_load_soperator_source_discovery_report",
-        lambda **_kwargs: {
-            "cluster_id": "mk8scluster-123",
-            "report": {"source_version": "1.22.3", "target_version": "4.0.2-ps.3"},
-            "snapshot": {"cluster_identity": locked_upgrade_path["identity"]},
-        },
-    )
-    monkeypatch.setattr(cli, "_external_soperator_campaign_live_waypoint_index", lambda **_: 0)
-    monkeypatch.setattr(
-        cli,
-        "_revalidate_config_campaign_under_shared_lease",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "external_soperator_upgrade_resume_backup_metadata",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx"
-    )
-    monkeypatch.setattr(
-        cli,
-        "_validate_external_soperator_kubernetes_uid_before_lease",
-        lambda *, campaign, kube_context: kube_context,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_create_external_soperator_upgrade_backup",
-        lambda **_kwargs: events.append("backup") or {"path": str(tmp_path / "backup.tar.gz")},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_external_soperator_campaign_backup",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "external_soperator_upgrade_protected_comparison_passed",
-        lambda **_kwargs: True,
-    )
-
-    def _execute(**kwargs: Any) -> SimpleNamespace:
-        events.append("execute")
-        captured.update(kwargs)
-        return SimpleNamespace(pending_phase="fixture-stop", lines=("done",))
-
-    monkeypatch.setattr(cli, "execute_soperator_migration", _execute)
-
-    with pytest.raises(cli.typer.Exit) as excinfo:
-        cli.soperator_external_upgrade_command(
-            config_path=config_path,
-            target_ref_opt="external-cluster",
-            backup_dir=None,
-            job_policy=None,
-            cancel_job=None,
-            requeue_job=None,
-            job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
-            job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-            dry_run=False,
-            execute=True,
-            approve=True,
-            approve_remediation=False,
-            interactive=interactive,
-        )
-
-    assert excinfo.value.exit_code == 1
-    rendered = rich_console.export_text()
-    assert f"Slurm job policy: {expected_policy}" in rendered
-    assert "Login availability:" in rendered
-    assert "without waiting for existing SSH sessions to drain" in rendered
-    assert "Login LoadBalancer allocation retention: cxcli automatically converts" in rendered
-    assert captured["job_policy"] == expected_policy
-    assert captured["slurm_scheduling_pause"] is True
-    assert captured["login_session_policy"] == "target-ready"
-    assert captured["login_session_drain_timeout_seconds"] == 0
-    assert events == ["backup", "execute"]
-
-
-def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("deploy: {}\n", encoding="utf-8")
-    locked_upgrade_path = _external_soperator_chart_upgrade_campaign()
-    payload: dict[str, Any] = {
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {"project_id": "project-456"},
-            "notifications": {},
-        },
-        "apps": {"charts": _campaign_managed_operator_app_rows(locked_upgrade_path)},
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "external-cluster",
-                    "kind": "external-mk8s",
-                    "cluster_id": "mk8scluster-123",
-                    "kube_context": "external-context",
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "actions": ["upgrade-soperator"],
-                        "source_version": "1.22.3",
-                        "target_version": "4.0.2-ps.3",
-                        "upgrade_path": locked_upgrade_path,
-                    },
-                }
-            ]
-        },
-    }
-    status_active = False
-    printed: list[tuple[bool, str]] = []
-
-    class _RecordingConsole:
-        is_terminal = False
-
-        def print(self, *args: object, **_kwargs: object) -> None:
-            printed.append((status_active, " ".join(str(arg) for arg in args)))
-
-    @contextmanager
-    def _no_status(_message: str):
-        yield
-
-    @contextmanager
-    def _status_emitter():
-        nonlocal status_active
-        status_active = True
-
-        class _Emitter:
-            def __call__(self, _message: str) -> None:
-                return None
-
-            @contextmanager
-            def pause(self) -> Iterator[None]:
-                yield
-
-        try:
-            yield _Emitter()
-        finally:
-            status_active = False
-
-    def _target(payload_arg: Mapping[str, Any], *, target_ref: str) -> Mapping[str, Any]:
-        targets = payload_arg.get("deploy", {}).get("targets", [])
-        return next(row for row in targets if row.get("instance_id") == target_ref)
-
-    monkeypatch.setattr(cli, "console", _RecordingConsole())
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
-    monkeypatch.setattr(
-        cli,
-        "_resolve_soperator_migration_target_ref",
-        lambda _payload, *, target_ref: target_ref or "external-cluster",
-    )
-    monkeypatch.setattr(
-        cli,
-        "legacy_soperator_migration_checkpoint_path",
-        lambda _config_path, _target_ref: tmp_path / "missing-checkpoint.json",
-    )
-    monkeypatch.setattr(
-        cli, "validate_soperator_onboarding_acceptance", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(cli, "soperator_onboarding_target", _target)
-    monkeypatch.setattr(cli, "_command_status", _no_status)
-    monkeypatch.setattr(cli, "_soperator_migration_status_emitter", _status_emitter)
-    monkeypatch.setattr(
-        cli,
-        "_run_external_soperator_discovery_command",
-        lambda **_kwargs: tmp_path / "manifest.json",
-    )
-    monkeypatch.setattr(
-        cli,
-        "_load_soperator_source_discovery_report",
-        lambda **_kwargs: {
-            "cluster_id": "mk8scluster-123",
-            "report": {"source_version": "1.22.3", "target_version": "4.0.2-ps.3"},
-            "snapshot": {"cluster_identity": locked_upgrade_path["identity"]},
-        },
-    )
-    monkeypatch.setattr(cli, "_external_soperator_campaign_live_waypoint_index", lambda **_: 0)
-    monkeypatch.setattr(
-        cli,
-        "_revalidate_config_campaign_under_shared_lease",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "_format_soperator_migration_plan_lines",
-        lambda **_kwargs: ("External Soperator upgrade target: external-cluster",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "external_soperator_upgrade_resume_backup_metadata",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx"
-    )
-    monkeypatch.setattr(
-        cli,
-        "_validate_external_soperator_kubernetes_uid_before_lease",
-        lambda *, campaign, kube_context: kube_context,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_create_external_soperator_upgrade_backup",
-        lambda **_kwargs: {"path": str(tmp_path / "backup.tar.gz")},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_verify_external_soperator_campaign_backup",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "external_soperator_upgrade_protected_comparison_passed",
-        lambda **_kwargs: True,
-    )
-    monkeypatch.setattr(
-        cli,
-        "execute_soperator_migration",
-        lambda **_kwargs: SimpleNamespace(
-            pending_phase="fixture-stop",
-            lines=("execute pending",),
-        ),
-    )
-
-    with pytest.raises(cli.typer.Exit) as excinfo:
-        cli.soperator_external_upgrade_command(
-            config_path=config_path,
-            target_ref_opt="external-cluster",
-            backup_dir=None,
-            job_policy=None,
-            cancel_job=None,
-            requeue_job=None,
-            job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
-            job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-            dry_run=False,
-            execute=True,
-            approve=True,
-            approve_remediation=False,
-            interactive=False,
-        )
-
-    assert excinfo.value.exit_code == 1
-    assert (False, "execute pending") in printed
-    assert (True, "execute pending") not in printed
-    assert not any(active for active, _line in printed)
-
-
-def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    payload = {
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "external-cluster",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                }
-            ]
-        },
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "external-cluster",
-                    "kind": "external-mk8s",
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "actions": ["reconcile-target-gpu-stack", "adopt-soperator"],
-                    },
-                }
-            ]
-        },
-    }
-    fake_paths.config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
-    monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
-    monkeypatch.setattr(cli, "reset_generated_bundle", lambda _paths: None)
-    monkeypatch.setattr(
-        cli,
-        "_ensure_deployments_gitignore",
-        lambda deployments_root: SimpleNamespace(path=None, wrote=False),
-    )
-    monkeypatch.setattr(cli, "render_terraform_artifacts", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        cli,
-        "_write_generated_runtime_manifest",
-        lambda config, paths, *, source_profile, **kwargs: (
-            paths.generated_dir / "nebius-cxcli-manifest.json"
-        ),
-    )
-
-    result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
-
-    assert result.exit_code == 0, result.output
-    plain_output = _plain_output(result.output)
-    normalized_output = " ".join(plain_output.split())
-    config_arg = str(fake_paths.config_path.resolve())
-    assert f"nebius-cxcli deploy {config_arg}" in plain_output.splitlines()
-    assert "Use `--target <target-id>` only when you intentionally want to narrow this run" in (
-        normalized_output
-    )
-    assert "Install/adopt-only Soperator targets: external-cluster" in normalized_output
-    assert "ext-soperator upgrade" not in normalized_output
-
-
 def test_internal_render_command_suppresses_deploy_hint_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -12718,9 +4733,7 @@ def test_validate_generated_command_portable_checks_module_sources(
             or _empty_quota_report()
         ),
     )
-    monkeypatch.setattr(
-        cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None
-    )
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda config: None)
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(cli, "terraform_init", lambda infra_dir, *, extra_env=None: None)
     monkeypatch.setattr(
@@ -12769,9 +4782,7 @@ def test_validate_generated_command_requires_manifest_module_sources_metadata(
         "_raise_on_generated_bundle_live_quota_issues",
         lambda *_args, **_kwargs: _empty_quota_report(),
     )
-    monkeypatch.setattr(
-        cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None
-    )
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda config: None)
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(cli, "terraform_init", lambda infra_dir, *, extra_env=None: None)
     monkeypatch.setattr(
@@ -12813,6 +4824,26 @@ def test_validate_sources_command_reports_success(
     normalized_output = output.replace("\n", "")
     assert "Component catalog/settings valid:" in output
     assert str(sources_file) in normalized_output
+
+
+def test_generic_catalog_soperator_latest_is_rejected() -> None:
+    version, issue = cli._catalog_chart_validation_version(
+        configured_version="latest",
+    )
+
+    assert version == ""
+    assert issue is not None
+    assert "exact immutable chart version" in issue
+
+
+def test_catalog_non_soperator_latest_is_rejected() -> None:
+    version, issue = cli._catalog_chart_validation_version(
+        configured_version="latest",
+    )
+
+    assert version == ""
+    assert issue is not None
+    assert "exact immutable chart version" in issue
 
 
 def test_validate_sources_command_reports_warnings_and_fails_on_issues(
@@ -13995,14 +6026,10 @@ def test_render_command_force_allows_noninteractive_overwrite(
         fake_paths.reports_dir / "soperator-clusters" / "external-context"
     )
     onboard_report = soperator_cluster_report_dir / "discovery"
-    ext_upgrade_report = soperator_cluster_report_dir / "ext-soperator-upgrade" / "report.md"
-    ext_upgrade_detail_report = (
-        soperator_cluster_report_dir / "ext-soperator-upgrade" / "deploy-smoke-report-external.json"
-    )
     node_template_report = fake_paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = fake_paths.reports_dir / "upgrade-node-template-report.json"
-    node_group_report = fake_paths.reports_dir / "upgrade-node-group-report.md"
-    node_group_report_json = fake_paths.reports_dir / "upgrade-node-group-report.json"
+    node_group_report = fake_paths.reports_dir / "migrate-node-group-report.md"
+    node_group_report_json = fake_paths.reports_dir / "migrate-node-group-report.json"
     upgrade_report = soperator_cluster_report_dir / "soperator-upgrade" / "report.md"
     upgrade_report_json = soperator_cluster_report_dir / "soperator-upgrade" / "report.json"
     stale_report = fake_paths.reports_dir / "old.json"
@@ -14013,17 +6040,11 @@ def test_render_command_force_allows_noninteractive_overwrite(
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.mkdir(parents=True)
     (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
-    ext_upgrade_report.parent.mkdir(parents=True)
-    ext_upgrade_report.write_text(
-        "# External Soperator Upgrade Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
-        encoding="utf-8",
-    )
-    ext_upgrade_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
     node_template_report.write_text("# MK8s Node Template Upgrade Report\n", encoding="utf-8")
     node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
     node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
     node_group_report_json.write_text('{"status": "approved-pre-mutation"}\n', encoding="utf-8")
-    upgrade_report.parent.mkdir(parents=True)
+    upgrade_report.parent.mkdir(parents=True, exist_ok=True)
     upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
     upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_report.write_text("{}\n", encoding="utf-8")
@@ -14054,10 +6075,6 @@ def test_render_command_force_allows_noninteractive_overwrite(
     assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
         '{"schema": "discovery"}\n'
     )
-    assert ext_upgrade_report.read_text(encoding="utf-8").startswith(
-        "# External Soperator Upgrade Report"
-    )
-    assert ext_upgrade_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert node_template_report.read_text(encoding="utf-8").startswith(
         "# MK8s Node Template Upgrade Report"
     )
@@ -14166,7 +6183,7 @@ def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
     assert not any(fake_paths.project_dir.glob(".generated-staging-*"))
 
 
-def test_deploy_command_passes_auto_auth_flag(
+def test_deploy_command_uses_single_canonical_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -14181,20 +6198,12 @@ def test_deploy_command_passes_auto_auth_flag(
             AssertionError("deploy must not bootstrap CI workflow")
         ),
     )
-    monkeypatch.setattr(
-        cli,
-        "_auto_bootstrap_ci_auth_and_secrets",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("deploy must not bootstrap GitHub CI auth/secrets")
-        ),
-    )
 
     def _fake_deploy_generated_artifacts(
         config: object,
         paths: object,
         loaded_manifest: object,
         *,
-        auto_auth_bootstrap: bool,
         skip_validations: bool,
         skip_validation_kinds: set[str],
         requested_target_ref: str | None = None,
@@ -14208,7 +6217,6 @@ def test_deploy_command_passes_auto_auth_flag(
         captured["config"] = config
         captured["paths"] = paths
         captured["manifest"] = loaded_manifest
-        captured["auto_auth_bootstrap"] = auto_auth_bootstrap
         captured["skip_validations"] = skip_validations
         captured["skip_validation_kinds"] = skip_validation_kinds
         captured["requested_target_ref"] = requested_target_ref
@@ -14224,7 +6232,7 @@ def test_deploy_command_passes_auto_auth_flag(
 
     result = runner.invoke(
         cli.app,
-        ["deploy", str(fake_paths.config_path), "--auto-auth-bootstrap"],
+        ["deploy", str(fake_paths.config_path)],
     )
 
     assert result.exit_code == 0, result.output
@@ -14242,7 +6250,6 @@ def test_deploy_command_passes_auto_auth_flag(
         "config": "cfg",
         "paths": fake_paths,
         "manifest": manifest,
-        "auto_auth_bootstrap": True,
         "skip_validations": False,
         "skip_validation_kinds": set(),
         "requested_target_ref": None,
@@ -16130,7 +8137,6 @@ def test_deploy_generated_artifacts_rejects_unknown_validation_kind_before_work(
             {},
             fake_paths,
             manifest,
-            auto_auth_bootstrap=False,
             skip_validations=skip_validations,
             skip_validation_kinds=set(),
             requested_target_ref="mk8s",
@@ -16229,20 +8235,18 @@ def test_destroy_command_passes_auto_auth_flag(
         paths: object,
         loaded_manifest: object,
         *,
-        auto_auth_bootstrap: bool,
         yes: bool = False,
     ) -> None:
         captured["config"] = config
         captured["paths"] = paths
         captured["manifest"] = loaded_manifest
-        captured["auto_auth_bootstrap"] = auto_auth_bootstrap
         captured["yes"] = yes
 
     monkeypatch.setattr(cli, "_destroy_generated_artifacts", _fake_destroy_generated_artifacts)
 
     result = runner.invoke(
         cli.app,
-        ["destroy", str(fake_paths.config_path), "--auto-auth-bootstrap", "--yes"],
+        ["destroy", str(fake_paths.config_path), "--yes"],
     )
 
     assert result.exit_code == 0, result.output
@@ -16252,7 +8256,6 @@ def test_destroy_command_passes_auto_auth_flag(
         "config": "cfg",
         "paths": fake_paths,
         "manifest": manifest,
-        "auto_auth_bootstrap": True,
         "yes": True,
     }
 
@@ -16448,9 +8451,7 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
-        ),
+        lambda config: calls.append(("backend", config)),
     )
     monkeypatch.setattr(
         cli,
@@ -16480,14 +8481,13 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
     cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=True,
         manifest={"render": {"module_sources": []}},
     )
 
     assert calls == [
         ("strict", config, False),
         ("mk8s", config),
-        ("backend", config, True),
+        ("backend", config),
         ("runtime_env", config),
         (
             "quota",
@@ -16542,9 +8542,7 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
-        ),
+        lambda config: calls.append(("backend", config)),
     )
     monkeypatch.setattr(
         cli,
@@ -16562,7 +8560,6 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
     cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=True,
         manifest={"render": {"module_sources": []}},
     )
 
@@ -16570,7 +8567,7 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
         ("strict", config, False),
         ("mk8s", config),
         ("gpu-stack", config),
-        ("backend", config, True),
+        ("backend", config),
         ("runtime_env", config),
         (
             "quota",
@@ -16614,9 +8611,7 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
-        ),
+        lambda config: calls.append(("backend", config)),
     )
     monkeypatch.setattr(
         cli,
@@ -16646,14 +8641,13 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=False,
         manifest={"render": {"module_sources": []}},
     )
 
     assert calls == [
         ("strict", config, False),
         ("mk8s", config),
-        ("backend", config, False),
+        ("backend", config),
         ("runtime_env", config),
         (
             "quota",
@@ -16831,7 +8825,6 @@ def test_run_deploy_preflight_validates_mysterybox_payloads_before_live_checks(
         cli._run_deploy_preflight(
             config,
             fake_paths,
-            auto_auth_bootstrap=True,
             manifest={"render": {"module_sources": []}},
         )
 
@@ -16890,7 +8883,7 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: events.append(("backend", auto_auth_bootstrap)),
+        lambda config: events.append("backend"),
     )
     monkeypatch.setattr(
         cli,
@@ -16921,7 +8914,6 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     returned_env = cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=True,
         manifest={"render": {"module_sources": []}},
     )
 
@@ -17331,8 +9323,8 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17367,7 +9359,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths, extra_env)),
+        lambda paths, *, extra_env=None, **_kwargs: calls.append(("flux", paths, extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -17389,13 +9381,12 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert calls == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
@@ -17418,129 +9409,6 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     ]
 
 
-def test_apply_rendered_flux_with_soperator_job_policy_blocks_existing_worker_jobs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "enabled": True,
-                    "instance_id": "mk8s",
-                    "target_ref": "mk8s",
-                    "namespace": "soperator",
-                    "release-name": "soperator",
-                }
-            ]
-        }
-    }
-    calls: list[tuple[str, Any]] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_live_slurmcluster_exists",
-        lambda **_kwargs: True,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_worker_nodeset_pod_candidates",
-        lambda **_kwargs: ("worker-gpu-0",),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_login_path_available",
-        lambda **_kwargs: True,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_slurm_node_filter",
-        lambda **_kwargs: ("worker-0",),
-    )
-
-    def _job_gate(**kwargs: Any) -> tuple[str, ...]:
-        calls.append(("job-gate", kwargs["node_names"]))
-        raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
-
-    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
-    monkeypatch.setattr(
-        cli,
-        "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
-    )
-
-    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
-        cli._apply_rendered_flux_with_soperator_job_policy(
-            config,
-            fake_paths,
-            command_name="deploy",
-            target_ref="mk8s",
-            extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-            job_policy="fail",
-            cancel_job_ids=(),
-            requeue_job_ids=(),
-            job_wait_timeout_seconds=0,
-            job_refresh_interval_seconds=30,
-        )
-
-    assert calls == [("job-gate", ("worker-0",))]
-
-
-def test_apply_rendered_flux_with_soperator_job_policy_skips_first_install_without_slurmcluster(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "enabled": True,
-                    "instance_id": "mk8s",
-                    "target_ref": "mk8s",
-                    "namespace": "soperator",
-                    "release-name": "soperator",
-                }
-            ]
-        }
-    }
-    calls: list[tuple[str, Any]] = []
-
-    monkeypatch.setattr(
-        cli,
-        "_soperator_upgrade_live_slurmcluster_exists",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_handle_soperator_upgrade_running_jobs",
-        lambda **_kwargs: calls.append(("job-gate", None)) or (),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
-    )
-
-    cli._apply_rendered_flux_with_soperator_job_policy(
-        config,
-        fake_paths,
-        command_name="flux apply",
-        target_ref="mk8s",
-        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-        job_policy="fail",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        job_wait_timeout_seconds=0,
-        job_refresh_interval_seconds=30,
-    )
-
-    assert calls == [("flux", fake_paths)]
-
-
 def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -17558,8 +9426,8 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17582,7 +9450,7 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths, extra_env)),
+        lambda paths, *, extra_env=None, **_kwargs: calls.append(("flux", paths, extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -17607,14 +9475,13 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert ("apply_with_status",) not in calls
     assert calls[:3] == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("inventory", config, fake_paths),
         ("kube_env", _external_mk8s_target(fake_paths)),
     ]
@@ -17634,17 +9501,15 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: (
-            calls.append(("preflight", auto_auth_bootstrap, manifest)) or {}
-        ),
+        lambda config, paths, *, manifest=None: calls.append(("preflight", manifest)) or {},
     )
 
     def _fake_apply(config, paths, **kwargs):
         calls.append(("apply", kwargs))
         raise RuntimeError("terraform failed")
 
-    def _fake_sync(config, paths, *, initialize=True, manifest=None, require_all=True):
-        calls.append(("sync", initialize, manifest, require_all))
+    def _fake_sync(config, paths, *, initialize=True, require_all=True):
+        calls.append(("sync", initialize, require_all))
         return True
 
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", _fake_apply)
@@ -17656,13 +9521,12 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
 
     assert calls == [
-        ("preflight", True, manifest),
+        ("preflight", manifest),
         (
             "apply",
             {
@@ -17671,7 +9535,7 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
                 "run_mk8s_preflight": False,
             },
         ),
-        ("sync", False, manifest, False),
+        ("sync", False, False),
         (
             "print",
             "Recovered MysteryBox primary version_id values from Terraform state; "
@@ -17765,8 +9629,8 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17801,7 +9665,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths, extra_env)),
+        lambda paths, *, extra_env=None, **_kwargs: calls.append(("flux", paths, extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -17823,13 +9687,12 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert calls == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
@@ -17862,8 +9725,8 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17898,7 +9761,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths, extra_env)),
+        lambda paths, *, extra_env=None, **_kwargs: calls.append(("flux", paths, extra_env)),
     )
     monkeypatch.setattr(
         cli,
@@ -17913,13 +9776,12 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert calls == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
@@ -17965,8 +9827,8 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
@@ -17997,7 +9859,9 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths.flux_dir, extra_env)),
+        lambda paths, *, extra_env=None, **_kwargs: calls.append(
+            ("flux", paths.flux_dir, extra_env)
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -18011,12 +9875,11 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
-    assert ("preflight", config, fake_paths, True, manifest) in calls
+    assert ("preflight", config, fake_paths, manifest) in calls
     assert (
         "kube_env",
         _mk8s_target(fake_paths, target_ref="cluster1"),
@@ -18058,7 +9921,7 @@ def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
         lambda _config: ("deploy warning only once",),
     )
 
-    def _fake_preflight(config, paths, *, auto_auth_bootstrap, manifest=None):
+    def _fake_preflight(config, paths, *, manifest=None):
         cli._print_mk8s_gpu_validation_warnings(config)
         return {}
 
@@ -18080,75 +9943,11 @@ def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert sum("deploy warning only once" in item for item in printed) == 1
-
-
-def test_print_mk8s_gpu_validation_warnings_includes_soperator_child_chart_warnings(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "bench",
-                    "target_ref": "bench",
-                    "enabled": True,
-                    "values": {
-                        "soperator-activechecks": {"enabled": True},
-                        "soperator-dcgm-exporter": {"enabled": True},
-                    },
-                },
-                {
-                    "id": "soperator",
-                    "instance_id": "checks-only",
-                    "target_ref": "checks-only",
-                    "enabled": True,
-                    "values": {
-                        "soperator-checks": {"enabled": True},
-                        "soperator-activechecks": {"enabled": False},
-                    },
-                },
-                {
-                    "id": "soperator",
-                    "instance_id": "rebooter-enabled",
-                    "target_ref": "rebooter-enabled",
-                    "enabled": True,
-                    "values": {
-                        "rebooter": {"enabled": True},
-                    },
-                },
-            ]
-        }
-    }
-    printed: list[str] = []
-    monkeypatch.setattr(
-        cli.console,
-        "print",
-        lambda message="", *args, **kwargs: printed.append(str(message)),
-    )
-
-    cli._print_mk8s_gpu_validation_warnings(payload)
-
-    joined = "\n".join(printed)
-    assert "ActiveChecks are enabled for target bench" in joined
-    assert "not production training clusters" in joined
-    assert "checks controller is enabled for target checks-only" in joined
-    assert "does not run GPU benchmarks by itself" in joined
-    assert "NebiusMaintenanceScheduled" in joined
-    assert "graceful maintenance drain/node handoff" in joined
-    assert "SlurmNodeReboot" in joined
-    assert "Soperator-managed node maintenance automation" in joined
-    assert "NodeConfigurator rebooter is enabled for target rebooter-enabled" in joined
-    assert "privileged host-level helper" in joined
-    assert "actual host reboot happens only after SlurmNodeReboot" in joined
-    assert "Soperator DCGM job-mapping exporter is enabled for target bench" in joined
-    assert "NVIDIA GPU Operator DCGM exporter plus the Nebius Observability Agent" in joined
 
 
 def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
@@ -18227,7 +10026,6 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -18257,178 +10055,6 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             {"KUBECONFIG": "/tmp/kubeconfig"},
         ),
         ("inventory", config, fake_paths),
-    ]
-
-
-def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    config = _config_with_enabled_mk8s(
-        charts=[
-            {
-                "id": "nvidia-gpu-operator",
-                "instance_id": "mk8s",
-                "target_ref": "mk8s",
-                "enabled": True,
-            },
-            {
-                "id": "soperator",
-                "instance_id": "mk8s",
-                "target_ref": "mk8s",
-                "enabled": True,
-            },
-        ]
-    )
-    config["infra"]["components"][0]["inputs"] = {
-        "node_groups": {
-            "worker-gpu": {
-                "gpu": True,
-                "workload": "worker",
-                "node_count": 2,
-            }
-        }
-    }
-    cluster_smoke_validation = {
-        "kind": "mk8s_cluster_smoke",
-        "name": "MK8s node inventory smoke",
-        "report_file": "cluster-inventory-report.json",
-        "target_ref": "mk8s",
-        "required": True,
-        "expect_gpu_nodes": True,
-    }
-    gpu_visibility_validation = {
-        "kind": "mk8s_gpu_visibility",
-        "name": "GPU visibility probe",
-        "report_file": "deploy-gpu-visibility-report.json",
-        "target_ref": "mk8s",
-    }
-    soperator_validation = {
-        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-        "name": "Soperator cluster smoke test (mk8s)",
-        "report_file": "deploy-smoke-report-mk8s.json",
-        "target_ref": "mk8s",
-        "required": True,
-    }
-    manifest = {
-        "deploy": {
-            "targets": [_mk8s_target(fake_paths)],
-            "validations": [
-                cluster_smoke_validation,
-                gpu_visibility_validation,
-                soperator_validation,
-            ],
-        }
-    }
-    calls: list[tuple[str, Any]] = []
-    staged_paths = replace(
-        _target_paths(fake_paths), flux_dir=fake_paths.flux_dir / "pre-soperator"
-    )
-
-    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "write_inventory",
-        lambda _config, paths, **_kwargs: SimpleNamespace(
-            markdown=paths.reports_dir / "deploy-report.md"
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
-    )
-    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
-    monkeypatch.setattr(
-        cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(cli, "_ensure_grafana_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli,
-        "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
-    )
-    monkeypatch.setattr(
-        cli, "_ensure_soperator_gpu_ephemeral_bootstrap_power_state", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
-    monkeypatch.setattr(
-        cli,
-        "_stabilize_deploy_soperator_login_load_balancer",
-        lambda config, paths, manifest, **kwargs: (config, dict(manifest)),
-    )
-    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
-
-    @contextmanager
-    def _fake_staged_flux_without_soperator(*_args: Any, **_kwargs: Any):
-        calls.append(("stage-without-soperator", "mk8s"))
-        yield staged_paths
-
-    @contextmanager
-    def _fake_status(_message: str, **_kwargs: object):
-        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
-
-    monkeypatch.setattr(cli, "_staged_flux_without_soperator", _fake_staged_flux_without_soperator)
-    monkeypatch.setattr(cli.console, "status", _fake_status)
-
-    def _fake_run_mk8s_gpu_validations(
-        validations: list[dict[str, Any]],
-        *,
-        reports_dir: Path,
-        extra_env: dict[str, str] | None,
-        emit=None,
-    ) -> list[Path]:
-        assert validations == [cluster_smoke_validation, gpu_visibility_validation]
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
-        calls.append(("gpu", validations))
-        return [reports_dir / "cluster-inventory-report.json"]
-
-    def _fake_run_soperator_cluster_validations(
-        validations: list[dict[str, Any]],
-        *,
-        reports_dir: Path,
-        extra_env: dict[str, str] | None,
-        emit=None,
-    ) -> list[Path]:
-        assert validations == [soperator_validation]
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
-        calls.append(("soperator", validations))
-        return [reports_dir / "deploy-smoke-report-mk8s.json"]
-
-    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
-    monkeypatch.setattr(
-        cli, "run_soperator_cluster_validations", _fake_run_soperator_cluster_validations
-    )
-
-    cli._deploy_generated_artifacts(
-        config,
-        fake_paths,
-        manifest,
-        auto_auth_bootstrap=True,
-        skip_validations=False,
-        skip_validation_kinds=set(),
-    )
-
-    assert calls == [
-        ("stage-without-soperator", "mk8s"),
-        ("flux", staged_paths),
-        ("gpu", [cluster_smoke_validation, gpu_visibility_validation]),
-        ("flux", _target_paths(fake_paths)),
-        ("soperator", [soperator_validation]),
     ]
 
 
@@ -18491,23 +10117,15 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(
-        cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
+        lambda paths, *, extra_env=None, **_kwargs: calls.append(("flux", paths)),
     )
     monkeypatch.setattr(
         cli, "_ensure_soperator_gpu_ephemeral_bootstrap_power_state", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
-    monkeypatch.setattr(
-        cli,
-        "_stabilize_deploy_soperator_login_load_balancer",
-        lambda config, paths, manifest, **kwargs: (config, dict(manifest)),
-    )
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
 
     @contextmanager
@@ -18534,7 +10152,6 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -18543,520 +10160,6 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         ("validation", [cluster_smoke_validation]),
         ("flux", _target_paths(fake_paths)),
     ]
-
-
-def test_staged_flux_without_soperator_removes_only_soperator_resources(
-    tmp_path: Path,
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    target_paths = _target_paths(fake_paths)
-    target_paths.flux_dir.mkdir(parents=True)
-    (target_paths.flux_dir / "gpu-operator.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "kind": "HelmRelease",
-                "metadata": {
-                    "name": "nvidia-gpu-operator",
-                    "namespace": "gpu-operator",
-                },
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    (target_paths.flux_dir / "soperator.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "kind": "HelmRelease",
-                "metadata": {"name": "soperator", "namespace": "soperator"},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    (target_paths.flux_dir / "post-flux-soperator.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "slurm.nebius.ai/v1",
-                "kind": "SlurmCluster",
-                "metadata": {"name": "soperator", "namespace": "soperator"},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    (target_paths.flux_dir / "post-flux-observability.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {"name": "observability", "namespace": "default"},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    (target_paths.flux_dir / "kustomization.yaml").write_text(
-        yaml.safe_dump(
-            {"resources": ["gpu-operator.yaml", "soperator.yaml"]},
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    config = _config_with_enabled_mk8s(
-        charts=[
-            {
-                "id": "soperator",
-                "instance_id": "mk8s",
-                "target_ref": "mk8s",
-                "enabled": True,
-                "namespace": "soperator",
-                "release-name": "soperator",
-            }
-        ]
-    )
-
-    with cli._staged_flux_without_soperator(
-        target_paths,
-        config=config,
-        target_ref="mk8s",
-    ) as staged_paths:
-        staged_flux_dir = staged_paths.flux_dir
-        staged_kustomization = yaml.safe_load(
-            (staged_flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
-        )
-        assert staged_kustomization["resources"] == ["gpu-operator.yaml"]
-        assert (staged_flux_dir / "gpu-operator.yaml").exists()
-        assert (staged_flux_dir / "post-flux-observability.yaml").exists()
-        assert not (staged_flux_dir / "soperator.yaml").exists()
-        assert not (staged_flux_dir / "post-flux-soperator.yaml").exists()
-
-
-def test_pre_soperator_gpu_validations_wait_for_scale_from_zero_gpu_workers() -> None:
-    gpu_validations = [
-        {"kind": "mk8s_gpu_operator_readiness", "target_ref": "mk8s"},
-        {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
-        {"kind": "soperator_smoke", "target_ref": "mk8s"},
-    ]
-
-    def _config_with_gpu_worker_min(min_node_count: int) -> dict[str, Any]:
-        config = _config_with_enabled_mk8s(
-            charts=[
-                {
-                    "id": "soperator",
-                    "instance_id": "mk8s",
-                    "target_ref": "mk8s",
-                    "enabled": True,
-                }
-            ]
-        )
-        config["infra"]["components"][0]["inputs"] = {
-            "node_groups": {
-                "worker-gpu": {
-                    "gpu": True,
-                    "workload": "worker",
-                    "autoscaling": {
-                        "min_node_count": min_node_count,
-                        "max_node_count": 1,
-                    },
-                }
-            }
-        }
-        return config
-
-    assert (
-        cli._pre_soperator_gpu_validations(
-            _config_with_gpu_worker_min(0),
-            target={"target_ref": "mk8s"},
-            validations=gpu_validations,
-        )
-        == []
-    )
-    assert (
-        cli._pre_soperator_gpu_validations(
-            _config_with_gpu_worker_min(1),
-            target={"target_ref": "mk8s"},
-            validations=gpu_validations,
-        )
-        == gpu_validations[:2]
-    )
-
-
-def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validations_for_scale_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    config = _config_with_enabled_mk8s(
-        charts=[
-            {
-                "id": "soperator",
-                "instance_id": "mk8s",
-                "target_ref": "mk8s",
-                "enabled": True,
-            }
-        ]
-    )
-    config["infra"]["components"][0]["inputs"] = {
-        "node_groups": {
-            "worker-gpu": {
-                "gpu": True,
-                "workload": "worker",
-                "autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 0,
-                    "max_node_count": 4,
-                },
-            }
-        }
-    }
-    gpu_stack_validation = {
-        "kind": "mk8s_gpu_operator_readiness",
-        "name": "GPU stack readiness",
-        "report_file": "deploy-gpu-stack-readiness-report.json",
-        "target_ref": "mk8s",
-    }
-    gpu_visibility_validation = {
-        "kind": "mk8s_gpu_visibility",
-        "name": "GPU visibility probe",
-        "report_file": "deploy-gpu-visibility-report.json",
-        "target_ref": "mk8s",
-    }
-    soperator_validation = {
-        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-        "name": "Soperator cluster smoke test (mk8s)",
-        "report_file": "deploy-smoke-report-mk8s.json",
-        "target_ref": "mk8s",
-        "required": True,
-    }
-    manifest = {
-        "deploy": {
-            "targets": [_mk8s_target(fake_paths)],
-            "validations": [
-                gpu_stack_validation,
-                gpu_visibility_validation,
-                soperator_validation,
-            ],
-        }
-    }
-    calls: list[tuple[str, Any]] = []
-
-    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "write_inventory",
-        lambda _config, paths, **_kwargs: SimpleNamespace(
-            markdown=paths.reports_dir / "deploy-report.md"
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
-    )
-    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
-    monkeypatch.setattr(
-        cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(cli, "_ensure_grafana_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        cli,
-        "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
-    )
-    monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
-    monkeypatch.setattr(
-        cli,
-        "_stabilize_deploy_soperator_login_load_balancer",
-        lambda config, paths, manifest, **kwargs: (config, dict(manifest)),
-    )
-    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
-
-    @contextmanager
-    def _fake_status(_message: str, **_kwargs: object):
-        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
-
-    monkeypatch.setattr(cli.console, "status", _fake_status)
-
-    def _fake_run_soperator_cluster_validations(
-        validations: list[dict[str, Any]],
-        *,
-        reports_dir: Path,
-        extra_env: dict[str, str] | None,
-        emit=None,
-    ) -> list[Path]:
-        assert validations == [soperator_validation]
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
-        calls.append(("soperator", validations))
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        report_path = reports_dir / "deploy-smoke-report-mk8s.json"
-        report_path.write_text(
-            json.dumps(
-                {
-                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
-                    "name": "Soperator cluster smoke test (mk8s)",
-                    "passed": True,
-                    "summary": "7/7 Soperator/Slurm checks passed.",
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return [report_path]
-
-    def _fake_run_mk8s_gpu_validations(
-        validations: list[dict[str, Any]],
-        *,
-        reports_dir: Path,
-        extra_env: dict[str, str] | None,
-        emit=None,
-    ) -> list[Path]:
-        assert validations == [gpu_stack_validation, gpu_visibility_validation]
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
-        calls.append(("gpu", validations))
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        stack_report = reports_dir / "deploy-gpu-stack-readiness-report.json"
-        stack_report.write_text(
-            json.dumps(
-                {
-                    "passed": True,
-                    "gpu_operator": {"gpu_nodes": [{"name": "gpu-node-a"}]},
-                    "network_operator": {"required": False},
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        gpu_visibility_report = reports_dir / "deploy-gpu-visibility-report.json"
-        gpu_visibility_report.write_text(
-            json.dumps(
-                {
-                    "passed": True,
-                    "selected_node_count": 1,
-                    "total_gpu_node_count": 1,
-                    "passed_node_count": 1,
-                    "skipped_node_count": 0,
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return [stack_report, gpu_visibility_report]
-
-    monkeypatch.setattr(
-        cli, "run_soperator_cluster_validations", _fake_run_soperator_cluster_validations
-    )
-    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
-
-    cli._deploy_generated_artifacts(
-        config,
-        fake_paths,
-        manifest,
-        auto_auth_bootstrap=True,
-        skip_validations=False,
-        skip_validation_kinds=set(),
-    )
-
-    assert calls == [
-        ("flux", _target_paths(fake_paths)),
-        ("soperator", [soperator_validation]),
-        ("gpu", [gpu_stack_validation, gpu_visibility_validation]),
-    ]
-
-
-def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_patches_empty_power_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[list[str]] = []
-    power_state_gets = 0
-    sleeps: list[float] = []
-
-    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
-        nonlocal power_state_gets
-        commands.append(cmd)
-        if cmd[1:5] == ["-n", "soperator", "get", "slurmclusters"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"items": [{"status": {"phase": "Not available"}}]}),
-                stderr="",
-            )
-        if cmd[1:5] == ["-n", "soperator", "get", "nodesets"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "items": [
-                            {
-                                "metadata": {"name": "worker-gpu"},
-                                "spec": {
-                                    "ephemeralNodes": True,
-                                    "initialNumberEphemeralNodes": 1,
-                                    "gpu": {"enabled": True},
-                                },
-                            }
-                        ]
-                    }
-                ),
-                stderr="",
-            )
-        if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]:
-            power_state_gets += 1
-            if power_state_gets == 1:
-                return SimpleNamespace(
-                    returncode=1,
-                    stdout="",
-                    stderr='Error from server (NotFound): nodesetpowerstates "worker-gpu" not found',
-                )
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"spec": {"nodeSetRef": "worker-gpu"}}),
-                stderr="",
-            )
-        if cmd[1:6] == ["-n", "soperator", "patch", "nodesetpowerstate", "worker-gpu"]:
-            return SimpleNamespace(returncode=0, stdout="patched", stderr="")
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    monkeypatch.setattr(
-        cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True
-    )
-    monkeypatch.setattr(
-        cli,
-        "_enabled_soperator_release_refs_for_target",
-        lambda *_args, **_kwargs: (cli._SoperatorReleaseRef("soperator", "soperator"),),
-    )
-    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
-    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
-
-    cli._ensure_soperator_gpu_ephemeral_bootstrap_power_state(
-        {"infra": {"components": []}},
-        target_ref="soperator-cluster1",
-        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-    )
-
-    patch_commands = [cmd for cmd in commands if "patch" in cmd]
-    assert len(patch_commands) == 1
-    assert json.loads(patch_commands[0][-1]) == {"spec": {"activeNodes": [0]}}
-    assert power_state_gets == 2
-    assert sleeps == [5.0]
-
-
-def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_skips_missing_power_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[list[str]] = []
-
-    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
-        commands.append(cmd)
-        if cmd[1:5] == ["-n", "soperator", "get", "slurmclusters"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"items": [{"status": {"phase": "Not available"}}]}),
-                stderr="",
-            )
-        if cmd[1:5] == ["-n", "soperator", "get", "nodesets"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "items": [
-                            {
-                                "metadata": {"name": "worker-gpu"},
-                                "spec": {
-                                    "ephemeralNodes": True,
-                                    "initialNumberEphemeralNodes": 1,
-                                    "gpu": {"enabled": True},
-                                },
-                            }
-                        ]
-                    }
-                ),
-                stderr="",
-            )
-        if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]:
-            return SimpleNamespace(
-                returncode=1,
-                stdout="",
-                stderr='Error from server (NotFound): nodesetpowerstates "worker-gpu" not found',
-            )
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    monkeypatch.setattr(
-        cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True
-    )
-    monkeypatch.setattr(
-        cli,
-        "_enabled_soperator_release_refs_for_target",
-        lambda *_args, **_kwargs: (cli._SoperatorReleaseRef("soperator", "soperator"),),
-    )
-    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
-
-    cli._ensure_soperator_gpu_ephemeral_bootstrap_power_state(
-        {"infra": {"components": []}},
-        target_ref="soperator-cluster1",
-        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-    )
-
-    power_state_gets = [
-        cmd
-        for cmd in commands
-        if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]
-    ]
-    assert len(power_state_gets) == 12
-    assert not any("patch" in cmd for cmd in commands)
-
-
-def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_skips_available_cluster(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[list[str]] = []
-
-    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
-        commands.append(cmd)
-        if cmd[1:5] == ["-n", "soperator", "get", "slurmclusters"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"items": [{"status": {"phase": "Available"}}]}),
-                stderr="",
-            )
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    monkeypatch.setattr(
-        cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True
-    )
-    monkeypatch.setattr(
-        cli,
-        "_enabled_soperator_release_refs_for_target",
-        lambda *_args, **_kwargs: (cli._SoperatorReleaseRef("soperator", "soperator"),),
-    )
-    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
-
-    cli._ensure_soperator_gpu_ephemeral_bootstrap_power_state(
-        {"infra": {"components": []}},
-        target_ref="soperator-cluster1",
-        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-    )
-
-    assert not any("patch" in cmd for cmd in commands)
 
 
 def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
@@ -19075,7 +10178,6 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
@@ -19097,7 +10199,6 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
@@ -19209,7 +10310,6 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -19299,7 +10399,6 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -19402,7 +10501,6 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
         requested_target_ref="cluster2",
@@ -19512,7 +10610,6 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=True,
         skip_validation_kinds=set(),
     )
@@ -19608,7 +10705,6 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -19703,7 +10799,6 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
@@ -19803,9 +10898,7 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda current_config, *, auto_auth_bootstrap: calls.append(
-            ("backend", current_config, auto_auth_bootstrap)
-        ),
+        lambda current_config: calls.append(("backend", current_config)),
     )
     monkeypatch.setattr(
         cli,
@@ -19817,17 +10910,14 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
-            calls.append(
-                (
-                    "destroy_tf",
-                    current_config,
-                    paths,
-                    auto_auth_bootstrap,
-                    yes,
-                    initialize,
-                    status_watchers,
-                )
+        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: calls.append(
+            (
+                "destroy_tf",
+                current_config,
+                paths,
+                yes,
+                initialize,
+                status_watchers,
             )
         ),
     )
@@ -19836,18 +10926,16 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
     assert calls == [
-        ("backend", config, True),
+        ("backend", config),
         ("destroy_flux", config, fake_paths, manifest, {"all_targets": True}),
         (
             "destroy_tf",
             config,
             fake_paths,
-            True,
             True,
             True,
             [
@@ -19960,7 +11048,6 @@ def test_destroy_generated_artifacts_deletes_all_target_flux_before_terraform(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
@@ -20044,6 +11131,77 @@ def test_destroy_rendered_flux_bundle_attempts_remaining_targets_after_target_fa
         ("namespaces", "managed-b"),
     ]
     assert any("continuing with remaining targets" in item for item in messages)
+
+
+def test_staged_flux_cleanup_recognizes_adapter_labeled_soperator_configmaps(
+    tmp_path: Path,
+) -> None:
+    flux_dir = tmp_path / "flux"
+    flux_dir.mkdir()
+    manifest_path = flux_dir / "post-flux-soperator-monitoring-dashboards.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "soperator-cluster-health",
+                    "namespace": "monitoring-system",
+                    "labels": {
+                        "soperator.nebius.ai/managed-by": "nebius-cxcli-adapter",
+                    },
+                },
+                "data": {"cluster-health.json": "{}\n"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cli._remove_soperator_resources_from_staged_flux(flux_dir, release_refs=())
+    assert not manifest_path.exists()
+
+
+def test_post_flux_adapter_configmap_readback_requires_exact_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "soperator-cluster-health",
+            "namespace": "monitoring-system",
+            "labels": {
+                "soperator.nebius.ai/managed-by": "nebius-cxcli-adapter",
+                "grafana_dashboard": "1",
+            },
+            "annotations": {
+                "soperator.nebius.ai/dashboard-sha256": "sha256:" + "a" * 64,
+            },
+        },
+        "data": {"cluster-health.json": "{}\n"},
+    }
+    live = {
+        **document,
+        "metadata": {
+            **document["metadata"],
+            "labels": {**document["metadata"]["labels"], "server-label": "allowed"},
+        },
+    }
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(live),
+            stderr="",
+        ),
+    )
+
+    cli._verify_post_flux_soperator_adapter_configmaps([document], env={})
+
+    live["data"] = {"cluster-health.json": "changed\n"}
+    with pytest.raises(RuntimeError, match="read-back mismatch"):
+        cli._verify_post_flux_soperator_adapter_configmaps([document], env={})
 
 
 def test_delete_post_flux_manifest_removes_webhooks_before_namespaces(
@@ -20163,7 +11321,6 @@ def test_destroy_generated_artifacts_external_target_skips_terraform_destroy(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
@@ -20194,7 +11351,6 @@ def test_destroy_generated_artifacts_external_target_flux_failure_is_fatal(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             yes=True,
         )
 
@@ -20220,13 +11376,12 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: (
             captured.setdefault(
                 "destroy",
                 {
                     "config": current_config,
                     "paths": paths,
-                    "auto_auth_bootstrap": auto_auth_bootstrap,
                     "yes": yes,
                     "initialize": initialize,
                     "status_watchers": status_watchers,
@@ -20243,7 +11398,6 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             yes=True,
         )
 
@@ -20287,14 +11441,13 @@ def test_destroy_generated_artifacts_deletes_flux_before_handoff_cluster_is_dest
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: (
             calls.append("destroy_terraform"),
             captured.setdefault(
                 "destroy",
                 {
                     "config": current_config,
                     "paths": paths,
-                    "auto_auth_bootstrap": auto_auth_bootstrap,
                     "yes": yes,
                     "initialize": initialize,
                     "status_watchers": status_watchers,
@@ -20310,14 +11463,12 @@ def test_destroy_generated_artifacts_deletes_flux_before_handoff_cluster_is_dest
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
     assert captured["destroy"] == {
         "config": config,
         "paths": fake_paths,
-        "auto_auth_bootstrap": True,
         "yes": True,
         "initialize": True,
         "status_watchers": None,
@@ -20426,9 +11577,10 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
     ]
     assert status_updates == [
         "[cyan]Checking target Kubernetes cluster reachability...[/cyan]",
+        "[cyan]Inspecting live release, Flux, and operation authority...[/cyan]",
         "[cyan]Installing Flux controllers into the target cluster...[/cyan]",
         "[cyan]Waiting for Flux resource APIs to become discoverable...[/cyan]",
-        "[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]",
+        "[cyan]Materializing the suspended target release graph...[/cyan]",
         "[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]",
     ]
 
@@ -20524,8 +11676,9 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
     ]
     assert status_updates == [
         "[cyan]Checking target Kubernetes cluster reachability...[/cyan]",
+        "[cyan]Inspecting live release, Flux, and operation authority...[/cyan]",
         "[cyan]Waiting for Flux resource APIs to become discoverable...[/cyan]",
-        "[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]",
+        "[cyan]Materializing the suspended target release graph...[/cyan]",
         "[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]",
     ]
 
@@ -21030,165 +12183,6 @@ def test_apply_post_flux_manifest_replaces_priority_classes_when_value_changes(
     assert calls[-1][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
 
 
-def test_apply_post_flux_manifest_deletes_stale_soperator_custom_resources(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    manifest_path = tmp_path / "post-flux-soperator.yaml"
-    manifest_path.write_text(
-        yaml.safe_dump_all(
-            [
-                {
-                    "apiVersion": "slurm.nebius.ai/v1alpha1",
-                    "kind": "NodeConfigurator",
-                    "metadata": {
-                        "name": "cluster1",
-                        "namespace": "soperator",
-                        "labels": {"app.kubernetes.io/instance": "soperator"},
-                    },
-                    "spec": {},
-                },
-                {
-                    "apiVersion": "slurm.nebius.ai/v1alpha1",
-                    "kind": "SlurmCluster",
-                    "metadata": {
-                        "name": "cluster1",
-                        "namespace": "soperator",
-                        "labels": {"app.kubernetes.io/instance": "soperator"},
-                    },
-                    "spec": {},
-                },
-                {
-                    "apiVersion": "slurm.nebius.ai/v1alpha1",
-                    "kind": "NodeSet",
-                    "metadata": {
-                        "name": "worker-cpu",
-                        "namespace": "soperator",
-                        "labels": {"app.kubernetes.io/instance": "soperator"},
-                    },
-                    "spec": {},
-                },
-            ],
-            explicit_start=True,
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    calls: list[tuple[str, ...]] = []
-
-    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
-        calls.append(tuple(cmd))
-        if cmd[:5] == [
-            "kubectl",
-            "-n",
-            "soperator",
-            "get",
-            "nodeconfigurators.slurm.nebius.ai",
-        ]:
-            return SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=json.dumps(
-                    {
-                        "items": [
-                            {"metadata": {"name": "cluster1", "namespace": "soperator"}},
-                            {"metadata": {"name": "soperator", "namespace": "soperator"}},
-                        ]
-                    }
-                ),
-            )
-        if cmd[:5] == [
-            "kubectl",
-            "-n",
-            "soperator",
-            "get",
-            "slurmclusters.slurm.nebius.ai",
-        ]:
-            return SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=json.dumps(
-                    {
-                        "items": [
-                            {"metadata": {"name": "cluster1", "namespace": "soperator"}},
-                            {
-                                "metadata": {
-                                    "name": "legacy-cluster",
-                                    "namespace": "soperator",
-                                }
-                            },
-                        ]
-                    }
-                ),
-            )
-        if cmd[:5] == [
-            "kubectl",
-            "-n",
-            "soperator",
-            "get",
-            "nodesets.slurm.nebius.ai",
-        ]:
-            return SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=json.dumps(
-                    {
-                        "items": [
-                            {"metadata": {"name": "worker-cpu", "namespace": "soperator"}},
-                            {"metadata": {"name": "worker-gpu-old", "namespace": "soperator"}},
-                        ]
-                    }
-                ),
-            )
-        return SimpleNamespace(returncode=0, stderr="", stdout="")
-
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
-
-    cli._apply_post_flux_manifest(manifest_path, env={})
-
-    assert (
-        "kubectl",
-        "-n",
-        "soperator",
-        "delete",
-        "nodeconfigurators.slurm.nebius.ai",
-        "soperator",
-        "--ignore-not-found=true",
-        "--wait=false",
-    ) in calls
-    assert (
-        "kubectl",
-        "-n",
-        "soperator",
-        "delete",
-        "slurmclusters.slurm.nebius.ai",
-        "legacy-cluster",
-        "--ignore-not-found=true",
-        "--wait=false",
-    ) in calls
-    assert (
-        "kubectl",
-        "-n",
-        "soperator",
-        "delete",
-        "nodesets.slurm.nebius.ai",
-        "worker-gpu-old",
-        "--ignore-not-found=true",
-        "--wait=false",
-    ) in calls
-    assert (
-        "kubectl",
-        "-n",
-        "soperator",
-        "delete",
-        "pod",
-        "-l",
-        "app.kubernetes.io/component=node-configurator,app.kubernetes.io/instance=cluster1",
-        "--ignore-not-found=true",
-        "--wait=false",
-    ) in calls
-    assert calls[-1][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
-
-
 def test_run_post_flux_kubectl_retries_transient_webhook_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -21307,8 +12301,9 @@ def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
 
     assert printed == [
         "[cyan]Checking target Kubernetes cluster reachability...[/cyan]",
+        "[cyan]Inspecting live release, Flux, and operation authority...[/cyan]",
         "[cyan]Waiting for Flux resource APIs to become discoverable...[/cyan]",
-        "[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]",
+        "[cyan]Materializing the suspended target release graph...[/cyan]",
         "[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]",
     ]
 
@@ -22195,43 +13190,6 @@ def test_print_create_next_steps_styles_all_copy_paste_commands(
         _assert_copy_paste_command_styled(rendered, command)
 
 
-def test_soperator_deploy_owned_route_styles_copy_paste_commands(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rich_console = cli.Console(
-        force_terminal=True,
-        color_system="truecolor",
-        width=220,
-        record=True,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
-    config_arg = str((tmp_path / "config.yaml").resolve())
-
-    with pytest.raises(cli.typer.Exit):
-        cli._exit_with_soperator_deploy_owned_route(
-            cli._SoperatorDeployOwnedRoute(
-                (
-                    "Soperator target has no external-upgrade-owned onboarding actions.",
-                    "Run these commands to reconcile deploy-owned work:",
-                    f"nebius-cxcli validate {config_arg}",
-                    f"nebius-cxcli render {config_arg}",
-                    f"nebius-cxcli deploy {config_arg}",
-                )
-            )
-        )
-
-    rendered = rich_console.export_text(styles=True)
-    plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
-    assert "Run these commands to reconcile deploy-owned work:" in plain_rendered
-    assert f"nebius-cxcli validate {config_arg}" in plain_rendered
-    _assert_copy_paste_command_styled(rendered, f"nebius-cxcli validate {config_arg}")
-    _assert_not_copy_paste_command_styled(
-        rendered,
-        "Run these commands to reconcile deploy-owned work:",
-    )
-
-
 def test_print_upgrade_plan_lines_styles_warnings_amber(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -22927,6 +13885,16 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
         },
         "deploy": {"targets": [], "validations": []},
     }
+    manifest_path = fake_paths.generated_dir / "nebius-cxcli-manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (fake_paths.infra_dir / "terraform.auto.tfvars.json").write_text(
+        json.dumps(manifest["render"]["terraform_tfvars"], indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda config: {"TF_VAR_demo": "1"})
     monkeypatch.setattr(
         cli,
@@ -22940,7 +13908,6 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
         "cfg",
         fake_paths,
         initialize=False,
-        manifest=manifest,
     )
 
     refreshed_config = yaml.safe_load(fake_paths.config_path.read_text(encoding="utf-8"))
@@ -22971,6 +13938,138 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
     assert tfvars["mysterybox_secrets"][0]["version_id"] == "mbsecver-created"
 
 
+@pytest.mark.parametrize("edited_target", ["config", "manifest", "tfvars"])
+def test_sync_mysterybox_primary_version_ids_rejects_concurrent_bundle_edits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    edited_target: str,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    source_payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mysterybox",
+                    "enabled": True,
+                    "inputs": {
+                        "secrets": [
+                            {
+                                "name": "app-runtime",
+                                "version_id": "n/a",
+                                "payload": {"API_KEY": {"type": "text"}},
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    }
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "runtime_config": json.loads(json.dumps(source_payload)),
+        "render": {
+            "terraform_tfvars": {
+                "mysterybox_secrets": [
+                    {
+                        "name": "app-runtime",
+                        "version_id": "n/a",
+                        "payload": {"API_KEY": {"type": "text"}},
+                    }
+                ]
+            }
+        },
+    }
+    manifest_path = fake_paths.generated_dir / "nebius-cxcli-manifest.json"
+    tfvars_path = fake_paths.infra_dir / "terraform.auto.tfvars.json"
+    fake_paths.config_path.write_text(
+        yaml.safe_dump(source_payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tfvars_path.write_text(
+        json.dumps(manifest["render"]["terraform_tfvars"], indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    paths_by_name = {
+        "config": fake_paths.config_path,
+        "manifest": manifest_path,
+        "tfvars": tfvars_path,
+    }
+    original = {name: path.read_bytes() for name, path in paths_by_name.items()}
+    operator_edit = b'{"operator": "edit"}\n'
+
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+
+    def _fake_terraform_output_json(*_args, **_kwargs):
+        paths_by_name[edited_target].write_bytes(operator_edit)
+        return {
+            "mysterybox_primary_secret_version_ids": {"value": {"app-runtime": "mbsecver-created"}}
+        }
+
+    monkeypatch.setattr(cli, "terraform_output_json", _fake_terraform_output_json)
+
+    with pytest.raises(cli.ProjectBundleSafetyError, match="changed after generation admission"):
+        cli._sync_mysterybox_primary_version_ids_to_config(
+            "cfg",
+            fake_paths,
+            initialize=False,
+        )
+
+    for name, path in paths_by_name.items():
+        assert path.read_bytes() == (operator_edit if name == edited_target else original[name])
+
+
+def test_sync_mysterybox_primary_version_ids_checks_only_changed_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    fake_paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mysterybox",
+                            "enabled": True,
+                            "inputs": {
+                                "secrets": [
+                                    {
+                                        "name": "app-runtime",
+                                        "version_id": "n/a",
+                                        "payload": {"API_KEY": {"type": "text"}},
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    tfvars_path = fake_paths.infra_dir / "terraform.auto.tfvars.json"
+    tfvars_path.write_text('{"before": true}\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+
+    def _fake_terraform_output_json(*_args, **_kwargs):
+        tfvars_path.write_text('{"operator": "edit"}\n', encoding="utf-8")
+        return {
+            "mysterybox_primary_secret_version_ids": {"value": {"app-runtime": "mbsecver-created"}}
+        }
+
+    monkeypatch.setattr(cli, "terraform_output_json", _fake_terraform_output_json)
+
+    assert cli._sync_mysterybox_primary_version_ids_to_config("cfg", fake_paths)
+    assert tfvars_path.read_text(encoding="utf-8") == '{"operator": "edit"}\n'
+
+
 def test_terraform_plan_command_invokes_runtime_auth_and_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -22982,11 +14081,8 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
     )
 
-    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
-        captured["backend"] = {
-            "config": config,
-            "auto_auth_bootstrap": auto_auth_bootstrap,
-        }
+    def _fake_ensure_terraform_backend_ready(config: object) -> None:
+        captured["backend"] = config
 
     monkeypatch.setattr(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
@@ -23024,14 +14120,11 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "plan", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["terraform", "plan", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == {
-        "config": "cfg",
-        "auto_auth_bootstrap": True,
-    }
+    assert captured["backend"] == "cfg"
     assert captured["init"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
@@ -23075,11 +14168,8 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
     )
 
-    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
-        captured["backend"] = {
-            "config": config,
-            "auto_auth_bootstrap": auto_auth_bootstrap,
-        }
+    def _fake_ensure_terraform_backend_ready(config: object) -> None:
+        captured["backend"] = config
 
     monkeypatch.setattr(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
@@ -23118,14 +14208,11 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["terraform", "apply", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == {
-        "config": "cfg",
-        "auto_auth_bootstrap": True,
-    }
+    assert captured["backend"] == "cfg"
     assert captured["init"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
@@ -23159,11 +14246,8 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     )
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
 
-    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
-        captured["backend"] = {
-            "config": config,
-            "auto_auth_bootstrap": auto_auth_bootstrap,
-        }
+    def _fake_ensure_terraform_backend_ready(config: object) -> None:
+        captured["backend"] = config
 
     monkeypatch.setattr(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
@@ -23171,36 +14255,29 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
-            captured.setdefault(
-                "destroy",
-                {
-                    "config": config,
-                    "paths": paths,
-                    "auto_auth_bootstrap": auto_auth_bootstrap,
-                    "yes": yes,
-                    "initialize": initialize,
-                    "status_watchers": status_watchers,
-                },
-            )
+        lambda config, paths, *, yes, initialize=True, status_watchers=None: captured.setdefault(
+            "destroy",
+            {
+                "config": config,
+                "paths": paths,
+                "yes": yes,
+                "initialize": initialize,
+                "status_watchers": status_watchers,
+            },
         ),
     )
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "destroy", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--yes"],
+        ["terraform", "destroy", str(tmp_path / "generated"), "--yes"],
     )
 
     assert result.exit_code == 0, result.output
     assert "Terraform destroy completed from" in _plain_output(result.output)
-    assert captured["backend"] == {
-        "config": "cfg",
-        "auto_auth_bootstrap": True,
-    }
+    assert captured["backend"] == "cfg"
     assert captured["destroy"] == {
         "config": "cfg",
         "paths": fake_paths,
-        "auto_auth_bootstrap": True,
         "yes": True,
         "initialize": True,
         "status_watchers": None,
@@ -23252,9 +14329,7 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, auto_auth_bootstrap, force: (
-            calls.append(("unlock", auto_auth_bootstrap, force)) or lock_info
-        ),
+        lambda config, paths, *, force: calls.append(("unlock", force)) or lock_info,
     )
     monkeypatch.setattr(
         cli,
@@ -23266,7 +14341,6 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
     cli._run_terraform_destroy_with_recovery(
         "cfg",
         fake_paths,
-        auto_auth_bootstrap=True,
         yes=True,
         initialize=True,
         status_watchers=None,
@@ -23274,7 +14348,7 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
 
     assert calls == [
         ("destroy", True, None),
-        ("unlock", True, False),
+        ("unlock", False),
         ("destroy", True, None),
     ]
 
@@ -23297,7 +14371,6 @@ def test_terraform_unlock_non_force_rejects_blank_lock_owner(
         cli._unlock_terraform_state_lock(
             "cfg",
             fake_paths,
-            auto_auth_bootstrap=True,
             force=False,
         )
 
@@ -23326,7 +14399,6 @@ def test_run_terraform_destroy_with_recovery_deletes_stuck_mk8s_node_group_and_r
     cli._run_terraform_destroy_with_recovery(
         "cfg",
         fake_paths,
-        auto_auth_bootstrap=True,
         yes=True,
         initialize=True,
         status_watchers=[
@@ -23395,7 +14467,7 @@ def test_terraform_unlock_command_reports_when_no_lock_is_present(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, auto_auth_bootstrap, force: None,
+        lambda config, paths, *, force: None,
     )
     monkeypatch.setattr(
         cli,
@@ -23430,7 +14502,7 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, auto_auth_bootstrap, force: lock_info,
+        lambda config, paths, *, force: lock_info,
     )
 
     result = runner.invoke(
@@ -23460,12 +14532,10 @@ def test_flux_bootstrap_command_invokes_flux_ops(
         config: object,
         *,
         need_terraform: bool,
-        auto_bootstrap: bool,
     ) -> None:
         captured["auth"] = {
             "config": config,
             "need_terraform": need_terraform,
-            "auto_bootstrap": auto_bootstrap,
         }
 
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _fake_ensure_runtime_auth_material)
@@ -23480,7 +14550,7 @@ def test_flux_bootstrap_command_invokes_flux_ops(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "bootstrap", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["flux", "bootstrap", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
@@ -23488,7 +14558,6 @@ def test_flux_bootstrap_command_invokes_flux_ops(
     assert captured["auth"] == {
         "config": "cfg",
         "need_terraform": False,
-        "auto_bootstrap": True,
     }
     assert captured["inventory"] == {"config": "cfg", "paths": fake_paths}
 
@@ -23787,12 +14856,23 @@ def test_install_flux_controllers_waits_for_namespace_before_apply(
     monkeypatch.setattr(
         flux_ops,
         "_run_filtered_kubectl_apply",
-        lambda cmd, **kwargs: calls.append(("apply", tuple(cmd))),
+        lambda cmd, **kwargs: (
+            calls.append(("apply", tuple(cmd)))
+            or flux_ops.FluxApplySummary(
+                created=0,
+                configured=1,
+                unchanged=0,
+                other=0,
+            )
+        ),
     )
     monkeypatch.setattr(
         flux_ops,
-        "_run",
-        lambda cmd, **kwargs: calls.append(("run", tuple(cmd))),
+        "_run_captured",
+        lambda cmd, **kwargs: (
+            calls.append(("run", tuple(cmd)))
+            or subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        ),
     )
 
     manifest_url = flux_ops.install_flux_controllers(extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
@@ -23897,7 +14977,7 @@ def test_mk8s_cluster_handoff_spec_selects_control_plane_endpoint_for_access(
     assert captured["closed"] is True
 
 
-def test_mk8s_cluster_handoff_spec_loads_runtime_auth_before_sdk_init(
+def test_mk8s_cluster_handoff_spec_loads_renewable_auth_despite_static_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[object] = []
@@ -23919,19 +14999,22 @@ def test_mk8s_cluster_handoff_spec_loads_runtime_auth_before_sdk_init(
             )
         ),
     )
+    request_kwargs: dict[str, object] = {}
 
     class FakeClusterServiceClient:
         def __init__(self, sdk: object) -> None:
             pass
 
-        def get(self, request: object) -> object:
+        def get(self, request: object, **kwargs: object) -> object:
+            request_kwargs.update(kwargs)
             return SimpleNamespace(wait=lambda: cluster)
 
     v1_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
     v1_module.ClusterServiceClient = FakeClusterServiceClient
     v1_module.GetClusterRequest = FakeGetClusterRequest
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", v1_module)
-    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: False)
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(cli, "_renewable_runtime_auth_env_available", lambda: False)
     monkeypatch.setattr(
         cli,
         "_runtime_auth_cache_load",
@@ -23940,17 +15023,48 @@ def test_mk8s_cluster_handoff_spec_loads_runtime_auth_before_sdk_init(
     monkeypatch.setattr(
         cli,
         "init_nebius_sdk",
-        lambda **_kwargs: calls.append("sdk") or FakeSdk(),
+        lambda **kwargs: calls.append(("sdk", kwargs)) or FakeSdk(),
     )
 
-    cli._mk8s_cluster_handoff_spec_for_identity(
+    spec = cli._mk8s_cluster_handoff_spec_for_identity(
         project_id="project-456",
         client_name="client-a",
         cluster_id="mk8scluster-123",
         access="external",
+        require_renewable_auth=True,
     )
 
-    assert calls[:2] == [("project-456", "client-a"), "sdk"]
+    assert calls[:2] == [
+        ("project-456", "client-a"),
+        (
+            "sdk",
+            {
+                "parent_id": "project-456",
+                "endpoint": None,
+                "context": "MK8s cluster handoff",
+                "require_renewable_auth": True,
+            },
+        ),
+    ]
+    assert spec.exec_args[-1] == "--require-renewable-auth"
+    assert request_kwargs["auth_options"] == {
+        "token_renew_synchronous": "true",
+        "token_renew_request_timeout": "20.0",
+    }
+
+
+def test_renewable_runtime_auth_env_does_not_accept_static_or_stale_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "static-token")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("NEBIUS_SA_ID", "service-account")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "public-key")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(tmp_path / "missing.pem"))
+
+    assert cli._runtime_auth_env_available() is True  # noqa: SLF001
+    assert cli._renewable_runtime_auth_env_available() is False  # noqa: SLF001
 
 
 def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_local_copy(
@@ -24008,7 +15122,7 @@ def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_lo
     monkeypatch.setattr(
         cli,
         "_mk8s_cluster_handoff_spec",
-        lambda config, *, cluster_id, access: (
+        lambda config, *, cluster_id, access, require_renewable_auth=False: (
             captured.update({"handoff_spec": (config, cluster_id, access)}) or spec
         ),
     )
@@ -24105,7 +15219,7 @@ def test_prepare_cluster_handoff_kube_env_loads_runtime_auth_cache_when_env_miss
     monkeypatch.setattr(
         cli,
         "_mk8s_cluster_handoff_spec",
-        lambda config, *, cluster_id, access: (
+        lambda config, *, cluster_id, access, require_renewable_auth=False: (
             captured.update({"handoff_spec": (config, cluster_id, access)}) or spec
         ),
     )
@@ -24169,7 +15283,7 @@ def test_prepare_cluster_handoff_kube_env_skips_local_persist_when_disabled(
     monkeypatch.setattr(
         cli,
         "_mk8s_cluster_handoff_spec",
-        lambda config, *, cluster_id, access: (
+        lambda config, *, cluster_id, access, require_renewable_auth=False: (
             captured.update({"handoff_spec": (config, cluster_id, access)}) or spec
         ),
     )
@@ -24344,66 +15458,6 @@ def test_mysterybox_eso_wizard_prompts_sync_namespaces_for_all_store_modes() -> 
         )
         is False
     )
-
-
-def test_soperator_notifier_mysterybox_materialization_selects_external_secrets() -> None:
-    payload = {
-        "deploy": {"targets": [{"instance_id": "cluster1"}]},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "namespace": "soperator",
-                    "values": {
-                        "soperator-notifier": {
-                            "enabled": True,
-                            "slack": {
-                                "mode": "existing-webhook",
-                                "webhookSource": "mysterybox",
-                                "existingSecret": "soperator-notifier-slack-webhook",
-                                "existingSecretKey": "url",
-                                "mysterybox": {
-                                    "secretId": "mbsec-e00slack",
-                                    "property": "url",
-                                },
-                            },
-                        },
-                    },
-                },
-            ]
-        },
-    }
-    external_secrets_entry = ComponentEntry(
-        id="external-secrets",
-        scope="apps",
-        config_path="apps.external_secrets",
-        description="External Secrets Operator",
-        group="platform",
-        version="0.19.2",
-        chart_name="external-secrets",
-        chart_repo="https://charts.external-secrets.io",
-        default_namespace="external-secrets",
-        default_release_name="external-secrets",
-    )
-
-    selected_apps, labels = cli._materialize_soperator_child_chart_secret_dependencies(
-        payload,
-        selected_apps={"soperator"},
-        app_entries=(external_secrets_entry,),
-    )
-
-    assert "external-secrets" in selected_apps
-    assert labels == ("external-secrets@cluster1",)
-    target_mysterybox = payload["deploy"]["targets"][0]["secrets"]["mysterybox"]
-    assert target_mysterybox["enabled"] is True
-    assert target_mysterybox["sync_namespaces"] == ["soperator"]
-    assert target_mysterybox["store_name"] == "nebius-mysterybox-shared"
-    external_secrets_row = payload["apps"]["charts"][1]
-    assert external_secrets_row["id"] == "external-secrets"
-    assert external_secrets_row["instance_id"] == "cluster1"
-    assert external_secrets_row["enabled"] is True
 
 
 def test_wizard_selected_value_shows_boolean_secret_controls() -> None:
@@ -24661,7 +15715,13 @@ def test_persist_cluster_handoff_kubeconfig_replaces_duplicate_named_entries(
     assert persisted["current-context"] == "context-entry"
 
 
+@pytest.mark.parametrize(
+    ("renewable_args", "expected_renewable"),
+    [([], False), (["--require-renewable-auth"], True)],
+)
 def test_mk8s_token_command_emits_exec_credential_from_sdk(
+    renewable_args: list[str],
+    expected_renewable: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -24689,8 +15749,18 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
     monkeypatch.setattr(
         cli,
         "init_nebius_sdk",
-        lambda *, parent_id, endpoint, context: (
-            captured.update({"sdk_init": (parent_id, endpoint, context)}) or _FakeSDK()
+        lambda *, parent_id, endpoint, context, require_renewable_auth: (
+            captured.update(
+                {
+                    "sdk_init": (
+                        parent_id,
+                        endpoint,
+                        context,
+                        require_renewable_auth,
+                    )
+                }
+            )
+            or _FakeSDK()
         ),
     )
 
@@ -24704,13 +15774,19 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
             "client-a",
             "--endpoint",
             "api.example.invalid",
+            *renewable_args,
         ],
     )
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert captured["cache_load"] == ("project-456", "client-a")
-    assert captured["sdk_init"] == ("project-456", "api.example.invalid", "MK8s exec auth")
+    assert captured["sdk_init"] == (
+        "project-456",
+        "api.example.invalid",
+        "MK8s exec auth",
+        expected_renewable,
+    )
     assert captured["timeout"] == cli._MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS
     assert captured["close_timeout"] == cli._MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS
     assert captured["closed"] is True
@@ -24718,6 +15794,31 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
     assert payload["kind"] == "ExecCredential"
     assert payload["status"]["token"] == "token-123"
     assert payload["status"]["expirationTimestamp"] == "2026-01-02T03:04:05Z"
+
+
+def test_renewable_mk8s_exec_command_reuses_current_python_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: "/stale/bin/nebius-cxcli")
+
+    command, args = cli._mk8s_token_exec_command(  # noqa: SLF001
+        project_id="project-456",
+        client_name="client-a",
+        endpoint=None,
+        require_renewable_auth=True,
+    )
+
+    assert command == sys.executable
+    assert args == (
+        "-m",
+        "nebius_cxcli",
+        "mk8s-token",
+        "--project-id",
+        "project-456",
+        "--client-name",
+        "client-a",
+        "--require-renewable-auth",
+    )
 
 
 def test_mk8s_exec_credential_cache_reuses_one_exchange_across_process_calls(
@@ -24756,6 +15857,49 @@ def test_mk8s_exec_credential_cache_reuses_one_exchange_across_process_calls(
     assert json.loads(first.stdout)["status"] == json.loads(second.stdout)["status"]
     assert exchanges == 1
     assert cache_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_mk8s_exec_credential_cache_renews_repeatedly_across_token_lifetimes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_datetime = cli.datetime
+    clock = {"now": real_datetime(2026, 1, 1, tzinfo=cli.UTC)}
+    calls: list[bool] = []
+
+    class _ClockedDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            current = clock["now"]
+            return current if tz is None else current.astimezone(tz)
+
+    def acquire(**kwargs: Any) -> dict[str, str]:
+        calls.append(kwargs["require_renewable_auth"])
+        expiration = clock["now"] + timedelta(hours=12)
+        return {
+            "token": f"token-{len(calls)}",
+            "expirationTimestamp": expiration.isoformat().replace("+00:00", "Z"),
+        }
+
+    cache_file = tmp_path / "exec-credential-cache.json"
+    monkeypatch.setattr(cli, "datetime", _ClockedDateTime)
+    monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", acquire)
+
+    def status() -> dict[str, str]:
+        return cli._mk8s_exec_credential_status(  # noqa: SLF001
+            project_id="project-456",
+            client_name="client-a",
+            endpoint=None,
+            cache_file=cache_file,
+            require_renewable_auth=True,
+        )
+
+    assert status()["token"] == "token-1"
+    clock["now"] += timedelta(hours=11, minutes=56)
+    assert status()["token"] == "token-2"
+    clock["now"] += timedelta(hours=11, minutes=56)
+    assert status()["token"] == "token-3"
+    assert calls == [True, True, True]
 
 
 def test_mk8s_exec_credential_cache_rejects_non_owner_only_directory(
@@ -25372,9 +16516,7 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25442,11 +16584,11 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "bootstrap", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["flux", "bootstrap", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoff"] == (
         fake_config,
@@ -25521,9 +16663,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25551,7 +16691,9 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: captured.update({"apply_flux": (paths, extra_env)}),
+        lambda paths, *, extra_env=None, **_kwargs: captured.update(
+            {"apply_flux": (paths, extra_env)}
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -25584,12 +16726,12 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["flux", "apply", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
     assert "Flux applied from" in _plain_output(result.output)
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoff"] == (
         fake_config,
@@ -25659,9 +16801,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25689,7 +16829,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
-        lambda paths, *, extra_env=None: cast(
+        lambda paths, *, extra_env=None, **_kwargs: cast(
             list[tuple[ProjectPaths, dict[str, str] | None]], captured["apply_flux"]
         ).append((paths, extra_env)),
     )
@@ -25708,11 +16848,11 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
 
     result = runner.invoke(
         cli.app,
-        ["flux", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--all-targets"],
+        ["flux", "apply", str(tmp_path / "generated"), "--all-targets"],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoffs"] == [
         (
@@ -25787,9 +16927,7 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25801,12 +16939,12 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "destroy", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--yes"],
+        ["flux", "destroy", str(tmp_path / "generated"), "--yes"],
     )
 
     assert result.exit_code == 0, result.output
     assert "Flux resources deleted from" in _plain_output(result.output)
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["destroy_flux"] == (
         fake_config,
         fake_paths,
@@ -25919,7 +17057,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     flux_bootstrap_result = runner.invoke(cli.app, ["flux", "bootstrap", "--help"])
     upgrade_result = runner.invoke(cli.app, ["upgrade", "--help"])
     upgrade_node_template_result = runner.invoke(cli.app, ["upgrade", "node-template", "--help"])
-    upgrade_node_group_result = runner.invoke(cli.app, ["upgrade", "node-group", "--help"])
+    migrate_result = runner.invoke(cli.app, ["migrate", "--help"])
+    migrate_node_group_result = runner.invoke(cli.app, ["migrate", "node-group", "--help"])
     removed_upgrade_results = {
         command: runner.invoke(cli.app, ["upgrade", command, "--help"])
         for command in (
@@ -25930,6 +17069,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
             "platform",
             "cpu-" + "preset",
             "gpu-" + "preset",
+            "node-group",
         )
     }
     upgrade_helm_result = runner.invoke(cli.app, ["upgrade", "helm-chart", "--help"])
@@ -25950,7 +17090,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert flux_bootstrap_result.exit_code == 0, flux_bootstrap_result.output
     assert upgrade_result.exit_code == 0, upgrade_result.output
     assert upgrade_node_template_result.exit_code == 0, upgrade_node_template_result.output
-    assert upgrade_node_group_result.exit_code == 0, upgrade_node_group_result.output
+    assert migrate_result.exit_code == 0, migrate_result.output
+    assert migrate_node_group_result.exit_code == 0, migrate_node_group_result.output
     for command, result in removed_upgrade_results.items():
         assert result.exit_code != 0, (command, result.output)
         assert "No such command" in _plain_output(result.output)
@@ -25974,8 +17115,9 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     upgrade_node_template_help = " ".join(
         _plain_output(upgrade_node_template_result.output).split()
     ).lower()
-    upgrade_node_group_help = " ".join(
-        _plain_output(upgrade_node_group_result.output).split()
+    migrate_help = " ".join(_plain_output(migrate_result.output).split()).lower()
+    migrate_node_group_help = " ".join(
+        _plain_output(migrate_node_group_result.output).split()
     ).lower()
     upgrade_helm_help = " ".join(_plain_output(upgrade_helm_result.output).split()).lower()
     quota_check_help = " ".join(_plain_output(quota_check_result.output).split()).lower()
@@ -25985,7 +17127,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
 
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "acceptance-test, soperator, upgrade, and bootstrap-ci use config.yaml"
+        "acceptance-test, soperator, upgrade, migrate, and bootstrap-ci use config.yaml"
     ) in top_help
     assert (
         f"upgrade example: | nebius-cxcli upgrade node-template {upgrade_example_config} "
@@ -26043,7 +17185,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     for removed_command in ("k8s-" + "version", "os-" + "image"):
         assert removed_command not in upgrade_help
     assert "node-template" in upgrade_help
-    assert "node-group" in upgrade_help
+    assert "nebius-cxcli upgrade node-group" not in upgrade_help
     assert "helm-chart" in upgrade_help
     assert "gpu-" + "fabric" not in upgrade_help
     assert "upgrade gpu-" + "stack-preset" not in upgrade_help
@@ -26068,15 +17210,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "--to-os ubuntu24.04 --node-group system --dry-run"
     ) in upgrade_help
     assert "one non-interactive command" not in upgrade_help
-    assert (
-        "nebius-cxcli upgrade node-group <config.yaml> infra:mk8s@<target> "
-        "--node-group worker --to-platform gpu-b200-sxm --to-preset "
-        "8gpu-160vcpu-1792gb --to-fabric fabric-6 --dry-run"
-    ) in upgrade_help
-    assert (
-        "nebius-cxcli upgrade node-group <config.yaml> infra:mk8s@<target> "
-        "--node-group system --to-platform cpu-d3 --to-preset <preset> --dry-run"
-    ) in upgrade_help
+    assert "create-cutover-retire migrations" in migrate_help
+    assert "nebius-cxcli migrate node-group" in migrate_help
     assert (
         "nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> "
         "--to-version <chart-version>"
@@ -26098,7 +17233,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--drain-timeout" in upgrade_node_template_help
     assert "--disruption-policy" not in upgrade_node_template_help
     assert "allow-unavailable" not in upgrade_node_template_help
-    assert "--auto-auth-bootstrap" in upgrade_node_template_help
+    assert "--auto-auth-bootstrap" not in upgrade_node_template_help
     assert "--skip-validations" in upgrade_node_template_help
     assert "--skip-validation" in upgrade_node_template_help
     assert f"guided wizard: | nebius-cxcli upgrade node-template {upgrade_example_config}" in (
@@ -26117,37 +17252,31 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "final mk8s readiness check" in upgrade_node_template_help
     assert "generated/reports/upgrade-node-template-report.md" in upgrade_node_template_help
     assert "generated/reports/upgrade-node-template-report.json" in upgrade_node_template_help
-    assert "plan an explicit terraform-managed node-group migration" in upgrade_node_group_help
-    assert "config_yaml target" in upgrade_node_group_help
-    assert "--node-group" in upgrade_node_group_help
-    assert "--to-platform" in upgrade_node_group_help
-    assert "--to-preset" in upgrade_node_group_help
-    assert "--to-os" in upgrade_node_group_help
-    assert "--to-gpu-stack-preset" in upgrade_node_group_help
-    assert "--to-fabric" in upgrade_node_group_help
-    assert "--dry-run" in upgrade_node_group_help
-    assert "--execute" in upgrade_node_group_help
-    assert "--approve" in upgrade_node_group_help
-    assert "omit --to-fabric for a gpu-cluster node group to keep its current fabric" in (
-        upgrade_node_group_help
+    assert "execute one explicit terraform-managed node-group migration" in (
+        migrate_node_group_help
     )
-    assert "approved pre-mutation checkpoint" in upgrade_node_group_help
-    assert "stops before live" in upgrade_node_group_help
-    assert "generated/reports/upgrade-node-group-report.md" in upgrade_node_group_help
-    assert "generated/reports/upgrade-node-group-report.json" in upgrade_node_group_help
+    assert "config_yaml [target]" in migrate_node_group_help
+    assert "--node-group" in migrate_node_group_help
+    assert "--replacement-node-gro" in migrate_node_group_help
+    assert "--replacement-name" in migrate_node_group_help
+    assert "--to-platform" in migrate_node_group_help
+    assert "--to-preset" in migrate_node_group_help
+    assert "--to-os" in migrate_node_group_help
+    assert "--to-gpu-stack-preset" in migrate_node_group_help
+    assert "--to-fabric" in migrate_node_group_help
+    assert "--dry-run" in migrate_node_group_help
+    assert "--execute" in migrate_node_group_help
+    assert "--approve" in migrate_node_group_help
+    assert "generated/reports/migrate-node-group-report" in migrate_node_group_help
     assert (
-        "example: | nebius-cxcli upgrade node-group <config.yaml> "
-        "infra:mk8s@<target> --node-group worker --to-platform gpu-b200-sxm "
-        "--to-preset 8gpu-160vcpu-1792gb --to-fabric fabric-6 --dry-run"
-    ) in upgrade_node_group_help
-    assert (
-        "use upgrade node-template instead for kubernetes version, os, or nebius-image gpu stack rolling updates"
-        in (upgrade_node_group_help)
+        "nebius-cxcli migrate node-group <config.yaml> infra:mk8s@<target>"
+    ) in migrate_node_group_help
+    assert "use upgrade node-template for in-place kubernetes, os, or gpu-stack changes" in (
+        migrate_node_group_help
     )
-    assert "--strategy" not in upgrade_node_group_help
-    assert "--interactive" not in upgrade_node_group_help
-    assert "--no-interactive" not in upgrade_node_group_help
-    assert "--yes" not in upgrade_node_group_help
+    assert "--interactive" in migrate_node_group_help
+    assert "--no-interactive" in migrate_node_group_help
+    assert "--yes" not in migrate_node_group_help
     assert "apps:grafana@mk8s" in upgrade_helm_help
     assert "apps:soperator@mk8s" not in upgrade_helm_help
     assert "reserved future command shape" not in upgrade_helm_help
@@ -26213,7 +17342,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     ) in output
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, "
-        "deploy, acceptance-test, soperator, upgrade, and bootstrap-ci use config.yaml"
+        "deploy, acceptance-test, soperator, upgrade, migrate, and bootstrap-ci use config.yaml"
     ) in output
     assert (
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/"
@@ -26230,7 +17359,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "flux uses generated/flux" in output
     assert "validate-sources accepts optional component_sources.yaml" in output
     assert "auth has no positional path" in output
-    assert "ext-soperator onboard registers existing Nebius MK8s targets in config.yaml" in output
+    assert "soperator onboard registers existing Nebius MK8s targets in config.yaml" in output
     assert "report Use CONFIG_YAML" not in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
@@ -26247,1352 +17376,6 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "quota-request Use CONFIG_YAML" in output
     assert "deploy Use CONFIG_YAML" in output
     assert "destroy Use CONFIG_YAML" in output
-
-
-def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
-    # Typer's runner rebuilds the complete Click command tree for every
-    # invocation. This test renders every registered help route at three
-    # widths, so build the equivalent Click command once and reuse it.
-    help_command = get_typer_command(cli.app)
-    help_runner = ClickCliRunner()
-    for width in (80, 120, 240):
-        help_with_examples: list[tuple[str, ...]] = []
-        help_with_comments: list[tuple[str, ...]] = []
-        for args in _iter_registered_help_args(cli.app):
-            result = help_runner.invoke(
-                help_command,
-                list(args),
-                env={"COLUMNS": str(width)},
-                terminal_width=width,
-            )
-
-            assert result.exit_code == 0, result.output
-            help_text = _plain_output(result.output)
-            normalized_help = " ".join(help_text.split())
-            _assert_example_commands_are_prefixed(help_text, args)
-            example_prefix_indexes = [
-                normalized_help.find(prefix)
-                for prefix in _HELP_EXAMPLE_SECTION_HEADINGS
-                if prefix in normalized_help
-            ]
-            if "Comments:" in normalized_help:
-                help_with_comments.append(args)
-                assert example_prefix_indexes, (width, args)
-                comments_index = normalized_help.index("Comments:")
-                examples_index = min(example_prefix_indexes)
-                assert examples_index < comments_index, (width, args)
-                assert "| " in normalized_help[examples_index:comments_index], (width, args)
-            if "nebius-cxcli" not in normalized_help:
-                continue
-            if not example_prefix_indexes:
-                continue
-
-            help_with_examples.append(args)
-            assert re.search(
-                r"\b(?:Examples|Example|Quickstart|CXCLI managed workflow|Workflow): \| ",
-                normalized_help,
-            ), (width, args)
-            assert "Examples: nebius-cxcli" not in normalized_help, (width, args)
-            assert "Example: nebius-cxcli" not in normalized_help, (width, args)
-            assert "Quickstart: nebius-cxcli" not in normalized_help, (width, args)
-
-        assert ("ext-soperator", "upgrade", "--help") in help_with_examples
-        assert ("acceptance-test", "--help") in help_with_examples
-        assert len(help_with_examples) >= 30
-        assert ("ext-soperator", "upgrade", "--help") in help_with_comments
-        assert ("upgrade", "node-group", "--help") in help_with_comments
-        assert len(help_with_comments) >= 10
-
-    ext_soperator_onboard_result = help_runner.invoke(
-        help_command,
-        ["ext-soperator", "onboard", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    assert ext_soperator_onboard_result.exit_code == 0, ext_soperator_onboard_result.output
-    ext_soperator_onboard_help = _plain_output(ext_soperator_onboard_result.output)
-    ext_soperator_onboard_examples = ext_soperator_onboard_help.split("Examples:", maxsplit=1)[
-        1
-    ].split("Comments:", maxsplit=1)[0]
-    normalized_onboard_examples = " ".join(ext_soperator_onboard_examples.split())
-    assert (
-        "--compute-migration-mode in-place --to-k8s-version <major.minor> "
-        "--no-interactive; | nebius-cxcli "
-        "ext-soperator onboard ./deployments --client-name acme"
-    ) in normalized_onboard_examples
-    assert "--compute-migration-mode blue-green" in normalized_onboard_examples
-    assert "nebius-cxcli validate" not in normalized_onboard_examples
-    assert "nebius-cxcli render" not in normalized_onboard_examples
-    assert "--cluster-id selects" not in ext_soperator_onboard_examples
-    assert "The command updates" not in ext_soperator_onboard_examples
-    assert "generated/reports/soperator-discovery" not in ext_soperator_onboard_examples
-    assert "next run" not in ext_soperator_onboard_examples.lower()
-
-    ext_soperator_upgrade_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "upgrade", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    assert ext_soperator_upgrade_result.exit_code == 0, ext_soperator_upgrade_result.output
-    normalized_ext_soperator_upgrade_help = " ".join(
-        _plain_output(ext_soperator_upgrade_result.output).split()
-    )
-    assert (
-        "Examples: | nebius-cxcli ext-soperator upgrade "
-        "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
-        "| nebius-cxcli ext-soperator upgrade "
-        "./deployments/tenant/project/config.yaml --target external-cluster "
-        "--execute --approve"
-    ) in normalized_ext_soperator_upgrade_help
-    assert "--target is the cxcli target id saved as deploy.targets[].instance_id" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "Comments: The target must already be onboarded" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "--execute --approve. --target is the cxcli target id" not in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert f"[bold {cli.COPY_PASTE_COMMAND_COLOR}]|[/]" == cli._HELP_EXAMPLE_SEPARATOR_MARKUP
-
-
-def test_command_help_usage_labels_positional_target_types() -> None:
-    create_result = runner.invoke(
-        cli.app,
-        ["create", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    component_result = runner.invoke(cli.app, ["component", "--help"])
-    component_list_result = runner.invoke(cli.app, ["component", "list", "--help"])
-    component_add_result = runner.invoke(
-        cli.app,
-        ["component", "add", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    component_remove_result = runner.invoke(
-        cli.app,
-        ["component", "remove", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    discover_result = runner.invoke(cli.app, ["discover", "--help"])
-    validate_result = runner.invoke(cli.app, ["validate", "--help"])
-    grafana_result = runner.invoke(cli.app, ["grafana", "--help"])
-    validate_dashboards_result = runner.invoke(cli.app, ["validate-dashboards", "--help"])
-    validate_sources_result = runner.invoke(cli.app, ["validate-sources", "--help"])
-    validate_generated_result = runner.invoke(cli.app, ["validate-generated", "--help"])
-    quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
-    wireguard_result = runner.invoke(cli.app, ["wireguard", "--help"])
-    ssh_jumphost_result = runner.invoke(cli.app, ["ssh-jumphost", "--help"])
-    deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
-    destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
-    tf_destroy_result = runner.invoke(cli.app, ["terraform", "destroy", "--help"])
-    flux_destroy_result = runner.invoke(cli.app, ["flux", "destroy", "--help"])
-    managed_soperator_result = runner.invoke(cli.app, ["soperator", "--help"])
-    managed_soperator_upgrade_result = runner.invoke(
-        cli.app,
-        ["soperator", "upgrade", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    managed_soperator_backup_result = runner.invoke(
-        cli.app,
-        ["soperator", "backup", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    managed_soperator_discover_result = runner.invoke(
-        cli.app,
-        ["soperator", "discover", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    managed_soperator_restore_result = runner.invoke(
-        cli.app,
-        ["soperator", "restore", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    managed_soperator_scale_down_result = runner.invoke(
-        cli.app,
-        ["soperator", "scale-down", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    managed_soperator_scale_up_result = runner.invoke(
-        cli.app,
-        ["soperator", "scale-up", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    soperator_result = runner.invoke(cli.app, ["ext-soperator", "--help"])
-    ext_soperator_backup_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "backup", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    ext_soperator_discover_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "discover", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    ext_soperator_restore_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "restore", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    ext_soperator_scale_down_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "scale-down", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    ext_soperator_scale_up_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "scale-up", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    soperator_onboard_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "onboard", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    ext_soperator_upgrade_result = runner.invoke(
-        cli.app,
-        ["ext-soperator", "upgrade", "--help"],
-        env={"COLUMNS": "240"},
-        terminal_width=240,
-    )
-    email_result = runner.invoke(cli.app, ["email", "--help"])
-
-    assert create_result.exit_code == 0, create_result.output
-    assert component_result.exit_code == 0, component_result.output
-    assert component_list_result.exit_code == 0, component_list_result.output
-    assert component_add_result.exit_code == 0, component_add_result.output
-    assert component_remove_result.exit_code == 0, component_remove_result.output
-    assert discover_result.exit_code == 0, discover_result.output
-    assert validate_result.exit_code == 0, validate_result.output
-    assert grafana_result.exit_code == 0, grafana_result.output
-    assert validate_dashboards_result.exit_code == 0, validate_dashboards_result.output
-    assert validate_sources_result.exit_code == 0, validate_sources_result.output
-    assert validate_generated_result.exit_code == 0, validate_generated_result.output
-    assert quota_request_result.exit_code == 0, quota_request_result.output
-    assert wireguard_result.exit_code == 0, wireguard_result.output
-    assert ssh_jumphost_result.exit_code == 0, ssh_jumphost_result.output
-    assert deploy_result.exit_code == 0, deploy_result.output
-    assert destroy_result.exit_code == 0, destroy_result.output
-    assert tf_destroy_result.exit_code == 0, tf_destroy_result.output
-    assert flux_destroy_result.exit_code == 0, flux_destroy_result.output
-    assert managed_soperator_result.exit_code == 0, managed_soperator_result.output
-    assert managed_soperator_upgrade_result.exit_code == 0, managed_soperator_upgrade_result.output
-    assert managed_soperator_backup_result.exit_code == 0, managed_soperator_backup_result.output
-    assert managed_soperator_discover_result.exit_code == 0, (
-        managed_soperator_discover_result.output
-    )
-    assert managed_soperator_restore_result.exit_code == 0, managed_soperator_restore_result.output
-    assert managed_soperator_scale_down_result.exit_code == 0, (
-        managed_soperator_scale_down_result.output
-    )
-    assert managed_soperator_scale_up_result.exit_code == 0, (
-        managed_soperator_scale_up_result.output
-    )
-    assert soperator_result.exit_code == 0, soperator_result.output
-    assert ext_soperator_backup_result.exit_code == 0, ext_soperator_backup_result.output
-    assert ext_soperator_discover_result.exit_code == 0, ext_soperator_discover_result.output
-    assert ext_soperator_restore_result.exit_code == 0, ext_soperator_restore_result.output
-    assert ext_soperator_scale_down_result.exit_code == 0, ext_soperator_scale_down_result.output
-    assert ext_soperator_scale_up_result.exit_code == 0, ext_soperator_scale_up_result.output
-    assert soperator_onboard_result.exit_code == 0, soperator_onboard_result.output
-    assert ext_soperator_upgrade_result.exit_code == 0, ext_soperator_upgrade_result.output
-    assert email_result.exit_code == 0, email_result.output
-
-    create_help = _plain_output(create_result.output)
-    component_help = _plain_output(component_result.output)
-    component_list_help = _plain_output(component_list_result.output)
-    component_add_help = _plain_output(component_add_result.output)
-    component_remove_help = _plain_output(component_remove_result.output)
-    discover_help = _plain_output(discover_result.output)
-    validate_help = _plain_output(validate_result.output)
-    grafana_help = _plain_output(grafana_result.output)
-    validate_dashboards_help = _plain_output(validate_dashboards_result.output)
-    validate_sources_help = _plain_output(validate_sources_result.output)
-    validate_generated_help = _plain_output(validate_generated_result.output)
-    quota_request_help = _plain_output(quota_request_result.output)
-    wireguard_help = _plain_output(wireguard_result.output)
-    ssh_jumphost_help = _plain_output(ssh_jumphost_result.output)
-    deploy_help = _plain_output(deploy_result.output)
-    destroy_help = _plain_output(destroy_result.output)
-    tf_destroy_help = _plain_output(tf_destroy_result.output)
-    flux_destroy_help = _plain_output(flux_destroy_result.output)
-    managed_soperator_help = _plain_output(managed_soperator_result.output)
-    managed_soperator_upgrade_help = _plain_output(managed_soperator_upgrade_result.output)
-    managed_soperator_backup_help = _plain_output(managed_soperator_backup_result.output)
-    managed_soperator_discover_help = _plain_output(managed_soperator_discover_result.output)
-    managed_soperator_restore_help = _plain_output(managed_soperator_restore_result.output)
-    managed_soperator_scale_down_help = _plain_output(managed_soperator_scale_down_result.output)
-    managed_soperator_scale_up_help = _plain_output(managed_soperator_scale_up_result.output)
-    soperator_help = _plain_output(soperator_result.output)
-    ext_soperator_backup_help = _plain_output(ext_soperator_backup_result.output)
-    ext_soperator_discover_help = _plain_output(ext_soperator_discover_result.output)
-    ext_soperator_restore_help = _plain_output(ext_soperator_restore_result.output)
-    ext_soperator_scale_down_help = _plain_output(ext_soperator_scale_down_result.output)
-    ext_soperator_scale_up_help = _plain_output(ext_soperator_scale_up_result.output)
-    soperator_onboard_help = _plain_output(soperator_onboard_result.output)
-    ext_soperator_upgrade_help = _plain_output(ext_soperator_upgrade_result.output)
-    email_help = _plain_output(email_result.output)
-    normalized_email_help = " ".join(email_help.split())
-    normalized_component_list_help = " ".join(component_list_help.split())
-    normalized_component_add_help = " ".join(component_add_help.split())
-    normalized_component_remove_help = " ".join(component_remove_help.split())
-    normalized_soperator_help = " ".join(soperator_help.split())
-    normalized_managed_soperator_help = " ".join(managed_soperator_help.split())
-    normalized_managed_soperator_upgrade_help = " ".join(managed_soperator_upgrade_help.split())
-    normalized_managed_soperator_backup_help = " ".join(managed_soperator_backup_help.split())
-    normalized_managed_soperator_discover_help = " ".join(managed_soperator_discover_help.split())
-    normalized_managed_soperator_restore_help = " ".join(managed_soperator_restore_help.split())
-    normalized_managed_soperator_scale_down_help = " ".join(
-        managed_soperator_scale_down_help.split()
-    )
-    normalized_managed_soperator_scale_up_help = " ".join(managed_soperator_scale_up_help.split())
-    normalized_soperator_onboard_help = " ".join(soperator_onboard_help.split())
-    normalized_ext_soperator_backup_help = " ".join(ext_soperator_backup_help.split())
-    normalized_ext_soperator_discover_help = " ".join(ext_soperator_discover_help.split())
-    normalized_ext_soperator_restore_help = " ".join(ext_soperator_restore_help.split())
-    normalized_ext_soperator_scale_down_help = " ".join(ext_soperator_scale_down_help.split())
-    normalized_ext_soperator_scale_up_help = " ".join(ext_soperator_scale_up_help.split())
-    normalized_ext_soperator_upgrade_help = " ".join(ext_soperator_upgrade_help.split())
-    normalized_wireguard_help = " ".join(wireguard_help.split())
-    normalized_ssh_jumphost_help = " ".join(ssh_jumphost_help.split())
-
-    assert "create [OPTIONS] DEPLOYMENTS_ROOT" in create_help
-    assert "--validate-config --no-validate-config" in " ".join(create_help.split())
-    normalized_component_help = " ".join(component_help.split())
-    assert "source-driven" in normalized_component_help
-    assert "component instances" in normalized_component_help
-    assert (
-        "Use --config CONFIG_YAML after create for day-2 add/remove/list changes"
-        in normalized_component_help
-    )
-    assert "config.yaml is not a positional component selector" in normalized_component_help
-    assert (
-        "nebius-cxcli component list --config ./deployments/tenant/project/config.yaml"
-        in normalized_component_help
-    )
-    assert (
-        "nebius-cxcli component add apps:soperator --config "
-        "./deployments/tenant/project/config.yaml"
-    ) in normalized_component_help
-    assert (
-        "nebius-cxcli component remove apps:soperator@target-mk8s-prod "
-        "--config ./deployments/tenant/project/config.yaml --no-interactive"
-    ) in normalized_component_help
-    normalized_create_help = " ".join(create_help.split())
-    assert (
-        "bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton"
-        in normalized_create_help
-    )
-    assert "overwrite an existing resolved project folder from scratch" in normalized_create_help
-    assert "unless --force is provided" in normalized_create_help
-    assert "Overwrite the resolved existing project folder from scratch" in normalized_create_help
-    assert "skips that validation" in normalized_create_help
-    assert "only; create still runs" in normalized_create_help
-    assert "warning-only live" in normalized_create_help
-    assert "quota/capacity" in normalized_create_help
-    assert "assessment" in normalized_create_help
-    assert (
-        "nebius-cxcli create /path/to/deployments-root --client-name client-slug "
-        "--tenant-id TENANT_ID --project-id PROJECT_ID "
-        "--infra mk8s,vm,wireguard-gw,ssh-jumphost "
-        "--no-validate-sources --no-validate-config"
-    ) in normalized_create_help
-    assert "add --app none to skip app selection" in normalized_create_help
-    assert (
-        "nebius-cxcli create /path/to/deployments-root --client-name client-slug "
-        "--tenant-id TENANT_ID --project-id PROJECT_ID "
-        "--infra mk8s,vm --infra wireguard-gw,ssh-jumphost "
-        "--app n8n,gateway-helm --app cert-manager "
-        "--no-validate-sources --no-validate-config"
-    ) in normalized_create_help
-    assert "guided create with multiple infra and app choices preselected" in (
-        normalized_create_help
-    )
-    assert re.search(r"\btenant-[a-z0-9]{16,}\b", normalized_create_help) is None
-    assert re.search(r"\bproject-[a-z0-9]{16,}\b", normalized_create_help) is None
-    assert "not a reservation" in normalized_create_help
-    assert "not a wizard-selectable deployment gate" in normalized_create_help
-    assert "Validate infra sources first" in normalized_create_help
-    assert "selected app chart sources" in normalized_create_help
-    assert "auto-enabled app dependencies" in normalized_create_help
-    assert "--app-version" in normalized_create_help
-    assert "Override app chart version" in normalized_create_help
-    assert "list [OPTIONS]" in component_list_help
-    assert "--config CONFIG_YAML" in normalized_component_list_help
-    assert "nebius-cxcli component list --config <config.yaml>" in normalized_component_list_help
-    assert "auto-resolves" not in normalized_component_list_help
-    assert "nebius-cxcli component list (auto-resolves ./config.yaml)" not in (
-        normalized_component_list_help
-    )
-    assert "add [OPTIONS] [COMPONENT_SELECTOR]..." in component_add_help
-    assert "--config CONFIG_YAML" in normalized_component_add_help
-    assert "Required project config.yaml" in normalized_component_add_help
-    assert "not as a positional path" in normalized_component_add_help
-    assert "project config.yaml" in normalized_component_add_help
-    assert "config.yaml" in normalized_component_add_help
-    assert "inspect or edit" in normalized_component_add_help
-    assert (
-        "nebius-cxcli component add infra:vm --config <config.yaml>"
-        in normalized_component_add_help
-    )
-    assert (
-        "nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive"
-    ) in normalized_component_add_help
-    assert (
-        "nebius-cxcli component add managed-postgresql object-storage@logs-bucket "
-        "--config <config.yaml> --no-interactive"
-    ) in normalized_component_add_help
-    assert (
-        "nebius-cxcli component add apps:external-secrets@training-cluster "
-        "--config <config.yaml> --no-interactive"
-    ) in normalized_component_add_help
-    assert (
-        "nebius-cxcli component add apps:external-secrets@target-mk8s-prod "
-        "--config ./deployments/tenant/project/config.yaml --no-interactive"
-    ) in normalized_component_add_help
-    assert "apps:nccl-test" not in normalized_component_add_help
-    assert "config.yaml is not a positional argument" in normalized_component_add_help
-    assert "plural apps:" in normalized_component_add_help
-    assert "not 'app:'" in normalized_component_add_help
-    assert "Omit" in normalized_component_add_help
-    assert "prompt" in normalized_component_add_help
-    assert "interactively" in normalized_component_add_help
-    assert "Infra-only" in normalized_component_add_help
-    assert "interactive adds" in normalized_component_add_help
-    assert "valid" in normalized_component_add_help
-    assert "scalar named infra modules" in normalized_component_add_help
-    assert "resource name first" in normalized_component_add_help
-    assert "derive the saved instance_id" in normalized_component_add_help
-    assert "non-interactive mode" in normalized_component_add_help
-    assert "bare" in normalized_component_add_help
-    assert "default named row" in normalized_component_add_help
-    assert "<id>@<resource-name>" in normalized_component_add_help
-    assert "create another named infra row" in normalized_component_add_help
-    assert "<id>@<resource-name-or-target-id>" in normalized_component_add_help
-    assert "infra:<id>" in normalized_component_add_help
-    assert "apps:<id>" in normalized_component_add_help
-    assert "all" in normalized_component_add_help
-    assert "none" in normalized_component_add_help
-    assert "instance_id" in normalized_component_add_help
-    assert "--validate-sources --no-validate-sources" in " ".join(component_add_help.split())
-    assert "Validate infra sources first" in normalized_component_add_help
-    assert "app chart sources selected" in normalized_component_add_help
-    assert "auto-enabled by this add" in normalized_component_add_help
-    assert "--app-namespace" in normalized_component_add_help
-    assert "--app-releasename" in normalized_component_add_help
-    assert "--app-version" in normalized_component_add_help
-    assert "Override added app chart version" in normalized_component_add_help
-    assert "requested chart version must resolve before" in normalized_component_add_help
-    assert "component add" in normalized_component_add_help
-    assert (
-        "Add source-defined components to an existing project config.yaml"
-        in normalized_component_add_help
-    )
-    assert "Apps are" in normalized_component_add_help
-    assert "Helm" in normalized_component_add_help
-    assert "charts" in normalized_component_add_help
-    assert "enabled" in normalized_component_add_help
-    assert "MK8s target" in normalized_component_add_help
-    assert "apps:soperator" in normalized_component_add_help
-    assert "apps:soperator@target-mk8s-prod" in normalized_component_add_help
-    assert "production worker profile" in normalized_component_add_help
-    assert (
-        "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>"
-        in normalized_component_add_help
-    )
-    assert "register an existing Nebius MK8s target" in normalized_component_add_help
-    assert "prompts for install mode" not in normalized_component_add_help
-    assert (
-        "nebius-cxcli component add apps:soperator@training-cluster --config <config.yaml>"
-        in normalized_component_add_help
-    )
-    assert (
-        "nebius-cxcli component add apps:gateway-helm@serving-cluster "
-        "--config <config.yaml> --no-interactive"
-    ) in normalized_component_add_help
-    assert "requires a managed MK8s target" in normalized_create_help
-    assert "selecting soperator creates a complete production MK8s+SFS+Soperator cluster" in (
-        normalized_create_help
-    )
-    assert "use `ext-soperator onboard` for existing Nebius MK8s targets" in normalized_create_help
-    assert "onboard-existing-cluster" not in normalized_create_help
-    assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
-    assert "soperator [OPTIONS] COMMAND [ARGS]" in managed_soperator_help
-    assert "Manage cxcli-managed Soperator deployments" in (normalized_managed_soperator_help)
-    assert "Soperator-aware MK8s node-template, chart, and Jail Upgrade rootfs refresh" in (
-        normalized_managed_soperator_help
-    )
-    assert "Examples: | nebius-cxcli soperator upgrade <config.yaml>" in (
-        normalized_managed_soperator_help
-    )
-    assert "soperator upgrade <config.yaml>" in normalized_managed_soperator_help
-    assert (
-        "nebius-cxcli soperator discover <config.yaml> --target <target> "
-        "--output-dir ./support-bundles"
-    ) in normalized_managed_soperator_help
-    assert (
-        "nebius-cxcli soperator scale-down <config.yaml> --target <target> "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait-to-finish --dry-run"
-    ) in normalized_managed_soperator_help
-    assert (
-        "nebius-cxcli soperator scale-up <config.yaml> --target <target> "
-        "--nodeset worker-gpu-0 --to-workers 4 --execute --approve"
-    ) in normalized_managed_soperator_help
-    assert (
-        "nebius-cxcli soperator restore <backup.tar.gz> "
-        "--kube-context <new-context> --execute --approve"
-    ) in normalized_managed_soperator_help
-    assert "backup" in managed_soperator_help
-    assert "discover" in managed_soperator_help
-    assert "restore" in managed_soperator_help
-    assert "scale-down" in managed_soperator_help
-    assert "scale-up" in managed_soperator_help
-    assert "backup [OPTIONS] CONFIG_YAML" in managed_soperator_backup_help
-    assert "discover [OPTIONS] CONFIG_YAML" in managed_soperator_discover_help
-    assert "restore [OPTIONS] BACKUP_ARCHIVE" in managed_soperator_restore_help
-    assert "scale-down [OPTIONS] CONFIG_YAML" in managed_soperator_scale_down_help
-    assert "scale-up [OPTIONS] CONFIG_YAML" in managed_soperator_scale_up_help
-    assert "--backup-dir" in normalized_managed_soperator_backup_help
-    assert "--kube-context" in normalized_managed_soperator_backup_help
-    assert "raw Kubernetes Secrets" in normalized_managed_soperator_backup_help
-    assert "retained controller/accounting PV/PVC restore material" in (
-        normalized_managed_soperator_backup_help
-    )
-    assert "--output-dir" in normalized_managed_soperator_discover_help
-    assert "--redaction" in normalized_managed_soperator_discover_help
-    assert "soperator-clusters/<cluster-key>/discovery/manifest.json" in (
-        normalized_managed_soperator_discover_help
-    )
-    assert "--output-dir ./support-bundles --redaction support" in (
-        normalized_managed_soperator_discover_help
-    )
-    assert "--to-chart-version <chart-version> --to-k8s-version 1.33" in (
-        normalized_managed_soperator_discover_help
-    )
-    assert "Use target-version flags to preview upgrade findings" in (
-        normalized_managed_soperator_discover_help
-    )
-    assert "Jail Upgrade rootfs-refresh boundary" in (normalized_managed_soperator_discover_help)
-    assert "--execute" in normalized_managed_soperator_restore_help
-    assert "--approve" in normalized_managed_soperator_restore_help
-    assert "--restore-accounting-db" in normalized_managed_soperator_restore_help
-    assert "Restore is dry-run by default" in normalized_managed_soperator_restore_help
-    assert "--kube-context replacement-cluster --execute --approve" in (
-        normalized_managed_soperator_restore_help
-    )
-    assert "restores retained controller/accounting PV/PVC bindings" in (
-        normalized_managed_soperator_restore_help
-    )
-    assert "VM/NFS retention and final Terraform convergence remain operator runbook steps" in (
-        normalized_managed_soperator_restore_help
-    )
-    assert "--target mk8s --dry-run" in normalized_managed_soperator_backup_help
-    assert "--backup-dir ./backups" in normalized_managed_soperator_backup_help
-    assert "<backup-dir>/soperator-clusters/<cluster-key>/" in (
-        normalized_managed_soperator_backup_help
-    )
-    assert "backups/soperator-clusters/mk8s/soperator-backup-" in (
-        normalized_managed_soperator_restore_help
-    )
-    assert "DR restore to a new empty compatible target cluster" in (
-        normalized_managed_soperator_restore_help
-    )
-    assert "not an in-place rollback" in normalized_managed_soperator_restore_help
-    assert "original/source cluster or an existing Soperator namespace" in (
-        normalized_managed_soperator_restore_help
-    )
-    assert "--nodeset" in normalized_managed_soperator_scale_down_help
-    assert "--to-workers" in normalized_managed_soperator_scale_down_help
-    assert "--worker-ordinal" in normalized_managed_soperator_scale_down_help
-    assert "--dry-run --execute" in normalized_managed_soperator_scale_down_help
-    assert "--approve --no-approve" in normalized_managed_soperator_scale_down_help
-    assert "--job-policy" in normalized_managed_soperator_scale_down_help
-    assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
-        normalized_managed_soperator_scale_down_help
-    )
-    assert "--worker-ordinal 3 --to-workers 3 --job-policy interactive" in (
-        normalized_managed_soperator_scale_down_help
-    )
-    assert (
-        "Ephemeral NodeSets use NodeSetPowerState" in normalized_managed_soperator_scale_down_help
-    )
-    assert "--nodeset" in normalized_managed_soperator_scale_up_help
-    assert "--to-workers" in normalized_managed_soperator_scale_up_help
-    assert "--dry-run --execute" in normalized_managed_soperator_scale_up_help
-    assert "--approve --no-approve" in normalized_managed_soperator_scale_up_help
-    assert "--worker-ordinal 0 --worker-ordinal 1 --to-workers 4 --execute --approve" in (
-        normalized_managed_soperator_scale_up_help
-    )
-    assert "Standalone MK8s node-template upgrades" in normalized_managed_soperator_upgrade_help
-    assert "including Jail Upgrade rootfs refresh" in normalized_managed_soperator_upgrade_help
-    assert "Kubernetes minor hops stay one hop per run" in (
-        normalized_managed_soperator_upgrade_help
-    )
-    assert "run the Soperator chart upgrade first" in (normalized_managed_soperator_upgrade_help)
-    assert "upgrade [OPTIONS] CONFIG_YAML" in managed_soperator_upgrade_help
-    assert "--target" in normalized_managed_soperator_upgrade_help
-    assert "--to-chart-version" in normalized_managed_soperator_upgrade_help
-    assert "--to-k8s-version" in normalized_managed_soperator_upgrade_help
-    assert "--to-os" in normalized_managed_soperator_upgrade_help
-    assert "--to-gpu-stack-preset" in normalized_managed_soperator_upgrade_help
-    assert "--job-policy" in normalized_managed_soperator_upgrade_help
-    assert "--slurm-scheduling-pause" in normalized_managed_soperator_upgrade_help
-    assert "--requeue-job" in normalized_managed_soperator_upgrade_help
-    assert "--backup-dir" in normalized_managed_soperator_upgrade_help
-    assert "--jail-persistent-mount" in normalized_managed_soperator_upgrade_help
-    assert "<mountPath>=<localPath>" in normalized_managed_soperator_upgrade_help
-    assert "/mnt/jail-store/shared/checkpoints" in normalized_managed_soperator_upgrade_help
-    for flag in (
-        "--node-group-strategy",
-        "--zero-surge-max-unavailable",
-        "--strategy-max-surge-count",
-        "--worker-drain-timeout",
-        "--max-parallel-worker-groups",
-        "--execute",
-        "--approve",
-    ):
-        assert flag in normalized_managed_soperator_upgrade_help
-    for removed in (
-        "--node-group ",
-        "--strategy ",
-        "--drain-timeout",
-        "--login-session-policy",
-        "--login-session-drain-timeout",
-        "--allow-unsupported-soperator-upgrade-path",
-    ):
-        assert removed not in normalized_managed_soperator_upgrade_help
-    assert "--preserve-jail-home" not in normalized_managed_soperator_upgrade_help
-    assert "--no-preserve-jail-home" not in normalized_managed_soperator_upgrade_help
-    assert "--jail-sfs-resize-policy" in normalized_managed_soperator_upgrade_help
-    assert "--jail-sfs-resize-to-gib" in normalized_managed_soperator_upgrade_help
-    assert "--home-sfs-size-multiplier" not in normalized_managed_soperator_upgrade_help
-    assert "--home-sfs-size-gib" not in normalized_managed_soperator_upgrade_help
-    assert "--confirm-jail-rootfs-overwrite" not in normalized_managed_soperator_upgrade_help
-    assert "Active/passive jail rootfs refresh mode" in normalized_managed_soperator_upgrade_help
-    assert "Jail rootfs backing SFS resize policy" in normalized_managed_soperator_upgrade_help
-    assert "Terraform" in normalized_managed_soperator_upgrade_help
-    assert "--to-version" not in normalized_managed_soperator_upgrade_help
-    assert "--dry-run" in normalized_managed_soperator_upgrade_help
-    assert "--interactive --no-interactive" in normalized_managed_soperator_upgrade_help
-    assert "Target Soperator chart/app version" in normalized_managed_soperator_upgrade_help
-    assert "--to-chart-version <chart-version> --dry-run" in (
-        normalized_managed_soperator_upgrade_help
-    )
-    assert (
-        "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
-        "--to-chart-version <chart-version> --job-policy wait-to-finish --job-wait-timeout 2h "
-        "--dry-run"
-    ) in normalized_managed_soperator_upgrade_help
-    assert "--execute --approve" in normalized_managed_soperator_upgrade_help
-    assert "Refreshes live discovery into a temporary bundle" in (
-        normalized_managed_soperator_upgrade_help
-    )
-    assert "ext-soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
-    assert "Manage existing external Nebius MK8s clusters for Soperator" in (
-        normalized_soperator_help
-    )
-    assert "backup" in soperator_help
-    assert "discover" in soperator_help
-    assert "restore" in soperator_help
-    assert "scale-down" in soperator_help
-    assert "scale-up" in soperator_help
-    assert (
-        "nebius-cxcli ext-soperator discover --project-id PROJECT "
-        "--cluster-id MK8SCLUSTER --output-dir ./support-bundles"
-    ) in normalized_soperator_help
-    assert (
-        "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
-        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
-        "--to-workers 0 --job-policy wait-to-finish --dry-run"
-    ) in normalized_soperator_help
-    assert (
-        "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
-        "--access internal --dry-run"
-    ) in normalized_soperator_help
-    assert "backup [OPTIONS] [CONFIG_YAML]" in ext_soperator_backup_help
-    assert "discover [OPTIONS] [CONFIG_OR_DEPLOYMENTS_ROOT]" in ext_soperator_discover_help
-    assert "restore [OPTIONS] BACKUP_ARCHIVE" in ext_soperator_restore_help
-    assert "scale-down [OPTIONS]" in ext_soperator_scale_down_help
-    assert "scale-up [OPTIONS]" in ext_soperator_scale_up_help
-    assert "--kube-context" in normalized_ext_soperator_backup_help
-    assert "--client-name" in normalized_ext_soperator_backup_help
-    assert "--project-id" in normalized_ext_soperator_backup_help
-    assert "--tenant-id" in normalized_ext_soperator_backup_help
-    assert "--cluster-id" in normalized_ext_soperator_backup_help
-    assert "--access" in normalized_ext_soperator_backup_help
-    assert (
-        "Omit for standalone --project-id plus --cluster-id/--kube-context backup"
-        in normalized_ext_soperator_backup_help
-    )
-    assert (
-        "Use the config form for an onboarded and accepted target, or the standalone "
-        "--project-id plus --cluster-id/--kube-context form before onboarding"
-        in normalized_ext_soperator_backup_help
-    )
-    assert "--access internal" in normalized_ext_soperator_backup_help
-    assert "--target external-cluster --dry-run" in normalized_ext_soperator_backup_help
-    assert "--backup-dir ./backups" in normalized_ext_soperator_backup_help
-    assert "<backup-dir>/soperator-clusters/<cluster-key>/" in (
-        normalized_ext_soperator_backup_help
-    )
-    assert "--access internal --dry-run" in normalized_ext_soperator_backup_help
-    assert "external uses the public control-plane endpoint" in normalized_ext_soperator_backup_help
-    assert "internal uses the private endpoint" in normalized_ext_soperator_backup_help
-    assert "preexisting private network reachability" in normalized_ext_soperator_backup_help
-    assert "external-soperator-backup-" in normalized_ext_soperator_backup_help
-    assert "retained controller/accounting PV/PVC restore material" in (
-        normalized_ext_soperator_backup_help
-    )
-    assert "--cluster-id" in normalized_ext_soperator_discover_help
-    assert "--client-name" in normalized_ext_soperator_discover_help
-    assert "--project-id" in normalized_ext_soperator_discover_help
-    assert "--tenant-id" in normalized_ext_soperator_discover_help
-    assert "--output-dir" in normalized_ext_soperator_discover_help
-    assert "with exactly one existing project config.yaml" in normalized_ext_soperator_discover_help
-    assert "Omit for standalone --project-id plus --cluster-id/--kube-context discovery" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "nebius-cxcli ext-soperator discover --project-id PROJECT --cluster-id MK8SCLUSTER" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "--output-dir ./support-bundles --redaction support" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "--access internal --output-dir ./support-bundles" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "--to-chart-version <chart-version> --to-k8s-version 1.33" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "Default root: config.yaml parent, or current working directory in standalone mode" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "--tenant-id is optional for standalone discovery" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "pass --client-name only when you need a specific runtime-auth cache profile" in (
-        normalized_ext_soperator_discover_help
-    )
-    assert "onboard resolves or creates" not in normalized_ext_soperator_discover_help
-    assert (
-        "soperator-clusters/<cluster-key>/discovery/manifest.json"
-        in normalized_ext_soperator_discover_help
-    )
-    assert "Jail Upgrade rootfs-refresh boundary" in normalized_ext_soperator_discover_help
-    assert "--execute" in normalized_ext_soperator_restore_help
-    assert "--approve" in normalized_ext_soperator_restore_help
-    assert "--restore-accounting-db" in normalized_ext_soperator_restore_help
-    assert "--kube-context new-cluster --execute --approve" in (
-        normalized_ext_soperator_restore_help
-    )
-    assert "external-soperator-backup-" in normalized_ext_soperator_restore_help
-    assert "backups/soperator-clusters/mk8scluster-example/external-soperator-backup-" in (
-        normalized_ext_soperator_restore_help
-    )
-    assert "DR restore to a new empty external target cluster" in (
-        normalized_ext_soperator_restore_help
-    )
-    assert "not an in-place rollback" in normalized_ext_soperator_restore_help
-    assert "original/source cluster or an existing Soperator namespace" in (
-        normalized_ext_soperator_restore_help
-    )
-    assert "restores retained controller/accounting PV/PVC bindings" in (
-        normalized_ext_soperator_restore_help
-    )
-    assert "VM/NFS retention and final Terraform convergence remain operator runbook steps" in (
-        normalized_ext_soperator_restore_help
-    )
-    assert "--project-id" in normalized_ext_soperator_scale_down_help
-    assert "--cluster-id" in normalized_ext_soperator_scale_down_help
-    assert "--kube-context" in normalized_ext_soperator_scale_down_help
-    assert "--nodeset" in normalized_ext_soperator_scale_down_help
-    assert "--to-workers" in normalized_ext_soperator_scale_down_help
-    assert "--job-policy" in normalized_ext_soperator_scale_down_help
-    assert "--dry-run --execute" in normalized_ext_soperator_scale_down_help
-    assert "--approve --no-approve" in normalized_ext_soperator_scale_down_help
-    assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
-        normalized_ext_soperator_scale_down_help
-    )
-    assert "--worker-ordinal 3 --to-workers 3 --job-policy interactive" in (
-        normalized_ext_soperator_scale_down_help
-    )
-    assert "--project-id/--cluster-id find Nebius node groups" in (
-        normalized_ext_soperator_scale_down_help
-    )
-    assert "--project-id" in normalized_ext_soperator_scale_up_help
-    assert "--cluster-id" in normalized_ext_soperator_scale_up_help
-    assert "--kube-context" in normalized_ext_soperator_scale_up_help
-    assert "--nodeset" in normalized_ext_soperator_scale_up_help
-    assert "--to-workers" in normalized_ext_soperator_scale_up_help
-    assert "--dry-run --execute" in normalized_ext_soperator_scale_up_help
-    assert "--approve --no-approve" in normalized_ext_soperator_scale_up_help
-    assert "--worker-ordinal 0 --worker-ordinal 1 --to-workers 4 --execute --approve" in (
-        normalized_ext_soperator_scale_up_help
-    )
-    assert "Restore is DR/new-empty-target only, not same-cluster rollback" in (
-        normalized_soperator_help
-    )
-    assert (
-        "onboard registers one cluster identity or reconciles its complete v6 campaign "
-        "in config.yaml"
-    ) in normalized_soperator_help
-    assert (
-        "upgrade reconciles live state and runs every remaining locked campaign segment "
-        "in one approved command"
-    ) in normalized_soperator_help
-    assert (
-        "a pending gate, error, explicit stop, or interrupt remains checkpointed and the "
-        "same execute command resumes it"
-    ) in normalized_soperator_help
-    assert (
-        "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
-        "--cluster-id <mk8scluster-id>"
-    ) in normalized_soperator_help
-    assert "Campaign workflow:" in normalized_soperator_help
-    assert "Optional support bundle:" in normalized_soperator_help
-    assert "Onboarding stores a cxcli target id in deploy.targets[].instance_id" in (
-        normalized_soperator_help
-    )
-    assert "A complete campaign is a live-verified no-op" in normalized_soperator_help
-    assert "a later campaign is proposed only by rerunning onboard after completion" in (
-        normalized_soperator_help
-    )
-    assert (
-        "Register a new target, report its active campaign, or propose the next campaign "
-        "after completion"
-    ) in normalized_soperator_help
-    assert "No prepare-upgrade command exists" in normalized_soperator_help
-    assert (
-        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run"
-        in normalized_soperator_help
-    )
-    assert (
-        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve"
-    ) in normalized_soperator_help
-    assert "CXCLI managed clusters use soperator upgrade" in (normalized_soperator_help)
-    assert (
-        "external MK8s control-plane, accepted in-place or blue-green compute, chart, and Jail "
-        "changes remain owned "
-        "by ext-soperator upgrade"
-    ) in normalized_soperator_help
-    assert "Terraform-managed MK8s node-template upgrades use upgrade node-template" in (
-        normalized_soperator_help
-    )
-    assert "onboard [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in soperator_onboard_help
-    assert "upgrade [OPTIONS] CONFIG_YAML" in ext_soperator_upgrade_help
-    assert (
-        "Register a new target, report its active campaign, or propose the next campaign "
-        "after completion"
-    ) in normalized_soperator_onboard_help
-    assert "Existing project config.yaml, project directory containing config.yaml" in (
-        normalized_soperator_onboard_help
-    )
-    assert "--client-name" in normalized_soperator_onboard_help
-    assert "--tenant-id" in normalized_soperator_onboard_help
-    assert "--project-id" in normalized_soperator_onboard_help
-    assert "--region-id" in normalized_soperator_onboard_help
-    assert "--cluster-id" in normalized_soperator_onboard_help
-    assert "--target-id" in normalized_soperator_onboard_help
-    assert "--kube-context" in normalized_soperator_onboard_help
-    assert "Nebius MK8s cluster id to adopt" in normalized_soperator_onboard_help
-    assert "generate a temporary kubeconfig through the Nebius API" in (
-        normalized_soperator_onboard_help
-    )
-    assert "Optional cxcli logical target id to save as deploy.targets[].instance_id" in (
-        normalized_soperator_onboard_help
-    )
-    assert "When omitted, cxcli derives it from the live MK8s cluster name" in (
-        normalized_soperator_onboard_help
-    )
-    assert "choose one existing Nebius MK8s cluster from the project" in (
-        normalized_soperator_onboard_help
-    )
-    assert (
-        "Core external Soperator operations use Nebius API and Kubernetes API/kubeconfig "
-        "access" in normalized_soperator_onboard_help
-    )
-    assert "they do not SSH from the operator workstation into login or worker nodes" in (
-        normalized_soperator_onboard_help
-    )
-    assert "Optional kubectl context override for discovery" in normalized_soperator_onboard_help
-    assert "By default cxcli uses --cluster-id" in normalized_soperator_onboard_help
-    assert "--access" in normalized_soperator_onboard_help
-    assert "external or internal" in normalized_soperator_onboard_help
-    assert "Use --cluster-id to identify the Nebius MK8s cluster" in (
-        normalized_soperator_onboard_help
-    )
-    assert "--storage-mode" in normalized_soperator_onboard_help
-    assert "--compute-mode" in normalized_soperator_onboard_help
-    assert "--source-version" in normalized_soperator_onboard_help
-    assert "--to-chart-version" not in normalized_soperator_onboard_help
-    assert "--allow-unsupported-soperator-upgrade-path" not in (normalized_soperator_onboard_help)
-    assert "--validate-sources --no-validate-sources" in normalized_soperator_onboard_help
-    assert "keep-existing-storage preserves live PVC/PV sizes and selectors" in (
-        normalized_soperator_onboard_help
-    )
-    assert "Compute-layout decision for an existing Soperator" in (
-        normalized_soperator_onboard_help
-    )
-    assert "source version used only when discovery cannot infer" in (
-        normalized_soperator_onboard_help
-    )
-    assert "catalog-pinned" in normalized_soperator_onboard_help
-    assert "Interactive onboarding recommends the highest endpoint reachable" in (
-        normalized_soperator_onboard_help
-    )
-    assert "Non-interactive runs must pass the exact final target" in (
-        normalized_soperator_onboard_help
-    )
-    assert "locks every contiguous hop" in normalized_soperator_onboard_help
-    assert "--cluster-id CLUSTER_ID" in normalized_soperator_onboard_help
-    assert "--target-id external-cluster" in normalized_soperator_onboard_help
-    assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
-    assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
-    for migration_option in (
-        "--compute-migration-mode",
-        "--slurm-scheduling-pause",
-        "--node-group-strategy",
-        "--zero-surge-max-unavailable",
-        "--strategy-max-surge-count",
-        "--worker-drain-timeout",
-        "--max-parallel-worker-groups",
-        "--blue-green-worker-bootstrap",
-    ):
-        assert migration_option in normalized_soperator_onboard_help
-    assert "create a project config under the deployments root" in normalized_soperator_onboard_help
-    for removed_option in (
-        "--worker-rollout-strategy",
-        "--service-role-rollout-strategy",
-        "--worker-wave-groups",
-        "--worker-wave-percent",
-        "--strategy-max-unavailable-count",
-        "--strategy-drain-timeout",
-    ):
-        assert removed_option not in normalized_soperator_onboard_help
-    assert "--source-version 1.23.3" not in normalized_soperator_onboard_help
-    assert "nebius-cxcli validate <config.yaml>" not in normalized_soperator_onboard_help
-    assert "nebius-cxcli render <config.yaml>" not in normalized_soperator_onboard_help
-    assert (
-        "Reruns report the active campaign without replacing it, or propose a later complete "
-        "campaign after live-verified completion" in (normalized_soperator_onboard_help)
-    )
-    assert "The campaign contains every SDK-validated Kubernetes hop" in (
-        normalized_soperator_onboard_help
-    )
-    assert "Soperator/chart target, and Jail Upgrade" in normalized_soperator_onboard_help
-    assert (
-        "Non-interactive mode requires --compute-migration-mode and the exact final "
-        "--to-k8s-version; when the target version is omitted it prints the recommended "
-        "reachable target and writes no target or campaign"
-    ) in normalized_soperator_onboard_help
-    assert "--cluster-id selects the Nebius MK8s cluster to adopt" in (
-        normalized_soperator_onboard_help
-    )
-    assert "--target-id is only the optional cxcli logical target id" in (
-        normalized_soperator_onboard_help
-    )
-    assert "do not render, deploy, or onboard again between segments" in (
-        normalized_soperator_onboard_help
-    )
-    assert (
-        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run"
-        in normalized_soperator_onboard_help
-    )
-    assert (
-        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve"
-        in normalized_soperator_onboard_help
-    )
-    assert "approve-soperator-migration" not in normalized_soperator_onboard_help
-    assert "approve-soperator-migration" not in normalized_ext_soperator_upgrade_help
-    assert "Plan or execute an accepted external Soperator upgrade" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "--target" in normalized_ext_soperator_upgrade_help
-    assert "--backup-dir" in normalized_ext_soperator_upgrade_help
-    assert "--job-policy" in normalized_ext_soperator_upgrade_help
-    assert "--slurm-scheduling-pause" in normalized_ext_soperator_upgrade_help
-    assert "--cancel-job" in normalized_ext_soperator_upgrade_help
-    assert "--requeue-job" in normalized_ext_soperator_upgrade_help
-    assert "--job-wait-timeout" in normalized_ext_soperator_upgrade_help
-    assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
-    assert "--login-session-policy" not in normalized_ext_soperator_upgrade_help
-    assert "--login-session-drain-timeout" not in normalized_ext_soperator_upgrade_help
-    assert "Login availability is unconditional" in normalized_ext_soperator_upgrade_help
-    assert "one exact source login Pod/node" in normalized_ext_soperator_upgrade_help
-    assert "without waiting for existing SSH sessions" in normalized_ext_soperator_upgrade_help
-    assert "an affected connection may drop and can reconnect" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "--jail-persistent-mount" in normalized_ext_soperator_upgrade_help
-    assert "--preserve-jail-home" not in normalized_ext_soperator_upgrade_help
-    assert "--no-preserve-jail-home" not in normalized_ext_soperator_upgrade_help
-    assert "--jail-sfs-resize-policy" in normalized_ext_soperator_upgrade_help
-    assert "--jail-sfs-resize-to-gib" in normalized_ext_soperator_upgrade_help
-    assert "--home-sfs-size-multiplier" not in normalized_ext_soperator_upgrade_help
-    assert "--home-sfs-size-gib" not in normalized_ext_soperator_upgrade_help
-    assert "--confirm-jail-rootfs-overwrite" not in normalized_ext_soperator_upgrade_help
-    assert "Active/passive jail rootfs refresh mode" in normalized_ext_soperator_upgrade_help
-    assert "Jail rootfs backing SFS resize policy" in normalized_ext_soperator_upgrade_help
-    assert "Nebius SDK/API" in normalized_ext_soperator_upgrade_help
-    assert "<mountPath>=<localPath>" in normalized_ext_soperator_upgrade_help
-    assert "--dry-run" in normalized_ext_soperator_upgrade_help
-    assert "--execute" in normalized_ext_soperator_upgrade_help
-    assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
-    assert "--approve-backup-recovery --no-approve-backup-recovery" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "missing or corrupt campaign-owned backup" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "never authorizes another segment until a replacement is verified" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "--approve-service-role-downtime" not in normalized_ext_soperator_upgrade_help
-    assert "checkpointed mutating phase can run" in normalized_ext_soperator_upgrade_help
-    assert "Confirm approval for the accepted external upgrade plan" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "--allow-unsupported-soperator-upgrade-path" not in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "--interactive --no-interactive" in normalized_ext_soperator_upgrade_help
-    assert "--worker-node-groups" not in normalized_ext_soperator_upgrade_help
-    assert "cxcli target id of the onboarded external MK8s target" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "Not the Nebius cluster_id or display name" in normalized_ext_soperator_upgrade_help
-    assert "Required execution mode" in normalized_ext_soperator_upgrade_help
-    assert "Use --dry-run for discovery refresh and the read-only plan" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "cutover, Jail Upgrade, validation, and retirement phases" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "Execute every remaining accepted campaign segment in dependency order" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "one minor hop per locked segment" in normalized_ext_soperator_upgrade_help
-    assert "continue automatically in the same invocation" in normalized_ext_soperator_upgrade_help
-    assert "Mutually exclusive with --dry-run" in normalized_ext_soperator_upgrade_help
-    assert "Confirm approval for the accepted external upgrade plan" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "Slurm job policy for external in-place upgrade: preserve, interactive, "
-        "wait-to-finish, wait-then-cancel, cancel-selected, "
-        "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
-        "requeue-hold-all, or fail"
-    ) in normalized_ext_soperator_upgrade_help
-    assert "Default: preserve" in normalized_ext_soperator_upgrade_help
-    assert "Maximum wait for Slurm jobs" in normalized_ext_soperator_upgrade_help
-    assert (
-        "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --execute --approve"
-    ) in normalized_ext_soperator_upgrade_help
-    assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "The target must already be onboarded and accepted through ext-soperator onboard" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "Dry-run refreshes discovery and prints the plan" in normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "Automatic external first adoption keeps /home, /data, /scripts, and /models"
-        in normalized_ext_soperator_upgrade_help
-    )
-    assert "does not require a copy-time login writer hold" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "Execute read-only probes those paths" in normalized_ext_soperator_upgrade_help
-    assert "Bound legacy, slot, and persistent PVCs before consumer switch" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "Core external Soperator execution uses Nebius API and Kubernetes API/kubectl "
-        "exec for cloud, cluster, and Slurm actions" in normalized_ext_soperator_upgrade_help
-    )
-    assert "it does not SSH from the operator workstation into login or worker nodes" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "--execute --approve refreshes discovery, creates or verifies one campaign-owned "
-        "restore-capable backup"
-    ) in normalized_ext_soperator_upgrade_help
-    assert "reconciles every remaining locked campaign segment in order" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "accepted Soperator storage/compute/GPU-stack/Jail Upgrade work assigned to that segment"
-        in (normalized_ext_soperator_upgrade_help)
-    )
-    assert "After each successful terminal segment checkpoint" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "the same invocation refreshes discovery, reacquires the cluster lease, revalidates "
-        "the immutable campaign and journal, and continues"
-        in (normalized_ext_soperator_upgrade_help)
-    )
-    assert "reports record cumulative active time spent inside approved execute invocations" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "offline gaps between resumptions are excluded" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert (
-        "The v6 operation journal never supplies a missing desired path"
-        in normalized_ext_soperator_upgrade_help
-    )
-    assert "rerun the idempotent onboard command only to check for and accept a later campaign" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    for removed_option in (
-        "--worker-rollout-strategy",
-        "--service-role-rollout-strategy",
-        "--worker-wave-groups",
-        "--worker-wave-percent",
-        "--strategy-max-unavailable-count",
-        "--strategy-drain-timeout",
-    ):
-        assert removed_option not in normalized_ext_soperator_upgrade_help
-    assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
-    assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
-    assert "Unsupported campaigns and non-v6 journals fail closed" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "external upgrade has no support-policy override" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
-    assert "--config CONFIG_YAML" in normalized_component_remove_help
-    assert (
-        "nebius-cxcli component remove managed-postgresql@analytics-pg "
-        "--config <config.yaml> --no-interactive"
-    ) in normalized_component_remove_help
-    assert (
-        "nebius-cxcli component remove 'apps:soperator@target-mk8s-prod' "
-        "--config ./deployments/tenant/project/config.yaml --no-interactive"
-    ) in normalized_component_remove_help
-    assert (
-        "nebius-cxcli component remove infra:mk8s "
-        "--config ./deployments/tenant/project/config.yaml --no-interactive"
-    ) in normalized_component_remove_help
-    assert "component remove 'apps:soperator@target-mk8s-prod' (removes" not in (
-        normalized_component_remove_help
-    )
-    assert "component remove infra:mk8s --no-interactive (non-interactive" not in (
-        normalized_component_remove_help
-    )
-    assert "nebius-cxcli component remove vm@worker-vm" in normalized_component_remove_help
-    assert "<id>@<resource-name-or-target-id>" in normalized_component_remove_help
-    assert "infra:<id>" in normalized_component_remove_help
-    assert "apps:<id>" in normalized_component_remove_help
-    assert "<row-id>" in normalized_component_remove_help
-    assert "row id is the normalized resource name" in normalized_component_remove_help
-    assert "it is the target id" in normalized_component_remove_help
-    assert "Omit" in normalized_component_remove_help
-    assert "prompt" in normalized_component_remove_help
-    assert "interactively" in normalized_component_remove_help
-    assert "wireguard [OPTIONS]" in wireguard_help
-    assert "Use exactly one mode per invocation" in normalized_wireguard_help
-    assert (
-        "--gen-client-conf CONFIG_YAML generates and downloads one client .conf"
-        in normalized_wireguard_help
-    )
-    assert "prints the local wg-quick up/down commands" in normalized_wireguard_help
-    assert "OS-specific install hint when wg-quick is missing" in normalized_wireguard_help
-    assert "wg-quick-safe filename/interface name" in normalized_wireguard_help
-    assert "max 15" in normalized_wireguard_help
-    assert "unique" in normalized_wireguard_help
-    assert "short" in normalized_wireguard_help
-    assert (
-        "--add-local-subnets CONFIG_YAML adds future-client route defaults"
-        in normalized_wireguard_help
-    )
-    assert (
-        "--remove-local-subnets CONFIG_YAML removes future-client route defaults"
-        in normalized_wireguard_help
-    )
-    assert (
-        "Add/remove subnet modes require one comma-separated --local-subnet value"
-        in normalized_wireguard_help
-    )
-    assert "Generation mode" in normalized_wireguard_help
-    assert "All modes" in normalized_wireguard_help
-    assert "pass exactly one" in normalized_wireguard_help
-    assert "comma-separated" in normalized_wireguard_help
-    assert "same selected component row" in normalized_wireguard_help
-    assert "Examples" in normalized_wireguard_help
-    assert "nebius-cxcli wireguard --gen-client-conf <config.yaml>" in normalized_wireguard_help
-    assert (
-        "nebius-cxcli wireguard --add-local-subnets <config.yaml> --local-subnet "
-        "10.20.0.0/16,10.30.0.0/16"
-    ) in normalized_wireguard_help
-    assert (
-        "nebius-cxcli wireguard --remove-local-subnets <config.yaml> --local-subnet "
-        "10.20.0.0/16,10.30.0.0/16"
-    ) in normalized_wireguard_help
-    assert "ssh-jumphost [OPTIONS]" in ssh_jumphost_help
-    assert "Use exactly one mode per invocation" in normalized_ssh_jumphost_help
-    assert (
-        "--add-allowed-cidrs CONFIG_YAML adds source CIDRs to the VM-local allowlist"
-        in normalized_ssh_jumphost_help
-    )
-    assert (
-        "--remove-allowed-cidrs CONFIG_YAML removes source CIDRs from the VM-local allowlist"
-        in normalized_ssh_jumphost_help
-    )
-    assert (
-        "--list-allowed-cidrs CONFIG_YAML lists the VM-local allowlist"
-        in normalized_ssh_jumphost_help
-    )
-    assert "one comma-separated --allowed-cidr value" in normalized_ssh_jumphost_help
-    assert "refuses to apply an empty allowlist" in normalized_ssh_jumphost_help
-    assert "same selected component row" in normalized_ssh_jumphost_help
-    assert "config.yaml" in normalized_component_remove_help
-    assert "row" in normalized_component_remove_help
-    assert "Already-absent selectors" in normalized_component_remove_help
-    assert "are" in normalized_component_remove_help
-    assert "skipped" in normalized_component_remove_help
-    assert "Removing a" in normalized_component_remove_help
-    assert "cluster target" in normalized_component_remove_help
-    assert "also removes" in normalized_component_remove_help
-    assert "app rows" in normalized_component_remove_help
-    assert "deploy.targets[] settings" in normalized_component_remove_help
-    assert "Remove enabled component rows" in normalized_component_remove_help
-    assert "discover [OPTIONS] DEPLOYMENT_SCOPE" in discover_help
-    assert "generated/" in discover_help
-    assert "narrower directory under it" in discover_help
-    assert "validate [OPTIONS] CONFIG_YAML" in validate_help
-    assert "grafana [OPTIONS]" in grafana_help
-    normalized_grafana_help = " ".join(grafana_help.split()).lower()
-    assert "--export-dashboard" in normalized_grafana_help
-    assert "--dashboard-json" in normalized_grafana_help
-    assert "--output-dir" in normalized_grafana_help
-    assert "--folder-uid" in normalized_grafana_help
-    assert "--dashboard-uid" in normalized_grafana_help
-    assert "--attach" in normalized_grafana_help
-    assert "--component-sources" in normalized_grafana_help
-    assert "--dashboard-folder" in normalized_grafana_help
-    assert "--datasource" in normalized_grafana_help
-    assert "--token-env" in normalized_grafana_help
-    assert "--username" in normalized_grafana_help
-    assert "examples:" in normalized_grafana_help
-    assert "api export with catalog attach" in normalized_grafana_help
-    assert "local json attach without grafana api credentials" in normalized_grafana_help
-    assert "multiple local json files with an explicit catalog" in normalized_grafana_help
-    assert "validate-dashboards [OPTIONS] CONFIG_YAML" in validate_dashboards_help
-    normalized_validate_dashboards_help = " ".join(validate_dashboards_help.split()).lower()
-    assert "grafana dashboard datasource/read-endpoint fit" in normalized_validate_dashboards_help
-    assert "explicit kube context" in normalized_validate_dashboards_help
-    assert "--target" in validate_dashboards_help
-    normalized_validate_help = " ".join(validate_help.split()).lower()
-    normalized_validate_generated_help = " ".join(validate_generated_help.split()).lower()
-    assert "--strict" not in validate_help
-    assert (
-        "source config, deployment readiness, and live quota/capacity" in normalized_validate_help
-    )
-    normalized_validate_sources_help = " ".join(validate_sources_help.split()).lower()
-    assert "validate-sources [OPTIONS] [COMPONENT_SOURCES_YAML]" in validate_sources_help
-    assert (
-        "component_sources.yaml, sibling component_cli_settings.yaml"
-        in normalized_validate_sources_help
-    )
-    assert "global flags" in normalized_validate_sources_help
-    assert "environment" in normalized_validate_sources_help
-    assert "bundled defaults" in normalized_validate_sources_help
-    assert "validate-generated [OPTIONS] GENERATED_PATH" in validate_generated_help
-    assert "generated-bundle readiness" in normalized_validate_generated_help
-    assert "portability" in normalized_validate_generated_help
-    assert "--auto-auth-bootstrap" in validate_generated_help
-    assert "--no-auto-auth" in validate_generated_help
-    assert "backend/terraform" in normalized_validate_generated_help
-    assert "validation when env" in normalized_validate_generated_help
-    normalized_deploy_help = " ".join(deploy_help.split()).lower()
-    assert "--skip-validations" in deploy_help
-    assert "--skip-validation" in deploy_help
-    assert "observability agent ingestion guardrail" in normalized_deploy_help
-    assert "required platform validations" in normalized_deploy_help
-    assert "eso mysterybox connectivity" in normalized_deploy_help
-    assert "one-run override" in normalized_deploy_help
-    assert "when omitted, deploy reconciles every built-in cluster target" in normalized_deploy_help
-    for option in (
-        "--job-policy",
-        "--cancel-job",
-        "--requeue-job",
-        "--job-wait-timeout",
-        "--job-refresh-interval",
-    ):
-        assert _help_contains_option(deploy_help, option)
-    assert "quota-request [OPTIONS] CONFIG_YAML" in quota_request_help
-    normalized_quota_request_help = " ".join(quota_request_help.split()).lower()
-    assert "already sufficient" in normalized_quota_request_help
-    assert "quota-request is a no-op" in normalized_quota_request_help
-    assert "remediation command" in normalized_quota_request_help
-    assert "deploy [OPTIONS] CONFIG_YAML" in deploy_help
-    assert "sibling generated/" in deploy_help
-    assert "destroy [OPTIONS] CONFIG_YAML" in destroy_help
-    assert "--yes" in " ".join(destroy_help.split())
-    assert "destroy [OPTIONS] GENERATED_PATH" in tf_destroy_help
-    assert "--yes" in " ".join(tf_destroy_help.split())
-    assert "destroy [OPTIONS] GENERATED_PATH" in flux_destroy_help
-    assert "--yes" in " ".join(flux_destroy_help.split())
-    assert "email [OPTIONS] [CONFIG_YAML]" in email_help
-    assert "Omit the path" in normalized_email_help
-    assert "only when" in normalized_email_help
-    assert "using --setup." in normalized_email_help
-
-
-def test_managed_soperator_command_group_exposes_lifecycle_commands() -> None:
-    result = runner.invoke(cli.app, ["soperator", "--help"])
-
-    assert result.exit_code == 0, result.output
-    output = _plain_output(result.output)
-    assert "Manage cxcli-managed Soperator deployments" in output
-    assert "backup" in output
-    assert "discover" in output
-    assert "restore" in output
-    assert "upgrade" in output
-
-
-def test_external_soperator_command_group_exposes_backup_restore() -> None:
-    result = runner.invoke(cli.app, ["ext-soperator", "--help"])
-
-    assert result.exit_code == 0, result.output
-    output = _plain_output(result.output)
-    assert "Manage existing external Nebius MK8s clusters for Soperator" in output
-    assert "backup" in output
-    assert "discover" in output
-    assert "restore" in output
-    assert "upgrade" in output
-    assert "migrate" not in output
-
-
-def test_retired_external_soperator_migrate_command_is_not_registered() -> None:
-    result = runner.invoke(cli.app, ["ext-soperator", "migrate", "--help"])
-
-    assert result.exit_code != 0, result.output
-    output = _plain_output(result.output)
-    assert "No such command" in output
-    assert "migrate" in output
 
 
 def test_public_command_help_omits_legacy_mk8s_shortcut_fields() -> None:
@@ -27658,11 +17441,10 @@ def test_bootstrap_ci_help_reflects_reconcile_first_contract() -> None:
     output = " ".join(plain_output.split()).lower()
 
     assert "--force" not in output
-    assert "--auth-bootstrap" in output
-    assert "--no-auth-bootstrap" in output
+    assert "--auth-bootstrap" not in output
+    assert "--no-auth-bootstrap" not in output
     assert "--cli-ref" in output
     assert "CLI-managed customer GitHub workflow" in plain_output
-    assert "[default: auth-bootstrap]" in plain_output
     assert "[default: GH_TOKEN]" in plain_output
 
 
@@ -27678,7 +17460,7 @@ def test_auth_help_reflects_sdk_auth_contract() -> None:
     assert "across all cached profiles for validate-only runs" in normalized_output
     assert "do not pass both" in plain_output
     assert "Valid only" in normalized_output
-    assert "with --project-id; required" in normalized_output
+    assert "with --project-id; the canonical runtime cache" in normalized_output
     assert "Nebius CLI profile name used by Nebius SDK" not in plain_output
     assert "Nebius SDK/CLI config file" not in plain_output
 
@@ -27875,7 +17657,7 @@ def test_top_level_help_has_single_auth_command_surface() -> None:
     result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
-    assert "Manage runtime auth profile" in output
+    assert "canonical project authentication" in output
     assert "auth-runtime-profile" not in output
     assert re.search(r"\bauth\b", output) is not None
 
@@ -27983,7 +17765,7 @@ def test_auth_help_has_no_subcommand_layer() -> None:
     assert "auth [OPTIONS]" in output
     assert "COMMAND [ARGS]" not in output
     assert "--validate-profile" in output
-    assert "--create" in output
+    assert "--create" not in output
     assert "--recreate" in output
     assert "--bootstrap-ci" in output
 
@@ -28004,6 +17786,21 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         wrote_workflow=True,
         replaced_workflow=False,
     )
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=tmp_path / "auth-private.pem",
+        private_key_pem="PRIVATE",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    material_with_s3 = replace(
+        material,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
 
     captured: dict[str, Any] = {}
 
@@ -28022,11 +17819,35 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         "_ensure_ci_workflow_for_deployments_root",
         lambda *, deployments_root, cli_ref: captured.update({"cli_ref": cli_ref}) or fake_workflow,
     )
-
-    def _fake_auto_bootstrap(**kwargs: object) -> None:
-        captured.update(kwargs)
-
-    monkeypatch.setattr(cli, "_auto_bootstrap_ci_auth_and_secrets", _fake_auto_bootstrap)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_deployments_gitignore",
+        lambda **_kwargs: SimpleNamespace(path=None, wrote=False),
+    )
+    monkeypatch.setattr(cli, "_load_local_email_settings", lambda: SimpleNamespace(enabled=False))
+    monkeypatch.setattr(
+        cli,
+        "_runtime_auth_cache_material",
+        lambda **kwargs: captured.update({"cache_lookup": kwargs}) or material,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_s3_material",
+        lambda value: captured.update({"s3_input": value}) or material_with_s3,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_export_runtime_auth_material",
+        lambda value: captured.update({"exported": value}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_sync_runtime_auth_profile_to_ci_environment",
+        lambda **kwargs: (
+            captured.update({"auth_sync": kwargs})
+            or ("owner/repo", "client-a-project-123", ["NEBIUS_SA_ID"])
+        ),
+    )
     monkeypatch.setattr(
         cli,
         "_sync_github_email_settings",
@@ -28043,7 +17864,6 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         [
             "bootstrap-ci",
             str(tmp_path / "config.yaml"),
-            "--auth-bootstrap",
             "--github-repo",
             "owner/repo",
             "--github-token-env",
@@ -28053,17 +17873,20 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
 
     assert result.exit_code == 0, result.output
     assert "CI bootstrap completed." in _plain_output(result.output)
-    assert captured["project_id"] == "project-123"
-    assert captured["github_environment"] == "client-a-project-123"
-    assert captured["github_repo"] == "owner/repo"
-    assert captured["github_token_env"] == "MY_GH_TOKEN"
+    assert captured["cache_lookup"] == {
+        "project_id": "project-123",
+        "client_name": "client-a",
+    }
+    assert captured["s3_input"] == material
+    assert captured["exported"] == material_with_s3
+    assert captured["auth_sync"] == {
+        "material": material_with_s3,
+        "client_name": "client-a",
+        "github_repo": "owner/repo",
+        "github_token_env": "MY_GH_TOKEN",
+        "repo_root_hint": tmp_path,
+    }
     assert captured["cli_ref"] == cli.default_cli_ref()
-
-
-def test_auth_requires_action_flag() -> None:
-    result = runner.invoke(cli.app, ["auth", "--project-id", "project-123"])
-    assert result.exit_code == 1
-    assert "Select at least one action" in _plain_output(result.output)
 
 
 def test_auth_rejects_mixed_project_config_and_project_id() -> None:
@@ -28117,7 +17940,7 @@ def test_auth_rejects_client_name_without_target() -> None:
     assert "--client-name requires --project-id" in _plain_output(result.output)
 
 
-def test_auth_create_warns_if_profile_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auth_target_ensures_profile_automatically(monkeypatch: pytest.MonkeyPatch) -> None:
     material = cli.RuntimeAuthCacheMaterial(
         project_id="project-123",
         client_name="client-a",
@@ -28133,10 +17956,12 @@ def test_auth_create_warns_if_profile_exists(monkeypatch: pytest.MonkeyPatch) ->
         "_create_or_recreate_runtime_auth_profile",
         lambda **_kwargs: (material, False),
     )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
 
     result = runner.invoke(
         cli.app,
-        ["auth", "--project-id", "project-123", "--client-name", "client-a", "--create"],
+        ["auth", "--project-id", "project-123", "--client-name", "client-a"],
     )
 
     assert result.exit_code == 0, result.output
@@ -28159,6 +17984,8 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
         "_create_or_recreate_runtime_auth_profile",
         lambda **_kwargs: (material, True),
     )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
 
     result = runner.invoke(
         cli.app,
@@ -28169,6 +17996,117 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
     assert "Recreated runtime auth profile for project 'project-123'" in _plain_output(
         result.output
     )
+
+
+def test_load_context_authenticates_before_normalized_config_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    fake_config = SimpleNamespace()
+    fake_paths = _fake_paths(tmp_path)
+    events: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda path, *, persist_normalized: (
+            events.append(("load", path, persist_normalized)) or fake_config
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_material",
+        lambda config, *, need_terraform: events.append(("auth", config, need_terraform)),
+    )
+    monkeypatch.setattr(cli, "to_plain_data", lambda _config: {})
+    monkeypatch.setattr(cli, "resolve_project_paths", lambda _path: fake_paths)
+    monkeypatch.setattr(
+        cli,
+        "validate_path_alignment",
+        lambda config, paths: events.append(("alignment", config, paths)),
+    )
+
+    config, paths = cli._load_context(config_path)
+
+    assert (config, paths) == (fake_config, fake_paths)
+    assert events[:3] == [
+        ("load", config_path, False),
+        ("auth", fake_config, False),
+        ("load", config_path, True),
+    ]
+
+
+def test_manifest_context_authenticates_before_tfvars_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    fake_config = SimpleNamespace()
+    events: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "load_generated_manifest",
+        lambda path: events.append(("manifest", path)) or manifest,
+    )
+    monkeypatch.setattr(cli, "_apply_generated_tool_version_overrides", lambda _manifest: None)
+    monkeypatch.setattr(cli, "runtime_config_from_manifest", lambda _manifest: fake_config)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_material",
+        lambda config, *, need_terraform: events.append(("auth", config, need_terraform)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_materialize_generated_terraform_tfvars",
+        lambda paths, loaded_manifest: events.append(("tfvars", paths, loaded_manifest)),
+    )
+
+    returned = cli._load_manifest_backed_context(fake_paths)
+
+    assert returned == (fake_config, fake_paths, manifest)
+    assert events == [
+        ("manifest", fake_paths.generated_dir),
+        ("auth", fake_config, False),
+        ("tfvars", fake_paths, manifest),
+    ]
+
+
+def test_source_payload_authenticates_after_exact_project_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "client_info": {
+                    "client_name": "client-a",
+                    "nebius": {
+                        "tenant_id": "tenant-123",
+                        "project_id": "project-123",
+                        "region_id": "eu-north1",
+                    },
+                    "notifications": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(cli, "_load_source_payload", _REAL_LOAD_SOURCE_PAYLOAD)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_project_auth_identity",
+        lambda **kwargs: calls.append(dict(kwargs)),
+    )
+
+    payload = cli._load_source_payload(config_path)
+
+    assert payload["client_info"]["nebius"]["project_id"] == "project-123"
+    assert calls == [{"project_id": "project-123", "client_name": "client-a"}]
 
 
 def test_runtime_auth_cache_metadata_write_keeps_previous_file_on_replace_failure(
@@ -28190,6 +18128,92 @@ def test_runtime_auth_cache_metadata_write_keeps_previous_file_on_replace_failur
     assert not list(tmp_path.glob(f".{cli._RUNTIME_AUTH_CACHE_FILE}.*.tmp"))
 
 
+def test_runtime_auth_cache_write_fsyncs_parent_after_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata_file = tmp_path / cli._RUNTIME_AUTH_CACHE_FILE
+    events: list[str] = []
+    real_fsync = cli.os.fsync
+    real_replace = cli.os.replace
+
+    def _record_fsync(descriptor: int) -> None:
+        events.append(
+            "directory-fsync" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file-fsync"
+        )
+        real_fsync(descriptor)
+
+    def _record_replace(source: object, destination: object) -> None:
+        events.append("replace")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(cli.os, "fsync", _record_fsync)
+    monkeypatch.setattr(cli.os, "replace", _record_replace)
+
+    cli._runtime_auth_cache_write_metadata(metadata_file, {"new": True})
+
+    assert events == ["file-fsync", "replace", "directory-fsync"]
+
+
+def test_runtime_auth_cache_material_repr_redacts_secret_values(tmp_path: Path) -> None:
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_file=tmp_path / "auth-private.pem",
+        private_key_pem="PRIVATE-SECRET-VALUE",
+        s3_access_key_id="access-key-id",
+        s3_secret_access_key="S3-SECRET-VALUE",
+    )
+
+    rendered = repr(material)
+
+    assert "PRIVATE-SECRET-VALUE" not in rendered
+    assert "S3-SECRET-VALUE" not in rendered
+    assert "serviceaccount-123" in rendered
+    assert "publickey-123" in rendered
+
+
+def test_runtime_auth_cache_rotation_keeps_previous_key_on_metadata_commit_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-old",
+        private_key_pem="OLD-PRIVATE-KEY",
+    )
+    original_replace = cli.os.replace
+
+    def _fail_metadata_commit(src: object, dst: object) -> None:
+        if Path(str(dst)).name == cli._RUNTIME_AUTH_CACHE_FILE:
+            raise RuntimeError("metadata commit failed")
+        original_replace(src, dst)
+
+    monkeypatch.setattr(cli.os, "replace", _fail_metadata_commit)
+
+    with pytest.raises(RuntimeError, match="metadata commit failed"):
+        cli._runtime_auth_cache_write(
+            project_id="project-123",
+            client_name="client-a",
+            service_account_id="serviceaccount-123",
+            auth_public_key_id="publickey-new",
+            private_key_pem="NEW-PRIVATE-KEY",
+        )
+
+    material = cli._runtime_auth_cache_material(
+        project_id="project-123",
+        client_name="client-a",
+    )
+    assert material is not None
+    assert material.auth_public_key_id == "publickey-old"
+    assert material.private_key_pem == "OLD-PRIVATE-KEY"
+
+
 def test_runtime_auth_cache_write_creates_private_files_with_restricted_modes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -28207,16 +18231,378 @@ def test_runtime_auth_cache_write_creates_private_files_with_restricted_modes(
     )
 
     cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
-    private_key_file = cache_dir / "auth-private.pem"
+    assert cache_dir == cli._runtime_auth_cache_dir(
+        project_id="project-123", client_name="different-client"
+    )
     metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    private_key_file = cache_dir / metadata["private_key_file"]
 
     assert oct(cache_dir.stat().st_mode & 0o777) == "0o700"
     assert private_key_file.read_text(encoding="utf-8") == "PRIVATE-KEY\n"
     assert oct(private_key_file.stat().st_mode & 0o777) == "0o600"
     assert oct(metadata_file.stat().st_mode & 0o777) == "0o600"
-    assert json.loads(metadata_file.read_text(encoding="utf-8"))["s3_secret_access_key"] == (
-        "secret-key"
+    assert metadata["schema"] == cli._RUNTIME_AUTH_CACHE_SCHEMA
+    assert metadata["service_account_name"] == "nebius-cxcli-sa"
+    assert metadata["s3_secret_access_key"] == "secret-key"
+
+
+def test_runtime_auth_cache_rejects_legacy_identity_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    cache_dir.mkdir(parents=True)
+    cache_dir.chmod(0o700)
+    key_file = cache_dir / "auth-private.pem"
+    key_file.write_text("KEY\n", encoding="utf-8")
+    key_file.chmod(0o600)
+    metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+    metadata_file.write_text(
+        json.dumps(
+            {
+                "schema": cli._RUNTIME_AUTH_CACHE_SCHEMA,
+                "state": cli._RUNTIME_AUTH_CACHE_STATE_READY,
+                "project_id": "project-123",
+                "client_name": "client-a",
+                "service_account_name": "nebius-cxcli-tf-sa",
+                "service_account_id": "legacy-sa",
+                "auth_public_key_id": "legacy-key",
+                "private_key_file": key_file.name,
+            }
+        ),
+        encoding="utf-8",
     )
+    metadata_file.chmod(0o600)
+
+    with pytest.raises(RuntimeError, match="canonical nebius-cxcli-sa identity"):
+        cli._runtime_auth_cache_material(project_id="project-123", client_name="client-a")
+
+
+def test_runtime_auth_cache_rejects_symlinked_private_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+    )
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    metadata = json.loads((cache_dir / cli._RUNTIME_AUTH_CACHE_FILE).read_text(encoding="utf-8"))
+    private_key_file = cache_dir / metadata["private_key_file"]
+    alternate_key_file = cache_dir / "alternate.pem"
+    alternate_key_file.write_text("ALTERNATE-KEY\n", encoding="utf-8")
+    alternate_key_file.chmod(0o600)
+    private_key_file.unlink()
+    private_key_file.symlink_to(alternate_key_file.name)
+
+    with pytest.raises(RuntimeError, match="private key file must not be a symlink"):
+        cli._runtime_auth_cache_material(project_id="project-123", client_name="client-a")
+
+
+def test_runtime_auth_profile_status_reports_unsafe_file_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+    )
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    private_key_file = cache_dir / metadata["private_key_file"]
+    metadata_file.chmod(0o644)
+    private_key_file.chmod(0o644)
+    monkeypatch.setattr(cli, "auth_public_key_exists", lambda **_kwargs: True)
+
+    status = cli._runtime_auth_profile_status(
+        project_id="project-123",
+        client_name="client-a",
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert "runtime-auth metadata file permissions must be 0600" in status.issues
+    assert "private key file permissions must be 0600" in status.issues
+
+
+def test_runtime_auth_key_intent_resumes_without_duplicate_cloud_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: ("PRIVATE", "PUBLIC"),
+    )
+    cli._runtime_auth_create_key_intent(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: SimpleNamespace(service_account_id="sa-123"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "service_account_auth_public_key_ids_by_description",
+        lambda **_kwargs: ("key-existing",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_service_account_auth_public_key",
+        lambda **_kwargs: pytest.fail("recovered intent must not upload a duplicate key"),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=False,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert created is True
+    assert material.service_account_id == "sa-123"
+    assert material.auth_public_key_id == "key-existing"
+    assert material.s3_access_key_id is None
+    assert not (material.private_key_file.parent / cli._RUNTIME_AUTH_KEY_INTENT_FILE).exists()
+
+
+def test_runtime_auth_imports_exact_canonical_ci_environment_without_new_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path / "cache"))
+    private_key_file = tmp_path / "ci-auth-private.pem"
+    private_key_file.write_text("CI-PRIVATE-KEY\n", encoding="utf-8")
+    private_key_file.chmod(0o600)
+    monkeypatch.setenv("NEBIUS_SA_ID", "serviceaccount-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "publickey-123")
+    monkeypatch.setenv(cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV, "project-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_PEM", "CI-PRIVATE-KEY")
+    monkeypatch.setenv("NEBIUS_S3_ACCESS_KEY_ID", "s3-access")
+    monkeypatch.setenv("NEBIUS_S3_SECRET_ACCESS_KEY", "s3-secret")
+    identity_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli,
+        "service_account_id_by_name",
+        lambda **_kwargs: "serviceaccount-123",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **kwargs: (
+            identity_calls.append(kwargs)
+            or SimpleNamespace(service_account_id="serviceaccount-123")
+        ),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: pytest.fail("canonical CI credentials must not create another key"),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=False,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert created is False
+    assert material.service_account_id == "serviceaccount-123"
+    assert material.auth_public_key_id == "publickey-123"
+    assert material.s3_access_key_id == "s3-access"
+    assert material.s3_secret_access_key == "s3-secret"
+    assert len(identity_calls) == 1
+    assert identity_calls[0]["prefer_operator_auth"] is False
+    assert identity_calls[0]["allow_mutation"] is False
+    assert identity_calls[0]["allow_cli_token"] is False
+
+
+def test_runtime_auth_cached_profile_is_returned_before_iam_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: pytest.fail(
+            "cached key validity must be checked before any IAM reconciliation"
+        ),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=False,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert created is False
+    assert material.service_account_id == "serviceaccount-123"
+    assert material.auth_public_key_id == "publickey-123"
+
+
+def test_runtime_auth_recreate_uses_operator_credentials_not_stale_cached_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_runtime_auth_env()
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-stale",
+        private_key_pem="STALE-PRIVATE-KEY",
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    monkeypatch.setenv(cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV, "project-123")
+    monkeypatch.setenv("NEBIUS_SA_ID", "serviceaccount-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "publickey-stale")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(tmp_path / "stale.pem"))
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_PEM", "STALE-PRIVATE-KEY")
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    captured: dict[str, str | None] = {}
+
+    def _ensure_identity(**_kwargs: object) -> SimpleNamespace:
+        captured.update(
+            {
+                "service_account_id": os.environ.get("NEBIUS_SA_ID"),
+                "public_key_id": os.environ.get("NEBIUS_AUTH_PUBLIC_KEY_ID"),
+                "private_key_file": os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE"),
+                "iam_token": os.environ.get("NEBIUS_IAM_TOKEN"),
+            }
+        )
+        return SimpleNamespace(service_account_id="serviceaccount-123")
+
+    monkeypatch.setattr(cli, "ensure_ci_service_account_identity", _ensure_identity)
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: ("FRESH-PRIVATE-KEY", "FRESH-PUBLIC-KEY"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "service_account_auth_public_key_ids_by_description",
+        lambda **_kwargs: ("publickey-fresh",),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=True,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert captured == {
+        "service_account_id": None,
+        "public_key_id": None,
+        "private_key_file": None,
+        "iam_token": "operator-token",
+    }
+    assert created is True
+    assert material.auth_public_key_id == "publickey-fresh"
+    assert material.s3_access_key_id == "s3-access"
+    assert material.s3_secret_access_key == "s3-secret"
+
+
+def test_automatic_runtime_auth_rotation_preserves_cached_s3_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-stale",
+        private_key_pem="STALE-PRIVATE-KEY",
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: SimpleNamespace(service_account_id="serviceaccount-123"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: ("FRESH-PRIVATE-KEY", "FRESH-PUBLIC-KEY"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "service_account_auth_public_key_ids_by_description",
+        lambda **_kwargs: ("publickey-fresh",),
+    )
+    wait_calls: list[str] = []
+
+    def _wait(material: cli.RuntimeAuthCacheMaterial) -> None:
+        wait_calls.append(material.auth_public_key_id)
+        if material.auth_public_key_id == "publickey-stale":
+            raise RuntimeError("Public Key not exists; JwtKeyNotExists")
+
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", _wait)
+    monkeypatch.setattr(
+        cli,
+        "issue_service_account_object_storage_access_key",
+        lambda **_kwargs: pytest.fail("authorized-key rotation must not issue another S3 key"),
+    )
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        ),
+        need_terraform=True,
+    )
+
+    material = cli._runtime_auth_cache_material(
+        project_id="project-123",
+        client_name="client-a",
+    )
+    assert material is not None
+    assert wait_calls == ["publickey-stale", "publickey-fresh"]
+    assert material.auth_public_key_id == "publickey-fresh"
+    assert material.s3_access_key_id == "s3-access"
+    assert material.s3_secret_access_key == "s3-secret"
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "s3-access"
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "s3-secret"
+    _clear_runtime_auth_env()
 
 
 def test_mysterybox_eso_credentials_json_uses_subject_credentials_format() -> None:
@@ -28282,6 +18668,7 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
         "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
         "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
         "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
     }
     for key, value in runtime_env.items():
         monkeypatch.setenv(key, value)
@@ -28289,7 +18676,7 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
     def _fake_bootstrap_service_account_auth_key(**kwargs: object) -> SimpleNamespace:
         captured.update(kwargs)
         captured["runtime_auth_env"] = {key: os.environ.get(key) for key in runtime_env}
-        return SimpleNamespace(
+        result = SimpleNamespace(
             project_id="project-123",
             service_account_name="mysterybox-sa",
             service_account_id="serviceaccount-mysterybox",
@@ -28299,6 +18686,14 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
             auth_public_key_id="publickey-mysterybox",
             auth_private_key_pem="MYSTERYBOX-PRIVATE-KEY",
         )
+        delivery = kwargs["delivery"]
+        intent = delivery.prepare(
+            result,
+            operation_id="a" * 32,
+            credentials=(("auth-public-key", "publickey-mysterybox"),),
+        )
+        delivery.deliver(result, intent)
+        return result
 
     monkeypatch.setattr(
         cli,
@@ -28311,12 +18706,26 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
         lambda *, project_id, credentials: wait_calls.append((project_id, credentials)),
     )
 
-    credentials = cli._create_mysterybox_eso_credentials(project_id="project-123")
+    delivered: list[cli.MysteryBoxEsoCredentials] = []
+    credentials = cli._create_mysterybox_eso_credentials(
+        project_id="project-123",
+        delivery=cli.CallbackCredentialDeliveryAdapter(
+            kind="test-secret",
+            target="namespace/name:key",
+            deliver_callback=lambda value, _intent: (
+                wait_calls.append(("project-123", value)),
+                delivered.append(value),
+            ),
+        ),
+    )
 
     assert captured["service_account_name"] == "mysterybox-sa"
     assert captured["role_ids"] == ["mysterybox.payload-viewer"]
     assert captured["allow_cli_token"] is True
-    assert captured["runtime_auth_env"] == {key: None for key in runtime_env}
+    assert captured["runtime_auth_env"] == {
+        **{key: None for key in runtime_env if key != cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV},
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+    }
     assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
     assert "access_key_description" not in captured
     assert credentials == cli.MysteryBoxEsoCredentials(
@@ -28325,6 +18734,7 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
         private_key_pem="MYSTERYBOX-PRIVATE-KEY",
     )
     assert wait_calls == [("project-123", credentials)]
+    assert delivered == [credentials]
 
 
 def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
@@ -28336,6 +18746,7 @@ def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
         "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
         "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
         "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
     }
     for key, value in runtime_env.items():
         monkeypatch.setenv(key, value)
@@ -28362,7 +18773,10 @@ def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
     assert captured["service_account_name"] == "mysterybox-sa"
     assert captured["role_ids"] == ["mysterybox.payload-viewer"]
     assert captured["allow_cli_token"] is True
-    assert captured["runtime_auth_env"] == {key: None for key in runtime_env}
+    assert captured["runtime_auth_env"] == {
+        **{key: None for key in runtime_env if key != cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV},
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+    }
     assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
 
 
@@ -28386,6 +18800,7 @@ def test_ensure_mysterybox_eso_credentials_secret_reuses_valid_cluster_secret(
         "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
         "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
         "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
     }
     for key, value in runtime_env.items():
         monkeypatch.setenv(key, value)
@@ -28435,12 +18850,16 @@ def test_ensure_mysterybox_eso_credentials_secret_reuses_valid_cluster_secret(
             "key": "credentials.json",
         },
         extra_env=None,
-        auto_auth_bootstrap=True,
         fresh_credentials=None,
     )
 
     assert fresh is None
-    assert auth_key_checks == [{key: None for key in runtime_env}]
+    assert auth_key_checks == [
+        {
+            **{key: None for key in runtime_env if key != cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV},
+            cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+        }
+    ]
     assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
     assert rendered_messages == [
         "Reused ESO MysteryBox credential Secret external-secrets/nebius-mysterybox-shared-creds for native provider."
@@ -28468,6 +18887,7 @@ def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
     )
     applied: list[dict[str, Any]] = []
     rendered_messages: list[str] = []
+    monkeypatch.setattr(cli, "_wait_for_mysterybox_eso_token_ready", lambda **_kwargs: None)
 
     monkeypatch.setattr(
         cli,
@@ -28486,12 +18906,14 @@ def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
     monkeypatch.setattr(
         cli,
         "_create_mysterybox_eso_credentials",
-        lambda *, project_id: fresh_credentials,
+        lambda *, project_id, delivery: _deliver_test_credentials(delivery, fresh_credentials),
     )
     monkeypatch.setattr(
         cli,
         "_apply_mysterybox_eso_credentials_secret",
-        lambda **kwargs: applied.append(dict(kwargs)),
+        lambda **kwargs: applied.append(
+            {key: value for key, value in kwargs.items() if key != "delivery_marker_sha256"}
+        ),
     )
     monkeypatch.setattr(
         cli.console,
@@ -28507,7 +18929,6 @@ def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
             "key": "credentials.json",
         },
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-        auto_auth_bootstrap=True,
         fresh_credentials=None,
     )
 
@@ -28525,7 +18946,7 @@ def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
     assert not any("is invalid; replacing it" in message for message in rendered_messages)
 
 
-def test_ensure_mysterybox_eso_credentials_secret_requires_auto_bootstrap_when_missing(
+def test_ensure_mysterybox_eso_credentials_secret_converges_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
@@ -28534,25 +18955,66 @@ def test_ensure_mysterybox_eso_credentials_secret_requires_auto_bootstrap_when_m
             nebius=SimpleNamespace(project_id="project-123"),
         )
     )
+    credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
+    )
+    applied: list[dict[str, object]] = []
+    delivery_state: dict[str, object] = {}
+    monkeypatch.setattr(cli, "_wait_for_mysterybox_eso_token_ready", lambda **_kwargs: None)
     monkeypatch.setattr(cli, "_kubectl_read_secret_key", lambda **_kwargs: None)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        cli._ensure_mysterybox_eso_credentials_secret(
-            fake_config,
-            spec={
-                "namespace": "external-secrets",
-                "name": "nebius-mysterybox-shared-creds",
-                "key": "credentials.json",
-            },
-            extra_env=None,
-            auto_auth_bootstrap=False,
-            fresh_credentials=None,
+    def _create_credentials(*, project_id: str, delivery: Any) -> Any:
+        assert project_id == "project-123"
+        intent = delivery.prepare(
+            credentials,
+            operation_id="e" * 32,
+            credentials=(("auth-public-key", "publickey-mysterybox"),),
         )
+        delivery.deliver(credentials, intent)
+        delivery_state.update(adapter=delivery, intent=intent)
+        return credentials
 
-    assert (
-        "credential Secret external-secrets/nebius-mysterybox-shared-creds:credentials.json is missing"
-        in str(exc_info.value)
+    monkeypatch.setattr(
+        cli,
+        "_create_mysterybox_eso_credentials",
+        _create_credentials,
     )
+    monkeypatch.setattr(
+        cli,
+        "_apply_mysterybox_eso_credentials_secret",
+        lambda **kwargs: applied.append(
+            {key: value for key, value in kwargs.items() if key != "delivery_marker_sha256"}
+        ),
+    )
+
+    returned = cli._ensure_mysterybox_eso_credentials_secret(
+        fake_config,
+        spec={
+            "namespace": "external-secrets",
+            "name": "nebius-mysterybox-shared-creds",
+            "key": "credentials.json",
+        },
+        extra_env=None,
+        fresh_credentials=None,
+    )
+
+    assert returned == credentials
+    assert applied[0]["credentials"] == credentials
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="Error from server (NotFound)",
+        ),
+    )
+    adapter = delivery_state["adapter"]
+    intent = delivery_state["intent"]
+    assert adapter.probe(intent) is cli.CredentialDeliveryDisposition.AMBIGUOUS
 
 
 def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
@@ -28572,6 +19034,7 @@ def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
     applied: list[tuple[object, dict[str, str] | None]] = []
     tls_checks: list[dict[str, Any]] = []
     credential_creates: list[str] = []
+    monkeypatch.setattr(cli, "_wait_for_mysterybox_eso_token_ready", lambda **_kwargs: None)
 
     monkeypatch.setattr(cli, "mysterybox_eso_enabled", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
@@ -28598,7 +19061,11 @@ def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
     monkeypatch.setattr(
         cli,
         "_create_mysterybox_eso_credentials",
-        lambda *, project_id: credential_creates.append(project_id) or credentials,
+        lambda *, project_id, delivery: (
+            credential_creates.append(project_id),
+            _deliver_test_credentials(delivery, credentials),
+            credentials,
+        )[2],
     )
     monkeypatch.setattr(
         cli,
@@ -28615,7 +19082,6 @@ def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
     cli._ensure_mysterybox_eso_runtime_before_flux(
         fake_config,
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-        auto_auth_bootstrap=True,
     )
 
     assert len(applied) == 1
@@ -28639,10 +19105,11 @@ def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
     assert secret_doc["apiVersion"] == "v1"
     assert secret_doc["kind"] == "Secret"
     assert secret_doc["type"] == "Opaque"
-    assert secret_doc["metadata"] == {
-        "name": "nebius-mysterybox-shared-creds",
-        "namespace": "external-secrets",
-    }
+    assert secret_doc["metadata"]["name"] == "nebius-mysterybox-shared-creds"
+    assert secret_doc["metadata"]["namespace"] == "external-secrets"
+    assert secret_doc["metadata"]["annotations"]["nebius.ai/cxcli-credential-delivery"].startswith(
+        "sha256:"
+    )
     credentials = json.loads(secret_doc["stringData"]["credentials.json"])
     assert credentials == {
         "subject-credentials": {
@@ -28672,6 +19139,7 @@ def test_ensure_mysterybox_eso_runtime_prints_confirmation_per_applied_secret(
     applied: list[tuple[object, dict[str, str] | None]] = []
     rendered_messages: list[str] = []
     credential_creates: list[str] = []
+    monkeypatch.setattr(cli, "_wait_for_mysterybox_eso_token_ready", lambda **_kwargs: None)
 
     monkeypatch.setattr(cli, "mysterybox_eso_enabled", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
@@ -28703,7 +19171,11 @@ def test_ensure_mysterybox_eso_runtime_prints_confirmation_per_applied_secret(
     monkeypatch.setattr(
         cli,
         "_create_mysterybox_eso_credentials",
-        lambda *, project_id: credential_creates.append(project_id) or credentials,
+        lambda *, project_id, delivery: (
+            credential_creates.append(project_id),
+            _deliver_test_credentials(delivery, credentials),
+            credentials,
+        )[2],
     )
     monkeypatch.setattr(
         cli,
@@ -28724,7 +19196,6 @@ def test_ensure_mysterybox_eso_runtime_prints_confirmation_per_applied_secret(
     cli._ensure_mysterybox_eso_runtime_before_flux(
         fake_config,
         extra_env=None,
-        auto_auth_bootstrap=True,
     )
 
     assert len(applied) == 2
@@ -28916,298 +19387,416 @@ def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
-            client_info=SimpleNamespace(
-                client_name="client-a",
-                nebius=SimpleNamespace(project_id="project-123"),
-            )
-        )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        refreshed_private_key = tmp_path / "auth-private-fresh.pem"
-        refreshed_private_key.write_text("FRESH-KEY", encoding="utf-8")
-        stale_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
             client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=False,
-            cloud_check_error=None,
-            issues=(
-                "auth_public_key_id 'auth-key-stale' does not exist (or is not accessible) in Nebius",
-            ),
+            nebius=SimpleNamespace(project_id="project-123"),
         )
-        refreshed_material = cli.RuntimeAuthCacheMaterial(
-            project_id="project-123",
-            client_name="client-a",
-            service_account_id="sa-fresh",
-            auth_public_key_id="auth-key-fresh",
-            private_key_file=refreshed_private_key,
-            private_key_pem="FRESH-KEY-DATA",
-            s3_access_key_id="fresh-access",
-            s3_secret_access_key="fresh-secret",
-        )
+    )
+    stale_key = tmp_path / "stale.pem"
+    fresh_key = tmp_path / "fresh.pem"
+    stale_key.write_text("STALE", encoding="utf-8")
+    fresh_key.write_text("FRESH", encoding="utf-8")
+    stale = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-stale",
+        auth_public_key_id="key-stale",
+        private_key_file=stale_key,
+        private_key_pem="STALE",
+        s3_access_key_id="s3",
+        s3_secret_access_key="secret",
+    )
+    fresh = replace(
+        stale,
+        service_account_id="sa-fresh",
+        auth_public_key_id="key-fresh",
+        private_key_file=fresh_key,
+        private_key_pem="FRESH",
+    )
+    recreate_calls: list[bool] = []
+    wait_calls: list[str] = []
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
+    def _profile(**kwargs: object) -> tuple[cli.RuntimeAuthCacheMaterial, bool]:
+        recreate = bool(kwargs["recreate"])
+        recreate_calls.append(recreate)
+        return (fresh if recreate else stale), recreate
 
-        recreate_calls: list[bool] = []
-        rendered_messages: list[str] = []
+    def _wait(material: cli.RuntimeAuthCacheMaterial) -> None:
+        wait_calls.append(material.auth_public_key_id)
+        if material is stale:
+            raise RuntimeError("Public Key not exists; JwtKeyNotExists")
 
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: stale_status)
-        monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **kwargs: (
-                recreate_calls.append(bool(kwargs["recreate"])) or (refreshed_material, True)
-            ),
-        )
-        monkeypatch.setattr(
-            cli.console,
-            "print",
-            lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
-        )
+    monkeypatch.setattr(cli, "_create_or_recreate_runtime_auth_profile", _profile)
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", _wait)
 
-        cli._ensure_runtime_auth_material(
-            fake_config,
-            need_terraform=True,
-            auto_bootstrap=True,
-        )
+    cli._ensure_runtime_auth_material(fake_config, need_terraform=False)
 
-        assert recreate_calls == [True]
-        assert os.environ["NEBIUS_SA_ID"] == "sa-fresh"
-        assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
-        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] == str(
-            refreshed_material.private_key_file
-        )
-        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] == "FRESH-KEY-DATA"
-        assert os.environ["AWS_ACCESS_KEY_ID"] == "fresh-access"
-        assert os.environ["AWS_SECRET_ACCESS_KEY"] == "fresh-secret"
-        assert any(
-            "Cached runtime auth profile is stale; recreating because" in message
-            for message in rendered_messages
-        )
-    finally:
-        _clear_runtime_auth_env()
+    assert recreate_calls == [False, True]
+    assert wait_calls == ["key-stale", "key-fresh"]
+    assert os.environ["NEBIUS_SA_ID"] == "sa-fresh"
+    assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "key-fresh"
+    _clear_runtime_auth_env()
 
 
-def test_ensure_runtime_auth_material_fails_fast_for_stale_cached_public_key_without_auto_bootstrap(
+def test_ensure_runtime_auth_material_does_not_duplicate_new_key_on_propagation_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "new.pem"
+    key_file.write_text("NEW", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-new",
+        auth_public_key_id="key-new",
+        private_key_file=key_file,
+        private_key_pem="NEW",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    recreate_calls: list[bool] = []
+
+    def _profile(**kwargs: object) -> tuple[cli.RuntimeAuthCacheMaterial, bool]:
+        recreate_calls.append(bool(kwargs["recreate"]))
+        return material, True
+
+    monkeypatch.setattr(cli, "_create_or_recreate_runtime_auth_profile", _profile)
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_runtime_auth_token_ready",
+        lambda _material: (_ for _ in ()).throw(
+            RuntimeError("Public Key not exists; JwtKeyNotExists after propagation timeout")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="propagation timeout"):
+        cli._ensure_runtime_auth_material(
+            SimpleNamespace(
+                client_info=SimpleNamespace(
+                    client_name="client-a",
+                    nebius=SimpleNamespace(project_id="project-123"),
+                )
+            ),
+            need_terraform=False,
+        )
+
+    assert recreate_calls == [False]
+    _clear_runtime_auth_env()
+
+
+def test_ensure_runtime_auth_material_replaces_inherited_snapshot_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "canonical.pem"
+    key_file.write_text("CANONICAL", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="canonical-sa",
+        auth_public_key_id="canonical-key",
+        private_key_file=key_file,
+        private_key_pem="CANONICAL",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "snapshot-token")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(tmp_path / "human.json"))
+    monkeypatch.setenv("NEBIUS_SA_ID", "inherited-sa")
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
             client_info=SimpleNamespace(
                 client_name="client-a",
                 nebius=SimpleNamespace(project_id="project-123"),
             )
-        )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        stale_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
-            client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=False,
-            cloud_check_error=None,
-            issues=(
-                "auth_public_key_id 'auth-key-stale' does not exist (or is not accessible) in Nebius",
-            ),
-        )
+        ),
+        need_terraform=False,
+    )
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
-
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: stale_status)
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **_kwargs: pytest.fail(
-                "stale cached profile should fail before recreate when auto bootstrap is disabled"
-            ),
-        )
-
-        with pytest.raises(RuntimeError) as exc_info:
-            cli._ensure_runtime_auth_material(
-                fake_config,
-                need_terraform=True,
-                auto_bootstrap=False,
-            )
-
-        message = str(exc_info.value)
-        assert "Cached runtime auth profile is stale" in message
-        assert "--recreate" in message
-        assert "--auto-auth-bootstrap" in message
-    finally:
-        _clear_runtime_auth_env()
+    assert os.environ["NEBIUS_SA_ID"] == "canonical-sa"
+    assert "NEBIUS_IAM_TOKEN" not in os.environ
+    assert "NEBIUS_AUTH_CREDENTIALS_FILE" not in os.environ
+    _clear_runtime_auth_env()
 
 
 def test_ensure_runtime_auth_material_does_not_recreate_on_cloud_verification_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
-            client_info=SimpleNamespace(
-                client_name="client-a",
-                nebius=SimpleNamespace(project_id="project-123"),
-            )
-        )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        verification_error_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
-            client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=None,
-            cloud_check_error="temporary sdk failure",
-            issues=("failed Nebius auth public key verification: temporary sdk failure",),
-        )
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "key.pem"
+    key_file.write_text("KEY", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa",
+        auth_public_key_id="key",
+        private_key_file=key_file,
+        private_key_pem="KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **kwargs: calls.append(bool(kwargs["recreate"])) or (material, False),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_runtime_auth_token_ready",
+        lambda _material: (_ for _ in ()).throw(RuntimeError("temporary sdk failure")),
+    )
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
-
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(
-            cli, "_runtime_auth_profile_status", lambda **_kwargs: verification_error_status
-        )
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **_kwargs: pytest.fail(
-                "cloud verification errors should not auto-recreate runtime auth material"
-            ),
-        )
-
+    with pytest.raises(RuntimeError, match="temporary sdk failure"):
         cli._ensure_runtime_auth_material(
-            fake_config,
-            need_terraform=True,
-            auto_bootstrap=True,
+            SimpleNamespace(
+                client_info=SimpleNamespace(
+                    client_name="client-a",
+                    nebius=SimpleNamespace(project_id="project-123"),
+                )
+            ),
+            need_terraform=False,
         )
-    finally:
-        _clear_runtime_auth_env()
+    assert calls == [False]
+    _clear_runtime_auth_env()
 
 
-def test_ensure_runtime_auth_material_recreates_on_deleted_key_cloud_error(
+def test_ensure_runtime_auth_material_issues_s3_only_for_terraform(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "key.pem"
+    key_file.write_text("KEY", encoding="utf-8")
+    api_only = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa",
+        auth_public_key_id="key",
+        private_key_file=key_file,
+        private_key_pem="KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    with_s3 = replace(
+        api_only,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    s3_calls: list[cli.RuntimeAuthCacheMaterial] = []
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (api_only, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_s3_material",
+        lambda material: s3_calls.append(material) or with_s3,
+    )
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
             client_info=SimpleNamespace(
                 client_name="client-a",
                 nebius=SimpleNamespace(project_id="project-123"),
             )
-        )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        refreshed_private_key = tmp_path / "auth-private-fresh.pem"
-        refreshed_private_key.write_text("FRESH-KEY", encoding="utf-8")
-        deleted_key_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
-            client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=None,
-            cloud_check_error=(
-                "Request error INVALID_ARGUMENT: Public Key not exists, expired or deactivated: "
-                "'auth-key-stale'; Caused by error: JwtKeyNotExists"
-            ),
-            issues=("failed Nebius auth public key verification",),
-        )
-        refreshed_material = cli.RuntimeAuthCacheMaterial(
-            project_id="project-123",
-            client_name="client-a",
-            service_account_id="sa-fresh",
-            auth_public_key_id="auth-key-fresh",
-            private_key_file=refreshed_private_key,
-            private_key_pem="FRESH-KEY-DATA",
-            s3_access_key_id="fresh-access",
-            s3_secret_access_key="fresh-secret",
-        )
+        ),
+        need_terraform=True,
+    )
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
+    assert s3_calls == [api_only]
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "s3-access"
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "s3-secret"
+    _clear_runtime_auth_env()
 
-        recreate_calls: list[bool] = []
 
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(
-            cli, "_runtime_auth_profile_status", lambda **_kwargs: deleted_key_status
+def test_ensure_runtime_auth_material_preserves_operator_auth_until_s3_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "key.pem"
+    key_file.write_text("KEY", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa",
+        auth_public_key_id="key",
+        private_key_file=key_file,
+        private_key_pem="KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    with_s3 = replace(
+        material,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    observed_operator_tokens: list[str | None] = []
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_s3_material",
+        lambda _material: (
+            observed_operator_tokens.append(os.environ.get("NEBIUS_IAM_TOKEN")) or with_s3
+        ),
+    )
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        ),
+        need_terraform=True,
+    )
+
+    assert observed_operator_tokens == ["operator-token"]
+    assert "NEBIUS_IAM_TOKEN" not in os.environ
+    assert os.environ["NEBIUS_SA_ID"] == "sa"
+    _clear_runtime_auth_env()
+
+
+def test_runtime_auth_s3_issuance_uses_captured_operator_not_canonical_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_runtime_auth_env()
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path / "cache"))
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    cli._capture_runtime_auth_operator_environment()
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="runtime-sa",
+        auth_public_key_id="runtime-key",
+        private_key_pem="RUNTIME-PRIVATE-KEY",
+    )
+    material = cli._runtime_auth_cache_material(
+        project_id="project-123",
+        client_name="client-a",
+    )
+    assert material is not None
+    cli._export_runtime_auth_material(material)
+    observed: list[dict[str, object]] = []
+    delivery_state: dict[str, object] = {}
+
+    def _issue(**kwargs: object) -> SimpleNamespace:
+        observed.append(
+            {
+                "iam_token": os.environ.get("NEBIUS_IAM_TOKEN"),
+                "service_account_env": os.environ.get("NEBIUS_SA_ID"),
+                "allow_cli_token": kwargs["allow_cli_token"],
+            }
         )
-        monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **kwargs: (
-                recreate_calls.append(bool(kwargs["recreate"])) or (refreshed_material, True)
-            ),
+        result = SimpleNamespace(
+            s3_access_key_id="s3-access",
+            s3_secret_access_key="s3-secret",
         )
-
-        cli._ensure_runtime_auth_material(
-            fake_config,
-            need_terraform=True,
-            auto_bootstrap=True,
+        delivery = kwargs["delivery"]
+        intent = delivery.prepare(
+            result,
+            operation_id="b" * 32,
+            credentials=(("access-key", "accesskey-resource"),),
         )
+        delivery.deliver(result, intent)
+        delivery_state.update(adapter=delivery, intent=intent)
+        return result
 
-        assert recreate_calls == [True]
-        assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
-    finally:
-        _clear_runtime_auth_env()
+    monkeypatch.setattr(cli, "issue_service_account_object_storage_access_key", _issue)
+
+    updated = cli._ensure_runtime_auth_s3_material(material)
+
+    assert observed == [
+        {
+            "iam_token": "operator-token",
+            "service_account_env": None,
+            "allow_cli_token": True,
+        }
+    ]
+    assert updated.s3_access_key_id == "s3-access"
+    assert updated.s3_secret_access_key == "s3-secret"
+    assert "NEBIUS_IAM_TOKEN" not in os.environ
+    assert os.environ["NEBIUS_SA_ID"] == "runtime-sa"
+    cache_path = (
+        cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+        / cli._RUNTIME_AUTH_CACHE_FILE
+    )
+    cache_path.unlink()
+    adapter = delivery_state["adapter"]
+    intent = delivery_state["intent"]
+    assert adapter.probe(intent) is cli.CredentialDeliveryDisposition.AMBIGUOUS
+    _clear_runtime_auth_env()
+
+
+def test_runtime_auth_token_sdk_sets_canonical_user_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nebius import sdk as nebius_sdk
+
+    private_key_file = tmp_path / "auth-private.pem"
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="publickey-123",
+        private_key_file=private_key_file,
+        private_key_pem="PRIVATE-KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    captured: dict[str, object] = {}
+
+    class _FakeSDK:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(nebius_sdk, "SDK", _FakeSDK)
+    monkeypatch.setenv("NEBIUS_ENDPOINT", "api.example.invalid")
+
+    sdk = cli._runtime_auth_token_sdk(material)
+
+    assert isinstance(sdk, _FakeSDK)
+    assert captured == {
+        "service_account_id": "sa-123",
+        "service_account_public_key_id": "publickey-123",
+        "service_account_private_key_file_name": private_key_file,
+        "parent_id": "project-123",
+        "user_agent_prefix": cli.NEBIUS_SDK_USER_AGENT_PREFIX,
+        "domain": "api.example.invalid",
+    }
 
 
 def test_wait_for_runtime_auth_token_ready_retries_until_token_service_accepts(
@@ -29269,7 +19858,19 @@ def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch
         s3_access_key_id=None,
         s3_secret_access_key=None,
     )
-    monkeypatch.setattr(cli, "_runtime_auth_cache_material", lambda **_kwargs: material)
+    synced_material = replace(
+        material,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_s3_material", lambda _material: synced_material)
     monkeypatch.setattr(
         cli,
         "_sync_runtime_auth_profile_to_ci_environment",
@@ -29294,6 +19895,50 @@ def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch
     output = _plain_output(result.output)
     assert "Synced GitHub environment secrets to owner/repo/client-a-project-123" in output
     assert "2" in output
+
+
+def test_runtime_auth_ci_sync_includes_exact_project_binding_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=tmp_path / "auth-private.pem",
+        private_key_pem="PRIVATE-KEY",
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "read_github_token", lambda **_kwargs: "github-token")
+    monkeypatch.setattr(cli, "_resolve_github_repo_slug", lambda **_kwargs: "owner/repo")
+    monkeypatch.setattr(cli, "ensure_github_environment", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_sync_github_ci_secrets",
+        lambda **kwargs: captured.update(kwargs) or sorted(kwargs["ci_secrets"]),
+    )
+
+    repo_slug, github_environment, updated = cli._sync_runtime_auth_profile_to_ci_environment(
+        material=material,
+        client_name="client-a",
+        github_repo="owner/repo",
+        github_token_env="GH_TOKEN",
+        repo_root_hint=tmp_path,
+    )
+
+    assert repo_slug == "owner/repo"
+    assert github_environment == "client-a-project-123"
+    assert cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV in updated
+    assert captured["ci_secrets"] == {
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+        "NEBIUS_SA_ID": "sa-123",
+        "NEBIUS_AUTH_PUBLIC_KEY_ID": "auth-key-123",
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM": "PRIVATE-KEY",
+        "NEBIUS_S3_ACCESS_KEY_ID": "s3-access",
+        "NEBIUS_S3_SECRET_ACCESS_KEY": "s3-secret",
+    }
 
 
 def test_auth_validate_profile_ok(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -29390,958 +20035,6 @@ def test_auth_validate_profile_fails_on_invalid_profile(monkeypatch: pytest.Monk
     )
 
 
-def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
-    infra_entries = (
-        ComponentEntry(
-            id="mk8s",
-            scope="infra",
-            config_path="infra.mk8s",
-            description="MK8s",
-        ),
-        ComponentEntry(
-            id="sfs",
-            scope="infra",
-            config_path="infra.sfs",
-            description="SFS",
-        ),
-        ComponentEntry(
-            id="nfs",
-            scope="infra",
-            config_path="infra.nfs",
-            description="NFS",
-        ),
-    )
-
-    selected = cli._expand_soperator_component_selection(
-        selected_infra=set(),
-        selected_apps={"soperator"},
-        infra_entries=infra_entries,
-    )
-
-    assert selected == {"mk8s", "sfs"}
-    onboarding_mode_selected = cli._expand_soperator_component_selection(
-        selected_infra={"mk8s"},
-        selected_apps={"soperator"},
-        infra_entries=infra_entries,
-        install_mode="onboard-existing-cluster",
-    )
-
-    assert onboarding_mode_selected == {"mk8s"}
-    app_entries = (
-        ComponentEntry(
-            id="soperator",
-            scope="apps",
-            config_path="apps.slurm.soperator",
-            description="Soperator",
-        ),
-        ComponentEntry(
-            id="cert-manager",
-            scope="apps",
-            config_path="apps.platform.cert-manager",
-            description="cert-manager",
-        ),
-    )
-    selected_apps = cli._expand_soperator_app_selection(
-        selected_apps={"soperator"},
-        app_entries=app_entries,
-    )
-
-    assert selected_apps == {"cert-manager", "soperator"}
-
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {
-                        "name": "stale-single-sfs",
-                        "size_gib": 1024,
-                        "mount_tag": "stale-single-sfs",
-                    },
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    cli._materialize_soperator_component_defaults(payload)
-
-    assert sum(1 for row in payload["infra"]["components"] if row["id"] == "sfs") == 1
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert "cpu_nodes_count" not in mk8s_inputs
-    assert "gpu_enabled" not in mk8s_inputs
-    assert "gpu_node_groups" not in mk8s_inputs
-    assert "mk8s_gpu_node_group_overrides" not in mk8s_inputs
-    assert set(mk8s_inputs["node_groups"]) == {
-        "system",
-        "controller",
-        "login",
-        "accounting",
-        "worker",
-    }
-    assert mk8s_inputs["node_groups"]["system"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["controller"]["jail"] is True
-    assert mk8s_inputs["node_groups"]["login"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["accounting"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["worker"]["nodeset_name"] == "worker"
-    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
-    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
-    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["worker"]["node_count"] == 1
-    assert mk8s_inputs["node_groups"]["worker"]["gpu"] is True
-    assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}
-    assert mk8s_inputs["node_groups"]["system"]["node_labels"]["nebius.com/node-group"] == (
-        "system"
-    )
-    assert mk8s_inputs["node_groups"]["worker"]["node_labels"]["nebius.com/node-group"] == (
-        "worker"
-    )
-    sfs_inputs = payload["infra"]["components"][1]["inputs"]
-    assert "name" not in sfs_inputs
-    assert "size_gib" not in sfs_inputs
-    assert "mount_tag" not in sfs_inputs
-    assert sfs_inputs["filesystems"]["jail"]["name"] == "cluster1-jail"
-    assert sfs_inputs["filesystems"]["jail"]["block_size_kib"] == 4
-    assert sfs_inputs["filesystems"]["accounting"]["mount_tag"] == "cluster1-accounting"
-    for filesystem_key in ("jail", "controller-spool", "accounting"):
-        filesystem = sfs_inputs["filesystems"][filesystem_key]
-        assert filesystem["block_size_kib"] == 4
-        assert filesystem["forbid_deletion"] is False
-    assert payload["apps"]["charts"][0]["install_mode"] == "production-cluster"
-    soperator_row = payload["apps"]["charts"][0]
-    soperator_values = soperator_row["values"]
-    assert soperator_values["clusterName"] == "cluster1"
-    assert soperator_values["gpuDriverJail"] == {"enabled": True}
-    assert soperator_values["mariadb-operator"]["installOperator"] is True
-    assert soperator_values["populateJail"]["k8sNodeFilterName"] == "system"
-    assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
-    assert soperator_values["slurmNodes"]["accounting"]["k8sNodeFilterName"] == "accounting"
-    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
-    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["storage"] == {
-        "size": "128Gi",
-        "storageClassName": "compute-csi-default-sc",
-        "volumeClaimTemplate": {
-            "accessModes": ["ReadWriteOnce"],
-            "resources": {"requests": {"storage": "128Gi"}},
-            "storageClassName": "compute-csi-default-sc",
-        },
-    }
-    assert soperator_values["slurmNodes"]["login"]["sshRootPublicKeys"] == []
-    assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "cluster1-jail"
-    assert soperator_values["volume"]["jail"]["size"] == "2048Gi"
-    assert soperator_values["volume"]["accounting"]["enabled"] is True
-    assert soperator_values["volume"]["accounting"]["size"] == "128Gi"
-    assert soperator_values["volume"]["controllerSpool"]["filestoreDeviceName"] == (
-        "cluster1-controller-spool"
-    )
-    assert soperator_row["placements"]["worker"] == ["worker"]
-
-
-def test_soperator_gpu_node_group_defaults_override_worker_reservation_policy() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "node_group_defaults": {
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                                "reservation": {"policy": "STRICT"},
-                            }
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    worker = payload["infra"]["components"][0]["inputs"]["node_groups"]["worker"]
-    assert worker["gpu"] is True
-    assert worker["platform"] == "gpu-h100-sxm"
-    assert worker["preset"] == "8gpu-128vcpu-1600gb"
-    assert worker["reservation"] == {"policy": "STRICT"}
-
-
-def test_soperator_sfs_defaults_are_target_scoped_for_multi_target_rows() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster-a",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster-b",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "cluster-a",
-                    "enabled": True,
-                    "inputs": {
-                        "filesystems": {
-                            "jail": {
-                                "name": "cluster-a-jail",
-                                "size_gib": 111,
-                                "mount_tag": "jail-a",
-                            }
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "cluster-b",
-                    "enabled": True,
-                    "inputs": {
-                        "filesystems": {
-                            "jail": {
-                                "name": "cluster-b-jail",
-                                "size_gib": 222,
-                                "mount_tag": "jail-b",
-                            }
-                        }
-                    },
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster-a",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                },
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster-b",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                },
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values_by_target = {row["instance_id"]: row["values"] for row in payload["apps"]["charts"]}
-    assert values_by_target["cluster-a"]["sfs"]["filesystems"]["jail"]["name"] == "cluster-a-jail"
-    assert values_by_target["cluster-a"]["volume"]["jail"]["size"] == "111Gi"
-    assert values_by_target["cluster-a"]["volume"]["jail"]["filestoreDeviceName"] == "jail-a"
-    assert values_by_target["cluster-a"]["sfs"]["filesystems"]["jail"]["block_size_kib"] == 4
-    assert values_by_target["cluster-a"]["sfs"]["filesystems"]["jail"]["forbid_deletion"] is False
-    assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["name"] == "cluster-b-jail"
-    assert values_by_target["cluster-b"]["volume"]["jail"]["size"] == "222Gi"
-    assert values_by_target["cluster-b"]["volume"]["jail"]["filestoreDeviceName"] == "jail-b"
-    assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["block_size_kib"] == 4
-    assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["forbid_deletion"] is False
-
-
-def test_soperator_sfs_mirror_values_replace_stale_generated_values() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "inputs": {
-                        "filesystems": {
-                            "jail": {
-                                "name": "cxcli-slurm-jail",
-                                "size_gib": 1024,
-                                "block_size_kib": 4,
-                                "mount_tag": "cxcli-slurm-jail",
-                                "forbid_deletion": False,
-                            },
-                            "controller-spool": {
-                                "name": "cxcli-slurm-controller-spool",
-                                "size_gib": 128,
-                                "block_size_kib": 4,
-                                "mount_tag": "cxcli-slurm-controller-spool",
-                                "forbid_deletion": False,
-                            },
-                            "accounting": {
-                                "name": "cxcli-slurm-accounting",
-                                "size_gib": 128,
-                                "block_size_kib": 4,
-                                "mount_tag": "cxcli-slurm-accounting",
-                                "forbid_deletion": False,
-                            },
-                        }
-                    },
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {
-                        "sfs": {
-                            "filesystems": {
-                                "jail": {"name": "mk8s-jail", "mount_tag": "mk8s-jail"},
-                                "controller-spool": {
-                                    "name": "mk8s-controller-spool",
-                                    "mount_tag": "mk8s-controller-spool",
-                                },
-                                "accounting": {
-                                    "name": "mk8s-accounting",
-                                    "mount_tag": "mk8s-accounting",
-                                },
-                            }
-                        },
-                        "volume": {
-                            "jail": {
-                                "size": "1Gi",
-                                "filestoreDeviceName": "mk8s-jail",
-                            },
-                            "controllerSpool": {
-                                "size": "1Gi",
-                                "filestoreDeviceName": "mk8s-controller-spool",
-                            },
-                            "accounting": {
-                                "size": "1Gi",
-                                "filestoreDeviceName": "mk8s-accounting",
-                            },
-                        },
-                    },
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["sfs"]["filesystems"]["jail"]["name"] == "cxcli-slurm-jail"
-    assert (
-        values["sfs"]["filesystems"]["controller-spool"]["mount_tag"]
-        == "cxcli-slurm-controller-spool"
-    )
-    assert values["sfs"]["filesystems"]["accounting"]["name"] == "cxcli-slurm-accounting"
-    assert values["volume"]["jail"] == {
-        "size": "1024Gi",
-        "filestoreDeviceName": "cxcli-slurm-jail",
-    }
-    assert values["volume"]["controllerSpool"] == {
-        "size": "128Gi",
-        "filestoreDeviceName": "cxcli-slurm-controller-spool",
-    }
-    assert values["volume"]["accounting"]["filestoreDeviceName"] == "cxcli-slurm-accounting"
-
-
-def test_soperator_jail_sfs_resize_state_rejects_existing_filesystem() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "sfs",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "inputs": {
-                        "filesystems": {
-                            "jail": {
-                                "name": "existing-jail",
-                                "existing_id": "filesystem-existing",
-                                "size_gib": 2048,
-                            }
-                        }
-                    },
-                }
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    with pytest.raises(RuntimeError, match="Only cxcli-owned SFS rows"):
-        cli._soperator_jail_sfs_resize_state(payload, target_ref="cxcli-slurm")
-
-
-def test_set_soperator_jail_sfs_size_gib_updates_sfs_and_chart_values() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "sfs",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "inputs": {
-                        "filesystems": {
-                            "jail": {
-                                "name": "cxcli-slurm-jail",
-                                "size_gib": 2048,
-                                "mount_tag": "cxcli-slurm-jail",
-                            }
-                        }
-                    },
-                }
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "values": {"volume": {"jail": {"size": "2048Gi"}}},
-                }
-            ]
-        },
-    }
-
-    cli._set_soperator_jail_sfs_size_gib(payload, target_ref="cxcli-slurm", size_gib=2304)
-
-    sfs_inputs = payload["infra"]["components"][0]["inputs"]
-    values = payload["apps"]["charts"][0]["values"]
-    assert sfs_inputs["filesystems"]["jail"]["size_gib"] == 2304
-    assert values["sfs"]["filesystems"]["jail"]["size_gib"] == 2304
-    assert values["volume"]["jail"]["size"] == "2304Gi"
-
-
-def test_soperator_jail_sfs_resize_records_failed_terraform_apply(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "sfs",
-                    "instance_id": "cxcli-slurm",
-                    "enabled": True,
-                    "inputs": {
-                        "filesystems": {
-                            "jail": {
-                                "name": "cxcli-slurm-jail",
-                                "size_gib": 2048,
-                                "mount_tag": "cxcli-slurm-jail",
-                            }
-                        }
-                    },
-                }
-            ]
-        },
-    }
-    preflight = evaluate_jail_capacity(
-        passive_available_bytes=32 * GIB,
-        active_used_bytes=80 * GIB,
-    )
-    capacity_records: list[Mapping[str, Any]] = []
-    resize_records: list[Mapping[str, Any]] = []
-
-    def _fail_apply(**_kwargs: Any) -> None:
-        raise RuntimeError("terraform apply failed")
-
-    monkeypatch.setattr(cli, "_apply_jail_sfs_resize_with_terraform", _fail_apply)
-
-    with pytest.raises(RuntimeError, match="terraform apply failed"):
-        cli._ensure_jail_sfs_capacity_or_resize(  # noqa: SLF001
-            config_path=tmp_path / "config.yaml",
-            source_payload=payload,
-            target_ref="cxcli-slurm",
-            policy="apply",
-            resize_to_gib=2304,
-            preflight=preflight,
-            probe_capacity=lambda: pytest.fail("capacity should not be rechecked"),
-            record_capacity=lambda value: capacity_records.append(value.as_payload()),
-            record_resize=lambda value: resize_records.append(dict(value)),
-            stage_label="populate-jail-refresh",
-        )
-
-    assert capacity_records == [preflight.as_payload()]
-    assert resize_records[-2]["status"] == "applying"
-    assert resize_records[-2]["terraform_apply_status"] == "running"
-    assert resize_records[-1]["status"] == "failed"
-    assert resize_records[-1]["terraform_apply_status"] == "failed"
-    assert resize_records[-1]["error"] == "terraform apply failed"
-
-
-def test_external_jail_sfs_resize_uses_existing_nebius_filesystem_update(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_report = {
-        "snapshot": {
-            "storage": {
-                "jail": {
-                    "filesystem_id": "filesystem-jail",
-                }
-            }
-        }
-    }
-    preflight = evaluate_jail_capacity(
-        passive_available_bytes=32 * GIB,
-        active_used_bytes=80 * GIB,
-    )
-    final_preflight = evaluate_jail_capacity(
-        passive_available_bytes=128 * GIB,
-        active_used_bytes=80 * GIB,
-    )
-    calls: list[tuple[Any, ...]] = []
-    resize_records: list[Mapping[str, Any]] = []
-    capacity_records: list[Mapping[str, Any]] = []
-
-    def _unexpected_terraform(**_kwargs: Any) -> None:
-        raise AssertionError("external resize must not call Terraform")
-
-    class _Api:
-        def get_filesystem(self, filesystem_id: str) -> Mapping[str, Any]:
-            calls.append(("get", filesystem_id))
-            return {"spec": {"size_gibibytes": 2048}}
-
-        def resize_filesystem(
-            self,
-            *,
-            filesystem_id: str,
-            target_size_gib: int,
-            resource_version: int | None = None,
-            timeout_seconds: int = 1800,
-        ) -> Mapping[str, Any]:
-            calls.append(
-                ("resize", filesystem_id, target_size_gib, resource_version, timeout_seconds)
-            )
-            return {"spec": {"size_gibibytes": target_size_gib}}
-
-        def close(self) -> None:
-            calls.append(("close",))
-
-    monkeypatch.setattr(cli, "_apply_jail_sfs_resize_with_terraform", _unexpected_terraform)
-
-    result = cli._ensure_external_jail_sfs_capacity_or_resize(  # noqa: SLF001
-        source_report=source_report,
-        policy="apply",
-        resize_to_gib=2304,
-        preflight=preflight,
-        probe_capacity=lambda: final_preflight,
-        record_capacity=lambda value: capacity_records.append(value.as_payload()),
-        record_resize=lambda value: resize_records.append(dict(value)),
-        nebius_api=_Api(),
-    )
-
-    assert result is final_preflight
-    assert ("get", "filesystem-jail") in calls
-    assert ("resize", "filesystem-jail", 2304, None, 1800) in calls
-    assert resize_records[-1]["status"] == "completed"
-    assert resize_records[-1]["nebius_api_status"] == "completed"
-    assert capacity_records == [preflight.as_payload(), final_preflight.as_payload()]
-
-
-def test_external_jail_sfs_resize_rejects_missing_or_multiple_candidates() -> None:
-    fail_api = SimpleNamespace(
-        get_filesystem=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
-        resize_filesystem=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
-        close=lambda: None,
-    )
-    with pytest.raises(RuntimeError, match="could not identify a Nebius shared filesystem"):
-        cli._external_jail_sfs_resize_state(  # noqa: SLF001
-            source_report={"snapshot": {"storage": {"jail": {"type": "nfs"}}}},
-            nebius_api=fail_api,
-        )
-
-    with pytest.raises(RuntimeError, match="multiple candidate Nebius filesystems"):
-        cli._external_jail_sfs_resize_state(  # noqa: SLF001
-            source_report={
-                "snapshot": {
-                    "storage": {"jail": {"filesystem_id": "filesystem-a"}},
-                    "node_groups": {
-                        "worker": {
-                            "template": {
-                                "filesystems": [
-                                    {
-                                        "mount_tag": "jail",
-                                        "filesystem_id": "filesystem-b",
-                                    }
-                                ]
-                            }
-                        }
-                    },
-                }
-            },
-            nebius_api=fail_api,
-        )
-
-
-def test_external_jail_sfs_resize_state_can_use_node_group_jail_attachment() -> None:
-    calls: list[tuple[str, ...]] = []
-
-    class _Api:
-        def get_filesystem(self, filesystem_id: str) -> Mapping[str, Any]:
-            calls.append(("get", filesystem_id))
-            return {"spec": {"size_gibibytes": 2048}}
-
-        def resize_filesystem(self, **_kwargs: Any) -> Mapping[str, Any]:
-            raise AssertionError("resize should not run")
-
-        def close(self) -> None:
-            calls.append(("close",))
-
-    state = cli._external_jail_sfs_resize_state(  # noqa: SLF001
-        source_report={
-            "snapshot": {
-                "storage": {"jail": {"source": "pvc/jail-pvc"}},
-                "node_groups": {
-                    "login": {
-                        "spec": {
-                            "template": {
-                                "filesystems": [
-                                    {
-                                        "mount_tag": "jail",
-                                        "existing_filesystem": {"id": "filesystem-jail"},
-                                    }
-                                ]
-                            }
-                        }
-                    }
-                },
-            }
-        },
-        nebius_api=_Api(),
-    )
-
-    assert state.filesystem_id == "filesystem-jail"
-    assert state.current_size_gib == 2048
-    assert calls == [("get", "filesystem-jail")]
-
-
-def test_soperator_profiles_share_complete_sfs_filesystem_defaults() -> None:
-    _default_profile, profiles = cli._soperator_nodesets_profiles()
-
-    for profile_name in ("nebius-cpu-v1", "nebius-mixed-v1", "nebius-gpu-v1"):
-        filesystems = profiles[profile_name]["sfs"]["filesystems"]
-        assert set(filesystems) == {"jail", "controller-spool", "accounting"}
-        assert filesystems["jail"] == {
-            "name": "{target}-jail",
-            "size_gib": 2048,
-            "block_size_kib": 4,
-            "mount_tag": "{target}-jail",
-            "forbid_deletion": False,
-        }
-        assert filesystems["controller-spool"] == {
-            "name": "{target}-controller-spool",
-            "size_gib": 128,
-            "block_size_kib": 4,
-            "mount_tag": "{target}-controller-spool",
-            "forbid_deletion": False,
-        }
-        assert filesystems["accounting"] == {
-            "name": "{target}-accounting",
-            "size_gib": 128,
-            "block_size_kib": 4,
-            "mount_tag": "{target}-accounting",
-            "forbid_deletion": False,
-        }
-
-
-def test_soperator_production_service_role_counts_materialize_mk8s_groups() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "system_node_count": 2,
-                            "controller_node_count": 3,
-                            "login_node_count": 4,
-                            "accounting_node_count": 5,
-                        },
-                        "node_groups": {
-                            "system": {
-                                "node_count": 1,
-                                "node_count_input": "soperator.system_node_count",
-                            },
-                            "controller": {
-                                "node_count": 1,
-                                "node_count_input": "soperator.controller_node_count",
-                            },
-                            "login": {
-                                "node_count": 1,
-                                "node_count_input": "soperator.login_node_count",
-                            },
-                            "accounting": {
-                                "node_count": 1,
-                                "node_count_input": "soperator.accounting_node_count",
-                            },
-                        },
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert node_groups["system"]["node_count"] == 3
-    assert node_groups["controller"]["node_count"] == 2
-    assert node_groups["login"]["node_count"] == 4
-    assert node_groups["accounting"]["node_count"] == 5
-    assert node_groups["worker"]["node_count"] == 1
-    assert all("node_count_input" not in group for group in node_groups.values())
-
-
-def test_soperator_production_profiles_render_fixed_bridge_domains() -> None:
-    _default_profile, profiles = cli._soperator_nodesets_profiles()  # noqa: SLF001
-
-    for profile_name, profile in profiles.items():
-        groups = profile["mk8s"]["node_groups"]
-        system = groups["system"]
-        controller = groups["controller"]
-
-        assert system["node_count"] == 3, profile_name
-        assert controller["node_count"] == 2, profile_name
-        assert "node_count_input" not in system, profile_name
-        assert "node_count_input" not in controller, profile_name
-        assert "autoscaling" not in system, profile_name
-        assert "autoscaling" not in controller, profile_name
-        assert "autoscaling_input" not in system, profile_name
-        assert "autoscaling_input" not in controller, profile_name
-        assert system["jail"] is True, profile_name
-        assert controller["jail"] is True, profile_name
-        assert system["sfs_filesystem_keys"] == ["controller-spool"], profile_name
-        assert controller["sfs_filesystem_keys"] == ["controller-spool"], profile_name
-        assert system["node_labels"]["nebius.ai/soperator-bridge-domain"] == "system"
-        assert controller["node_labels"]["nebius.ai/soperator-bridge-domain"] == "controller"
-
-
-def test_managed_soperator_mk8s_rolls_bridge_domains_last_and_serially(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    dispatched: list[str] = []
-    intents: list[str] = []
-    verified: list[str] = []
-
-    def _record_upgrade(**kwargs: Any) -> None:
-        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
-        if batch is None:
-            dispatched.append(kwargs["node_group"])
-        else:
-            dispatched.extend(batch.group_names)
-
-    monkeypatch.setattr(
-        cli,
-        "upgrade_node_template_command",
-        _record_upgrade,
-    )
-
-    rolled = cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
-        config_path=tmp_path / "config.yaml",
-        source_payload={
-            "infra": {
-                "components": [
-                    {
-                        "id": "mk8s",
-                        "instance_id": "cluster1",
-                        "enabled": True,
-                        "inputs": {
-                            "node_groups": {
-                                "controller": {},
-                                "worker": {},
-                                "system": {},
-                                "login": {},
-                            }
-                        },
-                    }
-                ]
-            }
-        },
-        target_ref="cluster1",
-        to_k8s_version="1.33",
-        to_os=None,
-        to_gpu_stack_preset=None,
-        node_group="",
-        disruption_policy="zero-surge",
-        drain_timeout="auto",
-        strategy_max_surge_count=None,
-        provider_roll_domain_writer=intents.append,
-        provider_roll_domain_verifier=verified.append,
-    )
-
-    assert rolled == ("login", "controller", "system", "worker")
-    assert dispatched == intents == verified == list(rolled)
-
-
-def test_managed_soperator_mk8s_batches_only_job_free_workers_at_eight(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    batches: list[tuple[str, ...]] = []
-    intents: list[str] = []
-    verified: list[str] = []
-    worker_groups = tuple(f"worker-{index}" for index in range(1, 11))
-
-    def _record_batch(**_kwargs: Any) -> None:
-        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
-        assert batch is not None
-        batches.append(batch.group_names)
-
-    monkeypatch.setattr(cli, "upgrade_node_template_command", _record_batch)
-    source_payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {"node_groups": {name: {} for name in worker_groups}},
-                }
-            ]
-        }
-    }
-
-    rolled = cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
-        config_path=tmp_path / "config.yaml",
-        source_payload=source_payload,
-        target_ref="cluster1",
-        to_k8s_version="1.33",
-        to_os="ubuntu24.04",
-        to_gpu_stack_preset=None,
-        node_group="",
-        disruption_policy="zero-surge",
-        drain_timeout="none",
-        strategy_max_surge_count=None,
-        zero_surge_max_unavailable="all",
-        max_parallel_worker_groups=8,
-        provider_roll_domain_writer=intents.append,
-        provider_roll_domain_verifier=verified.append,
-    )
-
-    assert rolled == worker_groups
-    assert batches == [worker_groups[:8], worker_groups[8:]]
-    assert intents == verified == list(worker_groups)
-
-
-def test_managed_soperator_mk8s_leaves_busy_workers_pending(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    batches: list[tuple[str, ...]] = []
-    workers = tuple(f"worker-{index}" for index in range(1, 11))
-    busy = set(workers[-3:])
-
-    def _record_batch(**_kwargs: Any) -> None:
-        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
-        assert batch is not None
-        batches.append(batch.group_names)
-
-    monkeypatch.setattr(cli, "upgrade_node_template_command", _record_batch)
-    with pytest.raises(cli.SoperatorMigrationPhasePending, match="worker-8, worker-9, worker-10"):
-        cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
-            config_path=tmp_path / "config.yaml",
-            source_payload={
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "cluster1",
-                            "enabled": True,
-                            "inputs": {"node_groups": {name: {} for name in workers}},
-                        }
-                    ]
-                }
-            },
-            target_ref="cluster1",
-            to_k8s_version="1.33",
-            to_os="ubuntu24.04",
-            to_gpu_stack_preset=None,
-            node_group="",
-            disruption_policy="zero-surge",
-            drain_timeout="none",
-            strategy_max_surge_count=None,
-            max_parallel_worker_groups=8,
-            worker_group_busy_checker=lambda group: group in busy,
-        )
-
-    assert batches == [workers[:7]]
-
-
 def test_managed_node_template_batch_resolves_config_key_alias() -> None:
     live_group = SimpleNamespace(
         id="group-id",
@@ -30373,3715 +20066,3 @@ def test_managed_node_template_batch_rejects_ambiguous_alias() -> None:
 
     with pytest.raises(RuntimeError, match="alias is ambiguous: gpu"):
         cli._managed_node_template_batch_selection(groups, ("gpu",))  # noqa: SLF001
-
-
-@pytest.mark.parametrize(
-    ("intent_newly_recorded", "live_matches_preimage", "live_is_owned_drain", "expected"),
-    (
-        (True, True, False, "dispatch"),
-        (False, False, True, "adopt"),
-    ),
-)
-def test_managed_worker_drain_reconciliation_safe_actions(
-    intent_newly_recorded: bool,
-    live_matches_preimage: bool,
-    live_is_owned_drain: bool,
-    expected: str,
-) -> None:
-    assert (
-        cli._managed_worker_drain_reconcile_action(  # noqa: SLF001
-            intent_newly_recorded=intent_newly_recorded,
-            live_matches_preimage=live_matches_preimage,
-            live_is_owned_drain=live_is_owned_drain,
-        )
-        == expected
-    )
-
-
-def test_managed_worker_drain_reconciliation_does_not_resend_uncertain_rpc() -> None:
-    with pytest.raises(cli.SoperatorMigrationPhasePending, match="no Slurm RPC was resent"):
-        cli._managed_worker_drain_reconcile_action(  # noqa: SLF001
-            intent_newly_recorded=False,
-            live_matches_preimage=True,
-            live_is_owned_drain=False,
-        )
-
-
-@pytest.mark.parametrize(
-    ("intent_newly_recorded", "live_matches_preimage", "live_is_owned_drain", "expected"),
-    (
-        (True, False, True, "dispatch"),
-        (False, True, False, "adopt"),
-    ),
-)
-def test_managed_worker_restore_reconciliation_safe_actions(
-    intent_newly_recorded: bool,
-    live_matches_preimage: bool,
-    live_is_owned_drain: bool,
-    expected: str,
-) -> None:
-    assert (
-        cli._managed_worker_restore_reconcile_action(  # noqa: SLF001
-            intent_newly_recorded=intent_newly_recorded,
-            live_matches_preimage=live_matches_preimage,
-            live_is_owned_drain=live_is_owned_drain,
-        )
-        == expected
-    )
-
-
-def test_managed_worker_restore_reconciliation_does_not_resend_uncertain_rpc() -> None:
-    with pytest.raises(cli.SoperatorMigrationPhasePending, match="no Slurm RPC was resent"):
-        cli._managed_worker_restore_reconcile_action(  # noqa: SLF001
-            intent_newly_recorded=False,
-            live_matches_preimage=False,
-            live_is_owned_drain=True,
-        )
-
-
-def test_soperator_support_policy_has_no_dry_run_override() -> None:
-    report = {
-        "findings": [
-            {
-                "layer": cli.SOPERATOR_UPGRADE_SUPPORT_LAYER,
-                "status": "unsupported",
-                "severity": "blocked",
-                "message": "unsupported test path",
-                "evidence": {
-                    "rule_id": "test-unsupported",
-                    "source_soperator_version": "0.0.1",
-                    "target_soperator_version": "9.9.9",
-                    "target_k8s_version": "9.9",
-                },
-            }
-        ]
-    }
-
-    with pytest.raises(RuntimeError, match="fails closed and has no support-policy override"):
-        cli._enforce_soperator_support_policy_for_report(  # noqa: SLF001
-            report,
-            command_name="soperator upgrade dry-run",
-        )
-
-
-def test_managed_soperator_mk8s_rechecks_dispatch_lock_after_clear_classification(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    workers = ("worker-1", "worker-2", "worker-3")
-    batches: list[tuple[str, ...]] = []
-    unlocked: list[str] = []
-
-    def _record_batch(**_kwargs: Any) -> None:
-        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
-        assert batch is not None
-        batches.append(batch.group_names)
-
-    monkeypatch.setattr(cli, "upgrade_node_template_command", _record_batch)
-    with pytest.raises(cli.SoperatorMigrationPhasePending, match="worker-2"):
-        cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
-            config_path=tmp_path / "config.yaml",
-            source_payload={
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "cluster1",
-                            "enabled": True,
-                            "inputs": {"node_groups": {name: {} for name in workers}},
-                        }
-                    ]
-                }
-            },
-            target_ref="cluster1",
-            to_k8s_version="1.33",
-            to_os="ubuntu24.04",
-            to_gpu_stack_preset=None,
-            node_group="",
-            disruption_policy="zero-surge",
-            drain_timeout="none",
-            strategy_max_surge_count=None,
-            worker_group_busy_checker=lambda _group: False,
-            worker_group_dispatch_locker=lambda group: group != "worker-2",
-            worker_group_dispatch_unlocker=unlocked.append,
-        )
-
-    assert batches == [("worker-1", "worker-3")]
-    assert unlocked == ["worker-1", "worker-3"]
-
-
-def test_managed_soperator_mk8s_does_not_redispatch_restored_worker(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    dispatched: list[str] = []
-
-    monkeypatch.setattr(
-        cli,
-        "upgrade_node_template_command",
-        lambda **_kwargs: dispatched.append("provider-dispatch"),
-    )
-
-    rolled = cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
-        config_path=tmp_path / "config.yaml",
-        source_payload={
-            "infra": {
-                "components": [
-                    {
-                        "id": "mk8s",
-                        "instance_id": "cluster1",
-                        "enabled": True,
-                        "inputs": {"node_groups": {"worker-1": {}}},
-                    }
-                ]
-            }
-        },
-        target_ref="cluster1",
-        to_k8s_version="1.33",
-        to_os="ubuntu24.04",
-        to_gpu_stack_preset=None,
-        node_group="",
-        disruption_policy="zero-surge",
-        drain_timeout="none",
-        strategy_max_surge_count=None,
-        worker_group_completed_checker=lambda _group: True,
-        worker_group_busy_checker=lambda _group: True,
-        worker_group_dispatch_locker=lambda _group: None,
-    )
-
-    assert rolled == ("worker-1",)
-    assert dispatched == []
-
-
-def test_managed_bridge_uid_rebind_is_limited_to_journaled_domain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    checkpoint: dict[str, Any] = {
-        "managed_bridge_binding": {
-            "schema": cli._MANAGED_BRIDGE_BINDING_SCHEMA,  # noqa: SLF001
-            "status": "planned",
-            "placement_domains": {"controller": {}, "system": {}},
-            "storage_fingerprints": {},
-        }
-    }
-    source_payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {"node_groups": {"controller": {}, "system": {}}},
-                }
-            ]
-        }
-    }
-
-    def _domains(controller_uid: str, system_uid: str) -> tuple[Any, Any]:
-        return (
-            cli.BridgePlacementDomain.managed(
-                name="controller",
-                role="controller",
-                node_group_id="group-controller",
-                selector={"domain": "controller"},
-                live_node_uid=controller_uid,
-                ready_capacity=2,
-                template={
-                    "eligible_node_uids": [controller_uid],
-                    "attachment_fingerprint": "controller-storage",
-                },
-            ),
-            cli.BridgePlacementDomain.managed(
-                name="system",
-                role="system",
-                node_group_id="group-system",
-                selector={"domain": "system"},
-                live_node_uid=system_uid,
-                ready_capacity=3,
-                template={
-                    "eligible_node_uids": [system_uid],
-                    "attachment_fingerprint": "system-storage",
-                },
-            ),
-        )
-
-    live_domains = _domains("controller-old", "system-old")
-    monkeypatch.setattr(
-        cli,
-        "managed_bridge_placement_domains_from_live_nodes",
-        lambda **_kwargs: live_domains,
-    )
-    cli._verify_managed_controller_bridge_substrate(  # noqa: SLF001
-        checkpoint=checkpoint,
-        source_payload=source_payload,
-        target_ref="cluster1",
-        snapshot={"kubernetes_nodes": []},
-    )
-
-    live_domains = _domains("controller-new", "system-old")
-    cli._verify_managed_controller_bridge_substrate(  # noqa: SLF001
-        checkpoint=checkpoint,
-        source_payload=source_payload,
-        target_ref="cluster1",
-        snapshot={"kubernetes_nodes": []},
-        allow_rebind_role="controller",
-    )
-    assert checkpoint["managed_bridge_binding"]["rebinds"][-1]["role"] == "controller"
-
-    live_domains = _domains("controller-new", "system-new")
-    with pytest.raises(RuntimeError, match="system.*outside its checkpointed provider roll"):
-        cli._verify_managed_controller_bridge_substrate(  # noqa: SLF001
-            checkpoint=checkpoint,
-            source_payload=source_payload,
-            target_ref="cluster1",
-            snapshot={"kubernetes_nodes": []},
-            allow_rebind_role="controller",
-        )
-
-
-def test_soperator_production_bridge_roles_ignore_stale_autoscaling_inputs() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "system_node_count": 2,
-                            "system_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 1,
-                                "max_node_count": 4,
-                            },
-                            "controller_node_count": 3,
-                            "login_node_count": 1,
-                            "accounting_node_count": 1,
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert node_groups["system"]["node_count"] == 3
-    assert "autoscaling" not in node_groups["system"]
-    assert node_groups["controller"]["node_count"] == 2
-    assert node_groups["login"]["node_count"] == 1
-    assert node_groups["accounting"]["node_count"] == 1
-    assert all("node_count_input" not in group for group in node_groups.values())
-    assert all("autoscaling_input" not in group for group in node_groups.values())
-
-
-def test_soperator_production_ignores_stale_service_autoscaling_inputs() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "system_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 1,
-                                "max_node_count": 4,
-                            },
-                        },
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
-    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
-
-    mk8s_inputs["soperator"]["system_autoscaling"] = {"enabled": False}
-    assert cli._materialize_soperator_component_defaults(payload) is False
-
-    system_group = mk8s_inputs["node_groups"]["system"]
-    assert system_group["node_count"] == 3
-    assert "autoscaling" not in system_group
-
-
-def test_soperator_production_disabled_service_autoscaling_clears_first_render_stale_group() -> (
-    None
-):
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "system_autoscaling": {
-                                "enabled": False,
-                            },
-                        },
-                        "node_groups": {
-                            "system": {
-                                "autoscaling": {
-                                    "min_node_count": 1,
-                                    "max_node_count": 4,
-                                },
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "32vcpu-128gb",
-                            },
-                            "controller": {
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "32vcpu-128gb",
-                            },
-                            "login": {
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "32vcpu-128gb",
-                            },
-                            "accounting": {
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "32vcpu-128gb",
-                            },
-                        },
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    system_group = payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]
-    assert system_group["node_count"] == 3
-    assert "autoscaling" not in system_group
-
-
-def test_soperator_production_worker_count_shards_mk8s_groups_and_nodesets() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "worker_gpu_total_nodes": 1000,
-                            "worker_gpu_nodes_per_group": 100,
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    worker_group_keys = [key for key in mk8s_inputs["node_groups"] if str(key).startswith("worker")]
-    assert worker_group_keys == [f"worker-{index}" for index in range(10)]
-    assert all(
-        mk8s_inputs["node_groups"][group_key]["node_count"] == 100
-        for group_key in worker_group_keys
-    )
-
-    app_row = payload["apps"]["charts"][0]
-    values = app_row["values"]
-    assert app_row["placements"]["worker"] == worker_group_keys
-    worker_nodesets = [
-        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
-    ]
-    assert [item["name"] for item in worker_nodesets] == [f"worker-{index}" for index in range(10)]
-    assert all(item["replicas"] == 100 for item in worker_nodesets)
-    worker_partition = next(
-        partition
-        for partition in values["partitionConfiguration"]["partitions"]
-        if partition["name"] == "gpu"
-    )
-    assert worker_partition["nodeSetRefs"] == [f"worker-{index}" for index in range(10)]
-
-
-def test_soperator_production_worker_count_replaces_stale_generated_placements() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_gpu_total_nodes": 3,
-                "worker_gpu_nodes_per_group": 2,
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["placements"] = {"worker": ["worker"]}
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    app_row = payload["apps"]["charts"][0]
-    assert app_row["placements"]["worker"] == ["worker-0", "worker-1"]
-    values = app_row["values"]
-    worker_nodesets = [
-        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker")
-    ]
-    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
-        ("worker-0", 2),
-        ("worker-1", 1),
-    ]
-    worker_partition = next(
-        partition
-        for partition in values["partitionConfiguration"]["partitions"]
-        if partition["name"] == "gpu"
-    )
-    assert worker_partition["nodeSetRefs"] == ["worker-0", "worker-1"]
-
-
-def _soperator_production_payload(mk8s_inputs: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": dict(mk8s_inputs),
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-
-def test_soperator_production_rejects_existing_managed_mk8s_without_service_roles() -> None:
-    payload = _soperator_production_payload(
-        {
-            "node_groups": {
-                "cpu-nodes": {
-                    "node_count": 2,
-                    "gpu": False,
-                    "platform": "cpu-d3",
-                    "preset": "32vcpu-128gb",
-                },
-                "gpu-nodes": {
-                    "node_count": 2,
-                    "gpu": True,
-                    "platform": "gpu-h100-sxm",
-                    "preset": "1gpu-16vcpu-200gb",
-                },
-            }
-        }
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=(
-            "missing required Soperator service-role node groups: "
-            "accounting, controller, login, system"
-        ),
-    ):
-        cli._materialize_soperator_component_defaults(payload)
-
-    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert set(node_groups) == {"cpu-nodes", "gpu-nodes"}
-
-
-def test_soperator_production_accepts_existing_managed_mk8s_with_full_placements() -> None:
-    payload = _soperator_production_payload(
-        {
-            "node_groups": {
-                "cpu-nodes": {
-                    "node_count": 2,
-                    "gpu": False,
-                    "platform": "cpu-d3",
-                    "preset": "32vcpu-128gb",
-                },
-                "gpu-nodes": {
-                    "node_count": 2,
-                    "gpu": True,
-                    "platform": "gpu-h100-sxm",
-                    "preset": "1gpu-16vcpu-200gb",
-                },
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["placements"] = {
-        "system": "cpu-nodes",
-        "controller": "cpu-nodes",
-        "login": "cpu-nodes",
-        "accounting": "cpu-nodes",
-        "worker": ["gpu-nodes"],
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert set(node_groups) == {"cpu-nodes", "gpu-nodes"}
-    values = payload["apps"]["charts"][0]["values"]
-    worker = next(item for item in values["nodesets"] if item["name"] == "worker")
-    assert worker["nodeSelector"] == {"nebius.com/node-group": "gpu-nodes"}
-
-
-@pytest.mark.parametrize(
-    "soperator_inputs",
-    [
-        {"worker_total_nodes": 1},
-        {"worker_nodes_per_group": 100},
-        {"worker_autoscaling": {"enabled": True, "min_node_count": 1, "max_node_count": 1}},
-        {"worker_cpu_autoscaling": {"enabled": True, "min_node_count": 1, "max_node_count": 1}},
-        {"worker_gpu_autoscaling": {"enabled": True, "min_node_count": 1, "max_node_count": 1}},
-        {"worker_ephemeral_nodes": {"enabled": True, "suspend_time_seconds": 300}},
-    ],
-)
-def test_soperator_production_rejects_legacy_worker_sizing_helpers(
-    soperator_inputs: Mapping[str, Any],
-) -> None:
-    payload = _soperator_production_payload({"soperator": soperator_inputs})
-
-    with pytest.raises(
-        ValueError,
-        match="no longer supported.*worker_node_groups\\.<worker>\\.autoscaling",
-    ):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-@pytest.mark.parametrize(
-    "soperator_inputs",
-    [
-        {"worker_gpu_total_nodes": 0},
-        {"worker_gpu_nodes_per_group": 0},
-    ],
-)
-def test_soperator_production_rejects_invalid_fixed_worker_sizing(
-    soperator_inputs: Mapping[str, Any],
-) -> None:
-    payload = _soperator_production_payload({"soperator": soperator_inputs})
-
-    with pytest.raises(ValueError, match="soperator\\.worker_gpu_.*must be a positive integer"):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-@pytest.mark.parametrize(
-    "soperator_inputs",
-    [
-        {"worker_cpu_nodes_per_group": 101},
-        {"worker_gpu_nodes_per_group": 101},
-    ],
-)
-def test_soperator_production_rejects_worker_nodes_per_group_above_profile_max(
-    soperator_inputs: Mapping[str, Any],
-) -> None:
-    payload = _soperator_production_payload({"soperator": soperator_inputs})
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-
-    with pytest.raises(
-        ValueError,
-        match="soperator\\.worker_.*_nodes_per_group must be less than or equal to 100",
-    ):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-def test_soperator_production_worker_shards_write_default_controls() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_cpu_total_nodes": 300,
-                "worker_cpu_nodes_per_group": 100,
-                "worker_gpu_total_nodes": 300,
-                "worker_gpu_nodes_per_group": 100,
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    expected_group_keys = [
-        "worker-cpu-0",
-        "worker-cpu-1",
-        "worker-cpu-2",
-        "worker-gpu-0",
-        "worker-gpu-1",
-        "worker-gpu-2",
-    ]
-    assert mk8s_inputs["soperator"]["worker_node_groups"] == {
-        group_key: {
-            "autoscaling": {"enabled": False},
-            "ephemeral_nodes": {"enabled": False},
-        }
-        for group_key in expected_group_keys
-    }
-    assert {
-        group_key: mk8s_inputs["node_groups"][group_key]["node_count"]
-        for group_key in expected_group_keys
-    } == {group_key: 100 for group_key in expected_group_keys}
-
-    app_row = payload["apps"]["charts"][0]
-    values = app_row["values"]
-    assert app_row["placements"]["worker"] == expected_group_keys
-    assert [
-        (item["name"], item["replicas"])
-        for item in values["nodesets"]
-        if str(item.get("name", "")).startswith("worker-")
-    ] == [(group_key, 100) for group_key in expected_group_keys]
-
-
-def test_soperator_mixed_large_worker_counts_shard_to_100_node_groups() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_cpu_total_nodes": 500,
-                "worker_cpu_nodes_per_group": 100,
-                "worker_gpu_total_nodes": 1000,
-                "worker_gpu_nodes_per_group": 100,
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    node_groups = mk8s_inputs["node_groups"]
-    expected_cpu_keys = [f"worker-cpu-{index}" for index in range(5)]
-    expected_gpu_keys = [f"worker-gpu-{index}" for index in range(10)]
-    expected_group_keys = [*expected_cpu_keys, *expected_gpu_keys]
-    assert [key for key in node_groups if str(key).startswith("worker-")] == expected_group_keys
-    assert {
-        key: (
-            node_groups[key].get("node_count"),
-            node_groups[key].get("autoscaling"),
-            node_groups[key].get("nodeset_name"),
-        )
-        for key in expected_group_keys
-    } == {
-        **{key: (100, None, "worker-cpu") for key in expected_cpu_keys},
-        **{key: (100, None, "worker-gpu") for key in expected_gpu_keys},
-    }
-    assert mk8s_inputs["soperator"]["worker_node_groups"] == {
-        key: {
-            "autoscaling": {"enabled": False},
-            "ephemeral_nodes": {"enabled": False},
-        }
-        for key in expected_group_keys
-    }
-
-    app_row = payload["apps"]["charts"][0]
-    values = app_row["values"]
-    assert app_row["placements"]["worker"] == expected_group_keys
-    worker_nodesets = [
-        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
-    ]
-    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
-        (key, 100) for key in expected_group_keys
-    ]
-    assert all("ephemeralNodes" not in item for item in worker_nodesets)
-    assert all("initialNumberEphemeralNodes" not in item for item in worker_nodesets)
-    assert "suspendTime" not in values.get("slurmConfig", {})
-
-    partitions = {
-        partition["name"]: partition["nodeSetRefs"]
-        for partition in values["partitionConfiguration"]["partitions"]
-        if partition["name"] in {"cpu", "gpu"}
-    }
-    assert partitions == {"cpu": expected_cpu_keys, "gpu": expected_gpu_keys}
-
-
-def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets() -> None:
-    worker_node_groups = {
-        group_key: {
-            "autoscaling": {
-                "enabled": True,
-                "min_node_count": 5,
-                "max_node_count": 100,
-            },
-            "ephemeral_nodes": {"enabled": False},
-        }
-        for group_key in (
-            "worker-cpu-0",
-            "worker-cpu-1",
-            "worker-cpu-2",
-            "worker-gpu-0",
-            "worker-gpu-1",
-            "worker-gpu-2",
-        )
-    }
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_cpu_total_nodes": 300,
-                "worker_cpu_nodes_per_group": 100,
-                "worker_gpu_total_nodes": 300,
-                "worker_gpu_nodes_per_group": 100,
-                "worker_node_groups": worker_node_groups,
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    node_groups = mk8s_inputs["node_groups"]
-    worker_group_keys = [key for key in node_groups if str(key).startswith("worker-")]
-    assert worker_group_keys == list(worker_node_groups)
-    assert mk8s_inputs["soperator"]["worker_node_groups"] == worker_node_groups
-    assert all(
-        node_groups[group_key]["autoscaling"]
-        == {
-            "min_node_count": 5,
-            "max_node_count": 100,
-        }
-        for group_key in worker_group_keys
-    )
-    assert all("node_count" not in node_groups[group_key] for group_key in worker_group_keys)
-
-    app_row = payload["apps"]["charts"][0]
-    values = app_row["values"]
-    assert app_row["placements"]["worker"] == worker_group_keys
-    worker_nodesets = [
-        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
-    ]
-    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
-        ("worker-cpu-0", 100),
-        ("worker-cpu-1", 100),
-        ("worker-cpu-2", 100),
-        ("worker-gpu-0", 100),
-        ("worker-gpu-1", 100),
-        ("worker-gpu-2", 100),
-    ]
-    assert all("ephemeralNodes" not in item for item in worker_nodesets)
-    assert all("initialNumberEphemeralNodes" not in item for item in worker_nodesets)
-    assert "suspendTime" not in values.get("slurmConfig", {})
-
-
-def test_soperator_production_worker_ephemeral_nodes_materialize_from_autoscaling() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_gpu_total_nodes": 5,
-                "worker_ephemeral_nodes": {
-                    "suspend_time_seconds": 300,
-                },
-                "worker_node_groups": {
-                    "worker": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 1,
-                            "max_node_count": 5,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                },
-            }
-        }
-    )
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["node_groups"]["worker"]["autoscaling"] == {
-        "min_node_count": 1,
-        "max_node_count": 5,
-    }
-    assert "node_count" not in mk8s_inputs["node_groups"]["worker"]
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
-    assert worker_nodeset["replicas"] == 5
-    assert worker_nodeset["ephemeralNodes"] is True
-    assert worker_nodeset["initialNumberEphemeralNodes"] == 1
-    assert values["slurmConfig"]["suspendTime"] == 300
-
-
-def test_soperator_production_worker_ephemeral_nodes_shard_initial_active_counts() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_gpu_total_nodes": 250,
-                "worker_gpu_nodes_per_group": 100,
-                "worker_ephemeral_nodes": {
-                    "suspend_time_seconds": 300,
-                },
-                "worker_node_groups": {
-                    "worker-0": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 3,
-                            "max_node_count": 100,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                    "worker-1": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 0,
-                            "max_node_count": 100,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                    "worker-2": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 0,
-                            "max_node_count": 50,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                },
-            }
-        }
-    )
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert {
-        key: group["autoscaling"]
-        for key, group in mk8s_inputs["node_groups"].items()
-        if str(key).startswith("worker")
-    } == {
-        "worker-0": {"min_node_count": 3, "max_node_count": 100},
-        "worker-1": {"min_node_count": 0, "max_node_count": 100},
-        "worker-2": {"min_node_count": 0, "max_node_count": 50},
-    }
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker_nodesets = {
-        item["name"]: item
-        for item in values["nodesets"]
-        if str(item.get("name")).startswith("worker")
-    }
-    assert {
-        name: (
-            nodeset["replicas"],
-            nodeset["ephemeralNodes"],
-            nodeset["initialNumberEphemeralNodes"],
-        )
-        for name, nodeset in worker_nodesets.items()
-    } == {
-        "worker-0": (100, True, 3),
-        "worker-1": (100, True, 1),
-        "worker-2": (50, True, 1),
-    }
-
-
-@pytest.mark.parametrize(
-    ("preset", "expected_gpu_per_worker", "expected_cpu", "expected_static"),
-    [
-        (
-            "1gpu-16vcpu-200gb",
-            1,
-            "12",
-            "Boards=1 SocketsPerBoard=1 CoresPerSocket=6 ThreadsPerCore=2 Gres=gpu:1",
-        ),
-        (
-            "8gpu-128vcpu-1600gb",
-            8,
-            "32",
-            "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1",
-        ),
-    ],
-)
-def test_soperator_production_worker_ephemeral_nodes_keep_per_host_gpu_count(
-    preset: str,
-    expected_gpu_per_worker: int,
-    expected_cpu: str,
-    expected_static: str,
-) -> None:
-    payload = _soperator_production_payload(
-        {
-            "node_group_defaults": {
-                "gpu": {
-                    "platform": "gpu-h100-sxm",
-                    "preset": preset,
-                }
-            },
-            "soperator": {
-                "worker_gpu_total_nodes": 5,
-                "worker_ephemeral_nodes": {
-                    "suspend_time_seconds": 300,
-                },
-                "worker_node_groups": {
-                    "worker": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 5,
-                            "max_node_count": 5,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                },
-            },
-        }
-    )
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["node_groups"]["worker"]["autoscaling"] == {
-        "min_node_count": 5,
-        "max_node_count": 5,
-    }
-    values = payload["apps"]["charts"][0]["values"]
-    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
-    assert worker_nodeset["replicas"] == 5
-    assert worker_nodeset["initialNumberEphemeralNodes"] == 5
-    assert worker_nodeset["slurmd"]["resources"]["gpu"] == expected_gpu_per_worker
-    assert worker_nodeset["slurmd"]["resources"]["cpu"] == expected_cpu
-    assert worker_nodeset["nodeConfig"]["static"] == expected_static
-
-
-def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_gpu_total_nodes": 5,
-                "worker_ephemeral_nodes": {
-                    "suspend_time_seconds": 300,
-                },
-                "worker_node_groups": {
-                    "worker": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 1,
-                            "max_node_count": 5,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                },
-            }
-        }
-    )
-    assert cli._materialize_soperator_component_defaults(payload) is True
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-
-    mk8s_inputs["soperator"]["worker_node_groups"]["worker"]["ephemeral_nodes"] = {"enabled": False}
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
-    assert worker_nodeset["replicas"] == 5
-    assert "ephemeralNodes" not in worker_nodeset
-    assert "initialNumberEphemeralNodes" not in worker_nodeset
-    assert "suspendTime" not in values.get("slurmConfig", {})
-
-
-@pytest.mark.parametrize(
-    ("soperator_inputs", "error_match"),
-    [
-        (
-            {
-                "worker_node_groups": {
-                    "worker": {"ephemeral_nodes": {"enabled": True}},
-                },
-            },
-            "worker_node_groups\\.worker\\.ephemeral_nodes\\.enabled requires "
-            "soperator\\.worker_node_groups\\.worker\\.autoscaling\\.enabled=true",
-        ),
-        (
-            {
-                "worker_ephemeral_nodes": {"suspend_time_seconds": 300},
-                "worker_node_groups": {
-                    "worker": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 0,
-                            "max_node_count": 0,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                },
-            },
-            "worker_node_groups\\.worker\\.ephemeral_nodes\\.enabled requires "
-            "soperator\\.worker_node_groups\\.worker\\.autoscaling\\.max_node_count to be at least 1",
-        ),
-        (
-            {
-                "worker_gpu_total_nodes": 5,
-                "worker_ephemeral_nodes": {
-                    "suspend_time_seconds": -1,
-                },
-                "worker_node_groups": {
-                    "worker": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 1,
-                            "max_node_count": 5,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                },
-            },
-            "worker_ephemeral_nodes\\.suspend_time_seconds must be an integer >= 0",
-        ),
-    ],
-)
-def test_soperator_production_worker_ephemeral_nodes_reject_invalid_partial_configs(
-    soperator_inputs: Mapping[str, Any],
-    error_match: str,
-) -> None:
-    payload = _soperator_production_payload({"soperator": dict(soperator_inputs)})
-
-    with pytest.raises(ValueError, match=error_match):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-@pytest.mark.parametrize(
-    ("worker_node_groups", "error_match"),
-    [
-        (
-            {
-                "worker": {
-                    "autoscaling": {
-                        "enabled": True,
-                        "min_node_count": 3,
-                        "max_node_count": 2,
-                    }
-                }
-            },
-            "worker_node_groups\\.worker\\.autoscaling\\.max_node_count must be "
-            "greater than or equal to "
-            "soperator\\.worker_node_groups\\.worker\\.autoscaling\\.min_node_count",
-        ),
-        (
-            {
-                "worker": {
-                    "autoscaling": {
-                        "enabled": True,
-                        "min_node_count": 0,
-                        "max_node_count": 2,
-                    }
-                }
-            },
-            "worker_node_groups\\.worker\\.autoscaling\\.max_node_count must be "
-            "less than or equal to the shard capacity 1",
-        ),
-    ],
-)
-def test_soperator_production_worker_node_group_autoscaling_rejects_invalid_bounds(
-    worker_node_groups: Mapping[str, Any],
-    error_match: str,
-) -> None:
-    payload = _soperator_production_payload(
-        {"soperator": {"worker_node_groups": dict(worker_node_groups)}}
-    )
-
-    with pytest.raises(ValueError, match=error_match):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-@pytest.mark.parametrize(
-    ("worker_node_groups", "error_match"),
-    [
-        (
-            {"worker": True},
-            "worker_node_groups\\.worker must be a mapping",
-        ),
-        (
-            {"worker": {"autoscaling": True}},
-            "worker_node_groups\\.worker\\.autoscaling must be a mapping",
-        ),
-        (
-            {"worker": {"ephemeral_nodes": True}},
-            "worker_node_groups\\.worker\\.ephemeral_nodes must be a mapping",
-        ),
-    ],
-)
-def test_soperator_production_worker_node_group_controls_reject_malformed_mappings(
-    worker_node_groups: Mapping[str, Any],
-    error_match: str,
-) -> None:
-    payload = _soperator_production_payload(
-        {"soperator": {"worker_node_groups": dict(worker_node_groups)}}
-    )
-
-    with pytest.raises(ValueError, match=error_match):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-def test_soperator_production_worker_node_group_prunes_stale_unmatched_controls() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_ephemeral_nodes": {"suspend_time_seconds": 300},
-                "worker_node_groups": {
-                    "stale-worker": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 1,
-                            "max_node_count": 1,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    }
-                },
-            }
-        }
-    )
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["soperator"]["worker_node_groups"] == {
-        "worker": {
-            "autoscaling": {"enabled": False},
-            "ephemeral_nodes": {"enabled": False},
-        }
-    }
-    values = payload["apps"]["charts"][0]["values"]
-    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
-    assert "ephemeralNodes" not in worker_nodeset
-    assert "suspendTime" not in values.get("slurmConfig", {})
-
-
-def test_soperator_production_worker_autoscaling_allows_scale_to_zero() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "worker_node_groups": {
-                                "worker": {
-                                    "autoscaling": {
-                                        "enabled": True,
-                                        "min_node_count": 0,
-                                        "max_node_count": 0,
-                                    }
-                                }
-                            },
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    node_groups = mk8s_inputs["node_groups"]
-    assert node_groups["worker"]["autoscaling"] == {
-        "min_node_count": 0,
-        "max_node_count": 0,
-    }
-    assert "node_count" not in node_groups["worker"]
-
-    app_row = payload["apps"]["charts"][0]
-    values = app_row["values"]
-    assert app_row["placements"]["worker"] == ["worker"]
-    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
-    assert worker_nodeset["replicas"] == 0
-
-
-def test_soperator_production_disabled_worker_autoscaling_clears_stale_shards() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "worker_gpu_total_nodes": 250,
-                            "worker_gpu_nodes_per_group": 100,
-                            "worker_node_groups": {
-                                "worker-0": {
-                                    "autoscaling": {
-                                        "enabled": True,
-                                        "min_node_count": 1,
-                                        "max_node_count": 100,
-                                    }
-                                },
-                                "worker-1": {
-                                    "autoscaling": {
-                                        "enabled": True,
-                                        "min_node_count": 0,
-                                        "max_node_count": 100,
-                                    }
-                                },
-                                "worker-2": {
-                                    "autoscaling": {
-                                        "enabled": True,
-                                        "min_node_count": 0,
-                                        "max_node_count": 50,
-                                    }
-                                },
-                            },
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert [key for key in mk8s_inputs["node_groups"] if str(key).startswith("worker")] == [
-        "worker-0",
-        "worker-1",
-        "worker-2",
-    ]
-
-    mk8s_inputs["soperator"]["worker_gpu_total_nodes"] = 1
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    node_groups = mk8s_inputs["node_groups"]
-    assert [key for key in node_groups if str(key).startswith("worker")] == ["worker"]
-    assert node_groups["worker"]["node_count"] == 1
-    assert "autoscaling" not in node_groups["worker"]
-    assert list(mk8s_inputs["soperator"]["worker_node_groups"]) == ["worker"]
-    assert mk8s_inputs["soperator"]["worker_node_groups"]["worker"] == {
-        "autoscaling": {"enabled": False},
-        "ephemeral_nodes": {"enabled": False},
-    }
-    app_row = payload["apps"]["charts"][0]
-    values = app_row["values"]
-    assert app_row["placements"]["worker"] == ["worker"]
-    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
-    assert worker_nodeset["replicas"] == 1
-
-
-def test_soperator_production_autoscaling_rejects_invalid_bounds() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "login_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 4,
-                                "max_node_count": 2,
-                            },
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    with pytest.raises(
-        ValueError,
-        match="soperator.login_autoscaling.max_node_count",
-    ):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-def test_soperator_production_service_role_autoscaling_rejects_scale_to_zero() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "login_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 0,
-                                "max_node_count": 0,
-                            },
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    with pytest.raises(
-        ValueError,
-        match="soperator.login_autoscaling.max_node_count must be at least 1",
-    ):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-def test_soperator_profile_managed_groups_track_selected_shape_defaults() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_source"] == "nebius_image"
-    assert mk8s_inputs["node_groups"]["worker"]["platform"] == "gpu-h100-sxm"
-    assert mk8s_inputs["node_groups"]["worker"]["preset"] == "8gpu-128vcpu-1600gb"
-    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_preset"] == "cuda13.0"
-    assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}
-
-    mk8s_inputs["node_group_defaults"] = {
-        "cpu": {
-            "platform": "cpu-d3",
-            "preset": "16vcpu-64gb",
-            "os": "ubuntu24.04",
-            "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": 93},
-        },
-        "gpu": {
-            "platform": "gpu-h100-sxm",
-            "preset": "1gpu-16vcpu-200gb",
-            "os": "ubuntu24.04",
-            "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": 256},
-            "gpu_stack_source": "nebius_image",
-            "gpu_stack_preset": "cuda13.0",
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    assert mk8s_inputs["node_groups"]["system"]["platform"] == "cpu-d3"
-    assert mk8s_inputs["node_groups"]["system"]["preset"] == "16vcpu-64gb"
-    assert mk8s_inputs["node_groups"]["worker"]["platform"] == "gpu-h100-sxm"
-    assert mk8s_inputs["node_groups"]["worker"]["preset"] == "1gpu-16vcpu-200gb"
-    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_source"] == "nebius_image"
-    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_preset"] == "cuda13.0"
-    assert (
-        payload["apps"]["charts"][0]["values"]["soperator-dcgm-exporter"]["validateToolkit"]
-        is False
-    )
-
-    assert "gpu_clusters" not in mk8s_inputs
-    assert "gpu_cluster_key" not in mk8s_inputs["node_groups"]["worker"]
-
-    mk8s_inputs.setdefault("gpu_clusters", {}).setdefault("workers", {})["infiniband_fabric"] = (
-        "fabric-6"
-    )
-    mk8s_inputs["node_groups"]["worker"]["gpu_cluster_key"] = "workers"
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    assert "infiniband_fabric" not in mk8s_inputs["node_group_defaults"]["gpu"]
-    assert "gpu_clusters" not in mk8s_inputs
-    assert "gpu_cluster_key" not in mk8s_inputs["node_groups"]["worker"]
-
-
-def test_mk8s_image_defaults_replace_stale_soperator_gpu_stack_default() -> None:
-    payload = {
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-123",
-                "region_id": "eu-north1",
-            },
-        },
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "cluster": {"k8s_version": "1.33"},
-                        "node_group_defaults": {
-                            "cpu": {
-                                "platform": "cpu-d3",
-                                "preset": "32vcpu-128gb",
-                                "os": "ubuntu24.04",
-                            },
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                                "os": "ubuntu24.04",
-                                "gpu_stack_source": "nebius_image",
-                                "gpu_stack_preset": "cuda13.0",
-                            },
-                        },
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    class _Lookup(cli.ProviderOptionLookup):
-        def resolve(self, *, provider, args, payload, field_path):
-            _ = args, payload
-            if provider == "mk8s_gpu_stack_presets":
-                assert field_path.endswith(".node_group_defaults.gpu.gpu_stack_preset")
-                return [cli.OptionChoice(value="cuda12.8", label="cuda12.8  (ubuntu24.04)")]
-            if provider == "mk8s_node_group_os_values":
-                return [cli.OptionChoice(value="ubuntu24.04", label="ubuntu24.04")]
-            return []
-
-        def last_error(self):
-            return ""
-
-    cli._materialize_mk8s_image_defaults(
-        payload=payload,
-        selected_infra={"cluster1"},
-        infra_entries=cli._with_infra_provider_groups(cli.component_entries("infra")),
-        provider_lookup=_Lookup(),
-    )
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["node_group_defaults"]["gpu"]["gpu_stack_preset"] == "cuda12.8"
-    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_preset"] == "cuda12.8"
-
-
-def test_soperator_shape_defaults_preserve_materialized_boot_disk_sizes() -> None:
-    payload = {
-        "client_info": {
-            "nebius": {
-                "tenant_id": "tenant-1",
-                "project_id": "project-1",
-                "region_id": "eu-north1",
-            }
-        },
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "node_group_defaults": {
-                            "cpu": {
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                                "boot_disk": {"type": "NETWORK_SSD"},
-                            },
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                                "boot_disk": {"type": "NETWORK_SSD"},
-                                "gpu_stack_source": "nebius_image",
-                                "gpu_stack_preset": "cuda13.0",
-                            },
-                        },
-                        "soperator": {
-                            "worker_gpu_total_nodes": 2,
-                            "worker_gpu_nodes_per_group": 1,
-                        },
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-    assert cli.materialize_compute_boot_disk_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["node_groups"]["system"]["boot_disk"]["size_gibibytes"] == 64
-    worker_groups = {
-        key: group
-        for key, group in mk8s_inputs["node_groups"].items()
-        if group.get("workload") == "worker"
-    }
-    assert set(worker_groups) == {"worker-0", "worker-1"}
-    assert all(group["boot_disk"]["size_gibibytes"] == 256 for group in worker_groups.values())
-
-    cli._materialize_soperator_component_defaults(payload)
-
-    assert mk8s_inputs["node_groups"]["system"]["boot_disk"] == {
-        "type": "NETWORK_SSD",
-        "size_gibibytes": 64,
-    }
-    worker_groups = {
-        key: group
-        for key, group in mk8s_inputs["node_groups"].items()
-        if group.get("workload") == "worker"
-    }
-    assert set(worker_groups) == {"worker-0", "worker-1"}
-    for group in worker_groups.values():
-        assert group["boot_disk"] == {
-            "type": "NETWORK_SSD",
-            "size_gibibytes": 256,
-        }
-
-
-def test_soperator_cpu_profile_materializes_only_cpu_worker_nodeset() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "profile": "nebius-cpu-v1",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert "gpu_enabled" not in mk8s_inputs
-    assert "gpu_node_groups" not in mk8s_inputs
-    assert "gpu_nodes_count_per_group" not in mk8s_inputs
-    assert "gpu_clusters" not in mk8s_inputs
-    assert set(mk8s_inputs["node_groups"]) == {
-        "system",
-        "controller",
-        "login",
-        "accounting",
-        "worker-cpu",
-    }
-    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
-    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
-    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
-    assert all(group["gpu"] is False for group in mk8s_inputs["node_groups"].values())
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["nodeset_name"] == "worker-cpu"
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["jail"] is True
-
-    soperator_row = payload["apps"]["charts"][0]
-    soperator_values = soperator_row["values"]
-    assert soperator_values["mariadb-operator"]["installOperator"] is True
-    assert soperator_values["clusterType"] == "cpu"
-    assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
-    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
-    assert soperator_row["placements"] == {
-        "system": "system",
-        "controller": "controller",
-        "login": "login",
-        "accounting": "accounting",
-        "worker": ["worker-cpu"],
-    }
-    assert [node["name"] for node in soperator_values["nodesets"]] == ["worker-cpu"]
-    worker_cpu = soperator_values["nodesets"][0]
-    assert worker_cpu["gpu"]["enabled"] is False
-    assert worker_cpu["slurmd"]["resources"]["cpu"] == "24"
-    assert worker_cpu["slurmd"]["resources"]["memory"] == "96Gi"
-    assert "gpu" not in worker_cpu["slurmd"]["resources"]
-    assert "nvidia.com/gpu" not in worker_cpu["slurmd"]["resources"]
-    assert soperator_values["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu"],
-            "policy": {
-                "default": True,
-                "state": "UP",
-                "maxTime": "INFINITE",
-                "priorityTier": 5,
-            },
-        },
-    ]
-    assert soperator_values["soperator-dcgm-exporter"]["enabled"] is False
-
-
-def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "worker_cpu_total_nodes": 2,
-                            "worker_cpu_nodes_per_group": 1,
-                            "worker_gpu_total_nodes": 3,
-                            "worker_gpu_nodes_per_group": 2,
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "profile": "nebius-mixed-v1",
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert "gpu_enabled" not in mk8s_inputs
-    assert "gpu_node_groups" not in mk8s_inputs
-    assert "gpu_nodes_count_per_group" not in mk8s_inputs
-    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
-    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
-    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
-    assert {
-        key: group["node_count"]
-        for key, group in mk8s_inputs["node_groups"].items()
-        if str(key).startswith("worker-cpu")
-    } == {"worker-cpu-0": 1, "worker-cpu-1": 1}
-    assert {
-        key: group["node_count"]
-        for key, group in mk8s_inputs["node_groups"].items()
-        if str(key).startswith("worker-gpu")
-    } == {"worker-gpu-0": 2, "worker-gpu-1": 1}
-    for key in ("worker-cpu-0", "worker-cpu-1"):
-        assert mk8s_inputs["node_groups"][key]["nodeset_name"] == "worker-cpu"
-        assert mk8s_inputs["node_groups"][key]["gpu"] is False
-        assert mk8s_inputs["node_groups"][key]["jail"] is True
-    for key in ("worker-gpu-0", "worker-gpu-1"):
-        assert mk8s_inputs["node_groups"][key]["nodeset_name"] == "worker-gpu"
-        assert mk8s_inputs["node_groups"][key]["gpu"] is True
-        assert mk8s_inputs["node_groups"][key]["jail"] is True
-        assert mk8s_inputs["node_groups"][key]["reservation"] == {"policy": "AUTO"}
-
-    soperator_values = payload["apps"]["charts"][0]["values"]
-    assert soperator_values["mariadb-operator"]["installOperator"] is True
-    assert soperator_values["clusterType"] == "gpu"
-    assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
-    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
-    assert payload["apps"]["charts"][0]["placements"]["worker"] == [
-        "worker-cpu-0",
-        "worker-cpu-1",
-        "worker-gpu-0",
-        "worker-gpu-1",
-    ]
-    assert [node["name"] for node in soperator_values["nodesets"]] == [
-        "worker-cpu-0",
-        "worker-cpu-1",
-        "worker-gpu-0",
-        "worker-gpu-1",
-    ]
-    worker_cpu = next(
-        node for node in soperator_values["nodesets"] if node["name"] == "worker-cpu-0"
-    )
-    worker_gpu_0 = next(
-        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu-0"
-    )
-    worker_gpu_1 = next(
-        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu-1"
-    )
-    assert worker_cpu["replicas"] == 1
-    assert worker_cpu["slurmd"]["resources"]["cpu"] == "24"
-    assert worker_cpu["slurmd"]["resources"]["memory"] == "96Gi"
-    assert worker_gpu_0["replicas"] == 2
-    assert worker_gpu_1["replicas"] == 1
-    assert {
-        "name": "NVIDIA_DRIVER_CAPABILITIES",
-        "value": "compute,graphics,utility,video",
-    } in worker_gpu_0["slurmd"]["customEnv"]
-    assert soperator_values["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
-            "policy": {
-                "default": True,
-                "state": "UP",
-                "maxTime": "INFINITE",
-                "priorityTier": 5,
-            },
-        },
-        {
-            "name": "gpu",
-            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
-            "policy": {
-                "default": False,
-                "state": "UP",
-                "maxTime": "INFINITE",
-                "priorityTier": 10,
-            },
-        },
-    ]
-
-
-def test_soperator_mixed_profile_replaces_stale_generated_worker_placements() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_cpu_total_nodes": 2,
-                "worker_cpu_nodes_per_group": 1,
-                "worker_gpu_total_nodes": 3,
-                "worker_gpu_nodes_per_group": 2,
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-    payload["apps"]["charts"][0]["placements"] = {"worker": ["worker-cpu", "worker-gpu"]}
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    app_row = payload["apps"]["charts"][0]
-    assert app_row["placements"]["worker"] == [
-        "worker-cpu-0",
-        "worker-cpu-1",
-        "worker-gpu-0",
-        "worker-gpu-1",
-    ]
-    values = app_row["values"]
-    assert [
-        (item["name"], item["replicas"])
-        for item in values["nodesets"]
-        if str(item.get("name", "")).startswith("worker-")
-    ] == [
-        ("worker-cpu-0", 1),
-        ("worker-cpu-1", 1),
-        ("worker-gpu-0", 2),
-        ("worker-gpu-1", 1),
-    ]
-    assert values["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
-            "policy": {
-                "default": True,
-                "state": "UP",
-                "maxTime": "INFINITE",
-                "priorityTier": 5,
-            },
-        },
-        {
-            "name": "gpu",
-            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
-            "policy": {
-                "default": False,
-                "state": "UP",
-                "maxTime": "INFINITE",
-                "priorityTier": 10,
-            },
-        },
-    ]
-
-
-def test_soperator_mixed_profile_custom_worker_placement_splits_by_group_shape() -> None:
-    payload = _soperator_production_payload(
-        {
-            "node_groups": {
-                "custom-cpu": {
-                    "node_count": 2,
-                    "gpu": False,
-                    "platform": "cpu-d3",
-                    "preset": "32vcpu-128gb",
-                },
-                "custom-gpu": {
-                    "node_count": 3,
-                    "gpu": True,
-                    "platform": "gpu-h100-sxm",
-                    "preset": "1gpu-16vcpu-200gb",
-                },
-            },
-        }
-    )
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-    payload["apps"]["charts"][0]["placements"] = {
-        "system": "custom-cpu",
-        "controller": "custom-cpu",
-        "login": "custom-cpu",
-        "accounting": "custom-cpu",
-        "worker": ["custom-cpu", "custom-gpu"],
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker_nodesets = [
-        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
-    ]
-    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
-        ("worker-cpu", 2),
-        ("worker-gpu", 3),
-    ]
-    worker_by_name = {item["name"]: item for item in worker_nodesets}
-    assert worker_by_name["worker-cpu"]["nodeSelector"] == {
-        "nebius.com/node-group": "custom-cpu",
-    }
-    assert worker_by_name["worker-gpu"]["nodeSelector"] == {
-        "nebius.com/node-group": "custom-gpu",
-    }
-    assert values["partitionConfiguration"]["partitions"] == [
-        {
-            "name": "cpu",
-            "nodeSetRefs": ["worker-cpu"],
-            "policy": {
-                "default": True,
-                "state": "UP",
-                "maxTime": "INFINITE",
-                "priorityTier": 5,
-            },
-        },
-        {
-            "name": "gpu",
-            "nodeSetRefs": ["worker-gpu"],
-            "policy": {
-                "default": False,
-                "state": "UP",
-                "maxTime": "INFINITE",
-                "priorityTier": 10,
-            },
-        },
-    ]
-
-
-def test_soperator_mixed_profile_autoscaling_shards_cpu_and_gpu_independently() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_cpu_total_nodes": 3,
-                "worker_cpu_nodes_per_group": 2,
-                "worker_gpu_total_nodes": 4,
-                "worker_gpu_nodes_per_group": 3,
-                "worker_node_groups": {
-                    "worker-cpu-0": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 1,
-                            "max_node_count": 2,
-                        },
-                    },
-                    "worker-cpu-1": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 0,
-                            "max_node_count": 1,
-                        },
-                    },
-                    "worker-gpu-0": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 2,
-                            "max_node_count": 3,
-                        },
-                    },
-                    "worker-gpu-1": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 0,
-                            "max_node_count": 1,
-                        },
-                    },
-                },
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert {
-        key: group["autoscaling"]
-        for key, group in node_groups.items()
-        if str(key).startswith("worker-cpu")
-    } == {
-        "worker-cpu-0": {"min_node_count": 1, "max_node_count": 2},
-        "worker-cpu-1": {"min_node_count": 0, "max_node_count": 1},
-    }
-    assert {
-        key: group["autoscaling"]
-        for key, group in node_groups.items()
-        if str(key).startswith("worker-gpu")
-    } == {
-        "worker-gpu-0": {"min_node_count": 2, "max_node_count": 3},
-        "worker-gpu-1": {"min_node_count": 0, "max_node_count": 1},
-    }
-    values = payload["apps"]["charts"][0]["values"]
-    assert [
-        (item["name"], item["replicas"])
-        for item in values["nodesets"]
-        if str(item.get("name", "")).startswith("worker-")
-    ] == [
-        ("worker-cpu-0", 2),
-        ("worker-cpu-1", 1),
-        ("worker-gpu-0", 3),
-        ("worker-gpu-1", 1),
-    ]
-
-
-def test_soperator_mixed_profile_ephemeral_can_target_one_worker_shard() -> None:
-    payload = _soperator_production_payload(
-        {
-            "soperator": {
-                "worker_ephemeral_nodes": {
-                    "suspend_time_seconds": 300,
-                },
-                "worker_node_groups": {
-                    "worker-gpu": {
-                        "autoscaling": {
-                            "enabled": True,
-                            "min_node_count": 1,
-                            "max_node_count": 1,
-                        },
-                        "ephemeral_nodes": {"enabled": True},
-                    },
-                },
-            }
-        }
-    )
-    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker_nodesets = {
-        item["name"]: item
-        for item in values["nodesets"]
-        if str(item.get("name", "")).startswith("worker-")
-    }
-    assert "ephemeralNodes" not in worker_nodesets["worker-cpu"]
-    assert worker_nodesets["worker-gpu"]["ephemeralNodes"] is True
-    assert worker_nodesets["worker-gpu"]["initialNumberEphemeralNodes"] == 1
-    assert values["slurmConfig"]["suspendTime"] == 300
-
-
-def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_role_groups() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "node_groups": {
-                            "cpu-a": {
-                                "node_count": 2,
-                                "nodes": ["computeinstance-a", "computeinstance-b"],
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
-                            "cpu-b": {
-                                "node_count": 2,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
-                            "h100": {
-                                "node_count": 2,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                                "labels": {
-                                    "nebius.com/driverful": "true",
-                                    "nebius.com/drivers-preset": "cuda13.0",
-                                    "nebius.com/node-group": "h100",
-                                },
-                            },
-                        }
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "no-soperator-detected",
-                        "actions": ["install-soperator"],
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["deploy"]["targets"][0]["inventory"]
-    assert set(mk8s_inputs["node_groups"]) == {"cpu-a", "cpu-b", "h100"}
-    assert "gpu_clusters" not in mk8s_inputs
-    assert payload["apps"]["charts"][0]["install_mode"] == "onboard-existing-cluster"
-
-    app_row = payload["apps"]["charts"][0]
-    values = app_row["values"]
-    assert app_row["placements"] == {
-        "system": ["cpu-a", "cpu-b"],
-        "controller": ["cpu-a", "cpu-b"],
-        "login": ["cpu-a", "cpu-b"],
-        "accounting": ["cpu-a", "cpu-b"],
-        "worker": ["h100"],
-    }
-    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
-    assert worker["replicas"] == 2
-    assert worker["nodeSelector"] == {"nebius.com/node-group": "h100"}
-    assert values["soperator-dcgm-exporter"]["validateToolkit"] is False
-    assert worker["slurmd"]["resources"]["gpu"] == 1
-    assert values["rebooter"]["tolerations"] == [
-        {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
-    ]
-    worker_partition = next(
-        partition
-        for partition in values["partitionConfiguration"]["partitions"]
-        if partition["name"] == "gpu"
-    )
-    assert worker_partition["nodeSetRefs"] == ["worker"]
-
-    filters = {item["name"]: item for item in values["k8sNodeFilters"]}
-    assert filters["controller"]["affinity"]["nodeAffinity"][
-        "requiredDuringSchedulingIgnoredDuringExecution"
-    ]["nodeSelectorTerms"][0]["matchExpressions"][0] == {
-        "key": "nebius.com/node-group",
-        "operator": "In",
-        "values": ["cpu-a", "cpu-b"],
-    }
-    system_affinity = filters["system"]["affinity"]
-    assert values["controllerManager"]["affinity"] == system_affinity
-    assert values["soperator-checks"]["checks"]["affinity"] == system_affinity
-    assert values["mariadb-operator"]["affinity"] == system_affinity
-    assert values["mariadb-operator"]["webhook"]["affinity"] == system_affinity
-    assert "certController" not in values["mariadb-operator"]
-    assert values["slurmNodes"]["controller"]["k8sNodeFilterName"] == "controller"
-    assert values["slurmNodes"]["login"]["k8sNodeFilterName"] == "login"
-    assert values["slurmNodes"]["login"]["sshd"]["resources"] == {
-        "cpu": "250m",
-        "memory": "512Mi",
-        "ephemeralStorage": "2Gi",
-    }
-    assert values["slurmNodes"]["login"]["munge"]["resources"] == {
-        "cpu": "100m",
-        "memory": "128Mi",
-        "ephemeralStorage": "1Gi",
-    }
-    assert values["storage"]["jail"]["matchExpressions"] == [
-        {
-            "key": "nebius.com/node-group",
-            "operator": "In",
-            "values": ["cpu-a", "cpu-b", "h100"],
-        }
-    ]
-    assert values["storage"]["controllerSpool"]["matchExpressions"] == [
-        {
-            "key": "nebius.com/node-group",
-            "operator": "In",
-            "values": ["cpu-a", "cpu-b"],
-        }
-    ]
-    assert values["storage"]["accounting"]["matchExpressions"] == [
-        {
-            "key": "nebius.com/node-group",
-            "operator": "In",
-            "values": ["cpu-a", "cpu-b"],
-        }
-    ]
-
-
-def test_soperator_onboarding_ignores_worker_node_group_ephemeral_inputs() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "soperator": {
-                            "worker_ephemeral_nodes": {"suspend_time_seconds": 300},
-                            "worker_node_groups": {
-                                "h100": {
-                                    "autoscaling": {
-                                        "enabled": True,
-                                        "min_node_count": 1,
-                                        "max_node_count": 2,
-                                    },
-                                    "ephemeral_nodes": {"enabled": True},
-                                },
-                            },
-                        },
-                        "node_groups": {
-                            "h100": {
-                                "node_count": 2,
-                                "autoscaling": {
-                                    "min_node_count": 1,
-                                    "max_node_count": 2,
-                                },
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                                "labels": {
-                                    "nebius.com/node-group": "h100",
-                                    "nebius.com/resource-preset": "8gpu-128vcpu-1600gb",
-                                },
-                            }
-                        },
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "no-soperator-detected",
-                        "actions": ["install-soperator"],
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "values": {},
-                }
-            ]
-        },
-    }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
-    assert worker["replicas"] == 2
-    assert "ephemeralNodes" not in worker
-    assert "initialNumberEphemeralNodes" not in worker
-    assert "suspendTime" not in values.get("slurmConfig", {})
-
-
-@pytest.mark.parametrize(
-    ("actions", "expected_cluster_name"),
-    [
-        (["adopt-soperator"], "mk8s"),
-        (["install-soperator"], "cluster1"),
-    ],
-)
-def test_soperator_onboarding_preserves_live_mk8s_cluster_name_only_for_adoption(
-    actions: list[str],
-    expected_cluster_name: str,
-) -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "node_groups": {
-                            "h100": {
-                                "node_count": 1,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                                "labels": {
-                                    "nebius.com/node-group": "h100",
-                                    "nebius.com/resource-preset": "8gpu-128vcpu-1600gb",
-                                },
-                                "allocatable": {"nvidia.com/gpu": "8"},
-                            }
-                        }
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "existing-soperator-target",
-                        "actions": actions,
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "placements": {"worker": ["h100"]},
-                    "values": {
-                        "clusterName": "mk8s",
-                    },
-                }
-            ]
-        },
-    }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    assert payload["apps"]["charts"][0]["values"]["clusterName"] == expected_cluster_name
-
-
-def test_soperator_onboarding_prefers_established_slurmcluster_over_pending_duplicate() -> None:
-    snapshot = {
-        "soperator_resources": [
-            {
-                "kind": "SlurmCluster",
-                "metadata": {
-                    "name": "mk8s",
-                    "creationTimestamp": "2026-06-09T17:38:17Z",
-                },
-                "spec": {
-                    "partitionConfiguration": {
-                        "partitions": [
-                            {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
-                            {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
-                        ]
-                    }
-                },
-                "status": {
-                    "phase": "Not available",
-                    "readyLogin": 1,
-                    "readySConfigController": 1,
-                },
-            },
-            {
-                "kind": "SlurmCluster",
-                "metadata": {
-                    "name": "cluster1",
-                    "creationTimestamp": "2026-06-10T00:51:57Z",
-                },
-                "spec": {
-                    "partitionConfiguration": {
-                        "partitions": [
-                            {
-                                "name": "gpu",
-                                "nodeSetRefs": ["worker-gpu-mk8snodegroup-1"],
-                            },
-                            {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
-                        ]
-                    }
-                },
-                "status": {"phase": "Pending"},
-            },
-            {"kind": "NodeSet", "metadata": {"name": "worker-cpu"}, "status": {"phase": "Ready"}},
-            {"kind": "NodeSet", "metadata": {"name": "worker-gpu"}, "status": {"phase": "Ready"}},
-            {
-                "kind": "NodeSet",
-                "metadata": {"name": "worker-gpu-mk8snodegroup-1"},
-                "status": {"phase": "Pending"},
-            },
-        ]
-    }
-
-    assert cli._soperator_onboarding_live_slurm_cluster_name(snapshot) == "mk8s"
-
-
-def test_soperator_onboarding_preserves_adopted_worker_nodesets_with_partition_refs() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "node_groups": {
-                            "cpu-a": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "labels": {"nebius.com/node-group": "cpu-a"},
-                            },
-                            "gpu-a": {
-                                "node_count": 1,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                                "labels": {"nebius.com/node-group": "gpu-a"},
-                                "allocatable": {"nvidia.com/gpu": "8"},
-                            },
-                            "gpu-b": {
-                                "node_count": 1,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                                "labels": {"nebius.com/node-group": "gpu-b"},
-                                "allocatable": {"nvidia.com/gpu": "8"},
-                            },
-                        }
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "existing-soperator-target",
-                        "actions": ["adopt-soperator"],
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "placements": {
-                        "system": "cpu-a",
-                        "controller": "cpu-a",
-                        "login": "cpu-a",
-                        "accounting": "cpu-a",
-                        "worker": ["gpu-a", "gpu-b"],
-                    },
-                    "values": {
-                        "clusterName": "mk8s",
-                        "nodesets": [
-                            {
-                                "name": "worker-cpu",
-                                "gpu": {"enabled": False},
-                                "slurmd": {"resources": {"cpu": "500m", "memory": "1024Mi"}},
-                            },
-                            {
-                                "name": "worker-gpu",
-                                "gpu": {"enabled": True},
-                                "slurmd": {
-                                    "resources": {"cpu": "500m", "memory": "1024Mi", "gpu": 8}
-                                },
-                            },
-                        ],
-                        "partitionConfiguration": {
-                            "partitions": [
-                                {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
-                                {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
-                            ]
-                        },
-                    },
-                }
-            ]
-        },
-    }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["clusterName"] == "mk8s"
-    assert [item["name"] for item in values["nodesets"]] == ["worker-cpu", "worker-gpu"]
-    assert values["partitionConfiguration"]["partitions"] == [
-        {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
-        {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
-    ]
-
-
-def test_soperator_source_worker_nodesets_ignore_pending_duplicate_partition_refs() -> None:
-    source_report = {
-        "snapshot": {
-            "node_groups": {},
-            "soperator_resources": [
-                {
-                    "kind": "SlurmCluster",
-                    "metadata": {
-                        "name": "mk8s",
-                        "creationTimestamp": "2026-06-09T17:38:17Z",
-                    },
-                    "spec": {
-                        "partitionConfiguration": {
-                            "partitions": [
-                                {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
-                                {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
-                            ]
-                        }
-                    },
-                    "status": {
-                        "phase": "Not available",
-                        "readyLogin": 1,
-                        "readySConfigController": 1,
-                    },
-                },
-                {
-                    "kind": "SlurmCluster",
-                    "metadata": {
-                        "name": "cluster1",
-                        "creationTimestamp": "2026-06-10T00:51:57Z",
-                    },
-                    "spec": {
-                        "partitionConfiguration": {
-                            "partitions": [
-                                {
-                                    "name": "gpu",
-                                    "nodeSetRefs": [
-                                        "worker-gpu-mk8snodegroup-a",
-                                        "worker-gpu-mk8snodegroup-b",
-                                    ],
-                                },
-                                {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
-                            ]
-                        }
-                    },
-                    "status": {"phase": "Pending"},
-                },
-                {
-                    "kind": "NodeSet",
-                    "metadata": {"name": "worker-cpu"},
-                    "spec": {
-                        "gpu": {"enabled": False},
-                        "slurmd": {"resources": {"cpu": "500m", "memory": "1024Mi"}},
-                    },
-                    "status": {"phase": "Ready"},
-                },
-                {
-                    "kind": "NodeSet",
-                    "metadata": {"name": "worker-gpu"},
-                    "spec": {
-                        "gpu": {"enabled": True},
-                        "slurmd": {"resources": {"cpu": "500m", "memory": "1024Mi"}},
-                    },
-                    "status": {"phase": "Ready"},
-                },
-                {
-                    "kind": "NodeSet",
-                    "metadata": {"name": "worker-gpu-mk8snodegroup-a"},
-                    "spec": {"gpu": {"enabled": True}},
-                    "status": {"phase": "Pending"},
-                },
-                {
-                    "kind": "NodeSet",
-                    "metadata": {"name": "worker-gpu-mk8snodegroup-b"},
-                    "spec": {"gpu": {"enabled": True}},
-                    "status": {"phase": "Pending"},
-                },
-            ],
-        },
-        "report": {"state": "existing-soperator-target"},
-    }
-
-    nodesets = soperator_migration._source_worker_nodeset_values(source_report)
-    partition_config = soperator_migration._source_worker_partition_configuration(
-        source_report,
-        worker_names=tuple(item["name"] for item in nodesets),
-    )
-
-    assert [item["name"] for item in nodesets] == ["worker-cpu", "worker-gpu"]
-    assert partition_config["partitions"] == [
-        {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
-        {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
-    ]
-
-
-def test_soperator_onboarding_rejects_removed_chart_local_storage_mode() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "node_groups": {
-                            "cpu-small": {
-                                "node_count": 2,
-                                "nodes": ["computeinstance-a", "computeinstance-b"],
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                                "allocatable": {
-                                    "cpu": "3900m",
-                                    "memory": "15749428Ki",
-                                },
-                            }
-                        }
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "no-soperator-detected",
-                        "storage_mode": "use-existing-pvc-or-storageclass",
-                        "actions": ["configure-soperator-storage", "install-soperator"],
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "profile": "nebius-cpu-v1",
-                    "values": {
-                        "k8sNodeFilters": [
-                            {
-                                "name": "system",
-                                "affinity": {
-                                    "nodeAffinity": {
-                                        "requiredDuringSchedulingIgnoredDuringExecution": {
-                                            "nodeSelectorTerms": [
-                                                {
-                                                    "matchExpressions": [
-                                                        {
-                                                            "key": "node.kubernetes.io/instance-type",
-                                                            "operator": "In",
-                                                            "values": ["cpu-d3"],
-                                                        }
-                                                    ]
-                                                }
-                                            ]
-                                        }
-                                    }
-                                },
-                            }
-                        ]
-                    },
-                }
-            ]
-        },
-    }
-
-    with pytest.raises(ValueError, match="use-existing-pvc-or-storageclass"):
-        cli._materialize_soperator_component_defaults(payload)
-
-
-def test_soperator_onboarding_uses_discovered_selector_labels_for_external_groups() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "node_groups": {
-                            "h100": {
-                                "node_count": 2,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                                "selector": {
-                                    "key": "yandex.cloud/node-group-id",
-                                    "operator": "In",
-                                    "values": ["mk8snodegroup-123"],
-                                },
-                            }
-                        }
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "no-soperator-detected",
-                        "actions": ["install-soperator"],
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "placements": {"worker": ["h100"]},
-                    "values": {},
-                }
-            ]
-        },
-    }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
-    assert worker["nodeSelector"] == {"yandex.cloud/node-group-id": "mk8snodegroup-123"}
-
-
-def test_soperator_onboarding_uses_fallback_live_labels_when_selector_is_absent() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "node_groups": {
-                            "fallback": {
-                                "node_count": 2,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                                "labels": {"yandex.cloud/node-group-id": "mk8snodegroup-123"},
-                            }
-                        }
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "no-soperator-detected",
-                        "actions": ["install-soperator"],
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "placements": {"worker": ["fallback"]},
-                    "values": {},
-                }
-            ]
-        },
-    }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
-    assert worker["nodeSelector"] == {"yandex.cloud/node-group-id": "mk8snodegroup-123"}
-
-
-def test_soperator_onboarding_uses_live_resource_labels_for_external_groups() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "access": "external",
-                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
-                    "inventory": {
-                        "node_groups": {
-                            "h100": {
-                                "node_count": 2,
-                                "gpu": True,
-                                "labels": {
-                                    "nebius.com/node-group": "h100",
-                                    "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
-                                },
-                                "allocatable": {"nvidia.com/gpu": "1"},
-                            }
-                        }
-                    },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "no-soperator-detected",
-                        "actions": ["install-soperator"],
-                    },
-                }
-            ]
-        },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "placements": {"worker": ["h100"]},
-                    "values": {},
-                }
-            ]
-        },
-    }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
-    assert worker["slurmd"]["resources"]["gpu"] == 1
-
-
-def test_soperator_profile_strips_internal_hidden_partition_from_source_config() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "node_groups": {
-                            "system": {
-                                "node_count": 2,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
-                            "controller": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
-                            "login": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                                "taints": [
-                                    {
-                                        "key": "slurm.nebius.ai/nodeset-name",
-                                        "value": "login",
-                                        "effect": "NO_SCHEDULE",
-                                    }
-                                ],
-                            },
-                            "accounting": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
-                            "worker": {
-                                "node_count": 2,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                            },
-                        }
-                    },
-                },
-                {"id": "sfs", "instance_id": "sfs", "enabled": True, "inputs": {}},
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {
-                        "partitionConfiguration": {
-                            "partitions": [
-                                {
-                                    "name": "gpu",
-                                    "nodeSetRefs": ["worker"],
-                                    "config": "Default=YES MaxTime=INFINITE State=UP PriorityTier=10",
-                                }
-                            ]
-                        }
-                    },
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    partitions = values["partitionConfiguration"]["partitions"]
-    assert [partition["name"] for partition in partitions] == ["gpu"]
-    assert partitions[0] == {
-        "name": "gpu",
-        "nodeSetRefs": ["worker"],
-        "policy": {
-            "default": True,
-            "state": "UP",
-            "maxTime": "INFINITE",
-            "priorityTier": 10,
-        },
-    }
-    assert "srunReadyPartition" not in values.get("soperator-activechecks", {})
-
-
-def test_soperator_activechecks_ready_partition_is_render_only_profile_value() -> None:
-    payload = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {
-                        "soperator-activechecks": {
-                            "enabled": True,
-                            "srunReadyPartition": "custom",
-                        }
-                    },
-                }
-            ]
-        }
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    assert "srunReadyPartition" not in values["soperator-activechecks"]
-
-    assert cli._materialize_soperator_render_only_values(payload) is True
-    assert values["soperator-activechecks"]["srunReadyPartition"] == "hidden"
-    assert [partition["name"] for partition in values["partitionConfiguration"]["partitions"]] == [
-        "hidden",
-        "gpu",
-    ]
-
-
-def test_soperator_guided_sssd_helper_is_render_only_profile_value() -> None:
-    payload = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {
-                        "sssd": {"enabled": True},
-                    },
-                }
-            ]
-        }
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["sssd"]["enabled"] is True
-    assert values["slurmNodes"]["sssd"]["enabled"] is True
-    assert all(
-        (nodeset.get("sssd") or {}).get("enabled") is True
-        for nodeset in values["nodesets"]
-        if isinstance(nodeset, dict)
-    )
-
-    assert cli._materialize_soperator_render_only_values(payload) is True
-    assert "sssd" not in values
-    assert values["slurmNodes"]["sssd"]["enabled"] is True
-    assert all(
-        (nodeset.get("sssd") or {}).get("enabled") is True
-        for nodeset in values["nodesets"]
-        if isinstance(nodeset, dict)
-    )
-
-
-def test_soperator_placements_derive_tolerations_from_mk8s_taints() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "node_groups": {
-                            "system": {
-                                "node_count": 2,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
-                            "controller": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                                "taints": [
-                                    {
-                                        "key": "slurm.nebius.ai/nodeset-name",
-                                        "value": "controller",
-                                        "effect": "NO_SCHEDULE",
-                                    }
-                                ],
-                            },
-                            "login": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
-                            "accounting": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                                "taints": [
-                                    {
-                                        "key": "slurm.nebius.ai/nodeset-name",
-                                        "value": "accounting",
-                                        "effect": "NO_SCHEDULE",
-                                    }
-                                ],
-                            },
-                            "worker": {
-                                "node_count": 1,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                                "taints": [
-                                    {
-                                        "key": "nvidia.com/gpu",
-                                        "value": "true",
-                                        "effect": "NO_SCHEDULE",
-                                    }
-                                ],
-                            },
-                        }
-                    },
-                }
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "placements": {
-                        "system": "system",
-                        "controller": "controller",
-                        "login": "login",
-                        "accounting": "accounting",
-                        "worker": ["worker"],
-                    },
-                    "values": {
-                        "rebooter": {
-                            "tolerations": [
-                                {
-                                    "key": "custom.nebius.ai/reboot",
-                                    "operator": "Exists",
-                                    "effect": "NoSchedule",
-                                }
-                            ]
-                        },
-                    },
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    filters = {item["name"]: item for item in values["k8sNodeFilters"]}
-    assert filters["controller"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "controller",
-            "effect": "NoSchedule",
-        }
-    ]
-    assert filters["login"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "login",
-            "effect": "NoSchedule",
-        }
-    ]
-    assert filters["accounting"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "accounting",
-            "effect": "NoSchedule",
-        }
-    ]
-    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
-    assert {
-        "key": "nvidia.com/gpu",
-        "operator": "Equal",
-        "value": "true",
-        "effect": "NoSchedule",
-    } in worker["tolerations"]
-    assert {
-        "key": "custom.nebius.ai/reboot",
-        "operator": "Exists",
-        "effect": "NoSchedule",
-    } in values["rebooter"]["tolerations"]
-    assert {
-        "key": "nvidia.com/gpu",
-        "operator": "Equal",
-        "value": "true",
-        "effect": "NoSchedule",
-    } in values["rebooter"]["tolerations"]
-    assert values["storage"]["accounting"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "accounting",
-            "effect": "NoSchedule",
-        }
-    ]
-    assert values["storage"]["controllerSpool"]["tolerations"] == [
-        {
-            "key": "slurm.nebius.ai/nodeset-name",
-            "operator": "Equal",
-            "value": "controller",
-            "effect": "NoSchedule",
-        }
-    ]
-
-
-def test_soperator_placements_preserve_explicit_node_group_sfs_keys() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "node_groups": {
-                            "controller": {
-                                "node_count": 1,
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                                "sfs_filesystem_keys": [
-                                    "cluster1-jail",
-                                    "cluster1-controller-spool",
-                                ],
-                            },
-                            "worker": {
-                                "node_count": 1,
-                                "gpu": True,
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                                "sfs_filesystem_keys": ["cluster1-jail"],
-                            },
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "placements": {
-                        "system": "controller",
-                        "controller": "controller",
-                        "login": "controller",
-                        "accounting": "controller",
-                        "worker": ["worker"],
-                    },
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert node_groups["controller"]["sfs_filesystem_keys"] == [
-        "cluster1-jail",
-        "cluster1-controller-spool",
-    ]
-    assert node_groups["worker"]["sfs_filesystem_keys"] == ["cluster1-jail"]
-    assert node_groups["controller"]["node_labels"]["nebius.com/node-group"] == "controller"
-    assert node_groups["worker"]["node_labels"]["nebius.com/node-group"] == "worker"
-    values = payload["apps"]["charts"][0]["values"]
-    controller_filter = next(
-        item for item in values["k8sNodeFilters"] if item["name"] == "controller"
-    )
-    controller_filter["comment"] = "operator override"
-
-    cli._materialize_soperator_component_defaults(payload)
-
-    values = payload["apps"]["charts"][0]["values"]
-    controller_filter = next(
-        item for item in values["k8sNodeFilters"] if item["name"] == "controller"
-    )
-    assert controller_filter["comment"] == "operator override"
-
-
-def test_soperator_onboarding_target_selection_preserves_multi_target_rows() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "kube_context": "ctx-1",
-                },
-                {
-                    "instance_id": "cluster2",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "kube_context": "ctx-2",
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "values": {},
-                },
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster2",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "values": {},
-                },
-                {
-                    "id": "cert-manager",
-                    "instance_id": "cluster2",
-                    "enabled": True,
-                },
-            ]
-        },
-    }
-
-    cli._ensure_soperator_onboarding_target(payload, interactive=False)
-
-    charts = payload["apps"]["charts"]
-    assert charts[0]["instance_id"] == "cluster1"
-    assert charts[1]["instance_id"] == "cluster2"
-    assert charts[2]["instance_id"] == "cluster2"
-
-
-def test_soperator_onboarding_target_selection_rejects_multiple_empty_target_rows() -> None:
-    payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "kube_context": "ctx-1",
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "values": {},
-                },
-                {
-                    "id": "soperator",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "values": {},
-                },
-            ]
-        },
-    }
-
-    with pytest.raises(RuntimeError, match="require an explicit target_ref"):
-        cli._ensure_soperator_onboarding_target(payload, interactive=False)
-
-
-def test_soperator_onboarding_target_defaults_do_not_accept_partial_analysis() -> None:
-    with pytest.raises(ValueError, match="no provider MK8s cluster id"):
-        cli._soperator_onboarding_target_defaults(
-            "cluster1",
-            kube_context="ctx-1",
-            project_id="project-456",
-            cluster_id="mk8scluster-123",
-            snapshot={
-                "node_groups": {},
-                "cluster_identity": {
-                    "kubernetes_uid": "kubernetes-uid-123",
-                    "soperator_uid": "soperator-uid-123",
-                    "slurmcluster_uid": "slurmcluster-uid-123",
-                    "jail_filesystem_id": "filesystem-123",
-                },
-                "helm_releases": [
-                    {
-                        "name": "custom-slurm",
-                        "namespace": "slurm",
-                        "chart": "soperator-1.0.0",
-                        "app_version": "1.0.0",
-                    }
-                ],
-                "crds": [],
-                "collection_errors": [],
-            },
-            pinned_chart_version="0.25.0",
-            pinned_app_version="0.25.0",
-        )
-
-
-def test_soperator_partition_and_topology_profiles_do_not_overwrite_user_values() -> None:
-    values = {
-        "partitionProfile": "custom-partitions",
-        "topologyProfile": "custom-topology",
-        "partitionConfiguration": {
-            "limits": {
-                "gpu": "user-gpu-limit",
-            }
-        },
-        "slurmConfig": {
-            "topologyPlugin": "user/plugin",
-        },
-    }
-    profile = {
-        "chart": {
-            "partition_profiles": {
-                "custom-partitions": {
-                    "values": {
-                        "partitionConfiguration": {
-                            "limits": {
-                                "gpu": "profile-gpu-limit",
-                                "cpu": "profile-cpu-limit",
-                            }
-                        }
-                    }
-                }
-            },
-            "topology_profiles": {
-                "custom-topology": {
-                    "values": {
-                        "slurmConfig": {
-                            "topologyPlugin": "topology/tree",
-                            "topologyParam": "SwitchAsNodeRank",
-                        }
-                    }
-                }
-            },
-        }
-    }
-
-    cli._materialize_soperator_partition_profile(values=values, profile=profile)
-    cli._materialize_soperator_topology_profile(values=values, profile=profile)
-
-    assert values["partitionConfiguration"]["limits"] == {
-        "gpu": "user-gpu-limit",
-        "cpu": "profile-cpu-limit",
-    }
-    assert values["slurmConfig"] == {
-        "topologyPlugin": "user/plugin",
-        "topologyParam": "SwitchAsNodeRank",
-    }
-
-
-def test_soperator_topology_profile_materializes_only_when_selected() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "profile": "nebius-gpu-v1",
-                    "values": {"topologyProfile": "nebius-tiered-tree-v1"},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["slurmConfig"] == {
-        "topologyPlugin": "topology/tree",
-        "topologyParam": "SwitchAsNodeRank",
-    }
-    assert (
-        values["controllerManager"]["manager"]["env"]["topologyLabelPrefix"]
-        == "topology.nebius.com"
-    )
-
-
-def test_soperator_mixed_feature_partition_profile_materializes_node_features() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "profile": "nebius-mixed-v1",
-                    "values": {"partitionProfile": "with-h100-infiniband-debug-long"},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    soperator_values = payload["apps"]["charts"][0]["values"]
-    assert [
-        partition["name"] for partition in soperator_values["partitionConfiguration"]["partitions"]
-    ] == ["cpu", "gpu", "h100", "infiniband", "debug", "long"]
-    worker_gpu = next(node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu")
-    assert worker_gpu["nodeConfig"]["features"] == [
-        "gpu",
-        "cuda",
-        "h100",
-        "infiniband",
-    ]
-    assert worker_gpu["slurmd"]["resources"]["gpu"] == 8
-
-
-def test_soperator_profile_switch_replaces_generated_default_profile_values() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {},
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {},
-                }
-            ]
-        },
-    }
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-    app_row = payload["apps"]["charts"][0]
-    assert app_row["profile"] == "nebius-gpu-v1"
-    assert app_row["values"]["partitionProfile"] == "shape-default"
-    assert app_row["values"]["topologyProfile"] == "disabled"
-    assert app_row["placements"]["worker"] == ["worker"]
-
-    app_row["profile"] = "nebius-mixed-v1"
-    app_row["values"]["partitionProfile"] = "with-h100-infiniband-debug-long"
-    app_row["values"]["topologyProfile"] = "nebius-nvl-rack-v1"
-    app_row["placements"]["worker"] = ["worker-cpu", "worker-gpu"]
-
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert set(mk8s_inputs["node_groups"]) == {
-        "system",
-        "controller",
-        "login",
-        "accounting",
-        "worker-cpu",
-        "worker-gpu",
-    }
-    values = app_row["values"]
-    assert app_row["placements"]["worker"] == ["worker-cpu", "worker-gpu"]
-    assert [node["name"] for node in values["nodesets"]] == [
-        "worker-cpu",
-        "worker-gpu",
-    ]
-    assert "worker" not in {node["name"] for node in values["nodesets"]}
-    assert not any(
-        str(node["name"]).startswith(("worker-cpu-worker-", "worker-gpu-worker-"))
-        for node in values["nodesets"]
-    )
-    assert [partition["name"] for partition in values["partitionConfiguration"]["partitions"]] == [
-        "cpu",
-        "gpu",
-        "h100",
-        "infiniband",
-        "debug",
-        "long",
-    ]
-    assert values["slurmConfig"]["topologyPlugin"] == "topology/block"

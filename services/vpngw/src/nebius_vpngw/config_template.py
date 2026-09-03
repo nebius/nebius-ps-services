@@ -35,6 +35,18 @@ region_id: "${{REGION_ID}}"  # e.g., eu-north1
 gateway_group:
   name: "nebius-vpn-gw"
   instance_count: 1
+  # VM-level HA is independent of per-tunnel ha_role and is opt-in.
+  vm_ha:
+    enabled: false
+    # When enabled, set instance_count: 2 and define exactly one active and one passive node:
+    # cluster_id: "nebius-vpn-gw-ha"
+    # members:
+    #   - node_id: "gateway-a"
+    #     instance_index: 0
+    #     role: "active"
+    #   - node_id: "gateway-b"
+    #     instance_index: 1
+    #     role: "passive"
   external_ips: []  # []=auto
   # Example (list per VM, inner list per NIC):
   # external_ips:

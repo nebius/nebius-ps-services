@@ -41,7 +41,7 @@ class GrafanaSkillContractTest(unittest.TestCase):
         skill = self.read(INSTALLER / "SKILL.md")
         readme = self.read(INSTALLER / "README.md")
         setup_guide = self.read(INSTALLER / "references" / "setup-guide.md")
-        evals = self.read(INSTALLER / "evals" / "trigger-prompts.md")
+        evals = self.read(INSTALLER / "evals" / "process-cases.md")
         helper = self.read(INSTALLER / "scripts" / "ensure-local-config.sh")
 
         self.assertIn("Install, configure, validate, or repair", skill)
@@ -275,8 +275,8 @@ class GrafanaSkillContractTest(unittest.TestCase):
 
     def test_root_catalog_and_evals_match_the_split(self) -> None:
         readme_path = ROOT / "README.md"
-        installer_evals = self.read(INSTALLER / "evals" / "trigger-prompts.md")
-        query_evals = self.read(QUERY / "evals" / "trigger-prompts.md")
+        installer_evals = self.read(INSTALLER / "evals" / "process-cases.md")
+        query_evals = self.read(QUERY / "evals" / "process-cases.md")
 
         if readme_path.is_file():
             readme = self.read(readme_path)

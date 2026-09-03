@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+shell-positive-01,true,"Create a robust Bash script with strict mode and safe argument parsing."
+shell-positive-02,true,"Refactor this shell automation to be idempotent and noninteractive."
+shell-positive-03,true,"Review this CLI wrapper and add clear help structured logs and safe errors."
+shell-negative-01,false,"Lint every existing shell script with shellcheck."
+shell-negative-02,false,"Write a Python CLI for this automation."
+shell-negative-03,false,"Create a GitHub Actions workflow for this task."

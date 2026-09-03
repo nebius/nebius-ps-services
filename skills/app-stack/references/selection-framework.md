@@ -53,6 +53,11 @@ Choose one primary archetype and any necessary secondary applications.
 If the requested archetype is unfamiliar, research it. Do not map every
 application to the general web profile.
 
+For an AI-enabled archetype, classify the user journey and surrounding product
+stack here, then use `ai-stack` for undecided model access, training, inference,
+agent, interoperability, retrieval, and AI evaluation layers. Keep the scoped
+decisions separate until `design` or the user synthesizes them.
+
 ## Selection Axes
 
 Score candidates qualitatively against the axes that matter. Do not manufacture

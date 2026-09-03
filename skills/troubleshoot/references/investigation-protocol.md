@@ -20,9 +20,85 @@ Define the failure before changing the system:
 - **Operational context:** exact target identity, ownership, environment class,
   blast radius, reversibility, maintenance window, data sensitivity,
   observability gaps, and allowed mutations.
+- **Assertion boundary:** included and excluded components and dependencies,
+  exercised control and data paths, and the incident-window start and end.
 
 Do not let an unstable symptom become the oracle for bisection, minimization,
 fuzzing, or repeated trials.
+
+## Stack And Architecture Inventory
+
+Complete discovery before choosing technology-specific diagnostics. Record:
+
+| Field | Required evidence |
+| --- | --- |
+| Technologies and versions | Runtime-reported version, image or package identity, and matching official documentation version |
+| Deployment model | Bare metal, VM, container, orchestrator, managed service, or hybrid |
+| Configuration authorities | Active files, flags, environment inputs, generated resources, policies, and last-known changes |
+| Components and dependencies | Expected instance, owner, dependency direction, and failure propagation path |
+| Interfaces | Ports, protocols, DNS names or service identities, authentication, authorization, and encryption |
+| Flows | Control, data, job, event, storage, and observability paths |
+| Vendor comparison | Expected architecture, observed topology, drift, unsupported assumptions, and evidence gaps |
+
+Use current official vendor architecture and configuration documentation. Do
+not mark Design `PASS` merely because expected components exist: demonstrate
+that the observed versions, roles, dependencies, and flows match the supported
+model, or record `FAIL` or `UNKNOWN`.
+
+## Component Verification Matrix
+
+Create one row for every discovered component, including external dependencies
+that can cause the symptom:
+
+| Component | Exists and expected version | Active configuration | Process or workload health | Dependency reachability, authentication, and DNS | Resource pressure and time sync | Restart history and recent changes | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+Record negative evidence and partial access. A healthy status endpoint proves
+only that endpoint; corroborate the component's real control or data path and
+its incident-window logs.
+
+## Incident Timeline
+
+Establish the incident window before collecting logs. Normalize timestamps to
+one timezone and record clock source, offset, and uncertainty for each host or
+node. Do not correlate cross-host timestamps until synchronization is verified
+or the measured skew is included.
+
+Correlate with the strongest available identifiers: request, trace, job, pod,
+process, host, node, device, volume, connection, and restart identifiers.
+
+| Time | Source and clock basis | Identifier | Event | Evidence or inference |
+| --- | --- | --- | --- | --- |
+
+Separate stale historical errors from events in the incident window.
+
+## Layered Log-Coverage Ledger
+
+Investigate each relevant layer with bounded time and identifier filters:
+
+| Layer | Source or configured location | Window and filters | Finding | Coverage status |
+| --- | --- | --- | --- | --- |
+| Component | Native service or subsystem log | | | examined / unavailable / unsafe / not applicable |
+| Application or job | Application and job stdout or stderr | | | |
+| Container or orchestrator | Current and previous workload logs, events, runtime | | | |
+| Service manager | systemd journal or equivalent supervisor | | | |
+| OS and kernel | Kernel, OOM, cgroup, RAS, driver, boot | | | |
+| Network and firewall | DNS, routing, policy, firewall, CNI, fabric | | | |
+| Storage | Filesystem, block, network storage, CSI, device | | | |
+| GPU or hardware | Driver, Xid, ECC, RAS, PCIe, fabric | | | |
+
+Every relevant row must name the source examined or why it was unavailable,
+unsafe, or not applicable. Absence of a configured file may require a syslog or
+journal fallback. Do not equate no matching lines with complete coverage unless
+the source, retention, window, clock, and filters are all proven.
+
+The canonical ledger contains exactly these eight rows in the documented
+order. Use only `examined`, `unavailable`, `unsafe`, or `not applicable` as the
+coverage status. Keep a row when its layer does not apply so the coverage gap
+is explicit. Primary local evidence such as configured component or application
+logs, container logs, journals, and kernel logs is baseline evidence gathering;
+it is not subject to Grafana provider-admission gates. Remote observability
+queries remain hypothesis-gated separately.
 
 ## Evidence Ledger
 
@@ -59,7 +135,10 @@ Hypotheses addressed:
 Single changed variable:
 Prediction:
 Falsifying result:
+Expected supporting evidence:
+Timeout or output bound:
 Risk and rollback:
+Next branch for each material result:
 Observed result:
 Ledger update:
 ```
@@ -71,6 +150,11 @@ production from boundary corruption.
 Do not rerun an unchanged command unless repetition is the measurement. After
 three experiments that do not materially update the ledger, reconstruct the
 system model and choose another localization dimension.
+
+Never use indefinite `tail -f`, arbitrary sleeps, passive terminal waiting, or
+large unfiltered log dumps. A bounded follow operation is allowed only when it
+tests a stated event hypothesis, has a deadline, and records the correlation
+identifier and next branch.
 
 Diagnostic experiments are not remediation attempts. Once a remediation is
 applied and the original reproducer still shows the same blocker, record the
@@ -143,6 +227,6 @@ next experiment. Do not convert incomplete access into false certainty.
 - **Retry-admission gate:** require new evidence and a genuinely new
   evidence-derived hypothesis before each remediation retry.
 - **Completion gate:** one passing test or restart is not closure.
-- **Remediation-budget gate:** permit no more than five remediation attempts
-  for one blocker tranche; after the fifth failure or the active time limit,
-  stop all tools and report instead of widening the search.
+- **Remediation-budget gate:** use the saved 5/120 default or user-authorized
+  profile through the 10/180 maxima for one blocker tranche; at its attempt or
+  active-time limit, stop all tools and report instead of widening the search.

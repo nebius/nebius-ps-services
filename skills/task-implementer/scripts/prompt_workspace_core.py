@@ -19,18 +19,22 @@ import unicodedata
 import uuid
 
 
-WORKSPACE_SCHEMA = "task-implementer/workspace-v1"
-PROMPT_SCHEMA = "task-implementer/prompt-v1"
+WORKSPACE_SCHEMA = "task-implementer/workspace-v2"
+PROMPT_SCHEMA = "task-implementer/prompt-v3"
+MIGRATION_PROMPT_SCHEMA = "task-implementer/prompt-v2"
+PROMPT_V3_MIGRATION_SCHEMA = "task-implementer/prompt-v3-migration-v1"
+LEGACY_PROMPT_SCHEMA = "task-implementer/prompt-v1"
 RUN_SCHEMA = "task-implementer/run-manifest-v1"
 MAX_PROMPT_BYTES = 256 * 1024
 TERMINAL_RUN_STATUSES = {"done", "superseded", "abandoned"}
 PROMPT_ID_RE = re.compile(r"prompt-[0-9a-f]{32}\Z")
+PROMPT_REF_RE = re.compile(r"[0-9a-f]{5,32}\Z")
 RUN_ID_RE = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
 REVISION_RE = re.compile(r"r([0-9]{4})\Z")
-FRONTMATTER_KEYS = {"schema", "prompt_id", "title", "created_at"}
-REQUIRED_SECTIONS = ("Ask", "Outcome", "Acceptance criteria", "Verification")
-ALL_SECTIONS = (
-    "Ask",
+FRONTMATTER_KEYS = {"schema", "prompt_id", "prompt_ref", "title", "created_at"}
+MIGRATION_FRONTMATTER_KEYS = {"schema", "prompt_id", "title", "created_at"}
+REQUIRED_SECTIONS = ("Ask",)
+OPTIONAL_SECTIONS = (
     "Outcome",
     "Context",
     "Constraints",
@@ -38,8 +42,29 @@ ALL_SECTIONS = (
     "Verification",
     "Non-goals",
     "References",
+    "Clarifications",
+    "Live Experiment Environment",
+    "Steering",
 )
-OPTIONAL_SECTIONS = ("Steering",)
+RESERVED_SECTIONS = (*REQUIRED_SECTIONS, *OPTIONAL_SECTIONS)
+HUB_FILENAME = "00-START-HERE.md"
+SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\bAWS_ACCESS_KEY_ID\b\s*[:=]\s*[A-Z0-9]{16,}"),
+    re.compile(r"\bAWS_SECRET_ACCESS_KEY\b\s*[:=]\s*[A-Za-z0-9/+=]{30,}"),
+    re.compile(r"\bGITHUB_TOKEN\b\s*[:=]\s*[A-Za-z0-9_ghopsu-]{20,}"),
+    re.compile(r"\bOPENAI_API_KEY\b\s*[:=]\s*sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(
+        r"\bNEBIUS_(?!(?:PROFILE|PROJECT_ID|AUTH_CREDENTIALS_FILE)\b)"
+        r"[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"
+    ),
+    re.compile(r"\bYC_TOKEN\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"),
+    re.compile(r"\bKUBECONFIG\b.*(certificate-authority-data|client-key-data|token:)"),
+    re.compile(
+        r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?"
+        r"[A-Za-z0-9_./+=:-]{12,}"
+    ),
+)
 
 
 class PromptWorkspaceError(Exception):
@@ -57,6 +82,7 @@ class PromptDocument:
     raw: bytes
     text: str
     prompt_id: str
+    prompt_ref: str
     title: str
     created_at: datetime
     sections: dict[str, str]
@@ -64,6 +90,10 @@ class PromptDocument:
     @property
     def sha256(self) -> str:
         return hashlib.sha256(self.raw).hexdigest()
+
+    @property
+    def intent_sha256(self) -> str:
+        return prompt_intent_sha256(self.sections)
 
 
 def now_local() -> datetime:
@@ -114,15 +144,43 @@ def require_mode(path: Path, expected: int, label: str) -> None:
 
 
 def ensure_private_dir(path: Path) -> None:
+    created = not path.exists()
     path.mkdir(parents=True, exist_ok=True)
     if path.is_symlink() or not path.is_dir():
         raise PromptWorkspaceError(
             "WORKSPACE_PATH_INVALID", f"private directory is unsafe: {path}"
         )
     private_chmod(path, 0o700)
+    if created:
+        _fsync_directory(path.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory entries after private-state create or replacement."""
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID",
+            f"private directory cannot be synchronized: {path}",
+        ) from exc
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID",
+            f"private directory could not be synchronized: {path}",
+        ) from exc
+    finally:
+        os.close(descriptor)
 
 
 def write_exclusive(path: Path, data: bytes) -> None:
+    ensure_private_dir(path.parent)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(path, flags, 0o600)
     try:
@@ -134,6 +192,7 @@ def write_exclusive(path: Path, data: bytes) -> None:
         path.unlink(missing_ok=True)
         raise
     private_chmod(path, 0o600)
+    _fsync_directory(path.parent)
 
 
 def write_atomic(path: Path, data: bytes) -> None:
@@ -150,6 +209,7 @@ def write_atomic(path: Path, data: bytes) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         private_chmod(path, 0o600)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -176,7 +236,27 @@ def load_json_object(path: Path, label: str) -> dict[str, object]:
     return value
 
 
-def canonical_git_root(path: Path) -> Path:
+def read_only_git_environment() -> dict[str, str]:
+    """Return a Git environment that cannot redirect reads into side effects."""
+
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+    )
+    return environment
+
+
+def canonical_git_root(
+    path: Path, *, git_environment: dict[str, str] | None = None
+) -> Path:
     candidate = path.expanduser().resolve()
     if not candidate.is_dir():
         raise PromptWorkspaceError(
@@ -190,6 +270,7 @@ def canonical_git_root(path: Path) -> Path:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
     except FileNotFoundError as exc:
         raise PromptWorkspaceError(
@@ -206,7 +287,9 @@ def canonical_git_root(path: Path) -> Path:
     return Path(result.stdout.strip()).resolve()
 
 
-def enclosing_git_storage(path: Path) -> Path | None:
+def enclosing_git_storage(
+    path: Path, *, git_environment: dict[str, str] | None = None
+) -> Path | None:
     """Return an enclosing worktree or Git metadata directory."""
 
     candidate = path.expanduser()
@@ -221,6 +304,7 @@ def enclosing_git_storage(path: Path) -> Path | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
         if worktree.returncode == 0 and worktree.stdout.strip():
             return Path(worktree.stdout.strip()).resolve()
@@ -231,6 +315,7 @@ def enclosing_git_storage(path: Path) -> Path | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            env=git_environment,
         )
     except FileNotFoundError as exc:
         raise PromptWorkspaceError(
@@ -287,17 +372,40 @@ def validate_short_ask(ask: str) -> str:
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "short ask contains a control character"
         )
+    if contains_secret(value):
+        raise PromptWorkspaceError(
+            "PROMPT_SENSITIVE_INPUT",
+            "short ask appears to contain secret material",
+        )
     return value
 
 
-def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
-    root = canonical_git_root(repo_path)
+def contains_secret(text: str) -> bool:
+    return any(
+        pattern.search(line)
+        for line in (text.splitlines() or [text])
+        for pattern in SECRET_PATTERNS
+    )
+
+
+def repo_and_scope(
+    repo_path: Path,
+    scope_value: str,
+    *,
+    git_environment: dict[str, str] | None = None,
+) -> tuple[Path, Path, str]:
+    root = canonical_git_root(repo_path, git_environment=git_environment)
     scope_candidate = Path(scope_value).expanduser()
     if scope_candidate.is_absolute():
         source_root = scope_candidate.resolve()
     else:
         source_root = (root / scope_candidate).resolve()
-    if not source_root.is_dir() or not is_relative_to(source_root, root):
+    if (
+        re.search(r"[\x00-\x1f\x7f]", str(root)) is not None
+        or re.search(r"[\x00-\x1f\x7f]", str(source_root)) is not None
+        or not source_root.is_dir()
+        or not is_relative_to(source_root, root)
+    ):
         raise PromptWorkspaceError(
             "SCOPE_INVALID", "scope must be an existing directory inside the Git root"
         )
@@ -305,16 +413,159 @@ def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
     return root, source_root, scope
 
 
+def workspace_git_identity(
+    root: Path, *, git_environment: dict[str, str] | None = None
+) -> tuple[Path, Path, str, str, str, str | None]:
+    try:
+        common_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            env=git_environment,
+        )
+        worktrees_result = subprocess.run(
+            ["git", "-C", str(root), "worktree", "list", "--porcelain"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            env=git_environment,
+        )
+        branch_result = subprocess.run(
+            ["git", "-C", str(root), "symbolic-ref", "-q", "--short", "HEAD"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            env=git_environment,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise PromptWorkspaceError(
+            "ENVIRONMENT_BLOCKER", "Git identity discovery failed"
+        ) from exc
+    first_line = (
+        worktrees_result.stdout.splitlines()[0] if worktrees_result.stdout else ""
+    )
+    if (
+        common_result.returncode != 0
+        or not common_result.stdout.strip()
+        or worktrees_result.returncode != 0
+        or not first_line.startswith("worktree ")
+        or branch_result.returncode != 0
+        or not branch_result.stdout.strip()
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "workspace Git identity is unavailable"
+        )
+    common_dir = Path(common_result.stdout.strip()).resolve()
+    primary = Path(first_line.removeprefix("worktree ")).resolve()
+    branch = branch_result.stdout.strip()
+    try:
+        source_config_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "config",
+                "--local",
+                "--get",
+                f"branch.{branch}.worktreeSkillTaskLaneSourceRef",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            env=git_environment,
+        )
+        lane_config_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "config",
+                "--local",
+                "--get",
+                f"branch.{branch}.worktreeSkillTaskLaneId",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            env=git_environment,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise PromptWorkspaceError(
+            "ENVIRONMENT_BLOCKER", "Git lane identity discovery failed"
+        ) from exc
+    source_ref = (
+        source_config_result.stdout.strip()
+        if source_config_result.returncode == 0 and source_config_result.stdout.strip()
+        else f"refs/heads/{branch}"
+    )
+    if not source_ref.startswith("refs/heads/") or source_ref == "refs/heads/":
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "workspace source ref is invalid"
+        )
+    lane_id = (
+        lane_config_result.stdout.strip()
+        if lane_config_result.returncode == 0 and lane_config_result.stdout.strip()
+        else None
+    )
+    return (
+        common_dir,
+        primary,
+        source_ref,
+        source_ref.removeprefix("refs/heads/"),
+        branch,
+        lane_id,
+    )
+
+
 def workspace_identity(
-    root: Path, source_root: Path, scope: str
+    root: Path,
+    source_root: Path,
+    scope: str,
+    *,
+    common_dir: Path | None = None,
+    primary: Path | None = None,
+    source_ref: str | None = None,
 ) -> tuple[str, str, str]:
-    root_hash = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    project_id = f"{safe_segment(root.name, fallback='project')}-{root_hash}"
-    scope_value = root.name if scope == "." else scope
+    if common_dir is None or primary is None or source_ref is None:
+        common_dir, primary, source_ref, _, _, _ = workspace_git_identity(root)
+    root_hash = hashlib.sha256(f"{common_dir}\0{primary}".encode("utf-8")).hexdigest()[
+        :12
+    ]
+    project_id = f"{safe_segment(primary.name, fallback='project')}-{root_hash}"
+    scope_value = primary.name if scope == "." else scope
     scope_slug = safe_segment(scope_value, fallback="scope", limit=60)
-    scope_hash = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:8]
+    scope_hash = hashlib.sha256(f"{source_ref}\0{scope}".encode("utf-8")).hexdigest()[
+        :8
+    ]
     scope_id = f"{scope_slug}-{scope_hash}"
     return project_id, scope_id, scope_slug
+
+
+def task_lane_identity(
+    *, common_dir: Path, primary: Path, source_ref: str, scope: str
+) -> str:
+    """Return the Worktree-owned deterministic identity for one project lane."""
+
+    payload = "\0".join((str(common_dir), str(primary), source_ref, scope))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
 def project_workspace_manifest(project_path: Path, codex_home: Path) -> Path:
@@ -334,18 +585,81 @@ def project_workspace_manifest(project_path: Path, codex_home: Path) -> Path:
     )
 
 
+def legacy_project_workspace_manifest(project_path: Path, codex_home: Path) -> Path:
+    """Return the former primary-checkout workspace-v1 location."""
+
+    requested = project_path.expanduser().resolve()
+    root, _, scope = repo_and_scope(requested, str(requested))
+    _, primary, _, _, _, _ = workspace_git_identity(root)
+    root = primary
+    root_hash = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    project_id = f"{safe_segment(root.name, fallback='project')}-{root_hash}"
+    scope_value = root.name if scope == "." else scope
+    scope_slug = safe_segment(scope_value, fallback="scope", limit=60)
+    scope_hash = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:8]
+    scope_id = f"{scope_slug}-{scope_hash}"
+    return (
+        codex_home.expanduser().resolve()
+        / "task-implementer"
+        / "projects"
+        / project_id
+        / "scopes"
+        / scope_id
+        / "workspace.json"
+    )
+
+
 def template_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "prompt-template.md"
 
 
-def render_prompt(ask: str, prompt_id: str, created_at: datetime) -> bytes:
+def hub_template_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "assets" / "prompt-workspace-hub.md"
+
+
+def ensure_prompt_hub(prompt_root: Path) -> Path:
+    hub_path = prompt_root / HUB_FILENAME
+    expected = hub_template_path().read_bytes()
+    if hub_path.exists() or hub_path.is_symlink():
+        if hub_path.is_symlink() or not hub_path.is_file():
+            raise PromptWorkspaceError(
+                "WORKSPACE_PATH_INVALID", "prompt workspace hub is unsafe"
+            )
+        require_mode(hub_path, 0o600, "prompt workspace hub")
+        if hub_path.read_bytes() != expected:
+            write_atomic(hub_path, expected)
+    else:
+        write_exclusive(hub_path, expected)
+    return hub_path
+
+
+def render_prompt(
+    ask: str,
+    prompt_id: str,
+    prompt_ref: str,
+    created_at: datetime,
+    *,
+    title: str | None = None,
+    draft: bool = False,
+    ask_body: str | None = None,
+) -> bytes:
+    if draft and ask_body is not None:
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "draft prompts cannot carry a session Ask body"
+        )
+    rendered_ask = ask_body if ask_body is not None else ask
+    rendered_title = title or ask
+    if draft:
+        rendered_ask = "<!-- Required: replace this comment with your Ask. -->"
+        rendered_title = title or "Untitled prompt"
     template = template_path().read_text(encoding="utf-8")
     replacements = {
         "{{PROMPT_ID}}": prompt_id,
-        "{{TITLE_JSON}}": json.dumps(ask, ensure_ascii=False),
+        "{{PROMPT_REF}}": prompt_ref,
+        "{{TITLE_JSON}}": json.dumps(rendered_title, ensure_ascii=False),
         "{{CREATED_AT}}": iso_seconds(created_at),
-        "{{TITLE}}": ask,
-        "{{ASK}}": ask,
+        "{{TITLE}}": rendered_title,
+        "{{ASK}}": rendered_ask,
     }
     rendered = template
     for marker, value in replacements.items():
@@ -365,7 +679,7 @@ def workspace_document(
 ) -> dict[str, object]:
     return {
         "folders": [
-            {"name": "CODE", "path": str(source_root)},
+            {"name": "CODE — MANAGED PERSISTENT LANE", "path": str(source_root)},
             {"name": "PROMPTS", "path": "prompts"},
         ],
         "settings": {"workbench.editor.labelFormat": "medium"},
@@ -386,7 +700,54 @@ def workspace_document(
                         "--open",
                     ],
                     "problemMatcher": [],
-                }
+                    "group": {"kind": "build", "isDefault": True},
+                },
+                {
+                    "label": "Task Implementer: Prompt Queue",
+                    "type": "process",
+                    "command": str(python_executable),
+                    "args": [
+                        str(helper_path),
+                        "queue-list",
+                        "--workspace",
+                        str(manifest_path),
+                    ],
+                    "problemMatcher": [],
+                },
+                {
+                    "label": "Task Implementer: Cancel Queued Prompt",
+                    "type": "process",
+                    "command": str(python_executable),
+                    "args": [
+                        str(helper_path),
+                        "queue-cancel",
+                        "--workspace",
+                        str(manifest_path),
+                        "--prompt",
+                        "${input:queuedPromptFilename}",
+                    ],
+                    "problemMatcher": [],
+                },
+                {
+                    "label": "Task Implementer: Show Lane Status",
+                    "type": "process",
+                    "command": str(python_executable),
+                    "args": [
+                        str(helper_path),
+                        "lane-report",
+                        "--workspace",
+                        str(manifest_path),
+                    ],
+                    "problemMatcher": [],
+                    "presentation": {
+                        "echo": False,
+                        "reveal": "always",
+                        "focus": False,
+                        "panel": "dedicated",
+                        "showReuseMessage": False,
+                        "clear": True,
+                    },
+                },
             ],
             "inputs": [
                 {
@@ -395,10 +756,106 @@ def workspace_document(
                     "description": (
                         "Short non-sensitive ask used for title and filename"
                     ),
-                }
+                },
+                {
+                    "id": "queuedPromptFilename",
+                    "type": "promptString",
+                    "description": "Exact queued prompt filename to cancel",
+                },
             ],
         },
     }
+
+
+def previous_workspace_document(
+    manifest_path: Path,
+    source_root: Path,
+    helper_path: Path,
+    python_executable: Path,
+) -> dict[str, object]:
+    """Return the sole generated shape accepted for in-place migration."""
+
+    document = workspace_document(
+        manifest_path, source_root, helper_path, python_executable
+    )
+    status_task = document["tasks"]["tasks"][3]
+    status_task["label"] = "Task Implementer: Show Pending Lane Changes"
+    status_task["args"].append("--json")
+    del status_task["presentation"]
+    return document
+
+
+def classify_generated_workspace(manifest_path: Path) -> str:
+    """Classify a generated editor document without mutating workspace state."""
+
+    requested = manifest_path.expanduser()
+    if requested.is_symlink() or not requested.is_file():
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID", "workspace manifest is missing or unsafe"
+        )
+    path = requested.resolve()
+    manifest = load_json_object(path, "workspace manifest")
+    source_value = manifest.get("source_root")
+    vscode_value = manifest.get("vscode_workspace")
+    if not isinstance(source_value, str) or not isinstance(vscode_value, str):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "workspace generated paths are invalid"
+        )
+    source_root = Path(source_value)
+    vscode_path = Path(vscode_value)
+    if (
+        not source_root.is_absolute()
+        or not vscode_path.is_absolute()
+        or vscode_path.is_symlink()
+        or not vscode_path.is_file()
+        or vscode_path.parent != path.parent
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID", "VS Code workspace is missing or unsafe"
+        )
+    document = load_json_object(vscode_path, "VS Code workspace")
+    trusted_helper = Path(__file__).resolve().with_name("prompt_workspace.py")
+    trusted_python = Path(sys.executable).resolve()
+    current = workspace_document(path, source_root, trusted_helper, trusted_python)
+    if document == current:
+        return "current"
+    previous = previous_workspace_document(
+        path, source_root, trusted_helper, trusted_python
+    )
+    if document == previous:
+        return "previous"
+
+    # The previous four-task shape may retain one now-removed package-manager
+    # Python executable. It is accepted only as inert migration input: helper,
+    # arguments, task count, and every other byte still come from the trusted
+    # running implementation, and init rewrites it before any command executes.
+    try:
+        tasks = document["tasks"]["tasks"]
+        commands = {str(task["command"]) for task in tasks}
+        helpers = {str(task["args"][0]) for task in tasks}
+    except (KeyError, IndexError, TypeError):
+        tasks = []
+        commands = set()
+        helpers = set()
+    if len(tasks) == 4 and len(commands) == 1 and helpers == {str(trusted_helper)}:
+        stale_text = next(iter(commands))
+        stale = Path(stale_text)
+        stale_shape = previous_workspace_document(
+            path, source_root, trusted_helper, stale
+        )
+        try:
+            stale_missing = not stale.exists()
+        except (OSError, ValueError):
+            stale_missing = False
+        if (
+            document == stale_shape
+            and stale.is_absolute()
+            and re.search(r"[\x00-\x1f\x7f]", stale_text) is None
+            and stale_missing
+            and re.fullmatch(r"python3(?:\.[0-9]+)?", stale.name) is not None
+        ):
+            return "previous"
+    return "tampered"
 
 
 def init_workspace(
@@ -406,9 +863,43 @@ def init_workspace(
     scope_value: str,
     codex_home: Path,
     *,
+    lane: dict[str, object] | None = None,
     clock: Callable[[], datetime] = now_local,
 ) -> dict[str, object]:
     root, source_root, scope = repo_and_scope(repo_path, scope_value)
+    if lane is None:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "workspace-v2 requires a Worktree-owned Task Implementer lane",
+        )
+    common_dir = Path(required_string(lane, "common_dir", "task lane"))
+    primary = Path(required_string(lane, "primary", "task lane"))
+    source_ref = required_string(lane, "source_ref", "task lane")
+    source_branch = required_string(lane, "source_branch", "task lane")
+    lane_id = required_string(lane, "lane_id", "task lane")
+    lane_branch = required_string(lane, "branch", "task lane")
+    (
+        actual_common_dir,
+        actual_primary,
+        actual_source_ref,
+        actual_source_branch,
+        actual_branch,
+        actual_lane_id,
+    ) = workspace_git_identity(root)
+    if (
+        str(root) != required_string(lane, "worktree", "task lane")
+        or scope != required_string(lane, "scope", "task lane")
+        or str(source_root) != required_string(lane, "scope_cwd", "task lane")
+        or common_dir != actual_common_dir
+        or primary != actual_primary
+        or source_ref != actual_source_ref
+        or source_branch != actual_source_branch
+        or lane_branch != actual_branch
+        or lane_id != actual_lane_id
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "Task Implementer lane scope is inconsistent"
+        )
     home = codex_home.expanduser().resolve()
     requested_state_root = home / "task-implementer"
     if requested_state_root.is_symlink():
@@ -426,12 +917,27 @@ def init_workspace(
             "task-implementer state must be outside Git worktrees and metadata",
         )
 
-    project_id, scope_id, scope_slug = workspace_identity(root, source_root, scope)
+    project_id, scope_id, scope_slug = workspace_identity(
+        root,
+        source_root,
+        scope,
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+    )
     scope_dir = state_root / "projects" / project_id / "scopes" / scope_id
     prompt_root = scope_dir / "prompts"
     runs_root = scope_dir / "runs"
     manifest_path = scope_dir / "workspace.json"
     vscode_path = scope_dir / f"{scope_slug}-prompts.code-workspace"
+
+    if manifest_path.exists() or manifest_path.is_symlink():
+        classification = classify_generated_workspace(manifest_path)
+        if classification == "tampered":
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID",
+                "generated VS Code workspace was tampered with",
+            )
 
     for directory in (
         state_root,
@@ -461,8 +967,16 @@ def init_workspace(
         "project_id": project_id,
         "scope_id": scope_id,
         "repo_root": str(root),
+        "primary_root": str(primary),
+        "common_dir": str(common_dir),
+        "source_branch": source_branch,
+        "source_ref": source_ref,
         "scope": scope,
         "source_root": str(source_root),
+        "lane_id": lane_id,
+        "lane_name": required_string(lane, "name", "task lane"),
+        "lane_branch": lane_branch,
+        "lane_incarnation": lane.get("incarnation"),
         "prompt_root": str(prompt_root),
         "runs_root": str(runs_root),
         "vscode_workspace": str(vscode_path),
@@ -471,10 +985,38 @@ def init_workspace(
     if manifest_path.exists():
         existing = load_json_object(manifest_path, "workspace manifest")
         if existing != manifest:
-            raise PromptWorkspaceError(
-                "WORKSPACE_MISMATCH",
-                "existing workspace manifest does not match the canonical checkout",
+            immutable_keys = {
+                "schema",
+                "project_id",
+                "scope_id",
+                "primary_root",
+                "common_dir",
+                "source_branch",
+                "source_ref",
+                "scope",
+                "lane_id",
+                "prompt_root",
+                "runs_root",
+                "vscode_workspace",
+                "created_at",
+            }
+            old_incarnation = existing.get("lane_incarnation")
+            new_incarnation = manifest.get("lane_incarnation")
+            rebindable = (
+                set(existing) == set(manifest)
+                and all(
+                    existing.get(key) == manifest.get(key) for key in immutable_keys
+                )
+                and isinstance(old_incarnation, int)
+                and isinstance(new_incarnation, int)
+                and new_incarnation > old_incarnation
             )
+            if not rebindable:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_MISMATCH",
+                    "existing workspace manifest does not match the canonical checkout",
+                )
+            write_atomic(manifest_path, stable_json(manifest))
         private_chmod(manifest_path, 0o600)
     else:
         try:
@@ -511,6 +1053,10 @@ def init_workspace(
         "prompt_root": str(prompt_root),
         "project_id": verified["project_id"],
         "scope_id": verified["scope_id"],
+        "lane_id": verified["lane_id"],
+        "lane_state": lane.get("lane_state"),
+        "lane_status": lane.get("status"),
+        "scope_cwd": str(source_root),
     }
 
 
@@ -523,7 +1069,9 @@ def required_string(value: dict[str, object], key: str, label: str) -> str:
     return result
 
 
-def verify_workspace(manifest_path: Path) -> dict[str, object]:
+def verify_workspace(
+    manifest_path: Path, *, git_environment: dict[str, str] | None = None
+) -> dict[str, object]:
     requested = manifest_path.expanduser()
     if requested.is_symlink():
         raise PromptWorkspaceError(
@@ -546,9 +1094,45 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace Git root is not canonical"
         )
-    if canonical_git_root(root) != root:
+    if canonical_git_root(root, git_environment=git_environment) != root:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace Git root no longer resolves canonically"
+        )
+    (
+        common_dir,
+        primary,
+        source_ref,
+        source_branch,
+        current_branch,
+        current_lane_id,
+    ) = workspace_git_identity(root, git_environment=git_environment)
+    if (
+        required_string(manifest, "primary_root", "workspace manifest") != str(primary)
+        or required_string(manifest, "common_dir", "workspace manifest")
+        != str(common_dir)
+        or required_string(manifest, "source_ref", "workspace manifest") != source_ref
+        or required_string(manifest, "source_branch", "workspace manifest")
+        != source_branch
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "workspace logical repository identity changed"
+        )
+    lane_id = required_string(manifest, "lane_id", "workspace manifest")
+    lane_name = required_string(manifest, "lane_name", "workspace manifest")
+    lane_branch = required_string(manifest, "lane_branch", "workspace manifest")
+    lane_incarnation = manifest.get("lane_incarnation")
+    if (
+        re.fullmatch(r"[0-9a-f]{32}", lane_id) is None
+        or not lane_name.startswith("project-")
+        or lane_branch != f"feature/{lane_name.removeprefix('project-')}"
+        or lane_branch != current_branch
+        or lane_id != current_lane_id
+        or not isinstance(lane_incarnation, int)
+        or lane_incarnation < 1
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID",
+            "workspace Task Implementer lane identity is invalid",
         )
     source_value = Path(required_string(manifest, "source_root", "workspace manifest"))
     if not source_value.is_absolute() or source_value.is_symlink():
@@ -577,7 +1161,14 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
             "workspace source scope no longer matches the Git root",
         )
 
-    project_id, scope_id, scope_slug = workspace_identity(root, source_root, scope)
+    project_id, scope_id, scope_slug = workspace_identity(
+        root,
+        source_root,
+        scope,
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+    )
     if manifest.get("project_id") != project_id or manifest.get("scope_id") != scope_id:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace identity does not match canonical paths"
@@ -598,7 +1189,7 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace path does not match its generated identity"
         )
-    if enclosing_git_storage(state_root) is not None:
+    if enclosing_git_storage(state_root, git_environment=git_environment) is not None:
         raise PromptWorkspaceError(
             "WORKSPACE_PATH_INVALID", "private workspace is inside Git storage"
         )
@@ -661,14 +1252,8 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
     require_mode(vscode_path, 0o600, "VS Code workspace")
 
     vscode = load_json_object(vscode_path, "VS Code workspace")
-    try:
-        task = vscode["tasks"]["tasks"][0]
-        helper_path = Path(task["args"][0])
-        python_executable = Path(task["command"])
-    except (KeyError, IndexError, TypeError) as exc:
-        raise PromptWorkspaceError(
-            "WORKSPACE_STATE_INVALID", "VS Code workspace task is invalid"
-        ) from exc
+    helper_path = Path(__file__).resolve().with_name("prompt_workspace.py")
+    python_executable = Path(sys.executable).resolve()
     if (
         not helper_path.is_absolute()
         or helper_path.is_symlink()
@@ -688,11 +1273,111 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         python_executable,
     )
     if vscode != expected_vscode:
+        classification = classify_generated_workspace(path)
+        if classification == "previous":
+            raise PromptWorkspaceError(
+                "WORKFLOW_UPGRADE_REQUIRED",
+                "generated workspace requires explicit workspace init migration",
+            )
         raise PromptWorkspaceError(
             "WORKSPACE_STATE_INVALID",
             "VS Code workspace differs from the generated CODE/PROMPTS contract",
         )
 
+    return manifest
+
+
+def verify_workspace_for_removal(
+    manifest_path: Path,
+    project_path: Path,
+    *,
+    git_environment: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Verify stable workspace identity even after its lane path is absent."""
+
+    requested_manifest = manifest_path.expanduser()
+    if requested_manifest.is_symlink():
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID", "workspace manifest must not be a symlink"
+        )
+    path = requested_manifest.resolve()
+    manifest = load_json_object(path, "workspace manifest")
+    if manifest.get("schema") != WORKSPACE_SCHEMA:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "workspace remove requires workspace-v2 lane state",
+        )
+    requested = project_path.expanduser().resolve()
+    root, source_root, scope = repo_and_scope(
+        requested, str(requested), git_environment=git_environment
+    )
+    common_dir, primary, source_ref, source_branch, _, _ = workspace_git_identity(
+        root, git_environment=git_environment
+    )
+    project_id, scope_id, scope_slug = workspace_identity(
+        root,
+        source_root,
+        scope,
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+    )
+    scope_dir = path.parent
+    scopes_dir = scope_dir.parent
+    project_dir = scopes_dir.parent
+    projects_dir = project_dir.parent
+    state_root = projects_dir.parent
+    lane_id = required_string(manifest, "lane_id", "workspace manifest")
+    lane_name = required_string(manifest, "lane_name", "workspace manifest")
+    lane_branch = required_string(manifest, "lane_branch", "workspace manifest")
+    lane_incarnation = manifest.get("lane_incarnation")
+    expected_lane_id = task_lane_identity(
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+        scope=scope,
+    )
+    repo_value = Path(required_string(manifest, "repo_root", "workspace manifest"))
+    source_value = Path(required_string(manifest, "source_root", "workspace manifest"))
+    expected_source = repo_value if scope == "." else repo_value / scope
+    expected_values = {
+        "project_id": project_id,
+        "scope_id": scope_id,
+        "primary_root": str(primary),
+        "common_dir": str(common_dir),
+        "source_branch": source_branch,
+        "source_ref": source_ref,
+        "scope": scope,
+        "prompt_root": str(path.parent / "prompts"),
+        "runs_root": str(path.parent / "runs"),
+        "vscode_workspace": str(path.parent / f"{scope_slug}-prompts.code-workspace"),
+    }
+    if (
+        path.name != "workspace.json"
+        or scope_dir.name != scope_id
+        or scopes_dir.name != "scopes"
+        or project_dir.name != project_id
+        or projects_dir.name != "projects"
+        or state_root.name != "task-implementer"
+        or any(manifest.get(key) != value for key, value in expected_values.items())
+        or lane_id != expected_lane_id
+        or not repo_value.is_absolute()
+        or repo_value.is_symlink()
+        or repo_value.resolve() != repo_value
+        or not source_value.is_absolute()
+        or source_value.is_symlink()
+        or source_value.resolve() != source_value
+        or source_value != expected_source
+        or not lane_name.startswith("project-ti-")
+        or not lane_name.endswith(f"-{lane_id[:8]}-{lane_incarnation}")
+        or lane_branch != f"feature/{lane_name.removeprefix('project-')}"
+        or not isinstance(lane_incarnation, int)
+        or lane_incarnation < 1
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH",
+            "workspace removal identity does not match the exact project lane",
+        )
     return manifest
 
 
@@ -720,7 +1405,7 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
             raise PromptWorkspaceError(
                 "PROMPT_INPUT_INVALID", f"prompt frontmatter repeats key {key}"
             )
-        if key not in FRONTMATTER_KEYS:
+        if key not in FRONTMATTER_KEYS | MIGRATION_FRONTMATTER_KEYS:
             raise PromptWorkspaceError(
                 "PROMPT_INPUT_INVALID", f"prompt frontmatter key is unsupported: {key}"
             )
@@ -744,8 +1429,13 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
                 "PROMPT_INPUT_INVALID", f"prompt frontmatter value is empty: {key}"
             )
         values[key] = value
-    if set(values) != FRONTMATTER_KEYS:
-        missing = sorted(FRONTMATTER_KEYS - set(values))
+    required_keys = (
+        MIGRATION_FRONTMATTER_KEYS
+        if values.get("schema") in {MIGRATION_PROMPT_SCHEMA, LEGACY_PROMPT_SCHEMA}
+        else FRONTMATTER_KEYS
+    )
+    if set(values) != required_keys:
+        missing = sorted(required_keys - set(values))
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID",
             f"prompt frontmatter is missing required keys: {', '.join(missing)}",
@@ -753,36 +1443,61 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
     return values, closing + 1
 
 
-def parse_sections(lines: list[str], start: int) -> dict[str, str]:
+def parse_sections(
+    lines: list[str],
+    start: int,
+    *,
+    required_sections: tuple[str, ...] = REQUIRED_SECTIONS,
+) -> dict[str, str]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
+    fence_character: str | None = None
+    fence_length = 0
     for line in lines[start:]:
+        fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence_character is not None:
+            if current is not None:
+                sections[current].append(line)
+            if (
+                fence is not None
+                and fence.group(1)[0] == fence_character
+                and len(fence.group(1)) >= fence_length
+                and not fence.group(2).strip()
+            ):
+                fence_character = None
+                fence_length = 0
+            continue
+        if fence is not None:
+            marker = fence.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            if current is not None:
+                sections[current].append(line)
+            continue
         if line.startswith("## "):
             heading = line[3:].strip()
+            if not heading:
+                raise PromptWorkspaceError(
+                    "PROMPT_INPUT_INVALID", "prompt contains an empty section heading"
+                )
             if heading in sections:
                 raise PromptWorkspaceError(
                     "PROMPT_INPUT_INVALID", f"prompt repeats section: {heading}"
                 )
-            if heading not in {*ALL_SECTIONS, *OPTIONAL_SECTIONS}:
-                current = None
-                continue
             sections[heading] = []
             current = heading
             continue
         if current is not None:
             sections[current].append(line)
-    missing = [heading for heading in ALL_SECTIONS if heading not in sections]
+    missing = [heading for heading in required_sections if heading not in sections]
     if missing:
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID",
             f"prompt is missing sections: {', '.join(missing)}",
         )
-    result = {
+    return {
         heading: "\n".join(content).strip() for heading, content in sections.items()
     }
-    for heading in OPTIONAL_SECTIONS:
-        result.setdefault(heading, "")
-    return result
 
 
 def meaningful_section(value: str) -> str:
@@ -791,8 +1506,73 @@ def meaningful_section(value: str) -> str:
     return without_markers.strip()
 
 
+def normalize_intent_content(value: str) -> str:
+    """Normalize prose formatting while preserving fenced-code semantics."""
+
+    parts: list[str] = []
+    prose: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+
+    def flush_prose() -> None:
+        if not prose:
+            return
+        without_comments = re.sub(r"<!--.*?-->", "", "\n".join(prose), flags=re.DOTALL)
+        normalized = re.sub(r"\s+", " ", without_comments).strip()
+        if normalized:
+            parts.append(f"prose:{normalized}")
+        prose.clear()
+
+    for line in value.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence_character is None:
+            if fence is None:
+                prose.append(line)
+                continue
+            flush_prose()
+            marker = fence.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            info = re.sub(r"\s+", " ", fence.group(2)).strip()
+            parts.append(f"fence:{fence_character}:{info}")
+            continue
+        if (
+            fence is not None
+            and fence.group(1)[0] == fence_character
+            and len(fence.group(1)) >= fence_length
+            and not fence.group(2).strip()
+        ):
+            parts.append("end-fence")
+            fence_character = None
+            fence_length = 0
+            continue
+        parts.append(f"code:{line}")
+    flush_prose()
+    return "\n".join(parts)
+
+
+def prompt_intent_sha256(sections: dict[str, str]) -> str:
+    normalized: list[tuple[str, str]] = []
+    for heading, value in sections.items():
+        content = normalize_intent_content(value)
+        if content:
+            normalized.append((heading, content))
+    normalized.sort(key=lambda item: item[0].casefold())
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def read_prompt(
-    path: Path, prompt_root: Path, *, require_content: bool
+    path: Path,
+    prompt_root: Path,
+    *,
+    require_content: bool,
+    allow_legacy: bool = False,
+    allow_migration_history: bool = False,
 ) -> PromptDocument:
     requested = path.expanduser()
     if requested.is_symlink():
@@ -828,9 +1608,30 @@ def read_prompt(
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt contains unresolved template markers"
         )
+    if contains_secret(text):
+        raise PromptWorkspaceError(
+            "PROMPT_SENSITIVE_INPUT",
+            "prompt appears to contain secret material; remove it before intake",
+        )
     lines = text.splitlines()
     frontmatter, body_start = parse_frontmatter(lines)
-    if frontmatter["schema"] != PROMPT_SCHEMA:
+    legacy = frontmatter["schema"] == LEGACY_PROMPT_SCHEMA
+    migration = frontmatter["schema"] == MIGRATION_PROMPT_SCHEMA
+    if legacy and not allow_legacy:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "prompt-v1 is read-only history; create a new prompt-v3 file",
+        )
+    if migration and not allow_migration_history:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "prompt-v2 requires one-time workspace initialization migration to prompt-v3",
+        )
+    if (
+        frontmatter["schema"] != PROMPT_SCHEMA
+        and not (allow_legacy and legacy)
+        and not (allow_migration_history and migration)
+    ):
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt schema is unsupported"
         )
@@ -838,6 +1639,23 @@ def read_prompt(
     if not PROMPT_ID_RE.fullmatch(prompt_id):
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt_id does not match the generated format"
+        )
+    prompt_ref = frontmatter.get("prompt_ref", "")
+    if (
+        not legacy
+        and not migration
+        and (
+            not PROMPT_REF_RE.fullmatch(prompt_ref)
+            or not prompt_id.removeprefix("prompt-").startswith(prompt_ref)
+            or (
+                prompt_root.name == "prompts"
+                and not canonical.name.startswith(f"{prompt_ref}--")
+            )
+        )
+    ):
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID",
+            "prompt_ref is invalid or missing from the filename prefix",
         )
     title = frontmatter["title"].strip()
     if (
@@ -858,10 +1676,14 @@ def read_prompt(
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "created_at must include a UTC offset"
         )
-    sections = parse_sections(lines, body_start)
-    if require_content:
+    sections = parse_sections(
+        lines,
+        body_start,
+        required_sections=() if legacy else REQUIRED_SECTIONS,
+    )
+    if require_content and not legacy:
         for heading in REQUIRED_SECTIONS:
-            if not meaningful_section(sections[heading]):
+            if not meaningful_section(sections.get(heading, "")):
                 raise PromptWorkspaceError(
                     "PROMPT_INPUT_INVALID",
                     f"required prompt section is empty: {heading}",
@@ -871,6 +1693,7 @@ def read_prompt(
         raw=raw,
         text=text,
         prompt_id=prompt_id,
+        prompt_ref=prompt_ref,
         title=title,
         created_at=created_at,
         sections=sections,
@@ -883,39 +1706,414 @@ def resolve_prompt_reference(
     *,
     require_content: bool,
 ) -> PromptDocument:
-    """Resolve an absolute prompt path or one flat-workspace filename."""
+    """Resolve an absolute path, exact filename, full prompt ID, or exact ref."""
 
     manifest = verify_workspace(manifest_path)
     prompt_root = Path(required_string(manifest, "prompt_root", "workspace manifest"))
-    reference = Path(prompt_reference).expanduser()
+    reference_text = str(prompt_reference)
+    reference = Path(reference_text).expanduser()
     if reference.is_absolute():
-        candidate = reference
+        candidates = [reference]
     else:
         if len(reference.parts) != 1 or reference.name in {"", ".", ".."}:
             raise PromptWorkspaceError(
                 "PROMPT_PATH_INVALID",
-                "prompt reference must be an absolute path or one prompt filename",
+                "prompt reference must be an absolute path, filename, full prompt ID, or prompt ref",
             )
-        candidate = prompt_root / reference.name
-    document = read_prompt(candidate, prompt_root, require_content=require_content)
+        direct = prompt_root / reference.name
+        if direct.exists() or direct.is_symlink():
+            candidates = [direct]
+        else:
+            candidates = []
+            for candidate in sorted(prompt_root.glob("*.md")):
+                if candidate.name == HUB_FILENAME:
+                    continue
+                try:
+                    document = read_prompt(
+                        candidate, prompt_root, require_content=require_content
+                    )
+                except PromptWorkspaceError:
+                    continue
+                if reference_text in {document.prompt_id, document.prompt_ref}:
+                    candidates.append(document.path)
+            if len(candidates) != 1:
+                raise PromptWorkspaceError(
+                    "PROMPT_PATH_AMBIGUOUS" if candidates else "PROMPT_PATH_INVALID",
+                    "prompt reference must match exactly one managed prompt",
+                )
+    document = read_prompt(candidates[0], prompt_root, require_content=require_content)
     ensure_unique_prompt_id(document, prompt_root)
     return document
 
 
 def ensure_unique_prompt_id(document: PromptDocument, prompt_root: Path) -> None:
-    matches: list[Path] = []
+    id_matches: list[Path] = []
+    ref_matches: list[Path] = []
     for candidate in sorted(prompt_root.glob("*.md")):
+        if candidate.name == HUB_FILENAME:
+            continue
         if candidate.is_symlink():
-            raise PromptWorkspaceError(
-                "PROMPT_PATH_INVALID", "prompt directory contains a symlink"
-            )
-        other = read_prompt(candidate, prompt_root, require_content=False)
-        if other.prompt_id == document.prompt_id:
-            matches.append(other.path)
-    if len(matches) != 1 or matches[0] != document.path:
+            continue
+        try:
+            raw = candidate.read_bytes()
+            if len(raw) > MAX_PROMPT_BYTES or b"\x00" in raw:
+                continue
+            metadata, _ = parse_frontmatter(raw.decode("utf-8").splitlines())
+        except (OSError, UnicodeDecodeError, PromptWorkspaceError):
+            continue
+        if (
+            metadata.get("schema") == PROMPT_SCHEMA
+            and metadata.get("prompt_id") == document.prompt_id
+        ):
+            id_matches.append(candidate.resolve())
+        if (
+            metadata.get("schema") == PROMPT_SCHEMA
+            and metadata.get("prompt_ref") == document.prompt_ref
+        ):
+            ref_matches.append(candidate.resolve())
+    if len(id_matches) != 1 or id_matches[0] != document.path:
         raise PromptWorkspaceError(
             "PROMPT_CONFLICT", "prompt_id is duplicated within this prompt workspace"
         )
+    if len(ref_matches) != 1 or ref_matches[0] != document.path:
+        raise PromptWorkspaceError(
+            "PROMPT_CONFLICT", "prompt_ref is duplicated within this prompt workspace"
+        )
+
+
+def prompt_ref_for_id(prompt_id: str, other_prompt_ids: list[str]) -> str:
+    if not PROMPT_ID_RE.fullmatch(prompt_id):
+        raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt ID is invalid")
+    suffix = prompt_id.removeprefix("prompt-")
+    others = [value.removeprefix("prompt-") for value in other_prompt_ids]
+    if len(others) != len(set(others)) or suffix in others:
+        raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt ID is duplicated")
+    for length in range(5, 33):
+        candidate = suffix[:length]
+        if all(not other.startswith(candidate) for other in others):
+            return candidate
+    raise PromptWorkspaceError("PROMPT_CONFLICT", "could not allocate a prompt ref")
+
+
+def allocate_prompt_ref(prompt_root: Path, prompt_id: str) -> str:
+    prompt_ids: list[str] = []
+    refs: set[str] = set()
+    for candidate in sorted(prompt_root.glob("*.md")):
+        if candidate.name == HUB_FILENAME or candidate.is_symlink():
+            continue
+        try:
+            raw = candidate.read_bytes()
+            metadata, _ = parse_frontmatter(raw.decode("utf-8").splitlines())
+        except (OSError, UnicodeDecodeError, PromptWorkspaceError):
+            continue
+        existing_id = metadata.get("prompt_id")
+        if isinstance(existing_id, str) and PROMPT_ID_RE.fullmatch(existing_id):
+            prompt_ids.append(existing_id)
+        existing_ref = metadata.get("prompt_ref")
+        if isinstance(existing_ref, str):
+            refs.add(existing_ref)
+    suffix = prompt_id.removeprefix("prompt-")
+    if prompt_id in prompt_ids:
+        raise PromptWorkspaceError(
+            "PROMPT_CONFLICT", "generated prompt ID already exists"
+        )
+    for length in range(5, 33):
+        candidate = suffix[:length]
+        if candidate not in refs and all(
+            not existing.removeprefix("prompt-").startswith(candidate)
+            for existing in prompt_ids
+        ):
+            return candidate
+    raise PromptWorkspaceError("PROMPT_CONFLICT", "could not allocate a prompt ref")
+
+
+def _render_migrated_prompt(raw: bytes, prompt_ref: str) -> bytes:
+    text = raw.decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "prompt migration frontmatter is invalid"
+        )
+    output: list[str] = []
+    inserted = False
+    frontmatter_closed = False
+    for index, line in enumerate(lines):
+        content = line.rstrip("\r\n")
+        ending = line[len(content) :]
+        if index > 0 and not frontmatter_closed and content == "---":
+            frontmatter_closed = True
+            output.append(line)
+            continue
+        if not frontmatter_closed and content.split(":", 1)[0].strip() == "schema":
+            output.append(f"schema: {PROMPT_SCHEMA}{ending}")
+            continue
+        output.append(line)
+        if not frontmatter_closed and content.split(":", 1)[0].strip() == "prompt_id":
+            output.append(f"prompt_ref: {prompt_ref}{ending}")
+            inserted = True
+    if not inserted or not frontmatter_closed:
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "prompt migration metadata is invalid"
+        )
+    return "".join(output).encode("utf-8")
+
+
+def _validated_prompt_v3_migrations(
+    value: object, prompt_root: Path
+) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+        )
+    required_keys = {
+        "prompt_id",
+        "prompt_ref",
+        "old_name",
+        "new_name",
+        "old_sha256",
+        "new_sha256",
+    }
+    migrations: list[dict[str, str]] = []
+    names: set[str] = set()
+    old_names: set[str] = set()
+    ids: set[str] = set()
+    for raw_item in value:
+        if not isinstance(raw_item, dict) or set(raw_item) != required_keys:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+            )
+        item = {str(key): str(value) for key, value in raw_item.items()}
+        prompt_id = item["prompt_id"]
+        prompt_ref = item["prompt_ref"]
+        old_name = item["old_name"]
+        new_name = item["new_name"]
+        expected_name = (
+            old_name
+            if old_name.startswith(f"{prompt_ref}--")
+            else f"{prompt_ref}--{old_name}"
+        )
+        if (
+            not PROMPT_ID_RE.fullmatch(prompt_id)
+            or not PROMPT_REF_RE.fullmatch(prompt_ref)
+            or not prompt_id.removeprefix("prompt-").startswith(prompt_ref)
+            or Path(old_name).name != old_name
+            or Path(new_name).name != new_name
+            or old_name in {"", ".", "..", HUB_FILENAME}
+            or new_name in {"", ".", "..", HUB_FILENAME}
+            or not old_name.endswith(".md")
+            or not new_name.endswith(".md")
+            or new_name != expected_name
+            or not re.fullmatch(r"[0-9a-f]{64}", item["old_sha256"])
+            or not re.fullmatch(r"[0-9a-f]{64}", item["new_sha256"])
+            or prompt_id in ids
+            or new_name in names
+            or old_name in old_names
+        ):
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+            )
+        if (prompt_root / new_name).parent != prompt_root:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID",
+                "prompt migration marker escapes its prompt root",
+            )
+        ids.add(prompt_id)
+        names.add(new_name)
+        old_names.add(old_name)
+        migrations.append(item)
+    return migrations
+
+
+def _recover_prompt_v3_migration_files(
+    prompt_root: Path, migrations: list[dict[str, str]]
+) -> None:
+    """Finish a journaled per-file migration after any interrupted process."""
+
+    for item in migrations:
+        old = prompt_root / item["old_name"]
+        target = prompt_root / item["new_name"]
+        if target.exists() or target.is_symlink():
+            if (
+                target.is_symlink()
+                or not target.is_file()
+                or target.stat().st_nlink != 1
+            ):
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID", "prompt migration target is unsafe"
+                )
+            require_mode(target, 0o600, "prompt migration target")
+            target_raw = target.read_bytes()
+            target_digest = hashlib.sha256(target_raw).hexdigest()
+            if target_digest == item["new_sha256"]:
+                if old != target and (old.exists() or old.is_symlink()):
+                    if (
+                        old.is_symlink()
+                        or not old.is_file()
+                        or old.stat().st_nlink != 1
+                    ):
+                        raise PromptWorkspaceError(
+                            "WORKSPACE_STATE_INVALID",
+                            "prompt migration source is unsafe",
+                        )
+                    require_mode(old, 0o600, "prompt migration source")
+                    if (
+                        hashlib.sha256(old.read_bytes()).hexdigest()
+                        != item["old_sha256"]
+                    ):
+                        raise PromptWorkspaceError(
+                            "WORKSPACE_STATE_INVALID", "prompt migration source drifted"
+                        )
+                    old.unlink()
+                continue
+            if old != target or target_digest != item["old_sha256"]:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID",
+                    "prompt migration target does not match its recovery marker",
+                )
+            source_raw = target_raw
+        else:
+            if old.is_symlink() or not old.is_file() or old.stat().st_nlink != 1:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID", "prompt migration source is unavailable"
+                )
+            require_mode(old, 0o600, "prompt migration source")
+            source_raw = old.read_bytes()
+            if hashlib.sha256(source_raw).hexdigest() != item["old_sha256"]:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID", "prompt migration source drifted"
+                )
+        migrated = _render_migrated_prompt(source_raw, item["prompt_ref"])
+        if hashlib.sha256(migrated).hexdigest() != item["new_sha256"]:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID",
+                "prompt migration rendering is not reproducible",
+            )
+        write_atomic(target, migrated)
+        if old != target:
+            old.unlink()
+
+
+def migrate_prompt_files_v2(prompt_root: Path) -> list[dict[str, str]]:
+    """Rewrite direct v2 prompts and leave a recovery marker for pointer repair."""
+
+    journal_path = prompt_root.parent / "prompt-v3-migration.json"
+    if journal_path.exists() or journal_path.is_symlink():
+        if journal_path.is_symlink() or not journal_path.is_file():
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is unsafe"
+            )
+        require_mode(journal_path, 0o600, "prompt migration marker")
+        journal = load_json_object(journal_path, "prompt migration marker")
+        if (
+            set(journal) != {"schema", "migrations"}
+            or journal.get("schema") != PROMPT_V3_MIGRATION_SCHEMA
+            or not isinstance(journal.get("migrations"), list)
+        ):
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+            )
+        recovered = _validated_prompt_v3_migrations(journal["migrations"], prompt_root)
+        _recover_prompt_v3_migration_files(prompt_root, recovered)
+        return recovered
+
+    records: list[tuple[Path, bytes, dict[str, str]]] = []
+    all_ids: list[str] = []
+    for candidate in sorted(prompt_root.glob("*.md")):
+        if candidate.name == HUB_FILENAME:
+            continue
+        if candidate.is_symlink() or not candidate.is_file():
+            raise PromptWorkspaceError(
+                "PROMPT_PATH_INVALID", "prompt migration input is unsafe"
+            )
+        require_mode(candidate, 0o600, "prompt file")
+        raw = candidate.read_bytes()
+        try:
+            metadata, _ = parse_frontmatter(raw.decode("utf-8").splitlines())
+        except (UnicodeDecodeError, PromptWorkspaceError) as error:
+            raise PromptWorkspaceError(
+                "PROMPT_INPUT_INVALID", "prompt migration input is invalid"
+            ) from error
+        schema = metadata.get("schema")
+        if schema not in {PROMPT_SCHEMA, MIGRATION_PROMPT_SCHEMA, LEGACY_PROMPT_SCHEMA}:
+            raise PromptWorkspaceError(
+                "PROMPT_INPUT_INVALID", "prompt schema is unsupported"
+            )
+        if schema == LEGACY_PROMPT_SCHEMA:
+            continue
+        prompt_id = metadata.get("prompt_id", "")
+        if not PROMPT_ID_RE.fullmatch(prompt_id):
+            raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt ID is invalid")
+        all_ids.append(prompt_id)
+        records.append((candidate, raw, metadata))
+    if len(all_ids) != len(set(all_ids)):
+        raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt ID is duplicated")
+    migrations: list[dict[str, str]] = []
+    targets: set[Path] = set()
+    for path, raw, metadata in records:
+        if metadata["schema"] == PROMPT_SCHEMA:
+            continue
+        prompt_id = metadata["prompt_id"]
+        prompt_ref = prompt_ref_for_id(
+            prompt_id, [value for value in all_ids if value != prompt_id]
+        )
+        target = path.with_name(
+            path.name
+            if path.name.startswith(f"{prompt_ref}--")
+            else f"{prompt_ref}--{path.name}"
+        )
+        if target in targets or (
+            target != path and (target.exists() or target.is_symlink())
+        ):
+            raise PromptWorkspaceError(
+                "PROMPT_CONFLICT", "prompt migration target conflicts"
+            )
+        targets.add(target)
+        migrated = _render_migrated_prompt(raw, prompt_ref)
+        migrations.append(
+            {
+                "prompt_id": prompt_id,
+                "prompt_ref": prompt_ref,
+                "old_name": path.name,
+                "new_name": target.name,
+                "old_sha256": hashlib.sha256(raw).hexdigest(),
+                "new_sha256": hashlib.sha256(migrated).hexdigest(),
+                "content": migrated.decode("utf-8"),
+            }
+        )
+    if not migrations:
+        return []
+    journal_migrations = [
+        {key: value for key, value in item.items() if key != "content"}
+        for item in migrations
+    ]
+    write_atomic(
+        journal_path,
+        stable_json(
+            {
+                "schema": PROMPT_V3_MIGRATION_SCHEMA,
+                "migrations": journal_migrations,
+            }
+        ),
+    )
+    for item in migrations:
+        item.pop("content", None)
+    recovered = _validated_prompt_v3_migrations(migrations, prompt_root)
+    _recover_prompt_v3_migration_files(prompt_root, recovered)
+    return recovered
+
+
+def complete_prompt_files_v3_migration(prompt_root: Path) -> None:
+    """Remove the recovery marker only after all mutable pointers are repaired."""
+
+    journal_path = prompt_root.parent / "prompt-v3-migration.json"
+    if not journal_path.exists():
+        return
+    if journal_path.is_symlink() or not journal_path.is_file():
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "prompt migration marker is unsafe"
+        )
+    require_mode(journal_path, 0o600, "prompt migration marker")
+    journal_path.unlink()
 
 
 def create_prompt(
@@ -924,10 +2122,12 @@ def create_prompt(
     *,
     clock: Callable[[], datetime] = now_local,
     id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
+    draft: bool = False,
+    ask_body: str | None = None,
 ) -> dict[str, object]:
     manifest = verify_workspace(manifest_path)
     prompt_root = Path(required_string(manifest, "prompt_root", "workspace manifest"))
-    ask = validate_short_ask(ask_value)
+    ask = validate_short_ask(ask_value) if not draft else "Untitled prompt"
     created_at = clock()
     if created_at.tzinfo is None or created_at.utcoffset() is None:
         raise PromptWorkspaceError(
@@ -938,9 +2138,22 @@ def create_prompt(
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "generated prompt ID has an invalid format"
         )
-    prefix = created_at.strftime("%Y-%m-%d_%H%M")
-    stem = f"{prefix}--{prompt_slug(ask)}"
-    content = render_prompt(ask, prompt_id, created_at)
+    prompt_ref = allocate_prompt_ref(prompt_root, prompt_id)
+    timestamp = created_at.strftime("%Y-%m-%d_%H%M")
+    stem = f"{prompt_ref}--{timestamp}--{prompt_slug(ask)}"
+    content = render_prompt(
+        ask,
+        prompt_id,
+        prompt_ref,
+        created_at,
+        title="Untitled prompt" if draft else None,
+        draft=draft,
+        ask_body=ask_body,
+    )
+    if len(content) > MAX_PROMPT_BYTES:
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", f"prompt exceeds {MAX_PROMPT_BYTES} bytes"
+        )
     for number in range(1, 1000):
         suffix = "" if number == 1 else f"--{number:02d}"
         prompt_path = prompt_root / f"{stem}{suffix}.md"
@@ -951,6 +2164,7 @@ def create_prompt(
         return {
             "path": str(prompt_path),
             "prompt_id": prompt_id,
+            "prompt_ref": prompt_ref,
             "title": ask,
             "created_at": iso_seconds(created_at),
         }

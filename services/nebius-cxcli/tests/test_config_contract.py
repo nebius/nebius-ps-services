@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
 
-from nebius_cxcli.config_loader import validate_config
+import nebius_cxcli.config_loader as config_loader
+from nebius_cxcli.config_loader import load_config, validate_config
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
@@ -41,6 +44,38 @@ def _runtime_payload_with_chart(chart: dict) -> dict:
             "charts": [chart],
         },
     }
+
+
+def test_config_loader_rejects_symlinked_config(tmp_path: Path) -> None:
+    target = tmp_path / "target.yaml"
+    target.write_text("version: v1\n", encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.symlink_to(target)
+
+    with pytest.raises(ValueError, match="single-link regular"):
+        load_config(config)
+
+
+def test_atomic_config_write_preserves_original_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text("original\n", encoding="utf-8")
+    original_replace = config_loader.os.replace
+
+    def _fail_replace(source: Path, destination: Path) -> None:
+        assert destination == config
+        assert source != destination
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(config_loader.os, "replace", _fail_replace)
+    with pytest.raises(OSError, match="injected replace failure"):
+        config_loader._write_text_atomic(config, "replacement\n", file_mode=0o640)
+    monkeypatch.setattr(config_loader.os, "replace", original_replace)
+
+    assert config.read_text(encoding="utf-8") == "original\n"
+    assert not tuple(tmp_path.glob(".config.yaml.*.tmp"))
 
 
 def test_starter_template_is_runtime_valid() -> None:
@@ -114,7 +149,6 @@ def test_runtime_payload_rejects_soperator_values_node_group_mapping() -> None:
             "id": "soperator",
             "instance_id": "cluster1",
             "enabled": True,
-            "install_mode": "production-cluster",
             "values": {
                 "nodeGroupMapping": {
                     "worker": ["worker"],

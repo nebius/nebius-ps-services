@@ -80,6 +80,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install pinned uv
+        if: steps.state.outputs.release_exists == 'false'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          enable-cache: true
+          cache-dependency-glob: services/nebius-cxcli/uv.lock
+
+      - name: Set up Helm
+        if: steps.state.outputs.release_exists == 'false'
+        uses: azure/setup-helm@v5
+
       - name: Verify source-checkout runtime version
         if: steps.state.outputs.release_exists == 'false'
         env:
@@ -121,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           terraform_output="$(
-            .venv/bin/python - <<'PY'
+            uv run --locked --no-sync --no-python-downloads python - <<'PY'
           from nebius_cxcli.managed_tools import resolve_terraform_binary
 
           print(resolve_terraform_binary())
@@ -138,12 +150,13 @@ jobs:
       - name: Verify service with local make contract
         if: steps.state.outputs.release_exists == 'false'
         env:
+          DIFF_BASE: ${{ steps.revision.outputs.commit }}^
           RELEASE_REF: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          make all
+          make ci-quality verify-wheel-cli
 
       - name: Validate active component sources catalog
         if: steps.state.outputs.release_exists == 'false'
@@ -151,7 +164,8 @@ jobs:
           NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
         run: |
           set -euo pipefail
-          .venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml
+          uv run --locked --no-sync --no-python-downloads \
+            python -m nebius_cxcli validate-sources component_sources.yaml
 
       - name: Resolve and verify release assets
         if: steps.state.outputs.release_exists == 'false'
@@ -187,7 +201,8 @@ jobs:
             exit 1
           fi
 
-          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel \
+          uv run --locked --no-sync --no-python-downloads \
+            python -m nebius_cxcli.release_catalog verify-wheel \
             --wheel "${asset}" \
             --release-ref "${RELEASE_REF}"
 
@@ -195,12 +210,14 @@ jobs:
           catalog_asset="${release_dir}/component_sources.yaml"
           rm -rf "${release_dir}"
           mkdir -p "${release_dir}"
-          .venv/bin/python -m nebius_cxcli.release_catalog render \
+          uv run --locked --no-sync --no-python-downloads \
+            python -m nebius_cxcli.release_catalog render \
             --input component_sources.yaml \
             --output "${catalog_asset}" \
             --release-ref "${RELEASE_REF}"
 
-          .venv/bin/python -m nebius_cxcli.release_catalog verify-catalog \
+          uv run --locked --no-sync --no-python-downloads \
+            python -m nebius_cxcli.release_catalog verify-catalog \
             --catalog "${catalog_asset}" \
             --release-ref "${RELEASE_REF}"
 
@@ -299,6 +316,7 @@ jobs:
         with:
           name: nebius-cxcli-release-manifest-${{ github.run_id }}
           path: ${{ env.APP_DIR }}/release-manifest.json
+          if-no-files-found: error
 
       - name: Release already exists
         if: steps.state.outputs.release_exists == 'true'

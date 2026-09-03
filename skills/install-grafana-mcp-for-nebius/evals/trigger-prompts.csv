@@ -1,0 +1,12 @@
+id,should_trigger,prompt
+grafana-install-positive-01,true,"Use install-grafana-mcp-for-nebius to install and configure the Grafana MCP server."
+grafana-install-positive-02,true,"Invoke the Grafana MCP installer to repair my pinned human-profile wrapper."
+grafana-install-positive-03,true,"Check and explicitly converge the existing Codex Grafana MCP registration."
+grafana-install-positive-04,true,"Use install-grafana-mcp-for-nebius to migrate the named Grafana MCP entry from a shared token to my pinned human profile."
+grafana-install-positive-05,true,"Invoke install-grafana-mcp-for-nebius to configure external Grafana for Nebius read endpoints."
+grafana-install-negative-01,false,"Show GPU utilization for this Nebius project using the configured Grafana server."
+grafana-install-negative-02,false,"Query Nebius Control Plane Audit Logs for this resource."
+grafana-install-negative-03,false,"Create a Grafana dashboard and alert."
+grafana-install-negative-04,false,"Summarize recent Loki errors from the already configured Grafana server."
+grafana-install-negative-05,false,"Inspect the Prometheus queries used by this existing dashboard."
+grafana-install-negative-06,false,"Show metrics for this project without changing my Grafana MCP setup."

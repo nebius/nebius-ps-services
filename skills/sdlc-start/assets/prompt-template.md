@@ -1,6 +1,7 @@
 ---
-schema: agentic-sdlc/prompt-v1
+schema: agentic-sdlc/prompt-v3
 prompt_id: {{PROMPT_ID}}
+prompt_ref: {{PROMPT_REF}}
 title: {{TITLE_JSON}}
 created_at: {{CREATED_AT}}
 ---
@@ -14,47 +15,12 @@ created_at: {{CREATED_AT}}
 ## Ask
 
 {{ASK}}
-
-## Outcome
-
-<!-- Required: describe what must be true when the SDLC run is complete. -->
-
-## Context
-
-<!-- Optional: add relevant repository facts, paths, or background. -->
-
-## Constraints
-
-- None.
-
-## Acceptance criteria
-
-- [ ] <!-- Required: add an observable, testable completion criterion. -->
-
-## Verification
-
-<!-- Required: name expected checks or ask Codex to derive them. -->
-
-## Live Experiment Environment
-
 <!--
-Optional: describe a disposable or non-production environment, safe connection
-steps, allowed actions, reset instructions, and evidence limits. Never add
-credentials, tokens, private endpoints, customer data, or other secrets.
--->
+Only Ask is required. Add any helpful sections when needed, for example:
+Outcome, Context, Constraints, Acceptance criteria, Verification, Non-goals,
+References, Clarifications, Live Experiment Environment, or Steering.
 
-## Non-goals
-
-<!-- Optional: list intentionally excluded work. -->
-
-## References
-
-<!-- Optional: list repo-relative paths, tickets, or public URLs. -->
-
-## Steering
-
-<!--
-Append clarifications, corrections, priorities, removals, or new requirements,
-then repeat the same `$sdlc-start run <prompt>` command. Edits elsewhere in the
-prompt are also treated as steering. Do not add secrets or customer data.
+For active work, edit this prompt and repeat `$sdlc-start run <prompt-ref-or-file>`.
+After completion, the edited prompt becomes a linked fresh objective evaluated
+against current product truth. Do not add secrets or customer data.
 -->

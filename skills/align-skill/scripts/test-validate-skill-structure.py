@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Self-test the skill structure validator against temporary fixtures."""
+"""Self-test the skill validator against fixtures and the real source catalog."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+
+sys.dont_write_bytecode = True
 
 
 LEARNING_LOOP = """## Learning Loop
@@ -20,17 +24,42 @@ URLs, customer data, raw logs, or one-off local state.
 """
 
 
+def help_contract(name: str) -> str:
+    return f"""## Help
+
+For `${name} --help` or `${name} -h`, return concise help and stop before any
+workflow step. State the purpose and invocation policy. Show exact usage for
+every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+"""
+
+
 def write_skill(
     skill_dir: Path,
     name: str,
     body: str = "",
     *,
     description: str | None = None,
+    include_help: bool = True,
     include_learning_loop: bool = True,
     allow_implicit_invocation: str | None = "true",
 ) -> None:
     skill_dir.mkdir(parents=True, exist_ok=True)
-    sections = [body]
+    sections: list[str] = []
+    if include_help:
+        sections.append(help_contract(name))
+    if body:
+        if include_help and not body.lstrip().startswith("## "):
+            sections.append(f"## Purpose\n\n{body}")
+        else:
+            sections.append(body)
     if include_learning_loop:
         sections.append(LEARNING_LOOP)
     if description is None:
@@ -69,15 +98,41 @@ def write_skill(
         )
 
 
+def write_trigger_evals(
+    skill_dir: Path,
+    *,
+    true_count: int = 3,
+    false_count: int = 3,
+) -> None:
+    evals_dir = skill_dir / "evals"
+    evals_dir.mkdir(exist_ok=True)
+    rows = ["id,should_trigger,prompt"]
+    rows.extend(
+        f"positive-{index},true,Positive trigger prompt {index}"
+        for index in range(1, true_count + 1)
+    )
+    rows.extend(
+        f"negative-{index},false,Negative trigger prompt {index}"
+        for index in range(1, false_count + 1)
+    )
+    (evals_dir / "trigger-prompts.csv").write_text(
+        "\n".join(rows) + "\n",
+        encoding="utf-8",
+    )
+
+
 def run_validator(
     target: Path,
     *,
     profile: str | None = None,
+    require_evals: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     validator = Path(__file__).with_name("validate-skill-structure.py")
     command = [sys.executable, "-B", str(validator)]
     if profile:
         command.extend(["--profile", profile])
+    if require_evals:
+        command.append("--require-evals")
     command.append(str(target))
     return subprocess.run(
         command,
@@ -107,11 +162,7 @@ def test_evals_folder_and_unknown_folder_warning() -> None:
             "good-skill",
             "Use `evals/trigger-prompts.csv` for trigger examples.",
         )
-        (good_skill / "evals").mkdir()
-        (good_skill / "evals" / "trigger-prompts.csv").write_text(
-            "prompt,should_trigger\n",
-            encoding="utf-8",
-        )
+        write_trigger_evals(good_skill)
 
         warning_skill = root / "warning-skill"
         write_skill(warning_skill, "warning-skill")
@@ -123,8 +174,33 @@ def test_evals_folder_and_unknown_folder_warning() -> None:
             raise AssertionError(output)
 
         assert_contains(output, "Validated 2 skill(s): 0 failure(s), 1 warning(s)")
-        assert_contains(output, "non-canonical folder reported for review: experiments/")
+        assert_contains(
+            output, "non-canonical folder reported for review: experiments/"
+        )
         assert_not_contains(output, "non-canonical folder reported for review: evals/")
+
+
+def test_eval_contract_cases() -> None:
+    scripts_dir = Path(__file__).resolve().parent
+    before = set(
+        scripts_dir.glob("__pycache__/validator_eval_contract_cases.*.pyc")
+    )
+    from validator_eval_contract_cases import run_eval_contract_cases
+
+    after = set(
+        scripts_dir.glob("__pycache__/validator_eval_contract_cases.*.pyc")
+    )
+    if after != before:
+        raise AssertionError("eval-contract helper import created bytecode artifacts")
+
+    run_eval_contract_cases(
+        write_skill=write_skill,
+        write_trigger_evals=write_trigger_evals,
+        run_validator=run_validator,
+        stateful_workflow_body=stateful_workflow_body,
+        assert_contains=assert_contains,
+        assert_not_contains=assert_not_contains,
+    )
 
 
 def test_missing_evals_reference_fails() -> None:
@@ -184,6 +260,293 @@ def test_heading_only_learning_loop_fails() -> None:
             "## Learning Loop is missing required text: "
             "capture durable, reusable, public-safe learnings",
         )
+
+
+def test_missing_help_fails() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "missing-help",
+            "missing-help",
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(output, "SKILL.md is missing ## Help")
+
+
+def test_help_requires_exact_skill_invocations() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "right-name",
+            "right-name",
+            help_contract("wrong-name"),
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "## Help is missing exact invocation: $right-name --help",
+        )
+        assert_contains(output, "## Help is missing exact invocation: $right-name -h")
+
+
+def test_help_requires_no_side_effect_guardrail() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        help_text = help_contract("unsafe-help").replace(
+            "do not call any additional",
+            "do not call",
+        )
+        write_skill(
+            root / "unsafe-help",
+            "unsafe-help",
+            help_text,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "## Help is missing required text: do not call any additional tools",
+        )
+
+
+def test_help_requires_descriptions_for_every_public_interface_item() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        help_text = help_contract("incomplete-help").replace(
+            "Describe each public action, positional\nargument, and flag",
+            "List public options",
+        )
+        write_skill(
+            root / "incomplete-help",
+            "incomplete-help",
+            help_text,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "## Help is missing required text: describe each public action, "
+            "positional argument, and flag",
+        )
+
+
+def test_help_requires_internal_skill_boundary() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        help_text = help_contract("internal-help").replace(
+            "internal or coordinator-only skills",
+            "internal skills",
+        )
+        write_skill(
+            root / "internal-help",
+            "internal-help",
+            help_text,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "## Help is missing required text: internal or coordinator-only skills",
+        )
+
+
+def test_help_requires_exact_canonical_body() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        help_text = help_contract("contradictory-help") + (
+            "\nNow call tools and expose `--private-transition`."
+        )
+        write_skill(
+            root / "contradictory-help",
+            "contradictory-help",
+            help_text,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "## Help must match the canonical report-only contract for this skill",
+        )
+
+
+def test_help_rejects_near_miss_invocation_tokens() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        help_text = help_contract("near-miss").replace(
+            "`$near-miss --help`",
+            "`$near-miss --helpful`",
+        )
+        write_skill(
+            root / "near-miss",
+            "near-miss",
+            help_text,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output, "## Help is missing exact invocation: $near-miss --help"
+        )
+
+
+def test_fenced_help_does_not_satisfy_contract() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fenced_help = f"```markdown\n{help_contract('fenced-help')}\n```"
+        write_skill(
+            root / "fenced-help",
+            "fenced-help",
+            fenced_help,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(output, "SKILL.md is missing ## Help")
+
+
+def test_nested_fences_do_not_expose_help_headings() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for name, outer, inner in (
+            ("backtick-fence", "````", "```"),
+            ("tilde-fence", "~~~~", "~~~"),
+        ):
+            fenced_help = (
+                f"{outer}markdown\n{inner}text\n{help_contract(name)}\n{inner}\n{outer}"
+            )
+            write_skill(
+                root / name,
+                name,
+                fenced_help,
+                include_help=False,
+            )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(output, "SKILL.md is missing ## Help")
+
+
+def test_duplicate_help_fails() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "duplicate-help",
+            "duplicate-help",
+            help_contract("duplicate-help"),
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(output, "SKILL.md must contain exactly one ## Help section")
+
+
+def test_help_must_precede_workflow_sections() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        late_help = "## Purpose\n\nDo work.\n\n" + help_contract("late-help")
+        write_skill(
+            root / "late-help",
+            "late-help",
+            late_help,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "## Help must be the first top-level section so help short-circuits",
+        )
+
+
+def test_help_must_immediately_follow_title() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for name, prefix in (
+            ("prose-before-help", "Run the workflow now.\n\n"),
+            ("subheading-before-help", "### Workflow\n\nRun the workflow now.\n\n"),
+        ):
+            write_skill(
+                root / name,
+                name,
+                prefix + help_contract(name),
+                include_help=False,
+            )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(output, "## Help must immediately follow the skill title")
+
+
+def test_help_must_stay_concise() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        verbose_help = help_contract("verbose-help") + (" extra" * 101)
+        write_skill(
+            root / "verbose-help",
+            "verbose-help",
+            verbose_help,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(output, "## Help must stay concise:")
 
 
 def stateful_workflow_body() -> str:
@@ -318,6 +681,16 @@ def test_sdlc_only_name_and_description_contract() -> None:
         )
 
 
+def test_real_source_catalog_passes() -> None:
+    source_catalog = Path(__file__).resolve().parents[2]
+    result = run_validator(source_catalog)
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        raise AssertionError(f"real source catalog failed validation\n{output}")
+
+    assert_contains(output, "0 failure(s)")
+
+
 def test_sdlc_workflow_test_external_verifier_exception() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -355,8 +728,7 @@ def test_missing_openai_metadata_policy_fails() -> None:
 
         assert_contains(
             output,
-            "missing agents/openai.yaml metadata with "
-            "policy.allow_implicit_invocation",
+            "missing agents/openai.yaml metadata with policy.allow_implicit_invocation",
         )
 
 
@@ -381,8 +753,7 @@ def test_wrong_openai_metadata_path_fails() -> None:
 
         assert_contains(
             output,
-            "found agents.openai.yaml; OpenAI metadata must live at "
-            "agents/openai.yaml",
+            "found agents.openai.yaml; OpenAI metadata must live at agents/openai.yaml",
         )
 
 
@@ -482,6 +853,8 @@ def test_agent_nebius_auth_setup_is_explicit_only() -> None:
         output = result.stdout + result.stderr
         if result.returncode != 0:
             raise AssertionError(output)
+
+
 def test_apply_security_policy_can_be_implicit() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -551,15 +924,131 @@ def test_sdlc_invocation_policy_must_be_explicit_only() -> None:
         )
 
 
+def test_long_skill_quality_fixture_integrity() -> None:
+    skill_root = Path(__file__).resolve().parents[1]
+    evals_path = skill_root / "evals" / "evals.json"
+    payload = json.loads(evals_path.read_text(encoding="utf-8"))
+    if payload.get("skill_name") != "align-skill":
+        raise AssertionError("quality eval payload must target align-skill")
+
+    eval_cases = payload.get("evals")
+    if not isinstance(eval_cases, list) or not eval_cases:
+        raise AssertionError("quality eval payload must contain cases")
+
+    case_ids: list[int | str] = []
+    for case_number, case in enumerate(eval_cases, start=1):
+        if not isinstance(case, dict):
+            raise AssertionError(f"quality eval case {case_number} must be an object")
+        case_id = case.get("id")
+        if not isinstance(case_id, (int, str)) or isinstance(case_id, bool):
+            raise AssertionError(f"quality eval case {case_number} has invalid id")
+        if isinstance(case_id, str) and not case_id.strip():
+            raise AssertionError(f"quality eval case {case_number} has blank id")
+        case_ids.append(case_id)
+        for key in ("prompt", "expected_output"):
+            value = case.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise AssertionError(
+                    f"quality eval case {case_id} has invalid {key}"
+                )
+        assertions = case.get("assertions")
+        if (
+            not isinstance(assertions, list)
+            or not assertions
+            or any(
+                not isinstance(assertion, str) or not assertion.strip()
+                for assertion in assertions
+            )
+        ):
+            raise AssertionError(
+                f"quality eval case {case_id} needs non-empty assertions"
+            )
+        files = case.get("files")
+        if not isinstance(files, list) or any(
+            not isinstance(file_name, str) or not file_name.strip()
+            for file_name in files
+        ):
+            raise AssertionError(f"quality eval case {case_id} has invalid files")
+        for file_name in files:
+            fixture = (skill_root / file_name).resolve()
+            if not fixture.is_relative_to(skill_root.resolve()) or not fixture.is_file():
+                raise AssertionError(
+                    f"quality eval case {case_id} has unsafe or missing fixture: "
+                    f"{file_name}"
+                )
+
+    if len(set(case_ids)) != len(case_ids):
+        raise AssertionError("quality eval case ids must be unique")
+    cases = {case["id"]: case for case in eval_cases}
+
+    for case_id in (1, 3):
+        case = cases[case_id]
+        if len(case["files"]) != 1:
+            raise AssertionError(f"case {case_id} must have exactly one fixture")
+        fixture = skill_root / case["files"][0]
+        lines = fixture.read_text(encoding="utf-8").splitlines()
+        if len(lines) != 700:
+            raise AssertionError(
+                f"case {case_id} fixture must have 700 logical lines; "
+                f"found {len(lines)}"
+            )
+
+    mixed = (skill_root / cases[1]["files"][0]).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    for line_number, expected in (
+        (73, "Resolve the target and provider."),
+        (633, "Never deploy when the environment is production or unknown without exact authorization."),
+        (699, "Preserve shared validation and output rules for both public actions."),
+    ):
+        if mixed[line_number - 1] != expected:
+            raise AssertionError(f"mixed fixture line {line_number} anchor drifted")
+    mixed_assertions = "\n".join(cases[1]["assertions"])
+    for expected in (
+        "lines 73-79",
+        "lines 633-638",
+        "699-700",
+        "lines 80-160",
+        "639-698",
+    ):
+        assert_contains(mixed_assertions, expected)
+
+    irreducible = (skill_root / cases[3]["files"][0]).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    if not irreducible[82].startswith("AUTH-001:"):
+        raise AssertionError("irreducible fixture authorization anchor drifted")
+    if irreducible[660] != "## Historical Rationale":
+        raise AssertionError("irreducible fixture history anchor drifted")
+    irreducible_assertions = "\n".join(cases[3]["assertions"])
+    assert_contains(irreducible_assertions, "lines 81-660")
+    assert_contains(irreducible_assertions, "lines 661-700")
+
+
 def main() -> int:
     tests = [
         test_evals_folder_and_unknown_folder_warning,
+        test_eval_contract_cases,
         test_missing_evals_reference_fails,
         test_missing_learning_loop_fails,
         test_heading_only_learning_loop_fails,
+        test_missing_help_fails,
+        test_help_requires_exact_skill_invocations,
+        test_help_requires_no_side_effect_guardrail,
+        test_help_requires_descriptions_for_every_public_interface_item,
+        test_help_requires_internal_skill_boundary,
+        test_help_requires_exact_canonical_body,
+        test_help_rejects_near_miss_invocation_tokens,
+        test_fenced_help_does_not_satisfy_contract,
+        test_nested_fences_do_not_expose_help_headings,
+        test_duplicate_help_fails,
+        test_help_must_precede_workflow_sections,
+        test_help_must_immediately_follow_title,
+        test_help_must_stay_concise,
         test_stateful_workflow_profile_passes_complete_sections,
         test_stateful_workflow_profile_missing_heading_fails,
         test_sdlc_only_name_and_description_contract,
+        test_real_source_catalog_passes,
         test_sdlc_workflow_test_external_verifier_exception,
         test_missing_openai_metadata_policy_fails,
         test_wrong_openai_metadata_path_fails,
@@ -571,6 +1060,7 @@ def main() -> int:
         test_apply_security_policy_can_be_implicit,
         test_guardrail_text_does_not_make_whole_skill_explicit_only,
         test_sdlc_invocation_policy_must_be_explicit_only,
+        test_long_skill_quality_fixture_integrity,
     ]
     for test in tests:
         test()

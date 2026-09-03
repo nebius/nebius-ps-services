@@ -13,16 +13,17 @@ classifiers = [
 ]
 
 # Python package dependencies (installed via pip)
-# All versions verified compatible with Python 3.12.12 (December 2025)
+# Upper bounds stop before vendor-documented breaking runtime/API changes.
 dependencies = [
 	"PyYAML>=6.0.3,<7.0.0",
 	"paramiko>=5.0.0,<6.0.0",
 	"rich>=14.2.0,<15.0.0",
 	"Pygments>=2.20.0,<3.0.0",
-	"click>=8.3.0,<9.0.0",
-	"typer>=0.20.0,<1.0.0",
+	"click>=8.3.0,<8.4.0",
+	"cryptography>=42.0.0,<50.0.0",
+	"typer>=0.20.0,<0.26.0",
 	"pydantic>=2.12.0,<3.0.0",
-	"nebius"
+	"nebius>=0.3.18,<0.4.0"
 ]
 
 [project.optional-dependencies]
@@ -34,7 +35,8 @@ dev = [
 	"ruff>=0.14.0,<1.0.0",
 	"pyinstaller>=6.17.0,<7.0.0",
 	"build>=1.3.0,<2.0.0",
-	"setuptools-scm>=9.2",
+	"setuptools>=83.0.0",
+	"setuptools-scm>=10.2.1,<11.0.0",
 	"vcs-versioning>=2.2.2,<3.0.0",
 	"types-PyYAML>=6.0.12,<7.0.0"
 ]
@@ -54,9 +56,12 @@ root = "."
 version_scheme = "semver-pep440"
 local_scheme = "no-local-version"
 version_file = "src/nebius_vpngw/_version.py"
-tag_regex = "^nebius-vpngw-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+write_to_source = true
 fallback_version = "0.0.0"
 search_parent_directories = true
+
+[tool.setuptools_scm.tag]
+regex = "^nebius-vpngw-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 
 [tool.setuptools_scm.scm.git]
 describe_command = "git describe --dirty --tags --long --abbrev=40 --match nebius-vpngw-v*"
@@ -116,7 +121,12 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.10"
 mypy_path = "src"
-files = ["src/nebius_vpngw"]
+files = [
+	"src/nebius_vpngw",
+	"misc/gcp_vpngw_vm_ha.py",
+	"misc/gcp_vpngw_classic_vm_ha.py",
+	"misc/vm_ha_one_way_probe.py"
+]
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
@@ -131,5 +141,5 @@ source = ["nebius_vpngw"]
 skip_empty = true
 
 [build-system]
-requires = ["setuptools>=83.0.0", "setuptools-scm>=9.2", "vcs-versioning>=2.2.2,<3.0.0"]
+requires = ["setuptools>=83.0.0", "setuptools-scm>=10.2.1,<11.0.0", "vcs-versioning>=2.2.2,<3.0.0"]
 build-backend = "setuptools.build_meta"

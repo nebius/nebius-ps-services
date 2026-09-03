@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+import fcntl
 import hashlib
 import json
+import os
 import re
 import tempfile
+import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -23,8 +26,14 @@ from .soperator_artifacts import (
 )
 
 SOPERATOR_DISCOVERY_SCHEMA = "nebius-cxcli-soperator-discovery/v1"
-SOPERATOR_DISCOVERY_DIR_NAME = "soperator-discovery"
 SOPERATOR_DISCOVERY_MANIFEST_NAME = "manifest.json"
+SOPERATOR_PUBLIC_DISCOVERY_SCHEMA = "nebius-cxcli.soperator-public-discovery.v2"
+SOPERATOR_PUBLIC_DISCOVERY_DIR_NAME = "soperator-discovery"
+SOPERATOR_PUBLIC_DISCOVERY_JSON_NAME = "report.json"
+SOPERATOR_PUBLIC_DISCOVERY_MARKDOWN_NAME = "report.md"
+SOPERATOR_PUBLIC_DISCOVERY_COMPLETE = "complete"
+SOPERATOR_PUBLIC_DISCOVERY_PARTIAL = "partial"
+SOPERATOR_PUBLIC_DISCOVERY_NOT_DETECTED = "not-detected"
 SOPERATOR_DISCOVERY_SECTION_FILES = (
     "identity.json",
     "kubernetes.json",
@@ -68,10 +77,18 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _sequence_of_mappings(value: Any) -> tuple[Mapping[str, Any], ...]:
+def _sequence(value: Any) -> tuple[Any, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return ()
-    return tuple(item for item in value if isinstance(item, Mapping))
+    return tuple(value)
+
+
+def _sequence_of_mappings(value: Any) -> tuple[Mapping[str, Any], ...]:
+    return tuple(item for item in _sequence(value) if isinstance(item, Mapping))
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _normalized_token(value: Any, default: str = "") -> str:
@@ -80,6 +97,1250 @@ def _normalized_token(value: Any, default: str = "") -> str:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+_PUBLIC_DISCOVERY_SAFE_NODE_LABELS = frozenset(
+    {
+        "beta.kubernetes.io/os",
+        "failure-domain.beta.kubernetes.io/region",
+        "kubernetes.io/arch",
+        "kubernetes.io/os",
+        "nebius.com/node-group",
+        "nebius.com/node-group-id",
+        "node.kubernetes.io/instance-type",
+        "nvidia.com/cuda.driver.major",
+        "nvidia.com/cuda.driver.minor",
+        "nvidia.com/cuda.driver.rev",
+        "nvidia.com/cuda.runtime.major",
+        "nvidia.com/cuda.runtime.minor",
+        "nvidia.com/gpu.driver.major",
+        "nvidia.com/gpu.driver.minor",
+        "nvidia.com/gpu.driver.revision",
+        "nvidia.com/gpu.product",
+        "topology.kubernetes.io/region",
+        "topology.kubernetes.io/zone",
+        "topology.nebius.com/block",
+        "topology.nebius.com/rack",
+        "topology.nebius.com/region",
+        "yandex.cloud/node-group-id",
+    }
+)
+
+
+def _public_discovery_safe_node_observations(
+    snapshot: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for node in _sequence_of_mappings(snapshot.get("kubernetes_nodes")):
+        metadata = _mapping(node.get("metadata"))
+        status = _mapping(node.get("status"))
+        labels = _mapping(metadata.get("labels"))
+        safe_labels = {
+            str(key): _text(value)
+            for key, value in sorted(labels.items())
+            if str(key) in _PUBLIC_DISCOVERY_SAFE_NODE_LABELS and _text(value)
+        }
+        node_info = _mapping(status.get("nodeInfo"))
+        safe_node_info = {
+            key: _text(node_info.get(key))
+            for key in ("kubeletVersion", "osImage", "kernelVersion", "containerRuntimeVersion")
+            if _text(node_info.get(key))
+        }
+        observations.append(
+            {
+                "name": _text(metadata.get("name")),
+                "labels": safe_labels,
+                "node_info": safe_node_info,
+            }
+        )
+    return observations
+
+
+def soperator_public_discovery_snapshot_region(snapshot: Mapping[str, Any]) -> str:
+    regions: set[str] = set()
+    for node in _public_discovery_safe_node_observations(snapshot):
+        labels = node.get("labels")
+        if not isinstance(labels, Mapping):
+            continue
+        for key in (
+            "topology.kubernetes.io/region",
+            "topology.nebius.com/region",
+            "failure-domain.beta.kubernetes.io/region",
+        ):
+            value = _text(labels.get(key))
+            if value:
+                regions.add(value)
+    if len(regions) > 1:
+        raise RuntimeError(
+            "Soperator discovery found nodes from multiple Kubernetes regions: "
+            + ", ".join(sorted(regions))
+        )
+    return next(iter(regions), "")
+
+
+def _public_discovery_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _public_discovery_condition_rows(value: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for condition in _sequence_of_mappings(value):
+        condition_type = _text(condition.get("type"))
+        if not condition_type:
+            continue
+        rows.append(
+            {
+                "type": condition_type,
+                "status": _text(condition.get("status")) or None,
+                "reason": _text(condition.get("reason")) or None,
+            }
+        )
+    return sorted(rows, key=lambda row: (row["type"], row["status"] or "", row["reason"] or ""))
+
+
+def _public_discovery_node_record(node: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = _mapping(node.get("metadata"))
+    spec = _mapping(node.get("spec"))
+    status = _mapping(node.get("status"))
+    labels = _mapping(metadata.get("labels"))
+    safe_labels = {
+        str(key): _text(value)
+        for key, value in sorted(labels.items())
+        if str(key) in _PUBLIC_DISCOVERY_SAFE_NODE_LABELS and _text(value)
+    }
+    node_info = _mapping(status.get("nodeInfo"))
+    conditions = _public_discovery_condition_rows(status.get("conditions"))
+    ready_condition = next((row for row in conditions if row["type"] == "Ready"), None)
+    ready = None if ready_condition is None else ready_condition["status"] == "True"
+    return {
+        "name": _text(metadata.get("name")) or None,
+        "uid": _text(metadata.get("uid")) or None,
+        "labels": safe_labels,
+        "unschedulable": spec.get("unschedulable") is True,
+        "ready": ready,
+        "conditions": conditions,
+        "node_info": {
+            key: _text(node_info.get(key))
+            for key in (
+                "containerRuntimeVersion",
+                "kernelVersion",
+                "kubeletVersion",
+                "osImage",
+            )
+            if _text(node_info.get(key))
+        },
+    }
+
+
+def _public_discovery_release_record(release: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in (
+            ("name", _text(release.get("name")) or None),
+            ("namespace", _text(release.get("namespace")) or None),
+            (
+                "chart",
+                _text(
+                    release.get("chart")
+                    or release.get("chart_name")
+                    or release.get("chart_version")
+                )
+                or None,
+            ),
+            (
+                "app_version",
+                _text(release.get("app_version") or release.get("appVersion")) or None,
+            ),
+            ("status", _text(release.get("status")) or None),
+            ("revision", _public_discovery_non_negative_int(release.get("revision"))),
+        )
+        if value is not None
+    }
+
+
+def _public_discovery_resource_record(resource: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = _mapping(resource.get("metadata"))
+    status = _mapping(resource.get("status"))
+    spec = _mapping(resource.get("spec"))
+    record: dict[str, Any] = {
+        "api_version": _text(resource.get("apiVersion")) or None,
+        "kind": _text(resource.get("kind")) or None,
+        "name": _text(metadata.get("name")) or None,
+        "namespace": _text(metadata.get("namespace")) or None,
+        "uid": _text(metadata.get("uid")) or None,
+        "generation": _public_discovery_non_negative_int(metadata.get("generation")),
+        "observed_generation": _public_discovery_non_negative_int(status.get("observedGeneration")),
+        "conditions": _public_discovery_condition_rows(status.get("conditions")),
+    }
+    kind = _text(resource.get("kind"))
+    if kind in {"Deployment", "StatefulSet", "DaemonSet", "AdvancedStatefulSet"}:
+        record["replicas"] = {
+            "desired": _public_discovery_non_negative_int(spec.get("replicas")),
+            "ready": _public_discovery_non_negative_int(status.get("readyReplicas")),
+            "available": _public_discovery_non_negative_int(status.get("availableReplicas")),
+            "updated": _public_discovery_non_negative_int(status.get("updatedReplicas")),
+        }
+    elif kind == "Pod":
+        record["phase"] = _text(status.get("phase")) or None
+    elif kind == "Job":
+        record["counts"] = {
+            key: _public_discovery_non_negative_int(status.get(key))
+            for key in ("active", "succeeded", "failed")
+        }
+    elif kind == "Service":
+        record["service_type"] = _text(spec.get("type")) or None
+    elif kind in {"Secret", "ConfigMap"}:
+        record["data_keys"] = sorted(
+            _text(key) for key in _sequence(resource.get("data_keys")) if _text(key)
+        )
+        if kind == "Secret":
+            record["secret_type"] = _text(resource.get("type")) or None
+    claim_names = resource.get("pvc_claim_names")
+    if isinstance(claim_names, Sequence) and not isinstance(claim_names, (str, bytes, bytearray)):
+        record["pvc_claim_names"] = sorted(
+            {_text(claim_name) for claim_name in claim_names if _text(claim_name)}
+        )
+    return record
+
+
+def _public_discovery_storage_record(resource: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = _mapping(resource.get("metadata"))
+    spec = _mapping(resource.get("spec"))
+    status = _mapping(resource.get("status"))
+    capacity = _mapping(status.get("capacity")) or _mapping(spec.get("capacity"))
+    return {
+        "kind": _text(resource.get("kind")) or None,
+        "name": _text(metadata.get("name")) or None,
+        "namespace": _text(metadata.get("namespace")) or None,
+        "uid": _text(metadata.get("uid")) or None,
+        "storage_class": _text(spec.get("storageClassName")) or None,
+        "volume_mode": _text(spec.get("volumeMode")) or None,
+        "access_modes": sorted(_text(item) for item in spec.get("accessModes", ()) if _text(item))
+        if isinstance(spec.get("accessModes"), Sequence)
+        and not isinstance(spec.get("accessModes"), (str, bytes, bytearray))
+        else [],
+        "phase": _text(status.get("phase")) or None,
+        "capacity": {
+            _text(key): _text(value)
+            for key, value in sorted(capacity.items())
+            if _text(key) and _text(value)
+        },
+    }
+
+
+def _public_discovery_provider_group(group: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": _text(group.get("id")) or None,
+        "name": _text(group.get("name")) or None,
+        "kubernetes_version": _text(group.get("kubernetes_version")) or None,
+        "platform": _text(group.get("platform")) or None,
+        "preset": _text(group.get("preset")) or None,
+        "os": _text(group.get("os")) or None,
+        "drivers_preset": _text(group.get("drivers_preset")) or None,
+        "gpu": group.get("gpu") is True,
+        "actual_node_count": _public_discovery_non_negative_int(group.get("actual_node_count")),
+        "target_node_count": _public_discovery_non_negative_int(group.get("target_node_count")),
+        "provider_ready_node_count": _public_discovery_non_negative_int(
+            group.get("provider_ready_node_count")
+        ),
+        "outdated_node_count": _public_discovery_non_negative_int(group.get("outdated_node_count")),
+        "state": _text(group.get("state")) or None,
+        "reconciling": group.get("reconciling")
+        if isinstance(group.get("reconciling"), bool)
+        else None,
+        "resource_version": _text(group.get("resource_version")) or None,
+    }
+
+
+def _public_discovery_record_sort_key(record: Mapping[str, Any]) -> tuple[str, ...]:
+    return (
+        _text(record.get("namespace")),
+        _text(record.get("kind")),
+        _text(record.get("name")),
+        _text(record.get("uid")),
+        _stable_json(record),
+    )
+
+
+def _public_discovery_is_gpu_operator_release(release: Mapping[str, Any]) -> bool:
+    name = _text(release.get("name")).lower()
+    chart = _text(release.get("chart")).lower()
+    return name in {"gpu-operator", "nvidia-gpu-operator"} or bool(
+        re.fullmatch(r"gpu-operator(?:[-_].+)?", chart)
+    )
+
+
+def _public_discovery_is_network_operator_release(release: Mapping[str, Any]) -> bool:
+    name = _text(release.get("name")).lower()
+    chart = _text(release.get("chart")).lower()
+    return name in {"network-operator", "nvidia-network-operator"} or bool(
+        re.fullmatch(r"network-operator(?:[-_].+)?", chart)
+    )
+
+
+def _public_discovery_claim_references(
+    snapshot: Mapping[str, Any],
+) -> set[tuple[str, str]]:
+    references: set[tuple[str, str]] = set()
+
+    def visit(value: Any, *, namespace: str) -> None:
+        if isinstance(value, Mapping):
+            persistent_volume_claim = _mapping(value.get("persistentVolumeClaim"))
+            claim_name = _text(persistent_volume_claim.get("claimName"))
+            if namespace and claim_name:
+                references.add((namespace, claim_name))
+            for nested in value.values():
+                visit(nested, namespace=namespace)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for nested in value:
+                visit(nested, namespace=namespace)
+
+    for key in (
+        "soperator_resources",
+        "soperator_namespace_resources",
+        "component_namespace_resources",
+    ):
+        for resource in _sequence_of_mappings(snapshot.get(key)):
+            namespace = _text(_mapping(resource.get("metadata")).get("namespace"))
+            claim_names = resource.get("pvc_claim_names")
+            if isinstance(claim_names, Sequence) and not isinstance(
+                claim_names, (str, bytes, bytearray)
+            ):
+                for claim_name in claim_names:
+                    if namespace and _text(claim_name):
+                        references.add((namespace, _text(claim_name)))
+            visit(resource, namespace=namespace)
+    return references
+
+
+def _public_discovery_distribution(values: Sequence[Any]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for value in values:
+        normalized = _text(value) or "unknown"
+        counts[normalized] = counts.get(normalized, 0) + 1
+    return [{"value": value, "count": counts[value]} for value in sorted(counts)]
+
+
+def _public_discovery_summary_value(values: Sequence[Mapping[str, Any]]) -> str:
+    distinct = [_text(item.get("value")) for item in values if _text(item.get("value"))]
+    if not distinct:
+        return "unknown"
+    sample = distinct[:3]
+    suffix = f" +{len(distinct) - len(sample)}" if len(distinct) > len(sample) else ""
+    return ", ".join(sample) + suffix
+
+
+def _public_discovery_collection(
+    snapshot: Mapping[str, Any],
+    *,
+    provider: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def safe_error_message(collector: str) -> str:
+        return {
+            "slurm-health": "Slurm health could not be checked.",
+            "soperator-identity": "Soperator identity could not be resolved unambiguously.",
+            "nebius-mk8s-node-groups": "Provider node-group inventory could not be collected.",
+            "nebius-mk8s-node-group": "A provider node-group record could not be normalized.",
+        }.get(collector, "A read-only inventory collector failed.")
+
+    errors: list[dict[str, Any]] = []
+    for item in _sequence_of_mappings(snapshot.get("collection_errors")):
+        raw_collector = _text(item.get("collector")).lower()
+        collector = (
+            raw_collector
+            if re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,63}", raw_collector)
+            else "read-only-collector"
+        )
+        severity = _text(item.get("severity")).lower()
+        errors.append(
+            {
+                "collector": collector,
+                "message": safe_error_message(collector),
+                "severity": severity if severity in {"warning", "error"} else "warning",
+            }
+        )
+    provided_lanes = _sequence_of_mappings(snapshot.get("collection_lanes"))
+    lanes = [
+        {
+            "name": _text(lane.get("name")),
+            "status": _text(lane.get("status")),
+            "item_count": _public_discovery_non_negative_int(lane.get("item_count")),
+        }
+        for lane in provided_lanes
+        if _text(lane.get("name"))
+        and _text(lane.get("status")) in {"succeeded", "failed", "not-applicable"}
+    ]
+    provider_lanes = _sequence_of_mappings(provider.get("collection_lanes"))
+    lanes.extend(
+        {
+            "name": _text(lane.get("name")),
+            "status": _text(lane.get("status")),
+            "item_count": _public_discovery_non_negative_int(lane.get("item_count")),
+        }
+        for lane in provider_lanes
+        if _text(lane.get("name"))
+        and _text(lane.get("status")) in {"succeeded", "failed", "not-applicable"}
+    )
+    deduplicated = {lane["name"]: lane for lane in lanes}
+    return sorted(deduplicated.values(), key=lambda lane: lane["name"]), sorted(
+        errors,
+        key=lambda item: (item["collector"], item["message"], item["severity"]),
+    )
+
+
+def _public_discovery_component_summaries(
+    *,
+    snapshot: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    soperator_releases: Sequence[Mapping[str, Any]],
+    gpu_releases: Sequence[Mapping[str, Any]],
+    network_releases: Sequence[Mapping[str, Any]],
+    detected: bool,
+    absence_conclusive: bool,
+) -> list[dict[str, Any]]:
+    def resolved(values: Sequence[Any], *, candidate_count: int) -> tuple[str, str]:
+        candidates = sorted({_text(value) for value in values if _text(value)})
+        if candidate_count > 1:
+            return f"ambiguous ({candidate_count} candidates)", "ambiguous"
+        if not candidates:
+            return "unknown", "unknown"
+        if len(candidates) == 1:
+            return candidates[0], "observed"
+        return f"ambiguous ({len(candidates)})", "ambiguous"
+
+    chart, chart_state = resolved(
+        [release.get("chart") for release in soperator_releases],
+        candidate_count=len(soperator_releases),
+    )
+    app_version, app_state = resolved(
+        [release.get("app_version") for release in soperator_releases],
+        candidate_count=len(soperator_releases),
+    )
+    gpu_chart, gpu_state = resolved(
+        [release.get("chart") for release in gpu_releases],
+        candidate_count=len(gpu_releases),
+    )
+    network_chart, network_state = resolved(
+        [release.get("chart") for release in network_releases],
+        candidate_count=len(network_releases),
+    )
+    control_plane = _text(provider.get("control_plane_version")) or "unknown"
+    gpu_applicable = any(
+        group.get("gpu") is True or _text(group.get("drivers_preset"))
+        for group in _sequence_of_mappings(provider.get("node_groups"))
+    )
+    if not gpu_applicable and not gpu_releases:
+        gpu_chart, gpu_state = "not applicable", "not-applicable"
+    if not gpu_applicable and not network_releases:
+        network_chart, network_state = "not applicable", "not-applicable"
+    jail = soperator_discovery_jail_rootfs_record(
+        snapshot=snapshot,
+        report={},
+        target_versions=None,
+    )
+    jail_image = _text(jail.get("current_image") or jail.get("live_desired_image"))
+    slurm_health = _mapping(snapshot.get("slurm_health"))
+    slurm_checked = slurm_health.get("checked") is True
+    slurm_healthy = slurm_health.get("healthy") is True
+    slurm_state = (
+        "healthy"
+        if slurm_checked and slurm_healthy
+        else "unhealthy"
+        if slurm_checked
+        else "not-checked"
+    )
+    absent_state = "not-detected" if absence_conclusive else "unknown"
+    return [
+        {
+            "component": "Soperator chart",
+            "value": chart,
+            "state": chart_state if detected else absent_state,
+            "classification": "kubernetes-observed" if chart != "unknown" else "unknown",
+        },
+        {
+            "component": "Soperator app",
+            "value": app_version,
+            "state": app_state if detected else absent_state,
+            "classification": "kubernetes-observed" if app_version != "unknown" else "unknown",
+        },
+        {
+            "component": "Kubernetes control plane",
+            "value": control_plane,
+            "state": "configured" if control_plane != "unknown" else "unknown",
+            "classification": "provider-configured" if control_plane != "unknown" else "unknown",
+        },
+        {
+            "component": "GPU Operator",
+            "value": gpu_chart,
+            "state": gpu_state,
+            "classification": "kubernetes-observed" if gpu_chart != "unknown" else "unknown",
+        },
+        {
+            "component": "Network Operator",
+            "value": network_chart,
+            "state": network_state,
+            "classification": "kubernetes-observed" if network_chart != "unknown" else "unknown",
+        },
+        {
+            "component": "Jail image",
+            "value": jail_image or "unknown",
+            "state": "observed" if jail_image else "unknown",
+            "classification": "kubernetes-observed" if jail_image else "unknown",
+        },
+        {
+            "component": "Slurm",
+            "value": slurm_state,
+            "state": slurm_state,
+            "classification": "runtime-observed" if slurm_checked else "unknown",
+        },
+        {
+            "component": "GPU driver runtime",
+            "value": "unknown" if gpu_applicable else "not applicable",
+            "state": "not-probed" if gpu_applicable else "not-applicable",
+            "classification": "unknown",
+        },
+        {
+            "component": "CUDA runtime",
+            "value": "unknown",
+            "state": "not-probed",
+            "classification": "unknown",
+        },
+    ]
+
+
+def build_soperator_public_discovery_report(
+    *,
+    tenant_id: str,
+    project_id: str,
+    cluster_id: str,
+    cluster_name: str,
+    region_id: str,
+    access: str,
+    snapshot: Mapping[str, Any],
+    provider: Mapping[str, Any],
+) -> dict[str, Any]:
+    provider_groups = sorted(
+        (
+            _public_discovery_provider_group(group)
+            for group in _sequence_of_mappings(provider.get("node_groups"))
+        ),
+        key=lambda group: (group["id"] or "", group["name"] or "", _stable_json(group)),
+    )
+    nodes = sorted(
+        (
+            _public_discovery_node_record(node)
+            for node in _sequence_of_mappings(snapshot.get("kubernetes_nodes"))
+        ),
+        key=lambda node: (node["uid"] or "", node["name"] or "", _stable_json(node)),
+    )
+    soperator_releases = sorted(
+        (
+            _public_discovery_release_record(release)
+            for release in _sequence_of_mappings(snapshot.get("helm_releases"))
+        ),
+        key=lambda release: (
+            release.get("namespace") or "",
+            release.get("name") or "",
+            release.get("chart") or "",
+            _stable_json(release),
+        ),
+    )
+    gpu_stack = _mapping(snapshot.get("gpu_stack"))
+    gpu_releases = sorted(
+        (
+            _public_discovery_release_record(release)
+            for release in _sequence_of_mappings(gpu_stack.get("helm_releases"))
+        ),
+        key=lambda release: (
+            release.get("namespace") or "",
+            release.get("name") or "",
+            release.get("chart") or "",
+            _stable_json(release),
+        ),
+    )
+    soperator_resources = sorted(
+        (
+            _public_discovery_resource_record(resource)
+            for resource in _sequence_of_mappings(snapshot.get("soperator_resources"))
+        ),
+        key=_public_discovery_record_sort_key,
+    )
+    component_resources = sorted(
+        (
+            _public_discovery_resource_record(resource)
+            for key in ("soperator_namespace_resources", "component_namespace_resources")
+            for resource in _sequence_of_mappings(snapshot.get(key))
+        ),
+        key=_public_discovery_record_sort_key,
+    )
+    gpu_policies = sorted(
+        (
+            _public_discovery_resource_record(policy)
+            for policy in _sequence_of_mappings(gpu_stack.get("policies"))
+        ),
+        key=_public_discovery_record_sort_key,
+    )
+    detected = bool(soperator_releases or soperator_resources) or any(
+        "slurm.nebius.ai" in _text(crd).lower()
+        for crd in _sequence(snapshot.get("crds"))
+        if isinstance(crd, str)
+    )
+    lanes, collection_errors = _public_discovery_collection(snapshot, provider=provider)
+    snapshot_identity = _mapping(snapshot.get("cluster_identity"))
+    kubernetes_uid = _text(snapshot_identity.get("kubernetes_uid"))
+
+    provider_candidates_by_id: dict[str, list[dict[str, Any]]] = {}
+    for group in provider_groups:
+        group_id = _text(group.get("id"))
+        if group_id:
+            provider_candidates_by_id.setdefault(group_id, []).append(group)
+    duplicate_provider_ids = {
+        group_id
+        for group_id, candidates in provider_candidates_by_id.items()
+        if len(candidates) > 1
+    }
+    providers_by_id = {
+        group_id: candidates[0]
+        for group_id, candidates in provider_candidates_by_id.items()
+        if len(candidates) == 1
+    }
+    providers_by_name: dict[str, list[dict[str, Any]]] = {}
+    for group in provider_groups:
+        name = _text(group.get("name"))
+        if name:
+            providers_by_name.setdefault(name, []).append(group)
+    nodes_by_provider_id: dict[str, list[dict[str, Any]]] = {
+        group_id: [] for group_id in providers_by_id
+    }
+    unmatched_nodes: list[dict[str, Any]] = []
+    correlation_reasons: set[str] = (
+        {"duplicate-provider-group-id"} if duplicate_provider_ids else set()
+    )
+    for node in nodes:
+        labels = _mapping(node.get("labels"))
+        group_ids = {
+            value
+            for key in ("nebius.com/node-group-id", "yandex.cloud/node-group-id")
+            if (value := _text(labels.get(key)))
+        }
+        group_id = next(iter(group_ids), "") if len(group_ids) == 1 else ""
+        group_name = _text(labels.get("nebius.com/node-group"))
+        matched: dict[str, Any] | None = None
+        reason = ""
+        if len(group_ids) > 1:
+            reason = "conflicting-provider-group-id-labels"
+        elif group_id in duplicate_provider_ids:
+            reason = "duplicate-provider-group-id"
+        elif group_id:
+            matched = providers_by_id.get(group_id)
+            if matched is None:
+                reason = "unknown-provider-group-id"
+            elif group_name and _text(matched.get("name")) and group_name != matched["name"]:
+                matched = None
+                reason = "contradictory-provider-group-labels"
+        elif group_name:
+            candidates = providers_by_name.get(group_name, [])
+            if len(candidates) == 1:
+                matched = candidates[0]
+            elif len(candidates) > 1:
+                reason = "ambiguous-provider-group-name"
+            else:
+                reason = "unknown-provider-group-name"
+        else:
+            reason = "missing-provider-group-labels"
+        if matched is None:
+            node["correlation"] = {"status": "unmatched", "reason": reason}
+            unmatched_nodes.append(node)
+            correlation_reasons.add(reason)
+        else:
+            provider_group_id = _text(matched.get("id"))
+            node["correlation"] = {
+                "status": "matched",
+                "provider_group_id": provider_group_id,
+            }
+            nodes_by_provider_id.setdefault(provider_group_id, []).append(node)
+
+    def group_summary(
+        group: Mapping[str, Any] | None,
+        group_nodes: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        node_info: list[Mapping[str, Any]] = [
+            _mapping(node.get("node_info")) for node in group_nodes
+        ]
+        labels: list[Mapping[str, Any]] = [_mapping(node.get("labels")) for node in group_nodes]
+        ready_values = [node.get("ready") for node in group_nodes]
+        return {
+            "id": _text(group.get("id")) if group else None,
+            "name": _text(group.get("name")) if group else "unmatched",
+            "correlation": "provider" if group else "unmatched",
+            "counts": {
+                "ready": sum(value is True for value in ready_values),
+                "observed": len(group_nodes),
+                "actual": group.get("actual_node_count") if group else None,
+                "target": group.get("target_node_count") if group else None,
+                "readiness_unknown": sum(value is None for value in ready_values),
+                "unschedulable": sum(node.get("unschedulable") is True for node in group_nodes),
+            },
+            "kubernetes": {
+                "configured": _text(group.get("kubernetes_version")) or None if group else None,
+                "observed": _public_discovery_distribution(
+                    [item.get("kubeletVersion") for item in node_info]
+                ),
+            },
+            "os": {
+                "configured": _text(group.get("os")) or None if group else None,
+                "observed": _public_discovery_distribution(
+                    [item.get("osImage") for item in node_info]
+                ),
+            },
+            "gpu": {
+                "preset": _text(group.get("drivers_preset")) or None if group else None,
+                "products": _public_discovery_distribution(
+                    [item.get("nvidia.com/gpu.product") for item in labels]
+                ),
+            },
+        }
+
+    node_group_summary = [
+        group_summary(group, nodes_by_provider_id.get(_text(group.get("id")), ()))
+        for group in provider_groups
+    ]
+    if unmatched_nodes:
+        node_group_summary.append(group_summary(None, unmatched_nodes))
+    node_group_summary.sort(
+        key=lambda group: (
+            group["correlation"] == "unmatched",
+            _text(group.get("name")),
+            _text(group.get("id")),
+        )
+    )
+
+    slurm_health = _mapping(snapshot.get("slurm_health"))
+    safe_slurm_health = {
+        "checked": slurm_health.get("checked") is True,
+        "healthy": slurm_health.get("healthy") is True,
+        "reason": None
+        if slurm_health.get("checked") is True and slurm_health.get("healthy") is True
+        else "Slurm health check did not pass."
+        if slurm_health.get("checked") is True
+        else "Slurm health was not checked.",
+    }
+    detection_lane_names = {"kubernetes-crds", "soperator-resources", "soperator-helm"}
+    detection_lanes = {lane["name"]: lane for lane in lanes if lane["name"] in detection_lane_names}
+    conclusive_absence = set(detection_lanes) == detection_lane_names and all(
+        lane["status"] in {"succeeded", "not-applicable"} for lane in detection_lanes.values()
+    )
+    gpu_operator_releases = [
+        release for release in gpu_releases if _public_discovery_is_gpu_operator_release(release)
+    ]
+    network_operator_releases = [
+        release
+        for release in gpu_releases
+        if _public_discovery_is_network_operator_release(release)
+    ]
+    component_summaries = _public_discovery_component_summaries(
+        snapshot=snapshot,
+        provider=provider,
+        soperator_releases=soperator_releases,
+        gpu_releases=gpu_operator_releases,
+        network_releases=network_operator_releases,
+        detected=detected,
+        absence_conclusive=not detected and conclusive_absence,
+    )
+    incomplete_reasons: list[str] = []
+    if collection_errors or any(lane["status"] == "failed" for lane in lanes):
+        incomplete_reasons.append("one or more read-only collectors failed")
+    if detected and not soperator_releases:
+        incomplete_reasons.append(
+            "Soperator resources were detected but no Helm release was observed"
+        )
+    if (
+        detected
+        and any(
+            group.get("gpu") is True or _text(group.get("drivers_preset"))
+            for group in provider_groups
+        )
+        and not gpu_operator_releases
+    ):
+        incomplete_reasons.append("GPU Operator Helm release was not observed for GPU nodes")
+    if detected and not safe_slurm_health["checked"]:
+        incomplete_reasons.append("Slurm health could not be checked")
+    if any(component["state"] == "ambiguous" for component in component_summaries):
+        incomplete_reasons.append("component version evidence is ambiguous")
+    if unmatched_nodes:
+        incomplete_reasons.append(
+            f"{len(unmatched_nodes)} Kubernetes node(s) could not be correlated to a provider node group"
+        )
+    if duplicate_provider_ids:
+        incomplete_reasons.append("provider node-group identities are not unique")
+    if not region_id:
+        incomplete_reasons.append("cluster region could not be derived")
+    if not kubernetes_uid:
+        incomplete_reasons.append("kube-system namespace UID was not observed")
+    if set(detection_lanes) != detection_lane_names:
+        incomplete_reasons.append("authoritative Soperator detection lanes are incomplete")
+    incomplete_reasons = sorted(dict.fromkeys(incomplete_reasons))
+    if not detected and conclusive_absence and not incomplete_reasons:
+        status = SOPERATOR_PUBLIC_DISCOVERY_NOT_DETECTED
+    else:
+        status = (
+            SOPERATOR_PUBLIC_DISCOVERY_PARTIAL
+            if incomplete_reasons or not detected
+            else SOPERATOR_PUBLIC_DISCOVERY_COMPLETE
+        )
+
+    topology = _mapping(snapshot.get("worker_topology_by_nodeset"))
+    safe_topology = {
+        _text(nodeset): {
+            key: _public_discovery_non_negative_int(value)
+            for key, value in sorted(values.items())
+            if key in {"cpus", "boards", "sockets", "cores_per_socket", "threads_per_core"}
+        }
+        for nodeset, values in sorted(topology.items())
+        if _text(nodeset) and isinstance(values, Mapping)
+    }
+    jail = soperator_discovery_jail_rootfs_record(
+        snapshot=snapshot,
+        report={},
+        target_versions=None,
+    )
+    component_namespaces = sorted(
+        {
+            namespace
+            for resource in (*soperator_resources, *component_resources, *gpu_policies)
+            if (namespace := _text(resource.get("namespace")))
+        }
+        | {
+            namespace
+            for release in (*soperator_releases, *gpu_releases)
+            if (namespace := _text(release.get("namespace")))
+        }
+    )
+    claim_references = _public_discovery_claim_references(snapshot)
+    scoped_pvcs = [
+        pvc
+        for pvc in _sequence_of_mappings(snapshot.get("pvcs"))
+        if (
+            _text(_mapping(pvc.get("metadata")).get("namespace")),
+            _text(_mapping(pvc.get("metadata")).get("name")),
+        )
+        in claim_references
+    ]
+    bound_persistent_volume_names = {
+        name for pvc in scoped_pvcs if (name := _text(_mapping(pvc.get("spec")).get("volumeName")))
+    }
+    scoped_pvs = [
+        pv
+        for pv in _sequence_of_mappings(snapshot.get("pvs"))
+        if _text(_mapping(pv.get("metadata")).get("name")) in bound_persistent_volume_names
+        or (
+            _text(_mapping(_mapping(pv.get("spec")).get("claimRef")).get("namespace")),
+            _text(_mapping(_mapping(pv.get("spec")).get("claimRef")).get("name")),
+        )
+        in claim_references
+    ]
+    inventory = {
+        "provider": {
+            "control_plane_version": _text(provider.get("control_plane_version")) or None,
+            "node_groups": provider_groups,
+        },
+        "kubernetes": {"nodes": nodes},
+        "components": {
+            "soperator_helm_releases": soperator_releases,
+            "soperator_resources": soperator_resources,
+            "namespace_resources": component_resources,
+            "gpu_helm_releases": gpu_releases,
+            "gpu_policies": gpu_policies,
+            "namespaces": component_namespaces,
+            "soperator_crds": sorted(
+                _text(crd)
+                for crd in _sequence(snapshot.get("crds"))
+                if isinstance(crd, str)
+                and _text(crd)
+                and ("slurm.nebius.ai" in _text(crd).lower() or "soperator" in _text(crd).lower())
+            ),
+            "jail": {
+                "current_image": _text(jail.get("current_image")) or None,
+                "current_version": _text(jail.get("current_version")) or None,
+                "current_source": _text(jail.get("current_source")) or None,
+                "live_desired_image": _text(jail.get("live_desired_image")) or None,
+                "live_desired_version": _text(jail.get("live_desired_version")) or None,
+                "live_desired_source": _text(jail.get("live_desired_source")) or None,
+                "evidence_status": _text(jail.get("current_evidence_status")) or None,
+            },
+        },
+        "storage": {
+            "persistent_volumes": sorted(
+                (_public_discovery_storage_record(resource) for resource in scoped_pvs),
+                key=_public_discovery_record_sort_key,
+            ),
+            "persistent_volume_claims": sorted(
+                (_public_discovery_storage_record(resource) for resource in scoped_pvcs),
+                key=_public_discovery_record_sort_key,
+            ),
+        },
+        "topology": {"worker_nodesets": safe_topology},
+        "health": {"slurm": safe_slurm_health},
+    }
+    summary = {
+        "cluster": {
+            "node_count": len(nodes),
+            "ready_node_count": sum(node.get("ready") is True for node in nodes),
+            "provider_node_group_count": len(provider_groups),
+            "unmatched_node_count": len(unmatched_nodes),
+        },
+        "components": component_summaries,
+        "node_groups": node_group_summary,
+    }
+    generated_at = _now_z()
+    identity = {
+        "tenant_id": _text(tenant_id),
+        "project_id": _text(project_id),
+        "cluster_id": _text(cluster_id),
+        "cluster_name": _text(cluster_name),
+        "region_id": _text(region_id) or "unknown",
+        "kubernetes_uid": kubernetes_uid or "unknown",
+        "soperator_namespace_uid": _text(snapshot_identity.get("soperator_uid")) or None,
+        "slurmcluster_uid": _text(snapshot_identity.get("slurmcluster_uid")) or None,
+        "access": _text(access),
+    }
+    summary_digest = _sha256_text(_stable_json(summary))
+    report_id = _sha256_text(
+        _stable_json(
+            {
+                "schema": SOPERATOR_PUBLIC_DISCOVERY_SCHEMA,
+                "generated_at": generated_at,
+                "identity": identity,
+                "summary_digest": summary_digest,
+                "inventory": inventory,
+                "collection_lanes": lanes,
+            }
+        )
+    )[:32]
+    return {
+        "schema": SOPERATOR_PUBLIC_DISCOVERY_SCHEMA,
+        "report_id": report_id,
+        "summary_digest": summary_digest,
+        "generated_at": generated_at,
+        "status": status,
+        "information_only": True,
+        "identity": identity,
+        "summary": summary,
+        "inventory": inventory,
+        "collection": {
+            "lanes": lanes,
+            "errors": collection_errors,
+            "incomplete_reasons": incomplete_reasons,
+            "correlation_reasons": sorted(correlation_reasons),
+        },
+        "limitations": [
+            "This report is information-only and is not registration or upgrade authority.",
+            "Provider presets, image identities, Helm metadata, and Kubernetes labels do not prove exact runtime GPU driver or CUDA versions.",
+            "No workload or Slurm job was created to collect this report.",
+        ],
+    }
+
+
+_PUBLIC_DISCOVERY_MARKDOWN_LITERAL_CHARACTERS = frozenset("\\`*_{}[]()<>#+!|")
+_PUBLIC_DISCOVERY_UNSAFE_UNICODE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _public_discovery_terminal_safe_text(value: Any) -> str:
+    text = _text(value)
+    return "".join(
+        f"\\u{ord(character):04x}"
+        if unicodedata.category(character) in _PUBLIC_DISCOVERY_UNSAFE_UNICODE_CATEGORIES
+        else character
+        for character in text
+    )
+
+
+def _public_discovery_markdown_literal(value: Any) -> str:
+    return "".join(
+        f"\\{character}"
+        if character in _PUBLIC_DISCOVERY_MARKDOWN_LITERAL_CHARACTERS
+        else character
+        for character in _public_discovery_terminal_safe_text(value)
+    )
+
+
+def _public_discovery_markdown_code(value: Any) -> str:
+    text = _public_discovery_terminal_safe_text(value)
+    longest_backtick_run = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", text)),
+        default=0,
+    )
+    fence = "`" * max(1, longest_backtick_run + 1)
+    padding = " " if longest_backtick_run else ""
+    return f"{fence}{padding}{text}{padding}{fence}"
+
+
+def _public_discovery_markdown(report: Mapping[str, Any], *, report_dir: Path) -> str:
+    identity = _mapping(report.get("identity"))
+    summary = _mapping(report.get("summary"))
+    cluster = _mapping(summary.get("cluster"))
+    collection = _mapping(report.get("collection"))
+    cluster_name = _text(identity.get("cluster_name")) or _text(identity.get("cluster_id"))
+    lines = [
+        "# Soperator Discovery Report",
+        "",
+        f"- Status: {_public_discovery_markdown_code(_text(report.get('status')) or 'unknown')}",
+        f"- Cluster: {_public_discovery_markdown_code(cluster_name)}",
+        f"- Cluster ID: {_public_discovery_markdown_code(identity.get('cluster_id'))}",
+        f"- Project ID: {_public_discovery_markdown_code(identity.get('project_id'))}",
+        f"- Region: {_public_discovery_markdown_code(_text(identity.get('region_id')) or 'unknown')}",
+        "- Nodes: "
+        + _public_discovery_markdown_code(
+            f"{cluster.get('ready_node_count', 0)}/{cluster.get('node_count', 0)} Ready"
+        ),
+        f"- Report ID: {_public_discovery_markdown_code(report.get('report_id'))}",
+        "- Report directory: "
+        + _public_discovery_markdown_code(
+            f"{SOPERATOR_PUBLIC_DISCOVERY_DIR_NAME}/{report_dir.name}"
+        ),
+        "",
+        "## Components",
+        "",
+        "| Component | Version / state | Evidence |",
+        "| --- | --- | --- |",
+    ]
+    for component in summary.get("components", ()):
+        if not isinstance(component, Mapping):
+            continue
+        value = _text(component.get("value")) or "unknown"
+        state = _text(component.get("state"))
+        value_and_state = value if not state or state == value else f"{value} ({state})"
+        lines.append(
+            "| "
+            + " | ".join(
+                _public_discovery_markdown_literal(cell)
+                for cell in (
+                    component.get("component"),
+                    value_and_state,
+                    component.get("classification"),
+                )
+            )
+            + " |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Node groups",
+            "",
+            "| Group | Ready / Actual / Target | K8s configured / observed | OS configured / observed | GPU preset / products |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for group in summary.get("node_groups", ()):
+        if not isinstance(group, Mapping):
+            continue
+        counts = _mapping(group.get("counts"))
+        kubernetes = _mapping(group.get("kubernetes"))
+        operating_system = _mapping(group.get("os"))
+        gpu = _mapping(group.get("gpu"))
+        group_name = _text(group.get("name") or group.get("id")) or "unmatched"
+        count_text = " / ".join(
+            "?" if value is None else str(value)
+            for value in (
+                counts.get("ready"),
+                counts.get("actual"),
+                counts.get("target"),
+            )
+        )
+        k8s_text = (
+            f"{_text(kubernetes.get('configured')) or 'unknown'} / "
+            f"{_public_discovery_summary_value(_sequence_of_mappings(kubernetes.get('observed')))}"
+        )
+        os_text = (
+            f"{_text(operating_system.get('configured')) or 'unknown'} / "
+            f"{_public_discovery_summary_value(_sequence_of_mappings(operating_system.get('observed')))}"
+        )
+        gpu_text = (
+            f"{_text(gpu.get('preset')) or 'none'} / "
+            f"{_public_discovery_summary_value(_sequence_of_mappings(gpu.get('products')))}"
+        )
+        lines.append(
+            "| "
+            + " | ".join(
+                _public_discovery_markdown_literal(cell)
+                for cell in (group_name, count_text, k8s_text, os_text, gpu_text)
+            )
+            + " |"
+        )
+    reasons = collection.get("incomplete_reasons")
+    if (
+        isinstance(reasons, Sequence)
+        and not isinstance(reasons, (str, bytes, bytearray))
+        and reasons
+    ):
+        lines.extend(["", "## Incomplete evidence", ""])
+        visible_reasons = tuple(reason for reason in reasons if _text(reason))
+        lines.extend(
+            f"- {_public_discovery_markdown_literal(reason)}" for reason in visible_reasons[:5]
+        )
+        if len(visible_reasons) > 5:
+            lines.append(
+                f"- {_public_discovery_markdown_literal(f'+{len(visible_reasons) - 5} more in report.json')}"
+            )
+    lines.extend(
+        [
+            "",
+            "## Boundaries",
+            "",
+            "- This report is information-only; onboarding re-collects live evidence independently.",
+            "- No cloud or Kubernetes resource was mutated and no workload or Slurm job was created.",
+            "- Runtime GPU driver and CUDA versions remain unknown unless separately runtime-tested.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _public_discovery_fsync_directory(path: Path) -> None:
+    with suppress(OSError):
+        directory_fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+
+def _public_discovery_pair_matches(json_path: Path, markdown_path: Path) -> bool:
+    try:
+        report_id = _text(json.loads(json_path.read_text(encoding="utf-8")).get("report_id"))
+        markdown = markdown_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+        return False
+    return bool(report_id) and f"- Report ID: `{report_id}`" in markdown.splitlines()
+
+
+def write_soperator_public_discovery_report(
+    output_root: Path,
+    *,
+    report: Mapping[str, Any],
+) -> tuple[Path, Path, str]:
+    identity = _mapping(report.get("identity"))
+    artifact_identity = soperator_cluster_artifact_identity(
+        cluster_id=identity.get("cluster_id"),
+        cluster_name=identity.get("cluster_name"),
+    )
+    report_dir = (
+        output_root.resolve() / SOPERATOR_PUBLIC_DISCOVERY_DIR_NAME / artifact_identity.cluster_key
+    )
+    json_path = report_dir / SOPERATOR_PUBLIC_DISCOVERY_JSON_NAME
+    markdown_path = report_dir / SOPERATOR_PUBLIC_DISCOVERY_MARKDOWN_NAME
+    markdown = _public_discovery_markdown(report, report_dir=report_dir)
+    json_text = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = report_dir / ".report.lock"
+    open_flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        open_flags |= os.O_NOFOLLOW
+    lock_fd = os.open(lock_path, open_flags, 0o600)
+    staged_paths: list[Path] = []
+    previous_json_path = report_dir / f".{SOPERATOR_PUBLIC_DISCOVERY_JSON_NAME}.previous"
+    previous_markdown_path = report_dir / f".{SOPERATOR_PUBLIC_DISCOVERY_MARKDOWN_NAME}.previous"
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        if previous_json_path.exists() or previous_markdown_path.exists():
+            if (
+                previous_markdown_path.exists()
+                and not previous_json_path.exists()
+                and json_path.exists()
+                and not markdown_path.exists()
+            ):
+                os.replace(previous_markdown_path, markdown_path)
+            elif _public_discovery_pair_matches(json_path, markdown_path):
+                previous_json_path.unlink(missing_ok=True)
+                previous_markdown_path.unlink(missing_ok=True)
+            else:
+                json_path.unlink(missing_ok=True)
+                markdown_path.unlink(missing_ok=True)
+                if previous_markdown_path.exists():
+                    os.replace(previous_markdown_path, markdown_path)
+                if previous_json_path.exists():
+                    os.replace(previous_json_path, json_path)
+            _public_discovery_fsync_directory(report_dir)
+        for path, text in ((markdown_path, markdown), (json_path, json_text)):
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=report_dir,
+                prefix=f".{path.name}.{_text(report.get('report_id'))}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                staged_path = Path(handle.name)
+                staged_paths.append(staged_path)
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        previous_markdown_moved = False
+        previous_json_moved = False
+        new_markdown_committed = False
+        new_json_committed = False
+        try:
+            if markdown_path.exists():
+                os.replace(markdown_path, previous_markdown_path)
+                previous_markdown_moved = True
+            if json_path.exists():
+                os.replace(json_path, previous_json_path)
+                previous_json_moved = True
+            _public_discovery_fsync_directory(report_dir)
+            os.replace(staged_paths[0], markdown_path)
+            staged_paths.pop(0)
+            new_markdown_committed = True
+            _public_discovery_fsync_directory(report_dir)
+            os.replace(staged_paths[0], json_path)
+            staged_paths.pop(0)
+            new_json_committed = True
+            _public_discovery_fsync_directory(report_dir)
+        except BaseException:
+            if new_json_committed:
+                json_path.unlink(missing_ok=True)
+            if new_markdown_committed:
+                markdown_path.unlink(missing_ok=True)
+            if previous_markdown_moved and previous_markdown_path.exists():
+                os.replace(previous_markdown_path, markdown_path)
+            if previous_json_moved and previous_json_path.exists():
+                os.replace(previous_json_path, json_path)
+            _public_discovery_fsync_directory(report_dir)
+            raise
+        previous_json_path.unlink(missing_ok=True)
+        previous_markdown_path.unlink(missing_ok=True)
+        _public_discovery_fsync_directory(report_dir)
+    finally:
+        for staged_path in staged_paths:
+            with suppress(OSError):
+                staged_path.unlink()
+        with suppress(OSError):
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+    return json_path, markdown_path, markdown
+
+
+def soperator_discovery_workload_namespace(snapshot: Mapping[str, Any]) -> str:
+    resources = snapshot.get("soperator_resources")
+    namespaces = {
+        _text((resource.get("metadata") or {}).get("namespace"))
+        for resource in resources or ()
+        if isinstance(resource, Mapping)
+        and isinstance(resource.get("metadata"), Mapping)
+        and _text(resource.get("kind")).lower() == "slurmcluster"
+    }
+    namespaces.discard("")
+    if len(namespaces) > 1:
+        raise RuntimeError(
+            "Soperator discovery found SlurmCluster workloads in multiple namespaces."
+        )
+    return next(iter(namespaces), "")
 
 
 def soperator_discovery_k8s_minor_text(value: Any) -> str:
@@ -824,12 +2085,7 @@ def _jail_rootfs_record(
         else "not-detected"
     )
     target_image, target_source = _target_jail_rootfs_image(target_versions)
-    target_jail_rootfs = (
-        target_versions.get("jail_rootfs")
-        if isinstance(target_versions, Mapping)
-        and isinstance(target_versions.get("jail_rootfs"), Mapping)
-        else {}
-    )
+    target_jail_rootfs = _mapping(_mapping(target_versions).get("jail_rootfs"))
     action_ids = _report_selected_action_ids(report)
     chart_upgrade_selected = "upgrade-soperator" in action_ids
     if current_image and target_image and current_image != target_image:
@@ -1139,7 +2395,7 @@ def _configmap_refs(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
         ):
             if not isinstance(item, Mapping):
                 continue
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+            metadata = _mapping(item.get("metadata"))
             refs.append(
                 {
                     "namespace": str(namespace),
@@ -1163,7 +2419,7 @@ def _secret_refs(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
         ):
             if not isinstance(item, Mapping):
                 continue
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+            metadata = _mapping(item.get("metadata"))
             refs.append(
                 {
                     "namespace": str(namespace),
@@ -1446,30 +2702,6 @@ def soperator_discovery_bundle_dir(
         kube_context=kube_context,
     )
     return soperator_cluster_report_dir(root, identity, "discovery")
-
-
-def soperator_discovery_manifest_path(
-    project_dir: Path,
-    target_ref: str,
-    *,
-    output_dir: Path | None = None,
-    cluster_id: str = "",
-    cluster_name: str = "",
-    kube_context: str = "",
-    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
-) -> Path:
-    return (
-        soperator_discovery_bundle_dir(
-            project_dir,
-            target_ref,
-            output_dir=output_dir,
-            cluster_id=cluster_id,
-            cluster_name=cluster_name,
-            kube_context=kube_context,
-            artifact_identity=artifact_identity,
-        )
-        / SOPERATOR_DISCOVERY_MANIFEST_NAME
-    )
 
 
 def write_soperator_discovery_bundle(

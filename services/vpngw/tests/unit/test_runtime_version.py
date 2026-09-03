@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 import sys
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -57,26 +59,49 @@ def test_parse_git_describe_version_bumps_patch_for_dev_distance() -> None:
     )
 
 
-def test_version_from_setuptools_scm_uses_nested_scm_describe_command(monkeypatch) -> None:
+def test_version_from_setuptools_scm_uses_project_configuration(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    configuration = object()
 
-    def fake_get_version(**kwargs):
-        captured.update(kwargs)
+    def fake_get_version(config, *, force_write_version_files):
+        captured["config"] = config
+        captured["force_write_version_files"] = force_write_version_files
         return "0.5.5.dev10"
 
+    class FakeEnvironment:
+        @classmethod
+        def from_env(cls, *tool_names):
+            captured["tool_names"] = tool_names
+            return cls()
+
+        def build_config(self, **kwargs):
+            captured["config_kwargs"] = kwargs
+            return configuration
+
     monkeypatch.setitem(
-        sys.modules, "setuptools_scm", SimpleNamespace(get_version=fake_get_version)
+        sys.modules, "setuptools_scm", SimpleNamespace(_get_version=fake_get_version)
+    )
+    monkeypatch.setitem(
+        sys.modules, "vcs_versioning", SimpleNamespace(VcsEnvironment=FakeEnvironment)
     )
 
-    assert (
-        runtime_version._version_from_setuptools_scm(Path("/tmp/repo/services/vpngw"))
-        == "0.5.5.dev10"
-    )
-    assert captured["root"] == "/tmp/repo/services/vpngw"
-    assert captured["search_parent_directories"] is True
-    assert captured["version_scheme"] == "semver-pep440"
-    assert captured["scm"] == {"git": {"describe_command": runtime_version._GIT_DESCRIBE_COMMAND}}
-    assert "git_describe_command" not in captured
+    service_root = Path("/tmp/repo/services/vpngw")
+
+    assert runtime_version._version_from_setuptools_scm(service_root) == "0.5.5.dev10"
+    assert captured == {
+        "tool_names": ("SETUPTOOLS_SCM",),
+        "config_kwargs": {"name": service_root / "pyproject.toml"},
+        "config": configuration,
+        "force_write_version_files": False,
+    }
+
+
+def test_version_from_setuptools_scm_is_warning_free() -> None:
+    service_root = Path(__file__).resolve().parents[2]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert runtime_version._version_from_setuptools_scm(service_root) is not None
 
 
 def test_version_from_source_tree_falls_back_to_git_describe(monkeypatch) -> None:
@@ -87,3 +112,16 @@ def test_version_from_source_tree_falls_back_to_git_describe(monkeypatch) -> Non
     monkeypatch.setattr(runtime_version, "_version_from_git_describe", lambda path: "0.5.5")
 
     assert runtime_version._version_from_source_tree() == "0.5.5"
+
+
+def test_version_from_git_describe_has_a_bounded_timeout(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def timeout_run(*args, **kwargs):
+        captured.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(runtime_version.subprocess, "run", timeout_run)
+
+    assert runtime_version._version_from_git_describe(Path("/tmp/repo/services/vpngw")) is None
+    assert captured["timeout"] == runtime_version._GIT_DESCRIBE_TIMEOUT_SECONDS

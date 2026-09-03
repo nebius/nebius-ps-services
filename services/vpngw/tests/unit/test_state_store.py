@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from unittest.mock import patch
+
+import pytest
 
 from nebius_vpngw.agent.state_store import RENDER_VERSION, StateStore
 
@@ -32,3 +37,35 @@ def test_state_store_returns_none_for_invalid_json(tmp_path) -> None:
     store = StateStore(state_path)
 
     assert store.load_last_applied() is None
+
+
+def test_render_version_upgrade_invalidates_version_three_state(tmp_path) -> None:
+    resolved_config = {"connections": [{"name": "peer-a"}]}
+    old_hash = hashlib.sha256(
+        json.dumps(
+            {"config": resolved_config, "render_version": 3},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    state_path = tmp_path / "last-applied.json"
+    state_path.write_text(json.dumps({"config_hash": old_hash}), encoding="utf-8")
+
+    assert RENDER_VERSION == 4
+    assert StateStore(state_path).is_changed(resolved_config)
+
+
+def test_state_store_atomic_write_preserves_previous_state_on_replace_failure(tmp_path) -> None:
+    state_path = tmp_path / "state" / "last-applied.json"
+    store = StateStore(state_path)
+    first = {"connections": [{"name": "peer-a"}]}
+    second = {"connections": [{"name": "peer-b"}]}
+    store.save_last_applied(first)
+
+    with (
+        patch.object(os, "replace", side_effect=OSError("injected replace failure")),
+        pytest.raises(OSError, match="injected replace failure"),
+    ):
+        store.save_last_applied(second)
+
+    assert store.load_last_applied()["resolved_config"] == first
+    assert list(state_path.parent.glob(".last-applied.json.*")) == []

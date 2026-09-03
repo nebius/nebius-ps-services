@@ -1,9 +1,23 @@
 ---
 name: scaffold-project
-description: "Use only when the user explicitly asks to plan, create, merge, or standardize a complete greenfield or brownfield repository scaffold after its architecture and technology stack are approved. Normalize logical capabilities into materialization and runtime units, assign one content owner per path, collect exact candidates from specialist skills, finalize a digest-bound private plan, and apply it through the guarded executor only after explicit digest approval. Do not use for stack selection, feature implementation, isolated component work, Agentic SDLC, or destructive repository rewrites."
+description: "Use only when the user explicitly asks to plan, create, merge, or standardize a complete repo scaffold after architecture/stack approval using path ownership and an approved plan. Not for stack selection, feature work, SDLC, or destructive rewrites."
 ---
 
 # Scaffold Project
+
+## Help
+
+For `$scaffold-project --help` or `$scaffold-project -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 

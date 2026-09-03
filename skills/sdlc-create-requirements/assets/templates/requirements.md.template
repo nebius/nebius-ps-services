@@ -1,13 +1,15 @@
+<!-- markdownlint-disable MD003 MD022 MD033 MD041 -->
+<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
 ---
-schema: agentic-sdlc.requirements.v1
+schema: maintain-project-specs/requirements-v2
 project: "<project-name>"
 owner: "<owner-or-team>"
 status: "draft"
 created_at: "<YYYY-MM-DD>"
 updated_at: "<YYYY-MM-DD>"
-created_by_skill: "sdlc-create-requirements"
-updated_by_skill: "sdlc-create-requirements"
-user_edit_policy: "Do not edit manually. Update through sdlc-create-requirements from user prompts."
+created_by_skill: "maintain-project-specs"
+updated_by_skill: "maintain-project-specs"
+user_edit_policy: "Update through maintain-project-specs; SDLC requirement phases are authoring adapters."
 id_policy: "Requirement IDs are stable. Never renumber existing IDs."
 ---
 
@@ -147,3 +149,5 @@ As a <user>, I want <capability>, so that <outcome>.
 ## Decision Log
 
 ## Change Log
+<!-- maintain-project-specs:requirements:end -->
+<!-- markdownlint-enable MD003 MD022 MD033 MD041 -->

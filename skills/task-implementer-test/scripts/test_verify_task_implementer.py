@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from verify_task_implementer import (
+    DEFAULT_SUITE_TIMEOUT_SECONDS,
     HARNESS_TEST_SCRIPTS,
     TEST_SCRIPTS,
     contract,
@@ -22,6 +23,9 @@ from verify_task_implementer import (
 
 
 class VerifyTests(unittest.TestCase):
+    def test_default_suite_timeout_covers_full_worktree_regression(self) -> None:
+        self.assertEqual(DEFAULT_SUITE_TIMEOUT_SECONDS, 900)
+
     def make_skill(self, root: Path, failing: str | None = None) -> Path:
         skill = root / "task-implementer"
         (skill / "agents").mkdir(parents=True)
@@ -32,7 +36,10 @@ class VerifyTests(unittest.TestCase):
             'description: "test"\n'
             "---\n\n"
             "$task-implementer workspace init [project-folder]\n"
-            "$task-implementer run <prompt-path-or-unique-filename>\n",
+            "$task-implementer workspace reuse [project-folder]\n"
+            "$task-implementer run <prompt-ref-or-file>\n"
+            "$task-implementer integrate [project-folder]\n"
+            "$task-implementer workspace remove [project-folder]\n",
             encoding="utf-8",
         )
         (skill / "agents" / "openai.yaml").write_text(

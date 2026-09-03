@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from .routing_guard import enforce_routing_invariants
+from .routing_guard import enforce_periodic_routing_invariants
 
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
 
@@ -40,7 +40,7 @@ def main() -> None:
         raise SystemExit(2)
 
     try:
-        enforce_routing_invariants(cfg)
+        enforce_periodic_routing_invariants(cfg)
     except Exception as e:
         print(
             f"[FixRoutes] Failed to enforce routing invariants: {e}",

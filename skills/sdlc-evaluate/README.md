@@ -64,3 +64,6 @@ conditional diagnostic branch.
 - Every failed criterion has a normalized failure event and deterministic
   classifier disposition.
 - State moves to `evaluated` only when every required criterion passes.
+
+Canonical routing cases live in `evals/trigger-prompts.csv`; deterministic
+workflow expectations live in the supplemental `evals/process-cases.md`.

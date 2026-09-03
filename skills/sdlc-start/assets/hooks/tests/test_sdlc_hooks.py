@@ -63,6 +63,8 @@ class HookTestCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.codex_home = self.root / "codex"
+        self.origin = self.root / "origin.git"
+        git(self.root, "init", "--bare", "-q", str(self.origin))
         self.project = self.root / "project"
         self.project.mkdir()
         try:
@@ -82,6 +84,15 @@ class HookTestCase(unittest.TestCase):
         )
         git(self.project, "add", ".")
         git(self.project, "commit", "-m", "initial")
+        git(self.project, "remote", "add", "origin", str(self.origin))
+        git(self.project, "push", "-u", "origin", "main")
+        git(self.origin, "symbolic-ref", "HEAD", "refs/heads/main")
+        git(
+            self.project,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        )
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -114,14 +125,18 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "prompt.json",
             {
-                "schema": "agentic-sdlc/prompt-binding-v1",
+                "schema": "agentic-sdlc/prompt-binding-v2",
                 "run_id": "run-1",
                 "prompt_id": "prompt-" + "1" * 32,
                 "prompt_filename": prompt_filename,
+                "lineage_root": "run-1",
+                "predecessor": None,
                 "revisions": [
                     {
                         "revision": "r0001",
                         "sha256": "a" * 64,
+                        "intent_sha256": "b" * 64,
+                        "kind": "initial",
                         "snapshot": "inputs/r0001/prompt.md",
                         "steering_status": "initial",
                     }
@@ -188,9 +203,7 @@ class HookTestCase(unittest.TestCase):
             else None
         )
         event_path = run_dir / "repairs" / "FEAT-001" / "events" / f"{event_id}.json"
-        control_path = (
-            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
-        )
+        control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         write_json(
             event_path,
             {
@@ -236,11 +249,7 @@ class HookTestCase(unittest.TestCase):
         }
         if with_diagnosis:
             diagnosis_path = (
-                run_dir
-                / "repairs"
-                / "FEAT-001"
-                / "diagnoses"
-                / f"{diagnosis_id}.json"
+                run_dir / "repairs" / "FEAT-001" / "diagnoses" / f"{diagnosis_id}.json"
             )
             write_json(
                 diagnosis_path,
@@ -275,6 +284,8 @@ class HookTestCase(unittest.TestCase):
         authorization = {
             "allowed": True,
             "branch": "agent/test",
+            "base_branch": "main",
+            "base_head": git(self.project, "rev-parse", "origin/main"),
             "phase": name.removesuffix("-authorization.json"),
             "expires_at": expires.isoformat().replace("+00:00", "Z"),
         }
@@ -290,9 +301,7 @@ class HookTestCase(unittest.TestCase):
         *,
         complete: bool,
     ) -> None:
-        control_path = (
-            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
-        )
+        control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         control = json.loads(control_path.read_text(encoding="utf-8"))
         blocker_key = control["active_blocker"]["blocker_key"]
         surface = "commit" if complete else "validation"
@@ -365,9 +374,9 @@ class HookTestCase(unittest.TestCase):
                 "fingerprints": fingerprints,
                 "evidence": ["promotion and cleanup passed"],
             }
-            content = (
-                json.dumps(gate, sort_keys=True, indent=2) + "\n"
-            ).encode("utf-8")
+            content = (json.dumps(gate, sort_keys=True, indent=2) + "\n").encode(
+                "utf-8"
+            )
             source = run_dir / "evidence" / "FEAT-001" / "commit.json"
             source.write_bytes(content)
             git(self.project, "worktree", "remove", str(integration))
@@ -375,7 +384,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v4",
+                    "schema": "agentic-sdlc/execution-coordinator-v7",
                     "status": "done",
                     "base_branch": "main",
                     "project_root": str(self.project),
@@ -470,7 +479,7 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "agentic-sdlc/execution-coordinator-v4",
+                "schema": "agentic-sdlc/execution-coordinator-v7",
                 "feature_id": "FEAT-001",
                 "project_root": str(self.project),
                 "git_common_dir": str(common),
@@ -522,7 +531,7 @@ class HookTestCase(unittest.TestCase):
             / "WAVE-001"
             / "TASK-001.json",
             {
-                "schema": "agentic-sdlc/worker-assignment-v2",
+                "schema": "agentic-sdlc/worker-assignment-v4",
                 "feature_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",
@@ -999,6 +1008,22 @@ class HookTestCase(unittest.TestCase):
         )
         self.assert_denied(result, "commit authorization")
 
+    def test_pretool_denies_direct_commit_transaction_during_active_sdlc(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        for action in ("prepare", "execute", "review"):
+            command = (
+                "python3 /Users/example/.agents/skills/commit/scripts/"
+                f"commit_transaction.py {action} --private canonical"
+            )
+            with self.subTest(action=action):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload("Bash", command),
+                    self.codex_home,
+                )
+                self.assert_denied(result, "use sdlc-commit")
+
     def test_pretool_detects_registered_integration_outside_project(self) -> None:
         _run_dir, integration = self.registered_integration()
         (integration / "feature.py").write_text("value = 1\n", encoding="utf-8")
@@ -1172,6 +1197,24 @@ class HookTestCase(unittest.TestCase):
         )
         self.assert_denied(result, "expected HEAD")
 
+    def test_pretool_denies_push_when_remote_default_head_advanced(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+            base_head="0" * 40,
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "git push origin HEAD:agent/test"),
+            self.codex_home,
+        )
+        self.assert_denied(result, "base HEAD")
+
     def test_pretool_denies_push_without_passing_uat_authorization(self) -> None:
         self.switch_feature()
         run_dir = self.active_run()
@@ -1301,7 +1344,9 @@ class HookTestCase(unittest.TestCase):
         )
         result = run_hook(
             PRE_TOOL,
-            self.pre_payload("Bash", "gh pr create --head agent/test --fill"),
+            self.pre_payload(
+                "Bash", "gh pr create --base main --head agent/test --fill"
+            ),
             self.codex_home,
         )
         self.assertEqual(result, {})
@@ -1322,6 +1367,53 @@ class HookTestCase(unittest.TestCase):
             self.codex_home,
         )
         self.assert_denied(result, "head must match")
+
+    def test_pretool_denies_gh_pr_create_without_exact_base(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        commands = (
+            "gh pr create --head agent/test --fill",
+            "gh pr create --base other --head agent/test --fill",
+            "gh pr create -Bother -Hagent/test --fill",
+            "gh pr create -B -Hagent/test --fill",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload("Bash", command),
+                    self.codex_home,
+                )
+                self.assert_denied(result, "base must match")
+
+    def test_pretool_denies_gh_pr_create_when_remote_default_head_advanced(
+        self,
+    ) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+            base_head="0" * 40,
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload(
+                "Bash", "gh pr create --base main --head agent/test --fill"
+            ),
+            self.codex_home,
+        )
+        self.assert_denied(result, "base HEAD")
 
     def test_pretool_denies_compound_gh_pr_create(self) -> None:
         self.switch_feature()
@@ -1384,7 +1476,12 @@ class HookTestCase(unittest.TestCase):
         run_dir = self.active_run()
         payload = self.pre_payload(
             "mcp__github__create_pull_request",
-            tool_input={"owner": "example", "repo": "demo", "head": "agent/test"},
+            tool_input={
+                "owner": "example",
+                "repo": "demo",
+                "base": "main",
+                "head": "agent/test",
+            },
         )
         denied = run_hook(PRE_TOOL, payload, self.codex_home)
         self.assert_denied(denied, "PR authorization")
@@ -1401,10 +1498,27 @@ class HookTestCase(unittest.TestCase):
 
         wrong_head = self.pre_payload(
             "mcp__github__create_pull_request",
-            tool_input={"owner": "example", "repo": "demo", "head": "other"},
+            tool_input={
+                "owner": "example",
+                "repo": "demo",
+                "base": "main",
+                "head": "other",
+            },
         )
         denied = run_hook(PRE_TOOL, wrong_head, self.codex_home)
         self.assert_denied(denied, "head must match")
+
+        wrong_base = self.pre_payload(
+            "mcp__github__create_pull_request",
+            tool_input={
+                "owner": "example",
+                "repo": "demo",
+                "base": "other",
+                "head": "agent/test",
+            },
+        )
+        denied = run_hook(PRE_TOOL, wrong_base, self.codex_home)
+        self.assert_denied(denied, "base must match")
 
     def test_pretool_denies_gh_pr_merge_without_authorization(self) -> None:
         self.switch_feature()
@@ -1468,6 +1582,27 @@ class HookTestCase(unittest.TestCase):
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assertEqual(result, {})
+
+    def test_pretool_denies_merge_when_remote_default_head_advanced(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+            base_head="0" * 40,
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "base HEAD")
 
     def test_pretool_allows_exact_authorized_merge_queue_command(self) -> None:
         self.switch_feature()
@@ -1698,10 +1833,24 @@ class HookTestCase(unittest.TestCase):
 
     def test_pretool_denies_dangerous_rm(self) -> None:
         self.active_run()
-        result = run_hook(
-            PRE_TOOL, self.pre_payload("Bash", "rm -rf /"), self.codex_home
-        )
-        self.assert_denied(result, "recursive removal")
+        for command, reason in (
+            ("rm -rf /", "recursive removal"),
+            ("find / -depth -delete", "filesystem root"),
+            ("find /./ -depth -delete", "filesystem root"),
+            ("find /tmp/.. -depth -delete", "filesystem root"),
+            ('find "/" -depth -delete', "filesystem root"),
+            ("find // -depth -delete", "filesystem root"),
+            ("find / -depth -{delete,print}", "filesystem root"),
+            ("find / -depth -{d{elete,ummy},print}", "filesystem root"),
+            ("find / -depth -{de,xx}{lete,yy}", "filesystem root"),
+            ("find / -depth {-,x}delete", "filesystem root"),
+            ("find / -depth -del*", "filesystem root"),
+        ):
+            with self.subTest(command=command):
+                result = run_hook(
+                    PRE_TOOL, self.pre_payload("Bash", command), self.codex_home
+                )
+                self.assert_denied(result, reason)
 
     def test_pretool_denies_recursive_ownership_shell_command(self) -> None:
         self.active_run()
@@ -1878,9 +2027,7 @@ class HookTestCase(unittest.TestCase):
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["next_recommended_skill"] = "sdlc-validate-codes"
         write_json(state_path, state)
-        control_path = (
-            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
-        )
+        control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         control = json.loads(control_path.read_text(encoding="utf-8"))
         control["revalidation"]["repair_dispatch_id"] = "foreign-dispatch"
         projection = {
@@ -1925,9 +2072,7 @@ class HookTestCase(unittest.TestCase):
         self.assertIn("still has invalidated evidence", result["stopReason"])
 
         self.write_revalidation_cursor(run_dir, complete=True)
-        self.assertFalse(
-            (run_dir / "worktrees" / "FEAT-001" / "integration").exists()
-        )
+        self.assertFalse((run_dir / "worktrees" / "FEAT-001" / "integration").exists())
         self.assertEqual(git(self.project, "status", "--porcelain"), "")
         control = json.loads(control_path.read_text(encoding="utf-8"))
         control["status"] = "resolved"
@@ -2013,6 +2158,23 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertFalse(result["continue"])
         self.assertIn("explicit user request", result["stopReason"])
+
+    def test_stop_does_not_continue_worktree_integration(self) -> None:
+        self.active_run(
+            phase="outer-integration-pending",
+            next_skill="sdlc-start",
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("fresh explicit user invocation", result["stopReason"])
+        self.assertIn("recorded primary checkout", result["stopReason"])
+
+    def test_stop_does_not_continue_worktree_next_skill(self) -> None:
+        self.active_run(next_skill="worktree")
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("fresh explicit user invocation", result["stopReason"])
+        self.assertIn("recorded primary checkout", result["stopReason"])
 
 
 if __name__ == "__main__":

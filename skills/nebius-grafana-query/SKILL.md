@@ -1,9 +1,23 @@
 ---
 name: nebius-grafana-query
-description: "Run read-only Nebius observability queries through an already-configured grafana-nebius Grafana MCP server authenticated as the pinned human user. Use automatically for explicit one-or-many tenant/project/resource scopes, datasource and dashboard discovery, PromQL metrics, Loki/LogQL logs, Tempo traces, or as the bounded structured evidence provider selected by troubleshoot or sdlc-evaluate. Never install or configure MCP, repair authentication, change IAM, issue static keys, query Control Plane Audit Logs, diagnose root cause, grade acceptance, or mutate Grafana; route direct-query setup and repair to $install-grafana-mcp-for-nebius."
+description: "Run read-only Nebius Grafana MCP queries for scoped dashboards, PromQL, Loki, or Tempo, including troubleshoot/SDLC evidence. Never install or configure MCP, repair auth/IAM, query audit logs, diagnose causes, grade acceptance, or mutate Grafana."
 ---
 
 # Nebius Grafana Query
+
+## Help
+
+For `$nebius-grafana-query --help` or `$nebius-grafana-query -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -238,7 +252,7 @@ pass/fail claims.
 - `references/evidence-provider.md`: embedded request schema, one-time
   readiness, cumulative fast/deep budgets, structured facts, and consumer
   boundaries.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
 - `evals/evidence-provider-tool-traces.json`: structured call-count,
   state-transition, cumulative-stage-budget, fixed-envelope, exact-cost,
   failure, and redaction eval fixtures.

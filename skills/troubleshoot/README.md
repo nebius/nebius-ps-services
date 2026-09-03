@@ -7,13 +7,51 @@ does not expand the authority of the surrounding task.
 ## Core Model
 
 ```text
-INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
+INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
        -> LOCALIZED -> PROVEN -> REMEDIATED -> VERIFIED -> REPORTED
 ```
 
 The workflow preserves evidence before functional edits, maintains competing
 hypotheses, chooses discriminating experiments, localizes the earliest
 divergence, and requires a causal mechanism before claiming root cause.
+Discovery inventories technologies, versions, deployment model, active
+configuration, components, dependencies, ports, protocols, authentication, and
+control and data flows, then compares the observed system with matching
+official vendor architecture before diagnostics begin.
+
+Every consequential command tests a stated hypothesis with expected supporting
+and falsifying evidence, a timeout or output bound, and a defined next branch.
+The workflow prohibits indefinite tails, arbitrary sleeps, passive terminal
+waiting, and broad unfiltered log dumps.
+
+## Evidence-Gated Completion
+
+Troubleshooting records a component verification matrix, normalized incident
+timeline, and layered log-coverage ledger. Component, application, container or
+orchestrator, systemd, OS, kernel, network, storage, GPU, and hardware evidence
+is examined when relevant or explicitly recorded as unavailable, unsafe, or not
+applicable.
+
+The internal evidence freezes its included and excluded components and
+dependencies, exercised control and data paths, and incident-window start and
+end. The component matrix explicitly records DNS or service-name resolution
+and restart history. The log ledger contains exactly one ordered record for component,
+application or job, container or orchestrator, service manager, OS and kernel,
+network and firewall, storage, and GPU or hardware. Primary local log reading is
+baseline evidence gathering; only remote Grafana queries use observability
+admission gates.
+
+The user-visible report is a concise projection: outcome, root cause and fix,
+verification and unverified scope, then an exact owner/action/done-when next
+step. `FAIL` and `UNKNOWN` remain internal evidence states; they do not stop the
+agent while another safe bounded result can change the decision. Detailed
+matrices and ledgers appear only in an optional evidence appendix.
+
+`DIAGNOSED-FIXED` means the cause and owner are proven, the owner-correct repair
+is applied, and the reproducer, focused regression, and source or affected
+boundary pass for the fixed scope. Installation or live replay may remain
+explicitly unverified. `VERIFIED_FIXED` remains complete end-to-end proof;
+`DIAGNOSED_NOT_FIXED` means no owner-correct repair was applied.
 
 ## Design Handoff
 
@@ -49,24 +87,87 @@ alternatives eliminated, confidence, regression oracle, evidence references,
 and the bounded owner handoff. Missing evidence and competing hypotheses stop;
 failure to find an implementation bug does not authorize redesign.
 
-Each autonomous blocker tranche is capped at five total remediation attempts
-or 120 active minutes. The five-attempt maximum cannot be raised or disabled.
+Each autonomous blocker tranche defaults to five remediation attempts and 120
+active minutes. Users can set a session profile up to 10/180 with optional
+flags, for example
+`$troubleshoot --attempt-limit=10 --time-limit-minutes=180 <problem>`. A bare
+invocation keeps the saved profile; one flag changes only that field; explicit
+5/120 resets the defaults. The UserPromptSubmit hook binds selected values to a
+private session authorization so free-text prose cannot change marker limits.
+A task-specific earlier workflow stop stays in prose and leaves active status
+and a null stop trigger.
 Before every retry, the agent must acquire new logs, a new stack trace, new code
 inspection evidence, or an equivalent observation and derive a genuinely new
 falsifiable hypothesis. Rewording the same hypothesis or reusing evidence is
-not sufficient. If the retry gate cannot be satisfied, the agent stops with a
-structured investigation report. It also reports failures 1 through 4, then
-stops all tools and returns the complete report at the first numeric limit. Only
-an explicit user instruction starts another bounded tranche for that blocker.
-A causally independent blocker starts a fresh attempt-1 budget; prior attempts,
+not sufficient. If the retry gate cannot be satisfied, the agent does not patch
+again; it returns to discovery, modeling, or safe evidence collection. It
+reports early only when decisive evidence has no safe alternative, authority or
+safety requires user action, the user asks to stop, or the budget is exhausted.
+It reports each non-terminal failure, then
+stops all tools and returns the complete report at the first numeric limit. A
+new user instruction starts fresh state; it never reopens the exhausted tranche.
+A causally independent blocker starts with an empty ledger; its next completed
+remediation and verification become attempt 1. Planned or in-progress work
+stays in prose and never becomes a partial attempt object. Prior attempts,
 elapsed active time, exhaustion state, and stop trigger do not carry over.
 Every counted attempt records the exact marker blocker key. A missing, mixed,
 or carried binding makes the marker invalid and enters repair instead of
 exhausting the new blocker. Marker validation and repair consume no attempt.
+Pending authorization feedback retains the precise marker or transition error
+and gives complete canonical repair guidance. While a budget transition is
+pending, the only admitted tool is one exact `apply_patch` targeting the
+advertised `current.md`: use `*** Update File` when it exists or `*** Add File`
+only when it is absent. `*** Delete File`, delete/add replacement, shell
+rewrites, and other tools remain denied. A resolved marker is completed evidence, not an
+exhaustion lock: a later bare invocation keeps the saved profile and admits
+discovery without pending marker replacement. Explicit profile flags preserve
+the resolved marker core through the profile-only handshake. Fresh-state
+guidance calls its source the prior terminal marker only after exhaustion.
+Invalid active-resize markers
+must restore their exact pre-resize non-profile state; deleted resize markers
+fail closed and require the exact prior marker or a fresh user-authorized
+session rather than a budget reset.
+
+Every explicit `$troubleshoot` invocation also creates a terminal report duty
+in session-private `troubleshoot-report-obligation.json`, even when no
+remediation marker exists. Success, blocking, tool or coordination error,
+ordinary stop, unresolved work, and exhaustion all use the same concise report.
+An ordinary incomplete or malformed report records `advisory_incomplete` and
+continues; it does not request another turn, deny tools, or emit a generated
+fallback. Prefer repository-relative inline labels, but inline or Markdown
+local targets may use repository-relative, native absolute, home-relative, or
+strict local `file:` syntax when canonical resolution keeps them inside the
+full Git repository root derived from the event working directory. Without a
+proven Git root, absolute, home-relative, and local `file:` forms remain unsafe.
+This allows sibling-project evidence while rejecting outside-root, symlink
+escape, and ambiguous or renderer-active link syntax. A contained format defect
+is advisory; sensitive content or an unsafe target records
+`sensitive_detected`, stops with one generic warning, and requests no automatic
+replacement report. Stop is terminal detection, not retroactive redaction of
+output already rendered by the host. Exhaustion remains strict, never truncates
+reference markup, and preserves public-safe marker-derived blocker and attempt
+evidence in the same concise envelope. A host process that dies before Stop can
+only be reported after same-session resume.
 
 For incidents, stabilization and diagnosis remain separate. A restart,
 rollback, failover, retry, cache clear, or scale change can mitigate impact but
 does not prove why the failure occurred.
+
+## Live Product Validation
+
+Live verification separates causal ownership, target recovery state, and proof
+lineage. Each trial freezes its declared product workflow; changing that
+declaration starts a new lineage and cannot clean earlier evidence. Codex may
+operate the declared workflow and perform authorized stabilization or recovery,
+but an out-of-band mutation that performs, bypasses, or pre-satisfies a
+product-owned step marks the affected evidence intervened. Nominally read-only
+observation is also classified by effect when it can alter criterion-relevant
+state or execution. After owner-correct repair, verification resumes from a
+declared or independently proven known-good product-supported checkpoint before
+the earliest product divergence or contamination, proves earlier writers are
+quiescent, observes the product perform the relevant transition, and checks
+authoritative postconditions independently. A healthy target or successful
+no-op after manual pre-satisfaction is mitigation, not proof.
 
 ## Observability Evidence
 
@@ -116,13 +217,22 @@ runtime evidence produces `BLOCKED_MISSING_EVIDENCE` with the exact data gap.
 - `references/software-failure-playbooks.md` owns code and shell failure classes.
 - `references/infrastructure-failure-playbooks.md` owns installed and distributed
   stack failure classes.
+- Technology-specific procedures live in `references/slurm.md`,
+  `references/soperator.md`, `references/kubernetes.md`,
+  `references/nebius.md`, `references/linux.md`, `references/network.md`,
+  `references/storage.md`, `references/gpu.md`, and
+  `references/code-debugging.md` and are loaded only after stack discovery.
+- `references/live-product-validation.md` owns product-versus-intervention
+  boundaries, evidence lineage, owner-correct repair, clean replay, and
+  claim-scope rules for live product testing.
 - `references/technique-selection.md` maps causal questions to diagnostics.
 - `references/verification-and-reporting.md` owns closure and reporting.
 - `references/observability-evidence.md` owns the runtime-evidence eligibility,
   scope, staged-query, and unavailable/partial contract.
 - `references/remediation-budget.md` owns attempt identity, limits, durable
   marker state, continuation tranches, and exhaustion reporting.
-- `assets/hooks/` contains the optional `PreToolUse` and `Stop` guard bundle.
+- `assets/hooks/` contains the optional `UserPromptSubmit`, `PreToolUse`, and
+  `Stop` guard bundle.
 - `scripts/` contains deterministic evidence helpers and their tests.
 - `evals/` contains trigger and process evaluation cases.
 

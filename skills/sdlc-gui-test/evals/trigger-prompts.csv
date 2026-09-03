@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-gui-positive-01,true,"Run the declared browser GUI harness for this Agentic SDLC acceptance criterion."
+sdlc-gui-positive-02,true,"Use required computer-use UAT to observe and screenshot this active SDLC flow."
+sdlc-gui-positive-03,true,"Evaluate the feature's browser behavior with the approved Playwright harness."
+sdlc-gui-negative-01,false,"Browse this website for general information."
+sdlc-gui-negative-02,false,"Run terminal wizard acceptance tests."
+sdlc-gui-negative-03,false,"Create frontend unit tests before implementation."

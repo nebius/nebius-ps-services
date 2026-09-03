@@ -26,6 +26,9 @@ venv.bak/
 .cache/
 .mypy_cache/
 .ruff_cache/
+htmlcov/
+.tox/
+.nox/
 
 # Logs & runtime
 *.log
@@ -80,6 +83,10 @@ id_ed25519.pub
 config-resolved.yaml
 last-applied.json
 .nebius-vpngw-rollbacks/
+*.vm-ha-lifecycle.json
+*.vm-ha-lifecycle.json.write.lock
+*.destroy-lifecycle.json
+.*.destroy-lifecycle.json.write.lock
 
 # StrongSwan & FRR runtime configs (if pulled locally—avoid accidental commit)
 ipsec.conf

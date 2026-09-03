@@ -1,9 +1,23 @@
 ---
 name: apply-security
-description: "Use as a security reviewer, adviser, and safe remediation helper for software design, implementation, code review, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD workflows, Bash scripts, and application code in Python, Java, JavaScript, TypeScript, or Rust. Use when work may affect secrets, public exposure, IAM/RBAC, auth, input handling, injection, deserialization, crypto, dependencies, containers, workflows, or supply-chain risk. Advises implicitly; patches only when the current task allows edits and the fix is low-risk."
+description: "Review software, infrastructure, CI/CD, containers, IaC, or design for security risks involving secrets, IAM/auth, exposure, inputs, dependencies, or supply chain. Advise implicitly; patch only when authorized."
 ---
 
 # Apply Security
+
+## Help
+
+For `$apply-security --help` or `$apply-security -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 

@@ -38,7 +38,7 @@
   - [`sdlc-gui-test`](#sdlc-gui-test)
   - [`sdlc-tui-test`](#sdlc-tui-test)
   - [`sdlc-classify-failure`](#sdlc-classify-failure)
-  - [`sdlc-align-specs`](#sdlc-align-specs)
+  - [Alignment](#alignment)
   - [`sdlc-commit`](#sdlc-commit)
   - [`sdlc-uat-tests`](#sdlc-uat-tests)
   - [`create-pr`](#create-pr)
@@ -72,8 +72,9 @@ The parent agent is the feature coordinator: it owns phase decisions, shared
 execution state, integration, combined validation, promotion, and the final
 report. During implementation, every safe `TASK-*` uses one fresh task agent
 with its own branch and private Git worktree. A task agent owns only its
-immutable assignment, declared write claims, focused evidence, review, and one
-direct-child commit. Task agents never select SDLC phases or mutate shared
+immutable assignment, declared write claims, focused evidence, review, and
+uncommitted implementation. Coordinator-owned `task-finish` creates the one
+direct-child task commit. Task agents never select SDLC phases or mutate shared
 coordinator state directly. MCP servers are tools an agent can call through the
 selected phase skill.
 
@@ -88,16 +89,20 @@ All `sdlc-*` skills set `allow_implicit_invocation: false` in
 `agents/openai.yaml`. The external `sdlc-workflow-test` verifier is the sole
 non-phase exception to the prefix convention. Operators and continuation
 prompts enter the workflow explicitly through
-`$sdlc-start run <prompt-path-or-unique-filename>`, and the coordinator records the next
+`$sdlc-start run <prompt-ref-or-file>`, and the coordinator records the next
 recommended phase skill in local state. This keeps workflow phases from being
 selected by ordinary prompt matching outside an active Agentic SDLC run.
 
-Every phase skill owns a narrow responsibility. For example,
-`sdlc-create-requirements` owns `docs/requirements.md`, `sdlc-create-design`
-owns `docs/design.md`, `project-agent-instructions` owns the conditional
-generated project-root `AGENTS.md`, `sdlc-create-plan` owns a locked private
-task graph, and `sdlc-prepare-execution` owns the persistent integration
-resource.
+Every phase skill owns a narrow responsibility. `maintain-project-specs` is the
+single semantic, schema, template, validation, and receipt owner for
+`docs/requirements.md` and `docs/design.md`. Inside Agentic SDLC,
+`sdlc-create-requirements` and `sdlc-create-design` are routed authoring
+adapters that may update their respective managed records, then return
+validation to that shared owner. Project-spec lifecycle observations are
+advisory and never become workflow phases or completion gates. A separately
+invoked `project-agent-instructions` workflow owns any explicit selected-project
+`AGENTS.md` mutation. `sdlc-create-plan` owns a locked private task graph, and
+`sdlc-prepare-execution` owns the persistent integration resource.
 `sdlc-implement-plan` owns task waves and ordered integration, while
 `sdlc-commit` owns final sealing and exact local promotion after evidence passes.
 
@@ -108,26 +113,32 @@ The always-present committed SDLC truth inside a target project is:
 - `<project>/docs/requirements.md`
 - `<project>/docs/design.md`
 
-After both documents validate, `project-agent-instructions` decides whether
-durable project-specific operating rules add to the inherited instruction
-chain. Only when that evidence gate passes does committed project truth also
+The workflow may inspect shared-owner validation or project-instruction status
+as advisory context, but missing, stale, contended, or invalid lifecycle
+evidence never blocks an SDLC phase. Personal global instructions are conflict
+context only and never change portable repository bytes. A separately
+authorized project-instruction workflow may make committed project truth also
 include:
 
 - `<project>/AGENTS.md`
 
 A missing file with no meaningful project-specific delta is a valid
-`not-needed` outcome. Other SDLC artifacts, including the decision manifest and
-receipt, are local runtime state and must not be committed.
+`not-needed` outcome. Other SDLC artifacts, including spec validation,
+effective-config, decision, ownership, and final-state receipts, are local
+runtime state and must not be committed.
 
 Ownership is strict:
 
-- Only `sdlc-create-requirements` writes `docs/requirements.md`.
-- Only `sdlc-create-design` writes `docs/design.md`.
-- Only `project-agent-instructions` may create or refresh a provenance-owned
-  generated project-root `AGENTS.md`; human-owned instruction files are
-  preserved.
-- Other skills route changes back to the owning skill instead of editing those
-  files directly.
+- `maintain-project-specs` is the sole semantic, schema, template, validation,
+  and receipt owner of both canonical specs.
+- Inside Agentic SDLC, only the routed `sdlc-create-requirements` and
+  `sdlc-create-design` authoring adapters write their respective managed
+  records. They preserve stable IDs and return validation to the shared owner.
+- Only `project-agent-instructions` may create, attach, refresh, explicitly
+  adopt, or explicitly retire a v3-managed selected-project `AGENTS.md`;
+  human-owned or edited instruction files are preserved.
+- Other phase skills route spec changes through the matching authoring adapter
+  instead of editing either canonical document directly.
 
 ### Private local run state
 
@@ -136,27 +147,56 @@ through exactly two public coordinator actions:
 
 ```text
 $sdlc-start workspace init [project-folder]
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 ```
 
-Managed prompts use `agentic-sdlc/prompt-v1`. Editing the same prompt and
-repeating `run` is the only steering path; there is no bare `$sdlc-start`
-resume action. The generated editor workspace provides private new-prompt and
-metadata-only history tasks; these do not expand the public interface. Exact
-manual renames preserve identity and update the run mirror, while rename plus
-content edits and stale/duplicate prompt copies fail closed. Execution state
-lives under:
+Managed prompts use `agentic-sdlc/prompt-v3`. The full prompt ID remains
+authoritative; a collision-safe five-character prompt reference is stored in
+metadata and prefixed to its filename, extending when a new ID collides. A
+one-time initialization migration upgrades editable v2 prompts and mutable
+source pointers while leaving immutable revision bytes unchanged. Only
+`## Ask` is required in addition to generated metadata; all structured and
+custom headings are optional. The coordinator compiles the Ask into full product requirements,
+inspects discoverable facts first, and persists stable private clarification
+questions only for material ambiguity. Editing the same active prompt and
+repeating `run` is the steering path; there is no bare `$sdlc-start` resume
+action. Editing a completed prompt creates a linked fresh-full-objective run,
+not steering. The generated editor workspace keeps `00-START-HERE.md` visible
+and provides private new-prompt, metadata-only history, and FIFO queue tasks;
+these do not expand the public interface. Explicitly running a different
+prompt while work is active durably queues it, while creating or saving does
+not. Queue-head drift requires an explicit rerun before post-completion
+activation; activation compares both accepted raw bytes and normalized intent
+and recovers a committed run after an interrupted dequeue. Requirements cannot
+advance to design until a private refinement gate binds the latest accepted
+prompt identity and intent to the exact current `docs/requirements.md`. Exact
+manual renames preserve identity and update the run mirror when normalized
+intent is unchanged, while rename plus intent edits and stale/duplicate prompt
+copies fail closed.
+
+An explicitly invoked init or run also binds that Codex session to this exact
+workflow and project. The separate `prompt-session-intake` UserPromptSubmit
+hook may then secret-scan and privately stage later safe direct turns with
+exact session/turn provenance. It remains capture-only: the current agent owns
+classification and lossless refinement, the SDLC adapter owns compare-and-set
+prompt creation or append with an exact-once operation marker, and `sdlc-start`
+owns the single canonical run or resume transition. Conversation, status, and control turns do not mutate or
+execute work. Filesystem edits and saves never trigger execution; they still
+require explicit `run`.
+
+Execution state lives under:
 
 ```text
 ~/.codex/sdlc-runs/<project-id>/<run-id>/
 ```
 
 The project-level SDLC state also has `workspace.json`, `activity.json`, a
-private prompt lock, managed prompt files, an `active-run.json` pointer, and an
+private prompt queue and accepted snapshots, a private prompt lock, managed
+prompt files, an `active-run.json` pointer, and an
 `active.lock` lock file under `~/.codex/sdlc-runs/<project-id>/`. The active
 run directory stores the active feature, run metadata, checkpoints, feature
 queue, fingerprints, steering, context packs, locked plans, evidence,
-screenshots, transcripts, failure logs, history, and short-lived authorization
+requirements refinement, screenshots, transcripts, failure logs, history, and short-lived authorization
 files. It is the recovery source when conversation context is lost.
 
 Important files include:
@@ -178,14 +218,14 @@ Important files include:
   compact active reminders.
 - `context/FEAT-*.context.md`: compact context packs for design and planning.
 - `plans/FEAT-*.plan.vN.md` and `.lock`: private locked feature plans.
-- `execution/FEAT-*/coordinator.json`: schema-v4 feature execution identity,
+- `execution/FEAT-*/coordinator.json`: schema-v7 feature execution identity,
   exact base/integration SHAs, wave pointers, and promotion state.
 - `execution/FEAT-*/waves/`, `tasks/`, `assignments/`, `incoming-handoffs/`,
   `sessions/`, `results/`, and `journals/`: separate private records for
   authoritative capacity batches, immutable prior-task context, exclusive
   session ownership, and parallel result isolation.
 - `execution/interop.json`: optional run-level managed-outer-worktree lease
-  identity, promoted head, and release state.
+  identity, promoted head, release state, and source-integration proof.
 - `repairs/FEAT-*/events/`, `diagnoses/`, and `classifications/`: immutable
   commit-bound failure records, causal handoffs, and deterministic routes.
 - `repairs/FEAT-*/repair-control.json`: atomic projection of the active stable
@@ -217,9 +257,11 @@ or `sdlc-create-design` before they become implementation truth.
 ### Feature execution plane
 
 One active feature has one persistent integration branch/worktree from
-pre-TDD preparation through final promotion. The original named project branch
-stays clean and fixed at its recorded base SHA during TDD, implementation,
-validation, tests, evaluation, documentation, and spec alignment.
+pre-TDD preparation through final promotion. The project promotion branch is
+either the current named non-default branch or a deterministic `feature/sdlc-*`
+branch created from the verified symbolic `origin` default. It stays clean and
+fixed at its recorded base SHA during TDD, implementation, validation, tests,
+evaluation, documentation, and spec alignment.
 
 The locked plan contains stable `TASK-*` records with requirement IDs,
 dependencies, exact/prefix write claims, conflict domains, focused validation,
@@ -237,10 +279,12 @@ the first wave has no predecessors; later assignments contain structured
 evidence from all earlier completed waves and batches. A process-safe transition
 lock, atomic hashed-session claims, and expected-attempt recovery guards prevent
 session or task ownership reuse. Workers return explicit summary, decisions,
-risks, validation, and review evidence and produce one direct-child commit. The
-coordinator verifies digests, paths, Git identity, and ancestry, opens the next
+risks, validation, and review evidence without committing. The coordinator
+arms and watches workers, then uses `task-finish` to verify liveness, digests,
+paths, Git identity, and ancestry and create one direct-child task commit. It opens the next
 batch only after the active batch commits, merges tasks in stable task order
-with retained worker commits and explicit `--no-ff` merge commits, runs combined
+with retained coordinator-created task commits and explicit `--no-ff` merge
+commits, runs combined
 evidence at the exact integration tip, and non-force-cleans only clean reachable
 worker resources.
 
@@ -352,33 +396,36 @@ external call and is not classified as an environment outage.
 
 ## Requirements, Design, And Project Instructions
 
-The two committed product-truth documents are created from templates in their
-owning skills:
+The two committed product-truth documents use rich Agentic authoring templates
+whose schema and managed-region ownership remain controlled by
+`maintain-project-specs`:
 
 - `sdlc-create-requirements/assets/templates/requirements.md.template`
 - `sdlc-create-design/assets/templates/design.md.template`
 
-`sdlc-create-requirements` uses the requirements template when
-`<project>/docs/requirements.md` does not exist. The template defines the
-front matter, source prompt, problem, desired outcome, users, success
-definition, constraints, environment, external systems, stable `REQ-*` blocks,
-acceptance criteria, negative criteria, validation method, test method,
-evaluation method, optional Live Experiment Environment details, open questions,
-decision log, and change log. The Live Experiment Environment section records
-status, non-production confirmation, safe access references, allowed and
-prohibited agent actions, test data, reset instructions, approvals, and
-evidence limits without storing secret values.
+When routed, `sdlc-create-requirements` uses the requirements template to
+author missing or changed managed requirement records. The template defines
+the source prompt, problem, desired outcome, users, success definition,
+constraints, environment, external systems, stable `REQ-*` blocks, acceptance
+criteria, negative criteria, validation method, test method, evaluation
+method, optional Live Experiment Environment details, open questions, decision
+log, and change log. The Live Experiment Environment section records status,
+non-production confirmation, safe access references, allowed and prohibited
+agent actions, test data, reset instructions, approvals, and evidence limits
+without storing secret values.
 
 The requirements template also records:
 
-- `created_by_skill: "sdlc-create-requirements"`
-- `updated_by_skill: "sdlc-create-requirements"`
-- a user edit policy that routes updates through `sdlc-create-requirements`
+- `created_by_skill: "maintain-project-specs"`
+- `updated_by_skill: "maintain-project-specs"`
+- a user edit policy that routes semantic ownership through
+  `maintain-project-specs` and Agentic authoring through
+  `sdlc-create-requirements`
 - an ID policy that forbids renumbering existing requirement IDs
 
-`sdlc-create-design` uses the design template when
-`<project>/docs/design.md` does not exist. The template defines the front
-matter, source requirements link, design summary, technology choices,
+When routed, `sdlc-create-design` uses the design template to author missing or
+changed managed feature records. The template defines the source requirements
+link, design summary, technology choices,
 architecture sections, stable `FEAT-*` feature blocks, requirements covered,
 context evidence, end-to-end feature flow, layer map, implementation
 boundaries, TDD success criteria, validation plan, test plan, evaluation plan,
@@ -387,23 +434,30 @@ change log.
 
 The design template also records:
 
-- `created_by_skill: "sdlc-create-design"`
-- `updated_by_skill: "sdlc-create-design"`
+- `created_by_skill: "maintain-project-specs"`
+- `updated_by_skill: "maintain-project-specs"`
 - `source_requirements: "docs/requirements.md"`
-- a user edit policy that routes updates through `sdlc-create-design`
+- a user edit policy that routes semantic ownership through
+  `maintain-project-specs` and Agentic authoring through `sdlc-create-design`
 - an execution plan policy stating that plans are local runtime artifacts and
   must not be committed
 - an ID policy that forbids renumbering existing feature IDs
 
 Project instructions intentionally have no fill-every-section template.
-`project-agent-instructions/references/decision-contract.md` defines the
-evidence gate, generated section allowlist, provenance marker, ownership
-rules, and deterministic inspect/apply/verify helper. The skill runs only
-after both specifications validate. It creates a concise selected-project
-`AGENTS.md` only for durable, project-specific, actionable rules not already
-provided by inherited instructions; it omits empty sections, task state,
-acceptance criteria, architecture essays, generic advice, and reusable
-procedures.
+`maintain-project-specs` validates complete tracked canonical documents,
+managed blocks, ready-feature completeness, marker/body agreement, and total
+status-aware REQ-to-FEAT traceability before emitting the private v3
+prerequisite receipt. The `sdlc-start/scripts/validate_project_specs.py`
+adapter invokes that shared validator without defining a second spec schema or
+receipt authority. The canonical result is required before spec-dependent
+planning and dispatch; historical private lifecycle-phase evidence remains
+advisory and never becomes an independent SDLC gate.
+`project-agent-instructions/references/decision-contract.md` defines layered
+discovery, structured evidence-backed rules, deterministic rendering, the 2 KiB
+preferred and 4 KiB hard body budgets, provenance plus private ownership,
+guarded adoption/retirement, recovery, and inspect/apply/verify behavior. A
+project-file change requires a fresh Codex session before the workflow
+continues.
 
 ## Workflow
 
@@ -423,22 +477,21 @@ The implementation state schema uses this phase order:
 1. requirements
 2. context
 3. design
-4. project-agent-instructions
-5. sdlc-auto-steering
-6. plan
-7. execution preparation
-8. sdlc-tdd in the integration worktree
-9. implementation dependency waves
-10. validation at the recorded integration HEAD
-11. test at the recorded integration HEAD
-12. evaluation at the recorded integration HEAD
-13. sdlc-update-documents in the integration worktree
-14. sdlc-align-specs in the integration worktree
-15. sdlc-commit final seal, ff-only promotion, and cleanup
-16. uat from the promoted project checkout
-17. create-pr
-18. review-pr
-19. sdlc-merge-pr, only after explicit user request
+4. sdlc-auto-steering
+5. plan
+6. execution preparation
+7. sdlc-tdd in the integration worktree
+8. implementation dependency waves
+9. validation at the recorded integration HEAD
+10. test at the recorded integration HEAD
+11. evaluation at the recorded integration HEAD
+12. sdlc-update-documents in the integration worktree
+13. general `align` in the integration worktree
+14. sdlc-commit final seal, ff-only promotion, and cleanup
+15. uat from the promoted project checkout
+16. create-pr
+17. review-pr
+18. sdlc-merge-pr, only after explicit user request
 
 `sdlc-auto-steering` also runs at the start of each feature loop, or whenever
 `sdlc-start` sees new steering input, stale steering fingerprints, or
@@ -525,26 +578,29 @@ The preflight must verify and record:
   placement in the workflow contract
 - `sdlc-prepare-execution` discovery, task-graph/state-schema contract, and
   deterministic scheduler plus real-Git lifecycle tests
-- installed `worktree`, installed `nebius-grafana-query`, installed
-  `project-agent-instructions`, and conditional `troubleshoot` availability plus
-  source-installed parity for every required SDLC skill, both runtime support
-  classes, and `sdlc-workflow-test`
+- installed `align`, installed `worktree`, installed
+  `nebius-grafana-query`, and conditional `troubleshoot` availability plus
+  source-installed parity for every required SDLC skill, all four runtime
+  support skills, and
+  `sdlc-workflow-test`
 - named regression capabilities for prompt workspace/history/exact manual
-  rename/lifecycle; execution scope, sessions, `task-recover`, resource-free
+  rename/lifecycle, owner-issued full-spec validation receipts; execution
+  scope, sessions, `task-recover`, resource-free
   `replan-future`, secret gates, and sequential fallback; Task Implementer
   interoperability; and prompt-bound steering continuation
 - deterministic failure-event, diagnosis, repair-control, design-admission,
   corrective-plan, full task-definition digest, and Stop-hook route contracts
 - a composed real-Git test that selects a nested folder in a managed outer
-  worktree, runs schema-v4 execution through promotion, proves the v2 outer
-  lease blocks publication, releases after final evidence, and then acquires
-  the create-PR reservation
+  worktree, runs schema-v7 execution through promotion, proves the v4 outer
+  lease blocks outer integration, releases after final evidence, integrates
+  the child locally, and records exact source proof
 - duplicate SDLC skill-name detection
 - optional PreToolUse and Stop registration; absence is WARN/PARTIAL, while
   malformed configuration, a non-canonical configured entrypoint, source/
   payload mismatch, or unsafe behavior is FAIL
 - preservation of non-SDLC hook boundaries such as `SessionStart` and
-  `UserPromptSubmit`
+  global-context `UserPromptSubmit` behavior plus the capture-only,
+  explicitly bound `prompt-session-intake` registration
 - PreToolUse allow and deny fixture cases
 - registered integration/worker worktree detection, identity-drift denial, and
   exact action-scoped execution authorization
@@ -601,16 +657,14 @@ new workflow CLI and do not let hooks orchestrate phases.
 
 Required happy-path evidence:
 
-- `sdlc-create-requirements` creates committed requirements with stable
-  `REQ-*` IDs.
+- `sdlc-create-requirements`, routed as the shared owner's requirements
+  authoring adapter, creates committed requirements with stable `REQ-*` IDs.
 - `sdlc-start` creates or resumes private local run state and recommends one
   next skill.
 - `sdlc-gather-context` records a compact context pack, including layer and
   boundary facts when the feature may span a vertical slice.
-- `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
-- `project-agent-instructions` records a verified conditional decision and
-  creates or refreshes a selected-project `AGENTS.md` only when current
-  evidence requires durable rules beyond inherited instructions.
+- `sdlc-create-design`, routed as the shared owner's design authoring adapter,
+  creates committed design with stable `FEAT-*` IDs.
 - `sdlc-auto-steering` records active-run steering, classifies mid-run prompts,
   and derives compact reminders without changing product-truth docs.
 - `sdlc-create-plan` writes a private locked task graph with dependencies,
@@ -621,7 +675,7 @@ Required happy-path evidence:
   implementation, including planned
   slice contracts and cross-layer validation targets when present.
 - `sdlc-implement-plan` uses one fresh agent, branch, and worktree per safe task,
-  preserves worker commits, creates ordered merge commits, runs combined
+  preserves coordinator-created task commits, creates ordered merge commits, runs combined
   evidence, and non-force-cleans worker resources.
 - `sdlc-validate-codes`, `sdlc-unit-tests`, and `sdlc-evaluate` record passing
   evidence or route failures for classification, including slice boundary
@@ -630,11 +684,13 @@ Required happy-path evidence:
 - `sdlc-update-documents` updates README, changelog, examples, or usage docs
   when implemented behavior requires it and records documentation evidence.
   Multi-layer behavior docs are backed by evaluated slice evidence.
-- `sdlc-align-specs` confirms requirements, design, plan, implementation,
+- general `align` confirms requirements, design, plan, implementation,
   documentation, slice evidence, and other evidence agree.
-- `sdlc-commit` seals final integration changes, verifies all evidence, and
-  fast-forwards the unchanged project branch to the exact integration tip only
-  after evidence passes, then non-force-cleans the integration resource.
+- `sdlc-commit` seals final integration changes, verifies all evidence and the
+  recorded remote-default identity, removes clean reachable worker resources,
+  and fast-forwards the unchanged project promotion branch to the exact
+  integration tip under the common-Git-directory lock. It then removes the
+  clean integration worktree and deletes its ref at the exact promoted SHA.
 - `sdlc-uat-tests` records product-level UAT evidence after all features are
   committed.
 - private SDLC state, plans, screenshots, transcripts, and evidence stay out
@@ -699,7 +755,7 @@ Repeated standalone destroy returns `ALREADY_DESTROYED`.
 
 Create first runs the unchanged deterministic preflight. It then prepares one
 owned project and uses only `$sdlc-start workspace init <project-folder>` and
-`$sdlc-start run <prompt-path-or-unique-filename>` to build a task-board
+`$sdlc-start run <prompt-ref-or-file>` to build a task-board
 application through the normal phase skills. The logical tiers are a browser
 GUI, Django/Gunicorn web/API server, and PostgreSQL database. Exactly two Docker
 Compose containers run the web and database services. Docker assigns the web
@@ -796,9 +852,11 @@ the contract.
 
 ### `sdlc-create-requirements`
 
-Converts user intent, tickets, issues, Slack threads, Confluence pages, GitHub
-context, or approved change requests into durable requirements in
-`docs/requirements.md`. It preserves stable `REQ-*` IDs, records acceptance
+Acts as the routed Agentic SDLC requirements-authoring adapter to
+`maintain-project-specs`. It converts user intent, tickets, issues, Slack
+threads, Confluence pages, GitHub context, or approved change requests into
+durable managed requirement records in `docs/requirements.md`, preserves
+stable `REQ-*` IDs, records acceptance
 and negative criteria, records optional Live Experiment Environment details for
 safe later evaluation, and marks unclear items as open questions instead of
 guessing.
@@ -836,8 +894,10 @@ pages, threads, or logs.
 
 ### `sdlc-create-design`
 
-Converts requirements and gathered context into `docs/design.md`. It maps
-stable `REQ-*` blocks to stable `FEAT-*` blocks, defines architecture,
+Acts as the routed Agentic SDLC design-authoring adapter to
+`maintain-project-specs`. It converts requirements and gathered context into
+managed feature records in `docs/design.md`, maps stable `REQ-*` blocks to
+stable `FEAT-*` blocks, defines architecture,
 boundaries, vertical end-to-end feature flow, layer map, data flow, control
 flow, state, error handling, security, observability, validation, tests,
 evaluation, rollback, and done criteria.
@@ -864,19 +924,41 @@ vN+1.
 
 ### `project-agent-instructions`
 
-Runs after validated requirements and design and before auto-steering or
-planning. It inspects the exact selected project, inherited instruction chain,
-active project instruction file, and relevant repository evidence. A new file
-is justified only by durable, project-specific, actionable rules that change
-agent behavior beyond inherited guidance.
+This is a separate, explicitly invoked mutation workflow, not an Agentic SDLC
+phase or prerequisite. Agentic SDLC may read its already-effective output and
+advisory status, but never waits for it, runs it automatically, or treats a
+reload as a completion gate. When explicitly invoked, it inspects the exact
+selected project, layered effective Codex
+config, global conflict context, ancestor project instructions, active source,
+ownership receipt, recovery artifacts, and relevant tracked evidence. A new
+file is justified only by durable, project-specific, actionable rules.
 
-The deterministic helper records a private manifest, decision, and state.
-It creates `AGENTS.md` exclusively, refreshes it only when the provenance
-marker and body digest prove the generated file is unchanged, and explicitly
-reads the active file after a write. Human-owned files, same-directory
-`AGENTS.override.md`, and configured fallback files are never overwritten.
-Conflicts, material gaps, unsafe targets, stale provenance, or concurrent
-changes block the workflow instead of silently weakening instructions.
+Ignored target paths and untracked or ignored human project-instruction sources
+fail discovery. For nonempty effective `project_root_markers`, the nearest
+matching directory from the selected project through the enclosing Git root is
+the instruction discovery root while the selected project remains the receipt,
+evidence, and target scope. An empty marker list disables parent traversal at
+the selected project directory.
+
+Plain-language intent that existing users depend on safe future code or
+interface changes is explicit compatibility intent without requiring a magic
+keyword. Unless active same-directory project instructions already provide the
+equivalent contract, render rules that protect supported public APIs/imports,
+CLI behavior, configuration, persisted formats, and upgrade paths; breaking a
+supported surface requires explicit approval, migration or deprecation
+planning, and regression coverage while private internals retain one canonical
+path. Personal global defaults are never copied or allowed to suppress the
+project rule.
+
+The deterministic helper renders structured rules and records a private v3
+manifest, decision, ownership receipt, and final state. It creates exclusively,
+attaches while preserving human prefix bytes, refreshes exact receipted bytes,
+adopts or retires only with exact-digest approval, and treats v1 or v2 as a
+manual-resolution blocker. Human-owned or edited files, same-directory
+`AGENTS.override.md`, and configured fallbacks are never overwritten. A
+surviving lock/backup blocks every transition. Created, attached, refreshed, or
+retired output requires a fresh session and re-verification before the
+coordinator continues.
 
 ### `sdlc-auto-steering`
 
@@ -908,15 +990,30 @@ history cannot be preserved, the workflow stops for human direction.
 
 ### `sdlc-prepare-execution`
 
-Runs after plan lock and before TDD. It requires a clean named non-default
-project branch, validates the locked task graph, creates deterministic waves,
-and prepares or resumes the feature integration branch/worktree at the exact
-project base SHA. The exact folder selected by `workspace init` is enforced as
-the claim, worker-cwd, and changed-path boundary even in a monorepo. It records
-schema-v4 private execution state, supports confirmed interrupted-worker
-transfer and resource-free future-wave replanning, and acquires an
-`agentic-sdlc` v2 lease when nested in a managed outer worktree. It never
-implements behavior, promotes, or force-cleans resources.
+Runs after plan lock and before TDD. It requires a clean project checkout. A
+named non-default branch is reused; a checkout on the verified symbolic
+`origin` default is switched to a deterministic `feature/sdlc-*` promotion
+branch in unmanaged mode. A managed child instead retains its exact local
+branch and `HEAD` without fetching or resolving a remote default. It validates
+the locked task graph and prepares or resumes the feature
+integration branch/worktree at the exact project base SHA. The exact folder
+selected by `workspace init` is enforced as the claim, worker-cwd, and
+changed-path boundary even in a monorepo. It records schema-v7 private
+execution state, supports confirmed interrupted-worker transfer and
+confirmed-stopped prestart requeue by exact dispatch compare-and-swap,
+resource-free future-wave replanning, and acquires an `agentic-sdlc` v4 lease
+when nested in an ordinary managed outer worktree. A Task Implementer
+persistent lane belongs to a separate peer workflow and is rejected before
+Agentic state or lease mutation. Both workflows continue to use Worktree as
+their shared authoritative Git-lifecycle substrate. Partial or missing Task lane
+branch identity for a matching live lane fails closed rather than becoming an
+ordinary managed anchor. It never implements behavior, promotes, or
+force-cleans resources.
+Managed promotion records the exact Git fast-forward in the lease before
+persisting coordinator `promoted` state. Resume reconciles the durable lease,
+local interop, clean outer Git head, and coordinator through promotion, cleanup,
+and done. Release leaves a terminal receipt until the outer worktree lifecycle
+is removed.
 `replan-future` serializes the transition, compares full canonical definitions
 and definition digests for every resource-owning wave, and replaces only
 resource-free planned future waves.
@@ -938,9 +1035,21 @@ creates immutable task assignments, and dispatches one fresh task agent per
 safe task with its own branch and private worktree. Native agents are preferred;
 when unavailable, one fresh sequential `codex exec` process runs with exact
 scope cwd, `workspace-write`, `--ephemeral`, stdin assignment, and structured
-output. Each task validates and reviews inside declared ownership. The
+output. The coordinator arms only a real worker slot and invokes read-only
+`task-watch` every 30 seconds. Each worker must call `task-start` before editing
+and emit direct bounded `task-heartbeat` transitions at least every 30 seconds;
+background heartbeat loops are forbidden. Prestart scope violations outrank
+allowed in-claim mutation; prestart timeout, read-only, stale-heartbeat, and
+maximum-runtime violations interrupt the worker while retaining its recovery
+resources. The sequential fallback owns a dedicated process group per worker
+and terminates that group on every post-spawn failure. After confirmed stop, a
+never-started untouched assignment may be requeued only with the exact dispatch
+timestamp. Each task validates and reviews inside declared ownership. The
 coordinator screens staged content and evidence for obvious secrets/private
-endpoints, then produces one direct-child commit with normal Git hooks. The
+endpoints, persists a digest-bound assignment/base/tree/message/evidence finish
+intent, then produces one direct-child commit with normal Git hooks. Retry
+adopts only the matching clean direct-child commit and exact result across
+either persistence crash window. The
 coordinator verifies results, merges in stable order with explicit merge
 commits, runs combined evidence, and performs non-force worker cleanup before
 advancing. A corrective assignment carries its exact diagnosis and original
@@ -1049,16 +1158,13 @@ stopped as missing evidence/unresolved. Failure to find an implementation bug
 never proves design. Probable or incomplete diagnoses cannot authorize repair
 or redesign.
 
-### `sdlc-align-specs`
+### Alignment
 
-Checks that requirements, design, locked plans, tests, implementation,
-documentation, end-to-end slice evidence, and other evidence tell one
-consistent story. For vertical features, it verifies that the design's feature
-flow and layer map, the locked plan's End-To-End Slice, tests, implementation
-boundaries, validation evidence, evaluation evidence, documentation, and UAT
-all describe the same slice or explicitly record why no slice applies. It is
-SDLC-specific and does not replace the general `align` skill. Drift is routed
-to the responsible SDLC skill.
+The general `align` skill checks that requirements, design, locked plans,
+tests, implementation, documentation, end-to-end slice evidence, and other
+evidence tell one consistent story. Drift is routed to the responsible SDLC
+skill. The legacy `sdlc-align-specs` helper may report advisory context but is
+not a workflow phase or prerequisite.
 
 ### `sdlc-commit`
 
@@ -1074,15 +1180,19 @@ Runs product-level UAT after all feature commits are complete. It builds a UAT
 matrix from requirements, validates cross-feature user journeys and negative
 criteria, may use the confirmed safe Live Experiment Environment within its
 recorded allowed operations and reset rules, records evidence, and marks the
-product ready for `create-pr` only on pass. For a managed outer worktree, final
+product ready for final handoff only on pass. For a managed outer worktree, final
 alignment, UAT, and documentation evidence plus a clean exact promoted head and
-zero internal resources release the Agentic SDLC lease before PR publication.
+zero internal resources release the Agentic SDLC lease into
+`outer-integration-pending`. The coordinator returns the recorded primary path
+plus the exact `$worktree integrate` command and stops for a fresh explicit user
+invocation from that primary checkout; after that separate local merge, the
+workflow records exact source-integration proof. The child is never published.
 
 ### `create-pr`
 
-Reuses the existing PR creation skill as the SDLC PR handoff. In an SDLC run,
-it uses publication-only mode after UAT passes and the Agentic SDLC lease
-releases. Current clean `HEAD`, commit/execution evidence, the exact promoted
+Reuses the existing PR creation skill only for an unmanaged final source
+branch. In that SDLC publication-only mode, it publishes only after UAT passes.
+Current clean `HEAD`, commit/execution evidence, the exact promoted
 SHA, and any existing remote PR head must agree. It does not stage, edit,
 commit, merge the base, resolve conflicts, repair checks, switch branches, or
 publish another SHA. Any required branch change routes through
@@ -1174,11 +1284,11 @@ Typical routes are:
 - ordered merge conflicts -> `sdlc-implement-plan` without history rewrite
 - unsafe worker/integration cleanup -> `CLEANUP_BLOCKED` without force removal
 - moved project/integration state -> `PROMOTION_BLOCKED`
-- any execution coordinator schema v1/v2/v3 record ->
+- any execution coordinator schema v1 through v6 record ->
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
-- documentation drift -> `sdlc-update-documents`, then `sdlc-align-specs`
+- documentation drift -> `sdlc-update-documents`, then `align`
 - local/remote/promoted/reviewed PR head drift -> `PR_HEAD_DRIFT` and human
   ownership input without push, overwrite, or merge
 - environment defects -> stop or request the minimum missing setup
@@ -1235,8 +1345,10 @@ alignment, or commit may continue.
 
 Git actions are intentionally split:
 
-- Task agents create one scoped worker commit through the private transition
-  helper; the coordinator creates ordered merge commits.
+- Task agents produce scoped uncommitted changes, validation, review, and
+  handoff evidence. Coordinator-owned `task-finish` checks liveness and claims,
+  creates one scoped direct-child task commit on the worker branch, and the coordinator then
+  creates ordered merge commits.
 - `sdlc-commit` seals final integration changes, performs exact ff-only local
   promotion, and never pushes.
 - In active Agentic SDLC mode, `create-pr` only publishes the clean exact
@@ -1296,7 +1408,7 @@ Stable IDs are part of the design:
   whether to resume, retain, or block.
 - Worker and merge commits are retained. No rebase, squash, amend, reset,
   cherry-pick, or force cleanup is used by the execution plane.
-- Every execution coordinator schema v1, v2, or v3 record fails closed with
+- Every execution coordinator schema v1 through v6 record fails closed with
   `WORKFLOW_UPGRADE_REQUIRED` without mutation, including completed records.
 - An unfinished pre-prompt run also fails with `WORKFLOW_UPGRADE_REQUIRED`;
   completed unbound history remains readable without an adoption shim.

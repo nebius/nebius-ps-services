@@ -75,6 +75,7 @@ def _runtime_payload() -> dict:
 def _mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, str]:
     return {
         "component_id": "mk8s",
+        "ownership": "managed",
         "instance_id": target_ref,
         "target_ref": target_ref,
         "cluster_id_output_name": f"{target_ref.replace('-', '_')}_cluster_id",
@@ -137,6 +138,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     assert manifest["deploy"]["targets"] == [
         {
             "component_id": "mk8s",
+            "ownership": "managed",
             "instance_id": "mk8s",
             "target_ref": "mk8s",
             "cluster_id_output_name": "mk8s_cluster_id",

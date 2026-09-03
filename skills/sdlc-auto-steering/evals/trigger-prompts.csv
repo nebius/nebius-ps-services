@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-steering-positive-01,true,"Refresh steering for this active prompt-bound SDLC run after the accepted prompt revision."
+sdlc-steering-positive-02,true,"Capture the latest same-prompt constraints before selecting the next SDLC phase."
+sdlc-steering-positive-03,true,"Reconcile active SDLC steering with requirements design plans fingerprints and evidence."
+sdlc-steering-negative-01,false,"Edit this standalone project prompt file."
+sdlc-steering-negative-02,false,"Brainstorm a new feature direction before starting SDLC."
+sdlc-steering-negative-03,false,"Start an Agentic SDLC run for this prompt."

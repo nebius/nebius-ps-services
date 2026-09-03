@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-tdd-positive-01,true,"Write tests first for this prepared Agentic SDLC feature before implementation waves begin."
+sdlc-tdd-positive-02,true,"Define the current SDLC feature's acceptance behavior in failing tests."
+sdlc-tdd-positive-03,true,"Create test-first coverage for the planned end-to-end SDLC slice."
+sdlc-tdd-negative-01,false,"Add tests after implementing this ordinary bug fix."
+sdlc-tdd-negative-02,false,"Run the existing SDLC unit and integration tests."
+sdlc-tdd-negative-03,false,"Prepare the SDLC integration worktree and task waves."

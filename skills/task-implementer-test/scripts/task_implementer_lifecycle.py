@@ -411,9 +411,13 @@ def _validate_project(
         raise OwnershipBlockedError(
             "project Git root does not match the owned directory"
         )
+    origin = run_path / "origin.git"
+    if origin.is_symlink() or not origin.is_dir():
+        raise OwnershipBlockedError("owned local origin is missing or symlinked")
     remotes = _git_value(project, "remote")
-    if remotes:
-        raise OwnershipBlockedError("owned project unexpectedly has a Git remote")
+    remote_url = _git_value(project, "remote", "get-url", "origin")
+    if remotes != "origin" or Path(remote_url).resolve() != origin.resolve():
+        raise OwnershipBlockedError("owned project local origin identity changed")
     if for_destroy:
         worktrees = _git_value(project, "worktree", "list", "--porcelain")
         for line in worktrees.splitlines():
@@ -960,12 +964,25 @@ def prepare(root: Path, fixture: Path) -> dict[str, Any]:
             git_hooks = run_path / "empty-git-hooks"
             git_template.mkdir(mode=0o700)
             git_hooks.mkdir(mode=0o700)
+            origin = run_path / "origin.git"
+            _run(
+                [
+                    "git",
+                    "init",
+                    "--bare",
+                    "--initial-branch",
+                    "main",
+                    f"--template={git_template}",
+                    str(origin),
+                ],
+                cwd=run_path,
+            )
             _run(
                 [
                     "git",
                     "init",
                     "--initial-branch",
-                    "task-implementer-test",
+                    "main",
                     f"--template={git_template}",
                 ],
                 cwd=project,
@@ -986,6 +1003,20 @@ def prepare(root: Path, fixture: Path) -> dict[str, Any]:
                 ["git", "commit", "-m", "Seed disposable multi-tier fixture"],
                 cwd=project,
             )
+            _run(["git", "remote", "add", "origin", str(origin)], cwd=project)
+            _run(["git", "push", "-u", "origin", "main"], cwd=project)
+            _run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=origin)
+            _run(["git", "fetch", "origin"], cwd=project)
+            _run(
+                [
+                    "git",
+                    "symbolic-ref",
+                    "refs/remotes/origin/HEAD",
+                    "refs/remotes/origin/main",
+                ],
+                cwd=project,
+            )
+            _run(["git", "switch", "-c", "task-implementer-test"], cwd=project)
             baseline = _run(["git", "rev-parse", "HEAD"], cwd=project).stdout.strip()
             state: dict[str, Any] = {
                 "active": True,
@@ -1008,7 +1039,7 @@ def prepare(root: Path, fixture: Path) -> dict[str, Any]:
                 state,
                 "fixture-preparation",
                 "PASS",
-                "Owned remote-free fixture and isolated Task Implementer state were created.",
+                "Owned local-only fixture, origin, and isolated Task Implementer state were created.",
             )
             _atomic_json(run_path / "lifecycle.json", state)
             _atomic_json(

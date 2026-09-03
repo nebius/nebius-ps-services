@@ -35,7 +35,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.repo_root = find_repo_root()
         if self.repo_root is None:
-            self.skipTest("install-skills.sh is not available next to this installed skill copy")
+            self.skipTest(
+                "install-skills.sh is not available next to this installed skill copy"
+            )
         self.installer = self.repo_root / "install-skills.sh"
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -74,7 +76,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
 
     def hook_provenance(self) -> dict[str, dict[str, str]]:
         entries: dict[str, dict[str, str]] = {}
-        for line in self.hook_provenance_path().read_text(encoding="utf-8").splitlines():
+        for line in (
+            self.hook_provenance_path().read_text(encoding="utf-8").splitlines()
+        ):
             dest_rel, source_id, source_rel, source_sha, target_sha = line.split("\t")
             entries[dest_rel] = {
                 "source_id": source_id,
@@ -88,7 +92,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def make_hook_source(self, files: dict[str, str]) -> Path:
-        hook_source = self.root / f"hook-source-{len(list(self.root.glob('hook-source-*')))}"
+        hook_source = (
+            self.root / f"hook-source-{len(list(self.root.glob('hook-source-*')))}"
+        )
         for relative_path, content in files.items():
             target = hook_source / relative_path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +326,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             indent=2,
             sort_keys=True,
         )
-        (self.codex_home / "hooks.json").write_text(original_hooks + "\n", encoding="utf-8")
+        (self.codex_home / "hooks.json").write_text(
+            original_hooks + "\n", encoding="utf-8"
+        )
         return original_hooks + "\n"
 
     def assert_failed_before_mutation(
@@ -329,9 +337,13 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         original_config: str,
     ) -> None:
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.config_path().read_text(encoding="utf-8"), original_config)
+        self.assertEqual(
+            self.config_path().read_text(encoding="utf-8"), original_config
+        )
         self.assertFalse(self.selector_path().exists())
-        self.assertEqual(list(self.codex_home.glob("config.toml.bak.agent-nebius-auth.*")), [])
+        self.assertEqual(
+            list(self.codex_home.glob("config.toml.bak.agent-nebius-auth.*")), []
+        )
         self.assertFalse((self.codex_home / "hooks.json").exists())
         self.assertFalse(self.installed_hook_path().exists())
         self.assertIn("inline config.toml hook entry detected", result.stderr)
@@ -355,7 +367,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             original_hook_payload,
         )
         self.assertFalse(self.hook_provenance_path().exists())
-        self.assertFalse((self.codex_home / ".install-hooks-state" / "backups").exists())
+        self.assertFalse(
+            (self.codex_home / ".install-hooks-state" / "backups").exists()
+        )
         self.assertIn("Refusing to register duplicate", result.stderr)
 
     def test_register_hooks_duplicate_fails_before_payload_overwrite(self) -> None:
@@ -380,11 +394,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         existing["hooks"]["PreToolUse"][0]["matcher"] = "^OldBash$"
         existing["owner"] = "preserve-me"
         existing["hooks"]["Stop"] = [
-            {
-                "hooks": [
-                    {"type": "command", "command": "python3 /other/keep_me.py"}
-                ]
-            }
+            {"hooks": [{"type": "command", "command": "python3 /other/keep_me.py"}]}
         ]
         hooks_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
 
@@ -404,8 +414,65 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertEqual(len(list(self.codex_home.glob("hooks.json.bak.*"))), 1)
 
+    def test_project_spec_manifest_retires_only_obsolete_observer_events(self) -> None:
+        command = (
+            'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/'
+            'project_specs_lifecycle.py"'
+        )
+        unrelated = {
+            "hooks": [{"type": "command", "command": "python3 /other/keep_me.py"}]
+        }
+        self.codex_home.joinpath("hooks.json").write_text(
+            json.dumps(
+                {
+                    "owner": "preserve-me",
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+                                "hooks": [{"type": "command", "command": command}],
+                            },
+                            unrelated,
+                        ],
+                        "PostToolUse": [
+                            {
+                                "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+                                "hooks": [{"type": "command", "command": command}],
+                            }
+                        ],
+                        "Stop": [unrelated],
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        source = self.repo_root / "maintain-project-specs/assets/hooks"
+
+        result = self.run_custom_hook_installer(source, "--register-hooks")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installed = json.loads(
+            self.codex_home.joinpath("hooks.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(installed["owner"], "preserve-me")
+        self.assertEqual(installed["hooks"]["PreToolUse"], [unrelated])
+        self.assertEqual(installed["hooks"]["PostToolUse"], [])
+        self.assertEqual(installed["hooks"]["Stop"], [unrelated])
+        observer_events = [
+            event
+            for event, groups in installed["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "project_specs_lifecycle.py" in hook["command"]
+        ]
+        self.assertEqual(observer_events, ["SessionStart", "UserPromptSubmit"])
+
     def test_targeted_refresh_can_remove_only_status_message_metadata(self) -> None:
-        command = 'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_status_refresh.py"'
+        command = (
+            'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_status_refresh.py"'
+        )
         registration = {
             "hooks": {
                 "PreToolUse": [
@@ -544,7 +611,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
 
-    def test_install_all_hooks_duplicate_registration_fails_before_payload_overwrite(self) -> None:
+    def test_install_all_hooks_duplicate_registration_fails_before_payload_overwrite(
+        self,
+    ) -> None:
         original_hooks_json = self.write_duplicate_hooks_json_registration()
         self.installed_hook_path().parent.mkdir(parents=True, exist_ok=True)
         original_hook_payload = "# local hook customization\n"
@@ -558,7 +627,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             original_hook_payload,
         )
 
-    def test_register_hooks_fails_when_marked_inline_config_toml_hook_exists(self) -> None:
+    def test_register_hooks_fails_when_marked_inline_config_toml_hook_exists(
+        self,
+    ) -> None:
         self.write_inline_config_block()
         original_config = self.config_path().read_text(encoding="utf-8")
 
@@ -574,7 +645,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
 
         self.assert_failed_before_mutation(result, original_config)
 
-    def test_register_hooks_fails_when_unmarked_inline_config_toml_hook_exists(self) -> None:
+    def test_register_hooks_fails_when_unmarked_inline_config_toml_hook_exists(
+        self,
+    ) -> None:
         self.write_unmarked_inline_config_entry()
         original_config = self.config_path().read_text(encoding="utf-8")
 
@@ -598,7 +671,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
 
         self.assert_failed_before_mutation(result, original_config)
 
-    def test_copy_only_install_all_fails_when_inline_config_toml_hook_exists(self) -> None:
+    def test_copy_only_install_all_fails_when_inline_config_toml_hook_exists(
+        self,
+    ) -> None:
         self.write_inline_config_block()
         original_config = self.config_path().read_text(encoding="utf-8")
 
@@ -629,7 +704,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
         entry = self.hook_provenance()["pre_tool_use_nebius_auth.py"]
         self.assertEqual(entry["source_sha"], self.file_sha256(source_hook))
-        self.assertEqual(entry["target_sha"], self.file_sha256(self.installed_hook_path()))
+        self.assertEqual(
+            entry["target_sha"], self.file_sha256(self.installed_hook_path())
+        )
 
     def test_hook_install_overwrites_customized_hook_file_and_registers(self) -> None:
         self.installed_hook_path().parent.mkdir(parents=True, exist_ok=True)
@@ -661,10 +738,14 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         entries = self.hook_provenance()
         self.assertIn("pre_tool_use_nebius_auth.py", entries)
         entry = entries["pre_tool_use_nebius_auth.py"]
-        self.assertEqual(entry["source_id"], f"local:{(self.repo_root / HOOK_SOURCE).resolve()}")
+        self.assertEqual(
+            entry["source_id"], f"local:{(self.repo_root / HOOK_SOURCE).resolve()}"
+        )
         self.assertEqual(entry["source_rel"], "pre_tool_use_nebius_auth.py")
         self.assertEqual(entry["source_sha"], self.file_sha256(source_hook))
-        self.assertEqual(entry["target_sha"], self.file_sha256(self.installed_hook_path()))
+        self.assertEqual(
+            entry["target_sha"], self.file_sha256(self.installed_hook_path())
+        )
 
     def test_source_changed_existing_hook_overwrites_with_backup(self) -> None:
         hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
@@ -677,7 +758,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         target = self.installed_hook_target("demo.py")
         self.assertEqual(target.read_text(encoding="utf-8"), "print('v2')\n")
-        backups = list((self.codex_home / ".install-hooks-state" / "backups").glob("*/demo.py"))
+        backups = list(
+            (self.codex_home / ".install-hooks-state" / "backups").glob("*/demo.py")
+        )
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(encoding="utf-8"), "print('v1')\n")
         entry = self.hook_provenance()["demo.py"]
@@ -714,7 +797,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         self.assertEqual(target.read_text(encoding="utf-8"), "print('v1')\n")
-        backups = list((self.codex_home / ".install-hooks-state" / "backups").glob("*/demo.py"))
+        backups = list(
+            (self.codex_home / ".install-hooks-state" / "backups").glob("*/demo.py")
+        )
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
         entry = self.hook_provenance()["demo.py"]
@@ -730,8 +815,17 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         result = self.run_all_hooks_installer_copy_only()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        source_hook = self.repo_root / "sdlc-start" / "assets" / "hooks" / "tests" / "test_sdlc_hooks.py"
-        self.assertEqual(target.read_text(encoding="utf-8"), source_hook.read_text(encoding="utf-8"))
+        source_hook = (
+            self.repo_root
+            / "sdlc-start"
+            / "assets"
+            / "hooks"
+            / "tests"
+            / "test_sdlc_hooks.py"
+        )
+        self.assertEqual(
+            target.read_text(encoding="utf-8"), source_hook.read_text(encoding="utf-8")
+        )
         backups = list(
             (self.codex_home / ".install-hooks-state" / "backups").glob(
                 "*/tests/test_sdlc_hooks.py"
@@ -741,7 +835,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
 
     def test_overwrite_hook_files_flag_is_removed(self) -> None:
-        removed_flag = "--overwrite" "-hook-files"
+        removed_flag = "--overwrite-hook-files"
         help_result = subprocess.run(
             ["bash", str(self.installer), "--help"],
             cwd=str(self.repo_root),
@@ -764,7 +858,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             check=False,
         )
 
-        self.assertEqual(help_result.returncode, 0, help_result.stdout + help_result.stderr)
+        self.assertEqual(
+            help_result.returncode, 0, help_result.stdout + help_result.stderr
+        )
         self.assertNotIn(removed_flag, help_result.stdout)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"unknown option: {removed_flag}", result.stderr)
@@ -801,33 +897,212 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
 
         self.assertIn("unchanged agent-nebius-auth-setup/assets/hooks", second.stdout)
         self.assertIn("unchanged config-codex/assets/hooks", second.stdout)
+        self.assertIn("unchanged maintain-project-specs/assets/hooks", second.stdout)
+        self.assertIn("unchanged prompt-session-intake/assets/hooks", second.stdout)
         self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
         self.assertIn("unchanged troubleshoot/assets/hooks", second.stdout)
         self.assertIn("files: unchanged 3", second.stdout)
         self.assertIn("files: unchanged 4", second.stdout)
-        self.assertIn("files: unchanged 6", second.stdout)
-        self.assertIn("files: unchanged 2", second.stdout)
+        self.assertIn("files: unchanged 7", second.stdout)
+        self.assertIn("files: unchanged 8", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
-        self.assertIn("Summary: files updated 0, unchanged 15; registrations unchanged 7", second.stdout)
+        self.assertIn(
+            "Summary: files updated 0, unchanged 31; registrations unchanged 13",
+            second.stdout,
+        )
         self.assertTrue(
             self.installed_hook_target("remediation_attempt_guard.py").is_file()
         )
         hooks = json.loads((self.codex_home / "hooks.json").read_text(encoding="utf-8"))
-        remediation_events = {
+        remediation_events = [
             event
             for event, groups in hooks["hooks"].items()
             for group in groups
             for hook in group["hooks"]
             if "remediation_attempt_guard.py" in hook["command"]
-        }
-        self.assertEqual(remediation_events, {"PreToolUse", "Stop"})
+        ]
+        self.assertEqual(len(remediation_events), 2)
+        self.assertEqual(set(remediation_events), {"UserPromptSubmit", "PreToolUse"})
+        arbiter_events = [
+            event
+            for event, groups in hooks["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "stop_lifecycle_arbiter.py" in hook["command"]
+        ]
+        self.assertEqual(arbiter_events, ["Stop"])
+        prompt_events = [
+            event
+            for event, groups in hooks["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "prompt_session_intake.py" in hook["command"]
+        ]
+        self.assertEqual(prompt_events, ["UserPromptSubmit"])
         self.assertNotIn("Discovered hook source directories", second.stdout)
         self.assertNotIn("Template suffixes were stripped", second.stdout)
         self.assertNotIn("Hook files:", second.stdout)
         self.assertNotIn("Hook registrations:", second.stdout)
         self.assertNotIn("This did not modify hooks.json", second.stdout)
-        self.assertNotIn("Action required: hook files or registrations changed", second.stderr)
+        self.assertNotIn(
+            "Action required: hook files or registrations changed", second.stderr
+        )
+
+    def test_installed_prompt_intake_never_blocks_direct_delivery(self) -> None:
+        installed = self.run_all_hooks_installer()
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        hook = self.installed_hook_target("prompt_session_intake.py")
+        project = self.root / "prompt-project"
+        project.mkdir(mode=0o700)
+        base = {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "prompt-session",
+            "turn_id": "bind",
+            "cwd": str(project),
+            "codex_home": str(self.codex_home),
+        }
+
+        def invoke(prompt: str, turn_id: str) -> tuple[dict[str, object], str]:
+            result = subprocess.run(
+                [sys.executable, str(hook)],
+                input=json.dumps({**base, "turn_id": turn_id, "prompt": prompt}),
+                cwd=str(project),
+                env=self.env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stderr, "")
+            return json.loads(result.stdout), result.stdout
+
+        bound, _ = invoke("$task-implementer workspace init", "bind")
+        self.assertTrue(bound["continue"])
+        conflict, conflict_output = invoke(
+            "$sdlc-start workspace init", "binding-conflict"
+        )
+        self.assertTrue(conflict["continue"])
+        self.assertNotIn("stopReason", conflict)
+        self.assertIn("BINDING_CONFLICT", conflict_output)
+
+        secret = "OPENAI_API_KEY=" + "sk-" + ("a" * 24)
+        secret_result, secret_output = invoke(secret, "secret")
+        self.assertTrue(secret_result["continue"])
+        self.assertNotIn("stopReason", secret_result)
+        self.assertNotIn(secret, secret_output)
+        event_root = self.codex_home / "prompt-session-intake" / "sessions"
+        self.assertFalse(any(event_root.rglob("raw.md")))
+
+    def test_install_all_migrates_only_legacy_stop_owners_to_arbiter(self) -> None:
+        unrelated = {
+            "matcher": "custom",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "python3 /tmp/custom_stop.py",
+                    "timeout": 10,
+                }
+            ],
+        }
+        legacy_sdlc = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": 'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/stop_sdlc_continue.py"',
+                    "timeout": 30,
+                }
+            ]
+        }
+        legacy_troubleshoot = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": 'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/remediation_attempt_guard.py"',
+                    "timeout": 30,
+                }
+            ]
+        }
+        self.codex_home.mkdir(parents=True, exist_ok=True)
+        (self.codex_home / "hooks.json").write_text(
+            json.dumps(
+                {"hooks": {"Stop": [legacy_sdlc, unrelated, legacy_troubleshoot]}},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_all_hooks_installer()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        hooks = json.loads((self.codex_home / "hooks.json").read_text())
+        stop_groups = hooks["hooks"]["Stop"]
+        commands = [hook["command"] for group in stop_groups for hook in group["hooks"]]
+        self.assertEqual(
+            sum("stop_lifecycle_arbiter.py" in item for item in commands), 1
+        )
+        self.assertFalse(any("stop_sdlc_continue.py" in item for item in commands))
+        self.assertFalse(
+            any("remediation_attempt_guard.py" in item for item in commands)
+        )
+        self.assertTrue(any("custom_stop.py" in item for item in commands))
+        self.assertIn(
+            "Retired exact obsolete managed hook registrations", result.stdout
+        )
+        self.assertEqual(len(list(self.codex_home.glob("hooks.json.bak.*"))), 1)
+
+    def test_stop_migration_rejects_basename_collision_without_mutation(self) -> None:
+        custom = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "python3 /tmp/custom/remediation_attempt_guard.py",
+                    "timeout": 10,
+                }
+            ]
+        }
+        hooks_path = self.codex_home / "hooks.json"
+        hooks_path.write_text(
+            json.dumps({"hooks": {"Stop": [custom]}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        before = hooks_path.read_bytes()
+
+        result = self.run_all_hooks_installer()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exact managed command", result.stderr)
+        self.assertEqual(hooks_path.read_bytes(), before)
+        self.assertFalse((self.codex_home / "hooks").exists())
+
+    def test_stop_migration_rejects_custom_interpreter_without_mutation(self) -> None:
+        custom = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": (
+                        '"/tmp/custom/python3" '
+                        '"${CODEX_HOME:-$HOME/.codex}/hooks/'
+                        'remediation_attempt_guard.py"'
+                    ),
+                    "timeout": 30,
+                }
+            ]
+        }
+        hooks_path = self.codex_home / "hooks.json"
+        hooks_path.write_text(
+            json.dumps({"hooks": {"Stop": [custom]}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        before = hooks_path.read_bytes()
+
+        result = self.run_all_hooks_installer()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exact managed command", result.stderr)
+        self.assertEqual(hooks_path.read_bytes(), before)
+        self.assertFalse((self.codex_home / "hooks").exists())
 
     def test_repeated_register_hooks_is_idempotent_and_hook_runs(self) -> None:
         first = self.run_installer()
@@ -846,15 +1121,18 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertFalse(self.selector_path().exists())
         self.assertEqual(len(self.hook_registrations()), 1)
         self.assertTrue(self.installed_hook_path().is_file())
-        self.assertTrue(
-            self.installed_hook_target("nebius_auth_shared.py").is_file()
-        )
+        self.assertTrue(self.installed_hook_target("nebius_auth_shared.py").is_file())
         self.assertTrue(
             self.installed_hook_target("nebius_auth_token_helper.py").is_file()
         )
         self.assertIn("registrations: unchanged 1", second.stdout)
-        self.assertIn("Summary: files updated 0, unchanged 3; registrations unchanged 1", second.stdout)
-        self.assertNotIn("Action required: hook files or registrations changed", second.stderr)
+        self.assertIn(
+            "Summary: files updated 0, unchanged 3; registrations unchanged 1",
+            second.stdout,
+        )
+        self.assertNotIn(
+            "Action required: hook files or registrations changed", second.stderr
+        )
 
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
         credential.write_text(
@@ -923,15 +1201,15 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             "tool_input": {
                 "command": (
                     f"CODEX_NEBIUS_PROJECT_ID={PROJECT} "
-                    "python3 \"$CODEX_NEBIUS_TOKEN_HELPER\" retry-idempotent -- "
+                    'python3 "$CODEX_NEBIUS_TOKEN_HELPER" retry-idempotent -- '
                     f"{operation} && "
                     "python3 -c 'import os; "
-                    "assert \"NEBIUS_IAM_TOKEN\" not in os.environ; "
-                    "assert \"TOKEN\" not in os.environ; "
-                    f"assert os.environ[\"NEBIUS_PROFILE\"] == \"codex-agent-{PROJECT}\"; "
-                    f"assert os.environ[\"NEBIUS_PROJECT_ID\"] == \"{PROJECT}\"; "
-                    "assert os.environ[\"NEBIUS_AUTH_CREDENTIALS_FILE\"] == "
-                    "os.environ[\"EXPECTED_CREDENTIALS_FILE\"]' "
+                    'assert "NEBIUS_IAM_TOKEN" not in os.environ; '
+                    'assert "TOKEN" not in os.environ; '
+                    f'assert os.environ["NEBIUS_PROFILE"] == "codex-agent-{PROJECT}"; '
+                    f'assert os.environ["NEBIUS_PROJECT_ID"] == "{PROJECT}"; '
+                    'assert os.environ["NEBIUS_AUTH_CREDENTIALS_FILE"] == '
+                    'os.environ["EXPECTED_CREDENTIALS_FILE"]\' '
                     "# api.nebius.cloud"
                 ),
             },

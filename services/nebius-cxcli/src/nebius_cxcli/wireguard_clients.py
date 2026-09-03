@@ -20,6 +20,7 @@ from .component_instances import component_instance_id, component_instance_label
 from .component_sources import component_output_root_name
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
+from .ssh_trust import ssh_trust_options
 
 WIREGUARD_COMPONENT_ID = "wireguard-gw"
 WIREGUARD_CLIENT_OUTPUT_DIR = "wireguard-clients"
@@ -44,6 +45,7 @@ class WireGuardClientGenerationRequest:
     public_ip: str
     ssh_user: str
     ssh_private_key: Path | None
+    ssh_known_hosts_file: Path
     client_name: str | None
     local_subnets: tuple[str, ...]
     dns: tuple[str, ...]
@@ -69,6 +71,7 @@ class WireGuardLocalSubnetUpdateRequest:
     public_ip: str
     ssh_user: str
     ssh_private_key: Path | None
+    ssh_known_hosts_file: Path
     operation: str
     local_subnets: tuple[str, ...]
 
@@ -258,6 +261,7 @@ def _ssh_command_parts(
     ssh_user: str,
     public_ip: str,
     ssh_private_key: Path | None,
+    ssh_known_hosts_file: Path,
     remote_parts: Sequence[str],
 ) -> list[str]:
     remote_command = " ".join(shlex.quote(part) for part in remote_parts)
@@ -265,9 +269,8 @@ def _ssh_command_parts(
         "ssh",
         "-o",
         "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
     ]
+    command.extend(ssh_trust_options(ssh_known_hosts_file))
     if ssh_private_key is not None:
         command.extend(["-i", str(ssh_private_key.expanduser())])
     command.extend([f"{ssh_user}@{public_ip}", remote_command])
@@ -293,6 +296,7 @@ def _ssh_command(request: WireGuardClientGenerationRequest) -> list[str]:
         ssh_user=request.ssh_user,
         public_ip=request.public_ip,
         ssh_private_key=request.ssh_private_key,
+        ssh_known_hosts_file=request.ssh_known_hosts_file,
         remote_parts=remote_parts,
     )
 
@@ -312,6 +316,7 @@ def _ssh_local_subnet_update_command(request: WireGuardLocalSubnetUpdateRequest)
         ssh_user=request.ssh_user,
         public_ip=request.public_ip,
         ssh_private_key=request.ssh_private_key,
+        ssh_known_hosts_file=request.ssh_known_hosts_file,
         remote_parts=remote_parts,
     )
 
@@ -333,11 +338,12 @@ def generate_wireguard_client_config(
         raise ValueError("--persistent-keepalive must be between 0 and 65535")
 
     request = replace(request, client_name=resolved_client_name)
+    ssh_command = _ssh_command(request)
     request.output_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(request.output_dir, 0o700)
     try:
         completed = run_command(
-            _ssh_command(request),
+            ssh_command,
             check=True,
             capture_output=True,
             text=True,

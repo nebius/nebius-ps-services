@@ -62,7 +62,8 @@ queries by `authentication.subject.tenant_user_id` or
 - `references/audit-log-querying.md`: official Nebius command and field notes.
 - `scripts/query_audit_logs.py`: read-only query helper.
 - `scripts/test_query_audit_logs.py`: unit tests using a fake `nebius` CLI.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental query workflow cases.
 
 ## Validation
 

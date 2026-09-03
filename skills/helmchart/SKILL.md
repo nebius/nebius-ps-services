@@ -1,9 +1,25 @@
 ---
 name: helmchart
-description: "Use for Helm chart work: create, review, harden, refactor, lint, template, or standardize Chart.yaml, values.yaml, values.schema.json, templates/, NOTES.txt, README, and chart CI. Do not use for OCI chart publication flow generation; use publish-helm. Do not use for plain Kubernetes YAML, Kustomize, Dockerfiles, or Terraform unless integrating with Helm."
+description: "Create, review, harden, refactor, lint, or standardize Helm charts, values/schema, templates, NOTES, README, and chart CI. Use publish-helm for OCI publication; not for plain Kubernetes, Dockerfiles, or Terraform."
 ---
 
 # Helm Chart
+
+## Help
+
+For `$helmchart --help` or `$helmchart -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Harden Helm charts for production and verify they render safely and consistently.
 

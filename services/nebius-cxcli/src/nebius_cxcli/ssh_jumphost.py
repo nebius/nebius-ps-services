@@ -14,6 +14,7 @@ from typing import Any
 from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .component_sources import component_output_root_name
 from .runtime_config import to_plain_data
+from .ssh_trust import ssh_trust_options
 
 SSH_JUMPHOST_COMPONENT_ID = "ssh-jumphost"
 
@@ -35,6 +36,7 @@ class SshJumphostAllowedCidrRequest:
     public_ip: str
     ssh_user: str
     ssh_private_key: Path | None
+    ssh_known_hosts_file: Path
     operation: str
     allowed_cidrs: tuple[str, ...] = ()
 
@@ -166,6 +168,7 @@ def _ssh_command_parts(
     ssh_user: str,
     public_ip: str,
     ssh_private_key: Path | None,
+    ssh_known_hosts_file: Path,
     remote_parts: Sequence[str],
 ) -> list[str]:
     remote_command = " ".join(shlex.quote(part) for part in remote_parts)
@@ -173,9 +176,8 @@ def _ssh_command_parts(
         "ssh",
         "-o",
         "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
     ]
+    command.extend(ssh_trust_options(ssh_known_hosts_file))
     if ssh_private_key is not None:
         command.extend(["-i", str(ssh_private_key.expanduser())])
     command.extend([f"{ssh_user}@{public_ip}", remote_command])
@@ -185,11 +187,7 @@ def _ssh_command_parts(
 def _ssh_allowed_cidr_command(request: SshJumphostAllowedCidrRequest) -> list[str]:
     if request.operation not in {"add", "remove", "list"}:
         raise ValueError("SSH jump-host allowed CIDR operation must be add, remove, or list")
-    remote_action = (
-        "list"
-        if request.operation == "list"
-        else f"{request.operation}-allowed-cidrs"
-    )
+    remote_action = "list" if request.operation == "list" else f"{request.operation}-allowed-cidrs"
     remote_parts = [
         "sudo",
         "/usr/local/sbin/nebius-ssh-jumphost",
@@ -202,6 +200,7 @@ def _ssh_allowed_cidr_command(request: SshJumphostAllowedCidrRequest) -> list[st
         ssh_user=request.ssh_user,
         public_ip=request.public_ip,
         ssh_private_key=request.ssh_private_key,
+        ssh_known_hosts_file=request.ssh_known_hosts_file,
         remote_parts=remote_parts,
     )
 

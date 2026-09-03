@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-unit-positive-01,true,"Run the behavior tests for this validated Agentic SDLC feature."
+sdlc-unit-positive-02,true,"Execute unit integration contract and regression tests for the active SDLC slice."
+sdlc-unit-positive-03,true,"Verify the feature tests against the acceptance criteria before evaluation."
+sdlc-unit-negative-01,false,"Write the tests first before implementing the SDLC plan."
+sdlc-unit-negative-02,false,"Run whole-product UAT before pull request creation."
+sdlc-unit-negative-03,false,"Optimize the performance of this project's pytest suite."

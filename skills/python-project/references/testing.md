@@ -129,13 +129,19 @@ Prefer explicit local targets:
 .DEFAULT_GOAL := all
 
 all: check build
+lock-check:
+	uv lock --check
+sync: lock-check
+	uv sync --locked
+lint: sync
+	uv run --locked ruff check src tests
 test: test-unit
-test-unit:
-	python -m pytest -m "not integration" tests/unit
-test-integration:
-	python -m pytest -m integration tests/integration
-coverage:
-	python -m pytest --cov=<package_name> --cov-report=term-missing tests/unit
+test-unit: sync
+	uv run --locked pytest -m "not integration" tests/unit
+test-integration: sync
+	uv run --locked pytest -m integration tests/integration
+coverage: sync
+	uv run --locked pytest --cov=<package_name> --cov-report=term-missing tests/unit
 check: lint test-unit
 ```
 
@@ -157,6 +163,10 @@ Recommended workflow split:
   - packaging
 
 Use `pytest-xdist` in CI for the fast lane when the test suite benefits from parallelism.
+Run CI through `uv sync --locked` and `uv run --locked` so every lane uses the
+reviewed graph. For a published library, add the isolated lower-bound lane from
+`dependency-management.md`; do not replace the normal committed lock with that
+test resolution.
 
 ## Test Selection Guidance
 

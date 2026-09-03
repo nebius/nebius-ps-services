@@ -18,11 +18,11 @@ can fix the cause.
 | CLEANUP_BLOCKED | A worker or integration resource cannot be proven clean, reachable, and registered for non-force removal. | owning execution phase or human input |
 | PROMOTION_BLOCKED | Project or integration identity/evidence drift prevents exact ff-only promotion. | sdlc-commit or responsible earlier phase |
 | PROMOTION_FAILED | Fast-forward promotion ran but exact target equality could not be proven. | sdlc-commit and human input |
-| WORKFLOW_UPGRADE_REQUIRED | Private execution uses unsupported coordinator schema v1, v2, or v3, including a completed record; or an unfinished run lacks its required managed prompt binding. | stop without mutation and start a new coordinator-v4 or prompt-bound run |
+| WORKFLOW_UPGRADE_REQUIRED | Private execution uses unsupported coordinator schema v1 through v6, including a completed record; or an unfinished run lacks its required managed prompt binding. | stop without mutation and start a new coordinator-v7 or prompt-bound run |
 | VALIDATION_DEFECT | Syntax, lint, type, import, config, dependency, or build check fails. | sdlc-validate-codes or sdlc-implement-plan |
 | EVALUATION_DEFECT | The evaluator or evaluation harness is proven wrong, or the observed acceptance failure still lacks a proven owner. | proven evaluator defect: sdlc-evaluate; ambiguous cause: troubleshoot exactly once |
 | UAT_DEFECT | Cross-feature or product-level acceptance fails. | classify to responsible phase |
-| DOCUMENTATION_DRIFT | Project-facing documentation, examples, changelog, or requirement/design traceability no longer matches the accepted implementation and evidence. | sdlc-update-documents, then sdlc-align-specs |
+| DOCUMENTATION_DRIFT | Project-facing documentation, examples, changelog, or requirement/design traceability no longer matches the accepted implementation and evidence. | sdlc-update-documents, then align |
 | PR_HEAD_DRIFT | The local, remote, promoted, reviewed, or authorized PR head identities disagree after promotion. | stop without push/overwrite/merge and require human ownership input before sdlc-start |
 | ENVIRONMENT_DEFECT | Tooling, dependency, auth, service, or local environment blocks proof. | human input or environment setup |
 | POLICY_BLOCK | Safety policy, branch policy, hook, or explicit guardrail blocks action. | human input or safer workflow |

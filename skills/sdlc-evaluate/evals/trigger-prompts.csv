@@ -1,0 +1,8 @@
+id,should_trigger,prompt
+sdlc-evaluate-positive-01,true,"Evaluate whether this validated Agentic SDLC feature satisfies every acceptance criterion."
+sdlc-evaluate-positive-02,true,"Grade the active SDLC feature's predefined operational criterion using the frozen evidence."
+sdlc-evaluate-positive-03,true,"Use the declared safe harness to evaluate the planned end-to-end slice."
+sdlc-evaluate-negative-01,false,"Diagnose the root cause of this failed production criterion."
+sdlc-evaluate-negative-02,false,"Query Grafana metrics for an exploratory dashboard request."
+sdlc-evaluate-negative-03,false,"Run user acceptance testing for the whole product before PR creation."
+sdlc-evaluate-negative-04,false,"Invoke sdlc-evaluate as a standalone workflow outside an active Agentic SDLC run."

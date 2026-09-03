@@ -3,6 +3,7 @@ name: nebius-cxcli-ci
 on:
   pull_request:
     paths:
+      - ".github/helm-chart-publish.json"
       - "services/nebius-cxcli/**"
       - "services/nccl-test/**"
       - "helm-charts/nccl-test/**"
@@ -12,6 +13,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/helm-chart-publish.json"
       - "services/nebius-cxcli/**"
       - "services/nccl-test/**"
       - "helm-charts/nccl-test/**"
@@ -28,9 +30,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: nebius-cxcli-ci
+  python-compatibility:
+    name: Python ${{ matrix.python-version }} offline suite
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    defaults:
+      run:
+        shell: bash
+        working-directory: services/nebius-cxcli
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          enable-cache: true
+          cache-dependency-glob: services/nebius-cxcli/uv.lock
+      - uses: azure/setup-helm@v5
+      - name: Install service dependencies
+        run: |
+          set -euo pipefail
+          make env
+      - name: Prepare Terraform CLI for service tests
+        run: |
+          set -euo pipefail
+          terraform_output="$(
+            uv run --locked --no-sync --no-python-downloads python - <<'PY'
+          from nebius_cxcli.managed_tools import resolve_terraform_binary
+
+          print(resolve_terraform_binary())
+          PY
+          )"
+          terraform_bin="$(printf '%s\n' "${terraform_output}" | tail -n 1)"
+          if [[ ! -x "${terraform_bin}" ]]; then
+            echo "::error::Resolved Terraform binary is not executable: ${terraform_bin}"
+            exit 1
+          fi
+          dirname "${terraform_bin}" >> "${GITHUB_PATH}"
+          "${terraform_bin}" version
+      - name: Run full offline suite
+        env:
+          RELEASE_REF: ${{ github.sha }}
+          NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+        run: |
+          set -euo pipefail
+          make ci-python
+
+  verify:
+    name: Quality, coverage, and wheel
+    runs-on: ubuntu-latest
+    env:
+      DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     defaults:
       run:
         shell: bash
@@ -42,6 +100,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          enable-cache: true
+          cache-dependency-glob: services/nebius-cxcli/uv.lock
       - uses: azure/setup-helm@v5
       - name: Install service dependencies
         run: |
@@ -51,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           terraform_output="$(
-            .venv/bin/python - <<'PY'
+            uv run --locked --no-sync --no-python-downloads python - <<'PY'
           from nebius_cxcli.managed_tools import resolve_terraform_binary
 
           print(resolve_terraform_binary())
@@ -70,7 +134,14 @@ jobs:
           NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
         run: |
           set -euo pipefail
-          make all
+          make ci-quality verify-wheel-cli
+
+      - name: Upload exact nebius-cxcli wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: nebius-cxcli-wheel
+          path: services/nebius-cxcli/dist/*.whl
+          if-no-files-found: error
 
       - name: Validate NCCL chart transport rendering
         run: |
@@ -90,7 +161,8 @@ jobs:
           NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: local
         run: |
           set -euo pipefail
-          .venv/bin/python -m nebius_cxcli validate-sources component_sources.yaml
+          uv run --locked --no-sync --no-python-downloads \
+            python -m nebius_cxcli validate-sources component_sources.yaml
 
       - name: Verify bundled component sources are packaged in wheel
         run: |
@@ -100,6 +172,46 @@ jobs:
             echo "::error::No wheel found in dist/"
             exit 1
           fi
-          .venv/bin/python -m nebius_cxcli.release_catalog verify-wheel-bundle \
+          uv run --locked --no-sync --no-python-downloads \
+            python -m nebius_cxcli.release_catalog verify-wheel-bundle \
             --wheel "${wheel}"
           echo "Verified bundled component_sources.yaml is packaged in ${wheel}"
+
+  wheel-compatibility:
+    name: Python ${{ matrix.python-version }} exact wheel contract
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    defaults:
+      run:
+        shell: bash
+        working-directory: services/nebius-cxcli
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          enable-cache: true
+          cache-dependency-glob: services/nebius-cxcli/uv.lock
+      - name: Install service dependencies
+        run: |
+          set -euo pipefail
+          make env
+      - name: Download exact nebius-cxcli wheel
+        uses: actions/download-artifact@v7
+        with:
+          name: nebius-cxcli-wheel
+          path: services/nebius-cxcli/dist
+      - name: Verify exact installed wheel CLI contract
+        run: |
+          set -euo pipefail
+          make verify-wheel-cli-dist

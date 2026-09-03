@@ -113,6 +113,7 @@ def normalize_generated_deploy_target(row: Any, *, index: int) -> dict[str, str]
     )
     return {
         "component_id": component_id,
+        DEPLOY_TARGET_OWNERSHIP_FIELD: MANAGED_TARGET_OWNERSHIP,
         DEPLOY_TARGET_INSTANCE_ID_FIELD: instance_id,
         TARGET_REF_FIELD: target_ref,
         "cluster_id_output_name": _required_generated_target_field(

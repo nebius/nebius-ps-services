@@ -15,9 +15,8 @@ from nebius_cxcli.cli import (
     _skip_sfs_multi_filesystem_prompt,
     _skip_sfs_single_filesystem_prompt,
     _skip_soperator_child_chart_prompt,
-    _skip_soperator_install_mode_dependent_prompt,
     _skip_soperator_managed_mk8s_prompt,
-    _skip_soperator_qos_configuration_prompt,
+    _skip_soperator_profile_owned_prompt,
     _wizard_field_prompt_enabled,
     _wizard_field_write_default_to_config,
 )
@@ -418,9 +417,7 @@ def test_mk8s_gpu_deployment_testing_max_nodes_required_only_when_section_enable
             "targets": [
                 {
                     "instance_id": "cluster1",
-                    "deployment_testing": {
-                        "mk8s_gpu": {"gpu_visibility": {"enabled": True}}
-                    },
+                    "deployment_testing": {"mk8s_gpu": {"gpu_visibility": {"enabled": True}}},
                 }
             ]
         }
@@ -622,7 +619,6 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "values": {},
                 }
             ]
@@ -785,8 +781,7 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         payload=payload,
         entry=entry,
         full_path_label=(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-            ".autoscaling.enabled"
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu.autoscaling.enabled"
         ),
     )
     assert _skip_soperator_managed_mk8s_prompt(
@@ -842,8 +837,7 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         payload=payload,
         entry=entry,
         full_path_label=(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-            ".autoscaling.enabled"
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu.autoscaling.enabled"
         ),
     )
     assert not _skip_soperator_managed_mk8s_prompt(
@@ -894,13 +888,20 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         ),
     )
 
-    payload["apps"]["charts"][0]["install_mode"] = "onboard-existing-cluster"
+    payload["deploy"] = {
+        "targets": [
+            {
+                "instance_id": "cluster1",
+                "kind": "external-mk8s",
+                "ownership": "external",
+            }
+        ]
+    }
     assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
         full_path_label=(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-            ".autoscaling.enabled"
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu.autoscaling.enabled"
         ),
     )
     assert _skip_soperator_managed_mk8s_prompt(
@@ -922,8 +923,7 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         payload=payload,
         entry=entry,
         full_path_label=(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-            ".autoscaling.enabled"
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu.autoscaling.enabled"
         ),
     )
     assert _skip_soperator_managed_mk8s_prompt(
@@ -937,29 +937,17 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         config_path="apps.slurm.soperator",
         description="soperator",
     )
-    assert not _skip_soperator_install_mode_dependent_prompt(
+    assert _skip_soperator_profile_owned_prompt(
         payload=payload,
         entry=app_entry,
         full_path_label="apps.charts[0].placements.worker",
     )
-    payload["apps"]["charts"][0]["install_mode"] = "production-cluster"
-    assert _skip_soperator_install_mode_dependent_prompt(
+    payload["deploy"] = {"targets": []}
+    assert _skip_soperator_profile_owned_prompt(
         payload=payload,
         entry=app_entry,
         full_path_label="apps.charts[0].placements.worker",
     )
-    assert _skip_soperator_qos_configuration_prompt(
-        payload=payload,
-        entry=app_entry,
-        full_path_label="apps.charts[0].values.qosConfiguration.enabled",
-    )
-    payload["apps"]["charts"][0]["values"] = {"partitionProfile": "with-qos-preemption"}
-    assert not _skip_soperator_qos_configuration_prompt(
-        payload=payload,
-        entry=app_entry,
-        full_path_label="apps.charts[0].values.qosConfiguration.enabled",
-    )
-
     payload["apps"]["charts"] = []
     assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
@@ -1007,7 +995,6 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-mixed-v1",
                     "values": {},
                 }
@@ -1059,18 +1046,15 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
         "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
     }
     bulk_apply_path = (
-        "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_worker_shards_apply_to_all"
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all"
     )
     bulk_enabled_path = (
         "infra.components[0].inputs.soperator.worker_node_groups."
         "all_worker_shards_autoscaling_enabled"
     )
     autoscaling_enabled_paths = {
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.enabled",
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0.autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1.autoscaling.enabled",
     }
 
     def _capture_continue_phase(
@@ -1117,95 +1101,76 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
         assert prompt_required[path] is True
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
-        ".autoscaling.enabled"
-        not in prompted_paths
+        ".autoscaling.enabled" not in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-        ".autoscaling.enabled"
-        not in prompted_paths
+        ".autoscaling.enabled" not in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.enabled"
-        in prompted_paths
+        ".autoscaling.enabled" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1"
-        ".autoscaling.enabled"
-        in prompted_paths
+        ".autoscaling.enabled" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-0"
-        ".autoscaling.enabled"
-        in prompted_paths
+        ".autoscaling.enabled" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-        ".autoscaling.enabled"
-        in prompted_paths
+        ".autoscaling.enabled" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.min_node_count"
-        in prompted_paths
+        ".autoscaling.min_node_count" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.max_node_count"
-        in prompted_paths
+        ".autoscaling.max_node_count" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-        ".autoscaling.min_node_count"
-        in prompted_paths
+        ".autoscaling.min_node_count" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-        ".autoscaling.max_node_count"
-        in prompted_paths
+        ".autoscaling.max_node_count" in prompted_paths
     )
     assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
     worker_enabled_prompt_order = [
         path
         for path in prompted_paths
-        if ".inputs.soperator.worker_node_groups." in path
-        and path.endswith(".autoscaling.enabled")
+        if ".inputs.soperator.worker_node_groups." in path and path.endswith(".autoscaling.enabled")
     ]
     assert worker_enabled_prompt_order == [
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.enabled",
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1"
-        ".autoscaling.enabled",
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-0"
-        ".autoscaling.enabled",
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0.autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1.autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-0.autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1.autoscaling.enabled",
     ]
     for path in worker_enabled_prompt_order:
         assert prompt_required[path] is True
     for suffix in (".autoscaling.min_node_count", ".autoscaling.max_node_count"):
         assert (
             prompt_required[
-                "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-                f"{suffix}"
+                f"infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0{suffix}"
             ]
             is True
         )
         assert (
             prompt_required[
-                "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-                f"{suffix}"
+                f"infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1{suffix}"
             ]
             is True
         )
     assert prompted_paths.index(bulk_apply_path) < prompted_paths.index(
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.enabled"
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0.autoscaling.enabled"
     )
     assert prompted_paths.index(
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.enabled"
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0.autoscaling.enabled"
     ) < prompted_paths.index(
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
         ".autoscaling.min_node_count"
@@ -1214,17 +1179,12 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
         ".autoscaling.max_node_count"
     ) < prompted_paths.index(
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1"
-        ".autoscaling.enabled"
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1.autoscaling.enabled"
     )
-    assert (
-        prompted_paths.index(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-            ".autoscaling.enabled"
-        )
-        < prompted_paths.index(
-            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
-        )
+    assert prompted_paths.index(
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1.autoscaling.enabled"
+    ) < prompted_paths.index(
+        "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
     )
 
     updated_payload = yaml.safe_load(updated_yaml)
@@ -1246,9 +1206,9 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
     assert worker_groups["worker-gpu-0"]["autoscaling"]["enabled"] is False
     assert worker_groups["worker-gpu-1"]["autoscaling"]["enabled"] is True
     assert (
-        updated_payload["infra"]["components"][0]["inputs"]["soperator"][
-            "worker_ephemeral_nodes"
-        ]["suspend_time_seconds"]
+        updated_payload["infra"]["components"][0]["inputs"]["soperator"]["worker_ephemeral_nodes"][
+            "suspend_time_seconds"
+        ]
         == 300
     )
 
@@ -1276,7 +1236,6 @@ def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-mixed-v1",
                     "values": {},
                 }
@@ -1324,8 +1283,7 @@ def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
         "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 2,
     }
     bulk_apply_path = (
-        "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_worker_shards_apply_to_all"
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all"
     )
     bulk_enabled_path = (
         "infra.components[0].inputs.soperator.worker_node_groups."
@@ -1370,8 +1328,7 @@ def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
     assert prompt_currents[bulk_apply_path] == [True]
     assert prompt_currents[bulk_enabled_path] == [False]
     assert not any(
-        ".inputs.soperator.worker_node_groups.worker-" in path
-        and ".autoscaling." in path
+        ".inputs.soperator.worker_node_groups.worker-" in path and ".autoscaling." in path
         for path in prompted_paths
     )
     assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
@@ -1435,7 +1392,6 @@ def test_run_component_field_wizard_bulk_disables_soperator_worker_controls(
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-mixed-v1",
                     "values": {},
                 }
@@ -1483,8 +1439,7 @@ def test_run_component_field_wizard_bulk_disables_soperator_worker_controls(
         "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
     }
     bulk_apply_path = (
-        "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_worker_shards_apply_to_all"
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all"
     )
     bulk_enabled_path = (
         "infra.components[0].inputs.soperator.worker_node_groups."
@@ -1529,8 +1484,7 @@ def test_run_component_field_wizard_bulk_disables_soperator_worker_controls(
     assert prompt_currents[bulk_apply_path] == [True]
     assert prompt_currents[bulk_enabled_path] == [False]
     assert not any(
-        ".inputs.soperator.worker_node_groups.worker-" in path
-        and ".autoscaling." in path
+        ".inputs.soperator.worker_node_groups.worker-" in path and ".autoscaling." in path
         for path in prompted_paths
     )
     assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
@@ -1581,7 +1535,6 @@ def test_run_component_field_wizard_bulk_apply_false_keeps_per_shard_flow(
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-mixed-v1",
                     "values": {},
                 }
@@ -1629,8 +1582,7 @@ def test_run_component_field_wizard_bulk_apply_false_keeps_per_shard_flow(
         "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
     }
     bulk_apply_path = (
-        "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_worker_shards_apply_to_all"
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all"
     )
     bulk_enabled_path = (
         "infra.components[0].inputs.soperator.worker_node_groups."
@@ -1675,13 +1627,11 @@ def test_run_component_field_wizard_bulk_apply_false_keeps_per_shard_flow(
     assert bulk_enabled_path not in prompted_paths
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
-        ".autoscaling.enabled"
-        in prompted_paths
+        ".autoscaling.enabled" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
-        ".autoscaling.enabled"
-        in prompted_paths
+        ".autoscaling.enabled" in prompted_paths
     )
 
 
@@ -1708,7 +1658,6 @@ def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-mixed-v1",
                     "values": {},
                 }
@@ -1756,8 +1705,7 @@ def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
         "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
     }
     bulk_apply_path = (
-        "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_worker_shards_apply_to_all"
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all"
     )
     bulk_enabled_path = (
         "infra.components[0].inputs.soperator.worker_node_groups."
@@ -1810,8 +1758,7 @@ def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
     assert prompt_currents[bulk_enabled_path] == [False, True]
     assert prompted_paths.count(suspend_path) == 1
     assert not any(
-        ".inputs.soperator.worker_node_groups.worker-" in path
-        and ".autoscaling." in path
+        ".inputs.soperator.worker_node_groups.worker-" in path and ".autoscaling." in path
         for path in prompted_paths
     )
 
@@ -1853,7 +1800,6 @@ def test_run_component_field_wizard_bulk_scope_labels_for_cpu_and_gpu_profiles(
                         "id": "soperator",
                         "instance_id": "cluster1",
                         "enabled": True,
-                        "install_mode": "production-cluster",
                         "profile": profile,
                         "values": {},
                     }
@@ -1941,8 +1887,7 @@ def test_run_component_field_wizard_bulk_scope_labels_for_cpu_and_gpu_profiles(
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_cpu_worker_shards_apply_to_all"
-        in cpu_prompted_paths
+        "all_cpu_worker_shards_apply_to_all" in cpu_prompted_paths
     )
     assert not any("all_gpu_worker_shards" in path for path in cpu_prompted_paths)
     assert not any("all_worker_shards" in path for path in cpu_prompted_paths)
@@ -1978,8 +1923,7 @@ def test_run_component_field_wizard_bulk_scope_labels_for_cpu_and_gpu_profiles(
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_gpu_worker_shards_apply_to_all"
-        in gpu_prompted_paths
+        "all_gpu_worker_shards_apply_to_all" in gpu_prompted_paths
     )
     assert not any("all_cpu_worker_shards" in path for path in gpu_prompted_paths)
     assert not any("all_worker_shards" in path for path in gpu_prompted_paths)
@@ -2007,7 +1951,6 @@ def test_run_component_field_wizard_defaults_worker_max_to_shard_capacity(
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-mixed-v1",
                     "values": {},
                 }
@@ -2055,14 +1998,11 @@ def test_run_component_field_wizard_defaults_worker_max_to_shard_capacity(
         "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 100,
     }
     bulk_apply_path = (
-        "infra.components[0].inputs.soperator.worker_node_groups."
-        "all_worker_shards_apply_to_all"
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all"
     )
     autoscaling_enabled_paths = {
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
-        ".autoscaling.enabled",
-        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu.autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu.autoscaling.enabled",
     }
 
     def _capture_continue_phase(
@@ -2098,34 +2038,22 @@ def test_run_component_field_wizard_defaults_worker_max_to_shard_capacity(
 
     assert completed is True
     assert prompt_currents[bulk_apply_path] == [True]
-    assert (
-        prompt_currents[
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
-            ".autoscaling.min_node_count"
-        ]
-        == [0]
-    )
-    assert (
-        prompt_currents[
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
-            ".autoscaling.max_node_count"
-        ]
-        == [4]
-    )
-    assert (
-        prompt_currents[
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-            ".autoscaling.min_node_count"
-        ]
-        == [0]
-    )
-    assert (
-        prompt_currents[
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
-            ".autoscaling.max_node_count"
-        ]
-        == [3]
-    )
+    assert prompt_currents[
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
+        ".autoscaling.min_node_count"
+    ] == [0]
+    assert prompt_currents[
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
+        ".autoscaling.max_node_count"
+    ] == [4]
+    assert prompt_currents[
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+        ".autoscaling.min_node_count"
+    ] == [0]
+    assert prompt_currents[
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+        ".autoscaling.max_node_count"
+    ] == [3]
 
     updated_payload = yaml.safe_load(updated_yaml)
     node_groups = updated_payload["infra"]["components"][0]["inputs"]["node_groups"]
@@ -2176,7 +2104,6 @@ def test_run_component_field_wizard_clears_worker_ephemeral_when_autoscaling_dis
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-gpu-v1",
                     "values": {},
                 }
@@ -2200,8 +2127,7 @@ def test_run_component_field_wizard_clears_worker_ephemeral_when_autoscaling_dis
     def _capture_prompt(path_label: str, current, **_kwargs):
         prompted_paths.append(path_label)
         if (
-            path_label
-            == "infra.components[0].inputs.soperator.worker_node_groups.worker"
+            path_label == "infra.components[0].inputs.soperator.worker_node_groups.worker"
             ".autoscaling.enabled"
         ):
             return False, False
@@ -2225,13 +2151,11 @@ def test_run_component_field_wizard_clears_worker_ephemeral_when_autoscaling_dis
     assert completed is True
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker"
-        ".autoscaling.enabled"
-        in prompted_paths
+        ".autoscaling.enabled" in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker"
-        ".ephemeral_nodes.enabled"
-        not in prompted_paths
+        ".ephemeral_nodes.enabled" not in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
@@ -2280,7 +2204,6 @@ def test_run_component_field_wizard_restores_worker_ephemeral_after_autoscaling_
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-gpu-v1",
                     "values": {},
                 }
@@ -2295,8 +2218,10 @@ def test_run_component_field_wizard_restores_worker_ephemeral_after_autoscaling_
         source="../../platform-infra/modules/mk8s",
     )
     answers = {
-        "infra.components[0].inputs.soperator.worker_node_groups.worker"
-        ".autoscaling.enabled": [True, False],
+        "infra.components[0].inputs.soperator.worker_node_groups.worker.autoscaling.enabled": [
+            True,
+            False,
+        ],
         "infra.components[0].inputs.soperator.worker_node_groups.worker"
         ".autoscaling.min_node_count": [cli_module._WIZARD_BACKTRACK],
     }
@@ -2332,15 +2257,13 @@ def test_run_component_field_wizard_restores_worker_ephemeral_after_autoscaling_
     assert completed is True
     assert (
         prompted_paths.count(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker"
-            ".autoscaling.enabled"
+            "infra.components[0].inputs.soperator.worker_node_groups.worker.autoscaling.enabled"
         )
         == 2
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker"
-        ".ephemeral_nodes.enabled"
-        not in prompted_paths
+        ".ephemeral_nodes.enabled" not in prompted_paths
     )
     assert (
         prompted_paths.count(
@@ -2351,8 +2274,7 @@ def test_run_component_field_wizard_restores_worker_ephemeral_after_autoscaling_
     )
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker"
-        ".autoscaling.max_node_count"
-        not in prompted_paths
+        ".autoscaling.max_node_count" not in prompted_paths
     )
     assert (
         "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
@@ -2431,7 +2353,6 @@ def test_keep_mk8s_node_group_defaults_for_soperator_target() -> None:
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "values": {},
                 }
             ]
@@ -2478,7 +2399,6 @@ def test_prune_gpu_node_group_defaults_for_cpu_only_soperator_profile() -> None:
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "production-cluster",
                     "profile": "nebius-cpu-v1",
                     "values": {},
                 }
@@ -2498,8 +2418,17 @@ def test_prune_gpu_node_group_defaults_for_cpu_only_soperator_profile() -> None:
     assert defaults == {"cpu": {"platform": "cpu-d3", "preset": "32vcpu-128gb"}}
 
 
-def test_prune_mk8s_node_group_defaults_for_soperator_onboarding_target() -> None:
+def test_prune_mk8s_node_group_defaults_for_registered_soperator_target() -> None:
     payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                }
+            ]
+        },
         "infra": {
             "components": [
                 {
@@ -2523,7 +2452,6 @@ def test_prune_mk8s_node_group_defaults_for_soperator_onboarding_target() -> Non
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
                     "values": {},
                 }
             ]
@@ -2869,7 +2797,6 @@ def test_app_chart_skip_defaults_preview_lines_are_concise_and_redacted() -> Non
         {
             "namespace": "soperator",
             "release-name": "soperator",
-            "install_mode": "production-cluster",
             "profile": "nebius-gpu-v1",
             "values": {
                 "clusterName": "soperator-cluster1",
@@ -2895,7 +2822,7 @@ def test_app_chart_skip_defaults_preview_lines_are_concise_and_redacted() -> Non
     assert len(lines) <= 4
     preview = " ".join(lines)
     assert "namespace=soperator" in preview
-    assert "install_mode=production-cluster" in preview
+    assert "install_mode" not in preview
     assert "timeout=90m" in preview
     assert "values.volume={jail.size=2048Gi" in preview
     assert "controllerSpool.size=128Gi" in preview

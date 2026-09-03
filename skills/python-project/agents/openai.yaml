@@ -1,6 +1,6 @@
 interface:
   display_name: "Python Project"
-  short_description: "Scaffold production Python repositories with reusable test and CI defaults"
-  default_prompt: "Use $python-project to scaffold a Python project with best practices for CLI, systemd, APIs/UI, IaC automation, security/networking, AI/ML workflows, and split unit/integration test scaffolding."
+  short_description: "Scaffold uv-locked Python repositories with reusable test and CI defaults"
+  default_prompt: "Use $python-project to scaffold or harden a Python project with one uv and pyproject.toml/uv.lock dependency workflow, profile-selected dependencies, split tests, and locked CI; preserve an existing manager unless I request migration."
 policy:
   allow_implicit_invocation: true

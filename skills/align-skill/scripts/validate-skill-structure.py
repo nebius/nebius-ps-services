@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import sys
 from dataclasses import dataclass, field
@@ -18,6 +19,33 @@ LOCAL_REF_RE = re.compile(
     r")"
 )
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)]+)\)")
+FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<marker>`{3,}|~{3,})(?P<rest>.*)$")
+HELP_HEADING = "## Help"
+HELP_REQUIRED_SNIPPETS = (
+    "return concise help and stop",
+    "before any workflow step",
+    "purpose",
+    "invocation policy",
+    "exact usage for every public action",
+    "describe each public action, positional argument, and flag",
+    "in one concise line",
+    "-h, --help",
+    "documented public interface",
+    "no additional public flags",
+    "internal or coordinator-only skills",
+    "no standalone public workflow action exists",
+    "selected `skill.md` is loaded",
+    "report-only",
+    "do not call any additional tools",
+    "inspect project state",
+    "modify files",
+    "private state",
+    "git",
+    "external systems",
+    "private helper actions or flags",
+    "workflow authorization",
+)
+HELP_MAX_WORDS = 120
 LEARNING_LOOP_HEADING = "\n## Learning Loop\n"
 LEARNING_LOOP_REQUIRED_SNIPPETS = (
     "capture durable, reusable, public-safe learnings",
@@ -46,6 +74,11 @@ SDLC_ONLY_DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
 SDLC_PREFIX_EXTERNAL_SKILLS = {"sdlc-workflow-test"}
 OPENAI_METADATA_RELATIVE_PATH = "agents/openai.yaml"
 WRONG_OPENAI_METADATA_FILENAME = "agents.openai.yaml"
+TRIGGER_EVAL_RELATIVE_PATH = "evals/trigger-prompts.csv"
+LEGACY_TRIGGER_EVAL_RELATIVE_PATH = "evals/trigger-prompts.md"
+TRIGGER_EVAL_HEADER = ("id", "should_trigger", "prompt")
+MIN_TRIGGER_CASES_PER_LABEL = 3
+SKILL_MD_LINE_BUDGET = 500
 EXPLICIT_INVOCATION_DESCRIPTION_MARKERS = (
     "use only when the user explicitly asks",
     "use only when the user explicitly requests",
@@ -82,6 +115,8 @@ EXPLICIT_ONLY_SKILL_NAMES = {
     "publish-release",
     "review-pr",
 }
+
+
 @dataclass
 class SkillResult:
     path: Path
@@ -103,6 +138,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         epilog=(
             "Examples:\n"
             "  python3 scripts/validate-skill-structure.py .\n"
+            "  python3 scripts/validate-skill-structure.py --require-evals .\n"
             "  python3 scripts/validate-skill-structure.py skills/align-skill\n"
             "  python3 scripts/validate-skill-structure.py skills/"
         ),
@@ -122,6 +158,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "Optional validation profile. The default basic profile checks "
             "generic skill structure only. stateful-workflow additionally "
             "requires the standard state-machine skill sections."
+        ),
+    )
+    parser.add_argument(
+        "--require-evals",
+        action="store_true",
+        help=(
+            "Require each selected skill to provide the canonical "
+            "evals/trigger-prompts.csv suite. Any canonical suite that exists "
+            "is validated even when this flag is omitted."
         ),
     )
     return parser.parse_args(argv)
@@ -190,9 +235,7 @@ def clean_reference(raw: str) -> str | None:
         return None
     if "#" in target:
         target = target.split("#", 1)[0]
-    if target.startswith(
-        ("agents/", "assets/", "evals/", "references/", "scripts/")
-    ):
+    if target.startswith(("agents/", "assets/", "evals/", "references/", "scripts/")):
         name = target.rstrip("/").rsplit("/", 1)[-1]
         if not target.endswith("/") and "." not in name:
             return None
@@ -228,6 +271,166 @@ def extract_learning_loop_section(skill_text: str) -> str | None:
     return skill_text[section_start:next_heading]
 
 
+def canonical_help_body(name: str) -> str:
+    return f"""For `${name} --help` or `${name} -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization."""
+
+
+def scan_markdown_sections(
+    markdown_text: str,
+    heading: str,
+) -> tuple[list[str], list[tuple[int, str]], list[int]]:
+    lines = markdown_text.splitlines()
+    sections: list[str] = []
+    headings: list[tuple[int, str]] = []
+    heading_indexes: list[int] = []
+    current_section: list[str] | None = None
+    in_fence = False
+    fence_character = ""
+    fence_length = 0
+
+    for index, line in enumerate(lines):
+        fence_match = FENCE_RE.match(line)
+        if in_fence:
+            if current_section is not None:
+                current_section.append(line)
+            if fence_match:
+                marker = fence_match.group("marker")
+                if (
+                    marker[0] == fence_character
+                    and len(marker) >= fence_length
+                    and not fence_match.group("rest").strip()
+                ):
+                    in_fence = False
+                    fence_character = ""
+                    fence_length = 0
+            continue
+
+        if fence_match:
+            marker = fence_match.group("marker")
+            rest = fence_match.group("rest")
+            if marker[0] == "`" and "`" in rest:
+                if current_section is not None:
+                    current_section.append(line)
+                continue
+            in_fence = True
+            fence_character = marker[0]
+            fence_length = len(marker)
+            if current_section is not None:
+                current_section.append(line)
+            continue
+
+        if line.startswith("## "):
+            headings.append((index, line))
+            if current_section is not None:
+                sections.append("\n".join(current_section).strip())
+                current_section = None
+            if line == heading:
+                heading_indexes.append(index)
+                current_section = []
+            continue
+
+        if current_section is not None:
+            current_section.append(line)
+
+    if current_section is not None:
+        sections.append("\n".join(current_section).strip())
+
+    return sections, headings, heading_indexes
+
+
+def content_before_help(markdown_text: str, help_index: int) -> list[str]:
+    lines = markdown_text.splitlines()
+    body_start = 0
+    if lines and lines[0].strip() == "---":
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                body_start = index + 1
+                break
+
+    significant: list[str] = []
+    in_comment = False
+    for line in lines[body_start:help_index]:
+        stripped = line.strip()
+        if in_comment:
+            if "-->" in stripped:
+                in_comment = False
+            continue
+        if stripped.startswith("<!--"):
+            if "-->" not in stripped:
+                in_comment = True
+            continue
+        if stripped:
+            significant.append(stripped)
+
+    if not significant:
+        return ["missing skill title"]
+    if not significant[0].startswith("# "):
+        return ["first body element is not the skill title"]
+    return significant[1:]
+
+
+def normalize_help_body(text: str) -> str:
+    return " ".join(text.split())
+
+
+def validate_help_contract(
+    skill_text: str,
+    *,
+    name: str,
+    result: SkillResult,
+) -> None:
+    sections, headings, heading_indexes = scan_markdown_sections(
+        skill_text,
+        HELP_HEADING,
+    )
+    if not sections:
+        result.failures.append("SKILL.md is missing ## Help")
+        return
+    if len(sections) != 1:
+        result.failures.append("SKILL.md must contain exactly one ## Help section")
+        return
+    if headings and headings[0][1] != HELP_HEADING:
+        result.failures.append(
+            "## Help must be the first top-level section so help short-circuits "
+            "before workflow instructions"
+        )
+    if heading_indexes and content_before_help(skill_text, heading_indexes[0]):
+        result.failures.append(
+            "## Help must immediately follow the skill title; executable prose or "
+            "lower-level headings are not allowed before it"
+        )
+
+    help_section = sections[0]
+    help_lower = " ".join(help_section.casefold().split())
+    for invocation in (f"${name} --help", f"${name} -h"):
+        if f"`{invocation}`" not in help_section:
+            result.failures.append(f"## Help is missing exact invocation: {invocation}")
+    for snippet in HELP_REQUIRED_SNIPPETS:
+        if snippet not in help_lower:
+            result.failures.append(f"## Help is missing required text: {snippet}")
+    if normalize_help_body(help_section) != normalize_help_body(
+        canonical_help_body(name)
+    ):
+        result.failures.append(
+            "## Help must match the canonical report-only contract for this skill"
+        )
+    word_count = len(help_section.split())
+    if word_count > HELP_MAX_WORDS:
+        result.failures.append(
+            f"## Help must stay concise: {word_count} words exceeds {HELP_MAX_WORDS}"
+        )
+
+
 def validate_stateful_workflow_profile(skill_text: str, result: SkillResult) -> None:
     for heading in STATEFUL_WORKFLOW_REQUIRED_HEADINGS:
         if f"\n{heading}\n" not in f"\n{skill_text}\n":
@@ -251,7 +454,10 @@ def extract_markdown_section(markdown_text: str, heading: str) -> str | None:
 
 def skill_declares_explicit_invocation(description: str, skill_text: str) -> bool:
     description_lower = description.lower()
-    if any(marker in description_lower for marker in EXPLICIT_INVOCATION_DESCRIPTION_MARKERS):
+    if any(
+        marker in description_lower
+        for marker in EXPLICIT_INVOCATION_DESCRIPTION_MARKERS
+    ):
         return True
 
     invocation_policy = extract_markdown_section(skill_text, "## Invocation Policy")
@@ -337,7 +543,143 @@ def validate_openai_metadata_policy(
         )
 
 
-def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
+def validate_trigger_evals(
+    skill_dir: Path,
+    *,
+    require_evals: bool,
+    result: SkillResult,
+) -> None:
+    eval_path = skill_dir / TRIGGER_EVAL_RELATIVE_PATH
+    legacy_path = skill_dir / LEGACY_TRIGGER_EVAL_RELATIVE_PATH
+
+    current_path = skill_dir
+    for path_part in Path(TRIGGER_EVAL_RELATIVE_PATH).parts:
+        current_path /= path_part
+        if current_path.is_symlink():
+            result.failures.append(
+                f"{TRIGGER_EVAL_RELATIVE_PATH} must be a target-owned regular "
+                "file; symlinks are not allowed"
+            )
+            return
+
+    if not eval_path.exists():
+        if require_evals:
+            detail = (
+                f"; {LEGACY_TRIGGER_EVAL_RELATIVE_PATH} does not satisfy the "
+                "canonical CSV contract"
+                if legacy_path.exists()
+                else ""
+            )
+            result.failures.append(
+                f"missing required {TRIGGER_EVAL_RELATIVE_PATH}{detail}"
+            )
+        return
+
+    try:
+        resolved_skill_dir = skill_dir.resolve(strict=True)
+        resolved_eval_path = eval_path.resolve(strict=True)
+    except OSError as exc:
+        result.failures.append(
+            f"cannot resolve {TRIGGER_EVAL_RELATIVE_PATH}: {exc}"
+        )
+        return
+
+    if not resolved_eval_path.is_relative_to(resolved_skill_dir):
+        result.failures.append(
+            f"{TRIGGER_EVAL_RELATIVE_PATH} must remain inside the skill directory"
+        )
+        return
+
+    if not eval_path.is_file():
+        result.failures.append(f"{TRIGGER_EVAL_RELATIVE_PATH} is not a file")
+        return
+
+    if require_evals and legacy_path.exists():
+        result.failures.append(
+            "strict eval validation rejects dual trigger authorities: "
+            f"{TRIGGER_EVAL_RELATIVE_PATH} and "
+            f"{LEGACY_TRIGGER_EVAL_RELATIVE_PATH}"
+        )
+
+    seen_ids: dict[str, int] = {}
+    seen_prompts: dict[str, int] = {}
+    label_counts = {"true": 0, "false": 0}
+
+    try:
+        with eval_path.open(encoding="utf-8", newline="") as stream:
+            reader = csv.reader(stream, strict=True)
+            header = next(reader, None)
+            if header is None or tuple(header) != TRIGGER_EVAL_HEADER:
+                expected = ",".join(TRIGGER_EVAL_HEADER)
+                result.failures.append(
+                    f"{TRIGGER_EVAL_RELATIVE_PATH} must use exact header: {expected}"
+                )
+                return
+
+            for row_number, row in enumerate(reader, start=2):
+                if len(row) != len(TRIGGER_EVAL_HEADER):
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} must "
+                        "contain exactly 3 columns"
+                    )
+                    continue
+
+                case_id, label, prompt = (value.strip() for value in row)
+                if not case_id:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} "
+                        "has a blank id"
+                    )
+                elif case_id in seen_ids:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} rows "
+                        f"{seen_ids[case_id]} and {row_number} have duplicate ids"
+                    )
+                else:
+                    seen_ids[case_id] = row_number
+
+                if label not in label_counts:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} "
+                        "should_trigger must be lowercase true or false"
+                    )
+                else:
+                    label_counts[label] += 1
+
+                if not prompt:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} row {row_number} "
+                        "has a blank prompt"
+                    )
+                elif prompt in seen_prompts:
+                    result.failures.append(
+                        f"{TRIGGER_EVAL_RELATIVE_PATH} rows "
+                        f"{seen_prompts[prompt]} and {row_number} have duplicate "
+                        "prompts"
+                    )
+                else:
+                    seen_prompts[prompt] = row_number
+    except (OSError, UnicodeError, csv.Error) as exc:
+        result.failures.append(
+            f"cannot read {TRIGGER_EVAL_RELATIVE_PATH}: {exc}"
+        )
+        return
+
+    for label in ("true", "false"):
+        count = label_counts[label]
+        if count < MIN_TRIGGER_CASES_PER_LABEL:
+            result.failures.append(
+                f"{TRIGGER_EVAL_RELATIVE_PATH} needs at least "
+                f"{MIN_TRIGGER_CASES_PER_LABEL} {label} cases; found {count}"
+            )
+
+
+def validate_skill(
+    skill_dir: Path,
+    *,
+    profile: str = "basic",
+    require_evals: bool = False,
+) -> SkillResult:
     result = SkillResult(path=skill_dir)
     skill_md = skill_dir / "SKILL.md"
 
@@ -390,6 +732,13 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
         result.failures.append(f"cannot read SKILL.md for learning loop: {exc}")
         skill_text = ""
 
+    line_count = len(skill_text.splitlines())
+    if line_count > SKILL_MD_LINE_BUDGET:
+        result.warnings.append(
+            f"SKILL.md has {line_count} lines; review progressive disclosure "
+            f"above the {SKILL_MD_LINE_BUDGET}-line budget"
+        )
+
     if name:
         validate_openai_metadata_policy(
             skill_dir,
@@ -398,6 +747,8 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
             skill_text=skill_text,
             result=result,
         )
+        if skill_text:
+            validate_help_contract(skill_text, name=name, result=result)
 
     learning_loop = extract_learning_loop_section(skill_text)
     if skill_text and learning_loop is None:
@@ -411,6 +762,12 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
 
     if profile == "stateful-workflow" and skill_text:
         validate_stateful_workflow_profile(skill_text, result)
+
+    validate_trigger_evals(
+        skill_dir,
+        require_evals=require_evals,
+        result=result,
+    )
 
     for child in sorted(skill_dir.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
@@ -477,7 +834,14 @@ def main(argv: list[str]) -> int:
     for target in args.targets:
         skills, warnings = discover_skills(target)
         discovery_warnings.extend(warnings)
-        all_results.extend(validate_skill(skill, profile=args.profile) for skill in skills)
+        all_results.extend(
+            validate_skill(
+                skill,
+                profile=args.profile,
+                require_evals=args.require_evals,
+            )
+            for skill in skills
+        )
 
     for warning in discovery_warnings:
         print(f"WARN: {warning}")

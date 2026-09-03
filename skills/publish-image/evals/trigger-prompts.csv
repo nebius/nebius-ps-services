@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+publish-image-positive-01,true,"Use publish-image to release this container image end to end."
+publish-image-positive-02,true,"Set up the image release helper changelog and publication assets."
+publish-image-positive-03,true,"Prepare merge tag verify and report the next registry image release."
+publish-image-negative-01,false,"Create and harden this Dockerfile without publishing it."
+publish-image-negative-02,false,"Publish the project's Helm chart."
+publish-image-negative-03,false,"Write only the GitHub Actions image workflow."

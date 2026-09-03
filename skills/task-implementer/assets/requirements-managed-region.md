@@ -1,28 +1,42 @@
-<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->
+<!-- markdownlint-disable MD001 -->
+<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v2 -->
 # Task Implementer Requirements
 
-## Requirement Records
-
+<!-- REQUIREMENT: TI-REQ-001 status=active priority=P1 type=feature -->
 ### TI-REQ-001: Requirement title
 
-- Status: active
-- Requirement: Observable desired behavior.
-- Constraints: Applicable boundaries or `none`.
-- Non-goals: Explicit exclusions or `none`.
+#### User Story
 
-#### Acceptance criteria
+Describe the observable desired behavior, constraints, and explicit non-goals.
 
-- Observable pass condition.
+#### Acceptance Criteria
 
-#### Verification
+- AC-001: Observable pass condition.
 
-- Focused or end-to-end check.
+#### Negative Criteria
 
-## Task Implementer Open Questions
+- NC-001: Behavior that must not occur.
+
+#### Validation Method
+
+Describe the focused validation method.
+
+#### Test Method
+
+Describe the focused or end-to-end test.
+
+#### Evaluation Method
+
+Describe the evidence used to judge completion.
+
+<!-- /REQUIREMENT: TI-REQ-001 -->
+
+## Open Questions
 
 - None.
 
-## Task Implementer Requirements Change Log
+## Change Log
 
 - YYYY-MM-DD: Added or updated TI-REQ-001 from accepted user steering.
-<!-- task-implementer:requirements:end -->
+<!-- maintain-project-specs:requirements:end -->
+<!-- markdownlint-enable MD001 -->

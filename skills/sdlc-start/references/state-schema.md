@@ -11,14 +11,18 @@ All run artifacts are private local state under
   <project-id>/
     workspace.json
     activity.json
+    prompt-queue.json
+    queued-prompts/
     prompt.lock
     prompts/
+      00-START-HERE.md
       <created-at>--<slug>.md
     <project>-prompts.code-workspace
     active-run.json
     active.lock
     <run-id>/
       prompt.json
+      requirements-refinement.json
       inputs/
         r0001/prompt.md
       run.json
@@ -90,13 +94,39 @@ editable prompt mtimes. `active-run.json` is a small project-level pointer to
 the active run ID. Read `prompt-workspace.md` for the prompt and revision
 schemas.
 
-Each managed run has `prompt.json` with schema
-`agentic-sdlc/prompt-binding-v1`, one stable prompt ID and filename, and an
-ordered revision list. Each revision records `rNNNN`, accepted timestamp,
-SHA-256 digest, immutable snapshot pointer, and steering status. The run's
+Each new managed run has `prompt.json` with schema
+`agentic-sdlc/prompt-binding-v2`, one stable prompt ID and filename, lineage
+root, optional terminal predecessor, and an ordered revision list. Each
+revision records `rNNNN`, accepted timestamp, raw and normalized-intent SHA-256
+digests, revision kind, immutable snapshot pointer, and steering status. The run's
 `run.json` must mirror the bound prompt ID, filename, latest accepted revision,
-digest, and snapshot pointer so hooks can continue without reading prompt
+digests, kind, and snapshot pointer so hooks can continue without reading prompt
 bodies.
+
+`requirements-refinement.json` uses
+`agentic-sdlc/requirements-refinement-v1`. It binds the latest accepted intent
+to categorized extraction, stable `Q-*` clarification state and provenance,
+the compiled requirements digest, and `extracting`, `needs_clarification`, or
+`ready` status. Material open or reopened questions prevent `ready`.
+
+`prompt-impact-claim.json` uses the workflow's prompt-impact contract. The SDLC
+adapter converts complete statement-occurrence dispositions into immutable
+`prompt-impact/attempt-NNNN.json` receipts and atomically selects the current
+head in `prompt-impact/ledger.json`. Per-run locked publication compare-checks
+the observed head and skips rather than overwrites a conflicting orphan attempt.
+`prompt-impact/execution/FEAT-NNN.json` separately binds each feature plan
+digest and plan-basis revision to the latest settled revision. Active state
+without this evidence freezes progression until a distinct safe replan creates
+a basis; terminal history reports `historical_no_receipt` without synthesizing
+coverage. Public status must use only the sanitized impact projection and never
+expose any digest or private path from these files.
+
+`prompt-queue.json` is a private FIFO of explicit run requests for prompts that
+cannot yet become active. Its immutable accepted snapshots live under
+`queued-prompts/`. Creation and saving never add entries; an edited queued
+prompt changes its entry only after another explicit run. Queue-head drift
+blocks activation, and the coordinator activates the head only after the
+active run and execution resources are terminal and released.
 
 ## Minimum current-state.json
 
@@ -118,7 +148,6 @@ bodies.
     "requirements": 0,
     "context": 0,
     "design": 0,
-    "project-agent-instructions": 0,
     "sdlc-auto-steering": 0,
     "plan": 0,
     "execution_preparation": 0,
@@ -130,7 +159,7 @@ bodies.
     "failure_classification": 0,
     "troubleshoot": 0,
     "sdlc-update-documents": 0,
-    "sdlc-align-specs": 0,
+    "align": 0,
     "sdlc-commit": 0,
     "uat": 0,
     "create-pr": 0,
@@ -139,19 +168,23 @@ bodies.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
-  "project_agent_instructions": {
-    "outcome": "not-needed",
-    "decision_fingerprint": "<sha256>",
-    "state": "project-agent-instructions/state.json",
-    "active_instruction": null
+  "project_spec_observation": {
+    "status": "current|pending|invalid|migration-required",
+    "observed_at": "<RFC3339 timestamp>",
+    "message": "<sanitized advisory>"
   },
   "repair": null,
   "execution": {
-    "schema": "agentic-sdlc/execution-coordinator-v4",
+    "schema": "agentic-sdlc/execution-coordinator-v7",
     "feature_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
     "git_root": "/absolute/git/root",
+    "default_remote": "origin",
+    "default_branch": "trunk",
+    "default_ref": "origin/trunk",
+    "default_head": "<sha>",
+    "base_branch": "feature/sdlc-<run-hash>",
     "project_scope": "services/example",
     "integration_worktree": null,
     "integration_branch": null,
@@ -197,20 +230,31 @@ immutable classification plus a completed successful dispatch. `resolved` is
 valid only when the cursor is complete; the Stop hook rejects UAT, PR, or
 publication routing while any invalidated gate remains.
 
-Coordinator v4 binds the exact initialized folder through `git_root`,
+Coordinator v7 binds the exact initialized folder through `git_root`,
 `selected_project_root`, `project_scope`, and per-assignment `scope_cwd`.
-Execution wave v2 enforces an active capacity-batch cursor. Mutable task v3
-records store append-only hashed worker-session history plus attempt count;
-assignment v2 binds an immutable `incoming-handoff-v1`, and
-`worker-result-v4` carries an explicit summary, decisions, open risks, and,
+Execution wave v2 enforces an active capacity-batch cursor. Mutable task v4
+records store append-only hashed worker-session history, attempt count,
+dispatch/start timestamps, heartbeat phase/sequence, and an optional
+digest-protected `task-finish-intent-v1`; assignment v3 binds the exact
+helper/run identity, liveness profile, and immutable `incoming-handoff-v1`.
+Private `task-arm`, `task-start`, direct `task-heartbeat`, and read-only
+`task-watch` transitions are Agentic-owned and never share Task Implementer
+state. Private `task-requeue` returns only a confirmed-stopped, never-started,
+clean exact dispatch to the queue. The coordinator-owned `task-finish` creates
+the task commit after recording its assignment/base/tree/message/evidence
+intent. Retry can adopt only that clean direct-child commit and an exact result
+from either persistence crash window. A
+`worker-result-v5` carries an explicit summary, decisions, open risks, typed
+`spec_gaps`, and,
 for corrective tasks, digest-protected `regression-oracle-evidence-v1` bound
-to the exact diagnosis, oracle, and worker commit. Atomic private
+to the exact diagnosis, oracle, and coordinator-created task commit. Atomic private
 `execution/<feature>/sessions/<hash>.json` claims prevent concurrent reuse of
 one session identity across tasks. A private execution transition lock and
 expected-attempt recovery guard make each task ownership transfer exclusive.
 Optional `execution/interop.json` uses
-`agentic-sdlc/worktree-interop-v1` for a managed outer-worktree lease.
-Every coordinator v1/v2/v3 record fails with `WORKFLOW_UPGRADE_REQUIRED` and is
+`agentic-sdlc/worktree-interop-v2` for a managed outer-worktree lease and
+source-integration handoff. Every coordinator v1 through v6 record fails with
+`WORKFLOW_UPGRADE_REQUIRED` and is
 not mutated, including completed records.
 
 ## Minimum checkpoint
@@ -234,7 +278,6 @@ without conversation history.
     "requirements": 0,
     "context": 0,
     "design": 0,
-    "project-agent-instructions": 0,
     "sdlc-auto-steering": 0,
     "plan": 0,
     "execution_preparation": 0,
@@ -246,7 +289,7 @@ without conversation history.
     "failure_classification": 0,
     "troubleshoot": 0,
     "sdlc-update-documents": 0,
-    "sdlc-align-specs": 0,
+    "align": 0,
     "sdlc-commit": 0,
     "uat": 0,
     "create-pr": 0,
@@ -255,17 +298,15 @@ without conversation history.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
-  "project_agent_instructions": {
-    "outcome": "not-needed",
-    "decision_fingerprint": "<sha256>",
-    "state": "project-agent-instructions/state.json",
-    "active_instruction": null
+  "project_spec_observation": {
+    "status": "current|pending|invalid|migration-required",
+    "observed_at": "<RFC3339 timestamp>",
+    "message": "<sanitized advisory>"
   },
   "repair": null,
   "fingerprint_ids": [
     "requirements:sha256:<digest>",
-    "design:sha256:<digest>",
-    "project-agent-instructions:sha256:<digest>"
+    "design:sha256:<digest>"
   ],
   "evidence": {
     "context": "context/FEAT-001.context.md",
@@ -283,10 +324,13 @@ without conversation history.
 }
 ```
 
-Execution coordinator v4 is the only supported execution schema. If an
+Execution coordinator v7 is the only supported execution schema. If an
 `agentic-sdlc/execution-coordinator-v1` or
 `agentic-sdlc/execution-coordinator-v2` or
-`agentic-sdlc/execution-coordinator-v3` record exists, stop with
+`agentic-sdlc/execution-coordinator-v3` or
+`agentic-sdlc/execution-coordinator-v4` or
+`agentic-sdlc/execution-coordinator-v5` or
+`agentic-sdlc/execution-coordinator-v6` record exists, stop with
 `WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate its
 resources. This applies to completed records; there is no legacy read path.
 
@@ -318,6 +362,9 @@ resources. This applies to completed records; there is no legacy read path.
    return the same `next_recommended_skill` without appending duplicate history.
 7. An unfinished active run without `prompt.json` fails with
    `WORKFLOW_UPGRADE_REQUIRED`; completed unbound history stays readable.
+8. A bound non-terminal run without current prompt-impact or execution-plan
+   settlement fails with `PROMPT_IMPACT_REQUIRED` or `REPLAN_REQUIRED` before
+   new dispatch, integration, or promotion. Terminal history remains readable.
 
 ## Hook Authorization Files
 
@@ -330,6 +377,7 @@ directory. They are local runtime state only and must not be committed.
   branch or opens/reuses a PR, after UAT evidence passes for the clean exact
   SHA promoted by `sdlc-commit`. It must include `phase: "create-pr"`, the
   exact branch, `expected_head` equal to the recorded promoted HEAD,
+  `base_branch` and `base_head` equal to the recorded remote-default identity,
   `uat_status: "passed"`, and a short expiry. A guarded Git push may contain
   only `origin` and one exact `HEAD:<branch>` refspec; CLI or MCP PR creation
   must name the same head branch. Shell execution must use one direct action
@@ -338,7 +386,8 @@ directory. They are local runtime state only and must not be committed.
 - `merge-authorization.json`: written immediately before `sdlc-merge-pr` merges a
   specific PR, after the explicit user merge request and final readiness
   checks. It binds `phase: "sdlc-merge-pr"`, the named branch and PR,
-  `expected_head` equal to the promoted and reviewed SHA, the one
+  `expected_head` equal to the promoted and reviewed SHA, the recorded
+  remote-default `base_branch` and `base_head`, and the one
   canonical single-action `exact_command` containing an explicit PR number or
   URL and `--match-head-commit <expected_head>`, `explicit_user_request: true`,
   `checks_status: "passed"`, `review_status: "passed"`,
@@ -375,20 +424,22 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 1. requirements
 2. context
 3. design
-4. project-agent-instructions
-5. sdlc-auto-steering
-6. plan
-7. execution preparation
-8. sdlc-tdd, in the integration worktree
-9. implementation dependency waves, in worker and integration worktrees
-10. validation, at the recorded integration HEAD
-11. test, at the recorded integration HEAD
-12. evaluation, at the recorded integration HEAD
-13. sdlc-update-documents, in the integration worktree
-14. sdlc-align-specs, in the integration worktree
-15. sdlc-commit: final seal, ff-only promotion, and integration cleanup
-16. uat, from the promoted project checkout
-17. create-pr
+4. sdlc-auto-steering
+5. plan
+6. execution preparation
+7. sdlc-tdd, in the integration worktree
+8. implementation dependency waves, in worker and integration worktrees
+9. validation, at the recorded integration HEAD
+10. test, at the recorded integration HEAD
+11. evaluation, at the recorded integration HEAD
+12. sdlc-update-documents, in the integration worktree
+13. general align quality gate, in the integration worktree
+14. sdlc-commit: final seal, ff-only promotion, and integration cleanup
+15. uat, from the promoted project checkout
+16. managed child only: outer-integration-pending, then return the recorded
+    primary path and await a fresh explicit user invocation of
+    `$worktree integrate` from that primary checkout
+17. create-pr, from the final unmanaged source branch only
 18. review-pr
 19. sdlc-merge-pr, only after explicit user request
 
@@ -413,11 +464,18 @@ evidence or a new explicit user-authorized tranche.
 `sdlc-tdd`. From preparation through final seal, the persistent integration
 worktree is the canonical feature checkout. The original project branch must
 remain clean and at `base_head` until `sdlc-commit` promotes the exact sealed
-integration tip with `git merge --ff-only`.
+integration tip under the common-Git-directory lock with
+`git merge --ff-only`.
 
 After UAT, `sdlc-start` may route back to `sdlc-update-documents` in run scope
-before `create-pr` when UAT or final steering changes require project-facing
-documentation updates. Once routed forward, `create-pr` is publication-only
+before final handoff when UAT or final steering changes require project-facing
+documentation updates. In a managed child, lease release enters
+`outer-integration-pending`; `sdlc-start` returns the recorded primary path plus
+the exact `$worktree integrate <generated-name>` command and stops. Only a fresh
+explicit user invocation from that primary checkout may run it. After that
+separate action, the exact source merge proof must be recorded before the run is
+complete. The child is never
+published. In an unmanaged source checkout, `create-pr` is publication-only
 for the clean exact promoted SHA and `review-pr` is
 findings-and-readiness-only; branch-changing findings return through
 `sdlc-classify-failure` and `sdlc-start`. `sdlc-merge-pr` then requires the
@@ -446,7 +504,9 @@ Only compact active reminders and unresolved routing decisions should be
 injected into the agent loop. Durable product changes still route through
 `sdlc-create-requirements` and `sdlc-create-design`; documentation-only changes
 route through `sdlc-update-documents`; durable changes to generated project
-instructions route through `project-agent-instructions`.
+instructions route through `project-agent-instructions` only when the current
+user explicitly requested the separate mutation workflow. Otherwise the entry
+is recorded as advisory and does not block SDLC progress.
 
 ## Hook Boundary
 

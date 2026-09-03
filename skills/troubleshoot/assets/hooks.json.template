@@ -1,5 +1,18 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/remediation_attempt_guard.py\"",
+            "timeout": 30,
+            "statusMessage": "Authorizing troubleshoot budget",
+            "additionalContextLimit": 800
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "*",
@@ -18,9 +31,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/remediation_attempt_guard.py\"",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/stop_lifecycle_arbiter.py\"",
             "timeout": 30,
-            "statusMessage": "Checking troubleshooting report"
+            "statusMessage": "Arbitrating workflow completion"
           }
         ]
       }

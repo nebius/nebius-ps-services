@@ -21,6 +21,12 @@ opinionated general-web profile, not a universal answer. Frontend, background
 work, scheduling, workflows, streaming, deployment, and observability remain
 conditional decisions.
 
+For an AI-enabled product, `app-stack` owns the surrounding UI, API, backend,
+ordinary data, deployment, and product layers. It delegates undecided model
+access, training, inference, agent, MCP/A2A, retrieval, and AI evaluation
+choices to `ai-stack`, then consumes that scoped decision without duplicating
+its workload and compatibility analysis.
+
 ## Implementation Coordination
 
 When the user asks only for advice, the skill remains read-only. When the user
@@ -53,13 +59,16 @@ topology ownership upstream.
   mutation boundaries, and completion evidence.
 - `references/scaffold-handoff.schema.json`: closed logical handoff consumed by
   `scaffold-project`.
-- `evals/trigger-prompts.md`: trigger and output-quality examples.
+- `evals/trigger-prompts.csv`: canonical trigger and boundary examples.
+- `evals/process-cases.md`: supplemental workflow and output-quality cases.
 
 ## Boundaries
 
 - Use `brainstorm` for open-ended ideation.
 - Use `research` for deep due diligence on a technology or architecture
   pattern.
+- Use `ai-stack` for an undecided AI-specific stack or layer; use `app-stack`
+  for the surrounding application.
 - Use `design` for a complete solution design before implementation.
 - When `design` requests a scoped stack decision, return the decision to that
   active workflow instead of starting a recursive design handoff.

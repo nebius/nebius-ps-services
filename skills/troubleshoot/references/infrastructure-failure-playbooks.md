@@ -4,6 +4,23 @@ Treat infrastructure as a graph of contracts rather than a list of commands.
 Start with read-only evidence and exact target identity. Use current official
 vendor documentation and matching domain skills for product-specific behavior.
 
+## Technology Routing
+
+After completing stack discovery, load only the playbooks that match the
+observed path:
+
+- `slurm.md` for scheduler, controller, worker, accounting, MUNGE, and job paths.
+- `soperator.md` for Soperator controllers, checks, reactions, and log pipeline.
+- `kubernetes.md` for cluster control plane, workloads, nodes, CNI, CSI, and DNS.
+- `nebius.md` for Nebius product and control-plane evidence.
+- `linux.md` for service manager, OS, kernel, resources, clocks, and host hardware.
+- `network.md`, `storage.md`, and `gpu.md` for their respective data paths.
+
+For each relevant layer, populate the component matrix and log-coverage ledger
+from `investigation-protocol.md`. A component status command is not a substitute
+for incident-window logs, dependency-path verification, or active-configuration
+comparison.
+
 ## Active Incident
 
 - Define user impact, affected scope, start time, current trajectory, and safe
@@ -111,3 +128,7 @@ Stop for explicit approval before destructive, irreversible, credential, IAM,
 data, public-exposure, deletion, material-cost, or material-availability
 actions. Keep production and unconfirmed environments read-only until the user
 authorizes the exact action.
+
+When a live infrastructure change occurs while verifying product behavior,
+also follow `live-product-validation.md`. Mutation authority permits recovery;
+it does not make an intervened trial valid product evidence.

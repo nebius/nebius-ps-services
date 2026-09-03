@@ -1,9 +1,25 @@
 ---
 name: agent-nebius-auth-diagnose
-description: Read-only diagnosis for current-session Nebius project discovery and Codex Agent authentication, tenant quota-read, CLI profile, selector, and hook failures. Use automatically when Nebius authentication is missing or a runtime auth hook blocks a command. Never create, repair, or mutate IAM, credentials, profiles, selectors, leases, or hooks.
+description: "Read-only diagnosis for current-session Nebius project discovery, Codex Agent auth, quota reads, profiles, selectors, or auth-hook failures. Use when auth is missing/blocked; never mutate auth or IAM."
 ---
 
 # Agent Nebius Auth Diagnose
+
+## Help
+
+For `$agent-nebius-auth-diagnose --help` or `$agent-nebius-auth-diagnose -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Diagnose current-session project and agent-auth state without mutation. Do not
 write files, change permissions, update profiles, generate credentials, change

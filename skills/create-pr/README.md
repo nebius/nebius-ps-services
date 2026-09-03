@@ -6,6 +6,9 @@ and GitHub steps.
 
 ## What It Does
 
+- Rejects publication from every state-classified managed child, integration
+  candidate, nested worker, or inconsistent ownership claim and routes it to
+  its local owner; only an unmanaged final source branch may become a PR head.
 - Creates or reuses feature branches.
 - Reuses the current non-default branch as the normal path, staging existing
   work only after formatting, whitespace, lint, and test gates complete,
@@ -25,7 +28,7 @@ and GitHub steps.
 - Preserves explicit user-supplied PR titles and bodies.
 - When invoked from Agentic SDLC, checks local UAT evidence and summarizes
   requirements, features, validation, tests, evaluation, and UAT in the PR body.
-- In an active Agentic SDLC run, switches to publication-only mode: it requires
+- In an active unmanaged Agentic SDLC run, switches to publication-only mode: it requires
   a clean exact promoted SHA with passing UAT and does not stage, commit, merge,
   repair, or otherwise change that SHA. Push and CLI PR creation use one direct
   action with explicit ref and head arguments.
@@ -74,8 +77,9 @@ Report PR number, URL, and blockers
    repair, and repair safe branch-owned failures.
 6. Push the branch with an explicit refspec.
 7. Open or reuse the PR with the requested title and body.
-8. For active Agentic SDLC runs, require passing UAT and publish only the exact
-   promoted SHA; route any required branch change back through the coordinator.
+8. For active Agentic SDLC runs, require passing UAT, reverify the recorded
+   remote-default branch and HEAD, and publish only the exact promoted SHA;
+   route any branch or default drift back through the coordinator.
 9. Keep repairing available branch-caused check failures when safe, or mark a
    real blocker. If GitHub checks are still pending, report the PR as pending
    instead of ready.
@@ -86,6 +90,8 @@ Report PR number, URL, and blockers
 - Do not leave new work on the default branch.
 - Do not create another branch when the current branch is already non-default;
   commit, push, and open or reuse the PR from that branch.
+- Resolve the actual `origin` default branch and bind both authorization and PR
+  creation to that exact base; do not guess a default branch name.
 - Do not guess when GitHub authentication, remotes, or branch ownership are
   unclear.
 - Always stage local work from the repository root with `git add -A`; do not

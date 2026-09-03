@@ -688,7 +688,7 @@ class EvidenceProviderContractTest(unittest.TestCase):
 
     def test_direct_report_and_embedded_envelope_are_separate(self) -> None:
         skill = self.read(QUERY / "SKILL.md")
-        evals = self.read(QUERY / "evals" / "trigger-prompts.md")
+        evals = self.read(QUERY / "evals" / "process-cases.md")
         normalized = " ".join(skill.split())
         normalized_evals = " ".join(evals.split())
 

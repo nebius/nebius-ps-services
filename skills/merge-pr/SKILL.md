@@ -1,9 +1,25 @@
 ---
 name: merge-pr
-description: "Use for merging GitHub pull requests outside Agentic SDLC: verify PR checks, reviews, mergeability, branch state, and head SHA, then merge with gh pr merge without admin bypass. Use after create-pr or review-pr when the user explicitly asks to merge a ready PR."
+description: "Use only when explicitly asked to merge a ready GitHub PR outside Agentic SDLC after verifying checks, reviews, mergeability, branch state, and head SHA; never use admin bypass."
 ---
 
 # Merge PR
+
+## Help
+
+For `$merge-pr --help` or `$merge-pr -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Merge a GitHub pull request only after explicit merge intent and final
 readiness verification.

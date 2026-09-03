@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import inspect
 import json
 import os
 from dataclasses import replace
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -76,6 +79,91 @@ class VerifierContractTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def source_contract_context(self) -> verifier.Context:
+        source_root = MODULE_PATH.parents[2]
+        return replace(
+            self.ctx,
+            skills_root=source_root,
+            design_path=source_root / verifier.DESIGN_RELATIVE,
+        )
+
+    def test_slow_aggregate_suites_have_measured_timeout_headroom(self) -> None:
+        self.assertEqual(verifier.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
+        self.assertEqual(
+            verifier.CAPABILITY_SUITE_TIMEOUT_SECONDS,
+            {"worktree": 300, "task-waves": 900},
+        )
+
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with mock.patch.object(verifier, "run", return_value=completed) as runner:
+            verifier.check_capability_regressions(self.ctx)
+
+        self.assertEqual(len(runner.call_args_list), 15)
+        for call in runner.call_args_list:
+            command = " ".join(str(value) for value in call.args[0])
+            if "test-worktree-manager.py" in command:
+                expected = 300
+            elif "test-task-waves.py" in command:
+                expected = 900
+            else:
+                expected = 120
+            self.assertEqual(call.kwargs["timeout"], expected, command)
+
+    def test_design_contract_normalizes_whitespace(self) -> None:
+        rendered = "\n\n".join(
+            term.replace(" ", "\n", 1) for term in verifier.DESIGN_REQUIRED_TERMS
+        )
+        self.ctx.design_path.write_text(rendered, encoding="utf-8")
+
+        verifier.check_design(self.ctx)
+
+        checks = [check for check in self.ctx.checks if check.name == "Design contract"]
+        self.assertEqual([check.status for check in checks], ["PASS"])
+
+    def test_design_contract_reports_a_missing_normalized_term(self) -> None:
+        missing = verifier.DESIGN_REQUIRED_TERMS[-1]
+        self.ctx.design_path.write_text(
+            "\n".join(verifier.DESIGN_REQUIRED_TERMS[:-1]), encoding="utf-8"
+        )
+
+        verifier.check_design(self.ctx)
+
+        checks = [check for check in self.ctx.checks if check.name == "Design contract"]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn(missing, checks[0].detail)
+
+    def copied_source_contract_context(self) -> verifier.Context:
+        source_root = MODULE_PATH.parents[2]
+        copied_root = self.root / "contract-skills"
+        copied_root.mkdir()
+        files = {
+            Path("README.md"),
+            verifier.DESIGN_RELATIVE,
+            Path("sdlc-create-requirements/README.md"),
+            Path(
+                "sdlc-create-requirements/assets/templates/requirements.md.template"
+            ),
+            Path("sdlc-create-design/assets/templates/design.md.template"),
+            Path("sdlc-start/references/prompt-requirements-refinement.md"),
+            Path("sdlc-start/scripts/validate_project_specs.py"),
+            Path("sdlc-workflow-test/SKILL.md"),
+            Path("maintain-project-specs/SKILL.md"),
+            Path("align/SKILL.md"),
+            Path("align-skill/scripts/validate-skill-structure.py"),
+        }
+        for skill in verifier.REQUIRED_SDLC_SKILLS:
+            files.add(Path(skill) / "SKILL.md")
+            files.add(Path(skill) / "agents" / "openai.yaml")
+        for relative in files:
+            target = copied_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root / relative, target)
+        return replace(
+            self.ctx,
+            skills_root=copied_root,
+            design_path=copied_root / verifier.DESIGN_RELATIVE,
+        )
 
     def write_manifest(
         self,
@@ -291,6 +379,143 @@ class VerifierContractTests(unittest.TestCase):
         self.ctx.add("Environment checked", "Execution contract", "FAIL", "failed")
         self.assertEqual(verifier.final_status(self.ctx), "FAIL")
 
+    def test_source_phase_contract_rejects_bad_source_prefix(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.skills_root / "sdlc-create-design" / "SKILL.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                verifier.DESCRIPTION_PREFIX,
+                "Use only as an Agentic SDLC adapter;",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        verifier.check_source_phase_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "source.phase-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("sdlc-create-design", checks[0].detail)
+
+    def test_source_catalog_validation_rejects_missing_reference(self) -> None:
+        ctx = self.copied_source_contract_context()
+        template = (
+            ctx.skills_root
+            / "sdlc-create-design"
+            / "assets"
+            / "templates"
+            / "design.md.template"
+        )
+        template.unlink()
+        verifier.check_source_catalog_validation(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "source.catalog-structure"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+
+    def test_spec_ownership_contract_accepts_canonical_sources(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["PASS"])
+
+    def test_spec_ownership_contract_rejects_legacy_owner(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.design_path
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + "\nOnly `sdlc-create-requirements` writes canonical requirements.\n",
+            encoding="utf-8",
+        )
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("legacy ownership term", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_missing_owner_dependency(self) -> None:
+        ctx = self.copied_source_contract_context()
+        (ctx.skills_root / "maintain-project-specs" / "SKILL.md").unlink()
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("authoritative owner contract", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_missing_phase_invariant(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.skills_root / "sdlc-evaluate" / "SKILL.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "`maintain-project-specs` is the sole semantic, schema, and validation owner",
+                "Canonical ownership is documented elsewhere",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("sdlc-evaluate", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_unsafe_readme_boundary(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = ctx.skills_root / "sdlc-create-requirements" / "README.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "- Do not edit `docs/design.md`.",
+                "- Edit `docs/design.md`.",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("README boundaries", checks[0].detail)
+
+    def test_spec_ownership_contract_rejects_missing_template_envelope(self) -> None:
+        ctx = self.copied_source_contract_context()
+        path = (
+            ctx.skills_root
+            / "sdlc-create-design"
+            / "assets"
+            / "templates"
+            / "design.md.template"
+        )
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join(lines[1:]) + "\n", encoding="utf-8")
+        verifier.check_spec_ownership_contract(ctx)
+        checks = [
+            check
+            for check in ctx.checks
+            if check.capability_id == "spec.ownership-contract"
+        ]
+        self.assertEqual([check.status for check in checks], ["FAIL"])
+        self.assertIn("design template", checks[0].detail)
+
     def test_missing_live_evidence_is_partial(self) -> None:
         verifier.add_agent_required_sections(self.ctx)
         live = [
@@ -405,7 +630,7 @@ class VerifierContractTests(unittest.TestCase):
             set(verifier.SKILL_EVIDENCE_BASES),
             {
                 *verifier.REQUIRED_SDLC_SKILLS,
-                "project-agent-instructions",
+                "align",
             },
         )
         self.assertEqual(verifier.SKILL_EVIDENCE_BASES["sdlc-merge-pr"], "safety-only")
@@ -413,11 +638,19 @@ class VerifierContractTests(unittest.TestCase):
             set(verifier.SKILL_REQUIRED_ASSERTIONS),
             {
                 *verifier.REQUIRED_SDLC_SKILLS,
-                "project-agent-instructions",
+                "align",
             },
         )
 
     def test_runtime_support_skills_are_parity_dependencies(self) -> None:
+        self.assertIn(
+            "align",
+            verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
+        )
+        self.assertIn(
+            "align",
+            verifier.SOURCE_PARITY_SKILLS,
+        )
         self.assertIn(
             "nebius-grafana-query",
             verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
@@ -451,40 +684,142 @@ class VerifierContractTests(unittest.TestCase):
             for check in self.ctx.checks
             if check.capability_id
             in {
+                "runtime.align-dependency",
                 "runtime.worktree-dependency",
                 "runtime.observability-dependency",
-                "runtime.project-agent-instructions-dependency",
             }
         }
         self.assertEqual(
             support_checks,
             {
+                "runtime.align-dependency": "PASS",
                 "runtime.worktree-dependency": "PASS",
                 "runtime.observability-dependency": "PASS",
-                "runtime.project-agent-instructions-dependency": "PASS",
             },
         )
 
-    def test_project_agent_instructions_is_runtime_support_and_golden_phase(
+    def test_managed_publication_guard_contract_covers_both_consumers(self) -> None:
+        contracts = {
+            "commit-push": "\n".join(
+                [
+                    "publication-guard --publication-action push",
+                    "before staging, committing, fetching, or pushing",
+                    "Publish only from the accumulated source branch",
+                ]
+            ),
+            "create-pr": "\n".join(
+                [
+                    "publication-guard --publication-action create-pr",
+                    "Before staging, committing, fetching for publication",
+                    "Only a genuinely unmanaged manual worktree may pass as `unmanaged`",
+                ]
+            ),
+        }
+        for skill, content in contracts.items():
+            path = self.ctx.skills_root / skill / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content + "\n", encoding="utf-8")
+
+        verifier.check_execution_plane_contract(self.ctx)
+        names = {
+            check.name: check.status
+            for check in self.ctx.checks
+            if check.name
+            in {
+                "commit-push managed publication guard",
+                "create-pr managed publication guard",
+            }
+        }
+        self.assertEqual(
+            names,
+            {
+                "commit-push managed publication guard": "PASS",
+                "create-pr managed publication guard": "PASS",
+            },
+        )
+
+        create_pr = self.ctx.skills_root / "create-pr" / "SKILL.md"
+        create_pr.write_text(
+            contracts["create-pr"].replace(
+                "publication-guard --publication-action create-pr",
+                "publication guard omitted",
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.ctx.checks.clear()
+        verifier.check_execution_plane_contract(self.ctx)
+        names = {
+            check.name: check.status
+            for check in self.ctx.checks
+            if check.name
+            in {
+                "commit-push managed publication guard",
+                "create-pr managed publication guard",
+            }
+        }
+        self.assertEqual(names["commit-push managed publication guard"], "PASS")
+        self.assertEqual(names["create-pr managed publication guard"], "FAIL")
+
+    def test_critical_capabilities_require_crash_and_history_regressions(
         self,
     ) -> None:
+        source = inspect.getsource(verifier.check_capability_regressions)
+        session_recovery = source.split('"execution.sessions-recovery":', 1)[1].split(
+            '"execution.replan":', 1
+        )[0]
+        outer_lease = source.split('"interop.outer-lease-v4":', 1)[1].split(
+            '"interop.task-implementer-compatibility":', 1
+        )[0]
+        task_compatibility = source.split(
+            '"interop.task-implementer-compatibility":', 1
+        )[1].split('"interop.task-implementer-promotion":', 1)[0]
         self.assertIn(
-            "project-agent-instructions",
-            verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
+            "test_remove_retry_deletes_terminal_receipt_after_git_cleanup",
+            outer_lease,
         )
         self.assertIn(
-            "project-agent-instructions",
-            verifier.SOURCE_PARITY_SKILLS,
+            "test_successive_promotions_advance_the_outer_lease_history",
+            task_compatibility,
         )
+        self.assertIn("test_parallel_session_claim_is_atomic", session_recovery)
+        self.assertIn(
+            "test_session_claim_is_complete_before_atomic_publication",
+            session_recovery,
+        )
+        self.assertIn(
+            "test_failed_session_claim_publication_leaves_no_partial_claim",
+            session_recovery,
+        )
+
+    def test_capability_requirements_resolve_to_declared_tests(self) -> None:
+        source = inspect.getsource(verifier.check_capability_regressions)
+        required = set(re.findall(r'"(test_[A-Za-z0-9_]+)"', source))
+        declared: set[str] = set()
+        for path in MODULE_PATH.parents[2].rglob("*.py"):
+            if not path.name.startswith("test"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            declared.update(
+                node.name
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+            )
+        self.assertEqual(sorted(required - declared), [])
+
+    def test_project_lifecycle_is_not_runtime_support_or_golden_phase(self) -> None:
+        self.assertNotIn(
+            "project-agent-instructions", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS
+        )
+        self.assertNotIn("maintain-project-specs", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS)
         design_index = verifier.GOLDEN_PHASE_SEQUENCE.index("sdlc-create-design")
         self.assertEqual(
             verifier.GOLDEN_PHASE_SEQUENCE[design_index + 1],
-            "project-agent-instructions",
-        )
-        self.assertEqual(
-            verifier.GOLDEN_PHASE_SEQUENCE[design_index + 2],
             "sdlc-auto-steering",
         )
+        self.assertNotIn("sdlc-align-specs", verifier.GOLDEN_PHASE_SEQUENCE)
+        self.assertIn("align", verifier.GOLDEN_PHASE_SEQUENCE)
 
     def test_troubleshoot_is_conditional_runtime_support_not_golden_phase(self) -> None:
         self.assertIn("troubleshoot", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS)

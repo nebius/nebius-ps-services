@@ -129,7 +129,8 @@ summaries. This installer does not retain a second operational query path.
   sanitization, and private-state and wrapper-path safety.
 - `scripts/test_grafana_skill_contract.py`: static cross-skill ownership,
   routing, metadata, catalog, and eval assertions.
-- `evals/trigger-prompts.md`: explicit setup and query-handoff examples.
+- `evals/trigger-prompts.csv`: explicit setup and query-handoff examples.
+- `evals/process-cases.md`: supplemental setup and query-handoff expectations.
 - `agents/openai.yaml`: UI metadata for the skill.
 
 ## Vendor Evidence

@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 
@@ -23,36 +25,73 @@ from prompt_workspace_core import (  # noqa: E402
     RUN_SCHEMA,
     WORKSPACE_SCHEMA,
     PromptWorkspaceError,
+    classify_generated_workspace,
     create_prompt,
     init_workspace,
     project_workspace_manifest,
     prompt_slug,
+    required_string,
+    repo_and_scope,
     resolve_prompt_reference,
     verify_workspace,
+    verify_workspace_for_removal,
+)
+from prompt_workspace_lanes import (  # noqa: E402
+    integrate_lane,
+    record_integration_review_correction,
+    remove_lane,
 )
 from prompt_workspace_intake import route_project_prompt  # noqa: E402
+from prompt_workspace_interop import verify_workspace_anchor  # noqa: E402
+from prompt_workspace_reporting import (  # noqa: E402
+    lane_report,
+    pending_finalization_generations,
+    render_lane_report,
+)
+from prompt_workspace_recovery import (  # noqa: E402
+    recover_handoff_projection,
+    recover_replanned_plan_digest,
+)
+from prompt_workspace_resume import (  # noqa: E402
+    CONTROLLED_TRANSITIONS,
+    abort_resume_transition_if_unchanged,
+    begin_resume_transition,
+    complete_resume_transition,
+    resume_execution_lock,
+    resume_run,
+)
 from prompt_workspace_waves import (  # noqa: E402
     accept_task_result,
     advance_batch,
     arm_task,
     cleanup_wave,
+    commit_coordinator_delta,
     dispatch_wave,
     finalize_run,
     heartbeat_task,
     integrate_wave,
     plan_waves,
+    publish_task_result,
+    prepare_run_checkpoint,
     prepare_wave,
     promote_wave,
+    rearm_task,
     recover_task,
+    recover_wave_resources,
     replan_waves,
+    stage_coordinator_contract,
     start_task,
     watch_task,
 )
 from prompt_workspace_runs import (  # noqa: E402
+    activate_next_queued_prompt,
+    cancel_queued_prompt,
     initialize_project_workspace,
     load_run_manifests,
     manifest_revisions,
+    merge_session_projection,
     prompt_rows,
+    queue_rows,
     scope_lock,
     snapshot_prompt,
     verify_command,
@@ -60,6 +99,7 @@ from prompt_workspace_runs import (  # noqa: E402
 )
 from prompt_workspace_specs import (  # noqa: E402
     inspect_spec_documents,
+    load_current_prompt_impact,
     resolve_steering_revision,
 )
 
@@ -71,33 +111,50 @@ __all__ = [
     "WORKSPACE_SCHEMA",
     "PromptWorkspaceError",
     "accept_task_result",
+    "activate_next_queued_prompt",
     "advance_batch",
     "arm_task",
     "cleanup_wave",
+    "commit_coordinator_delta",
+    "cancel_queued_prompt",
     "create_prompt",
     "init_workspace",
     "initialize_project_workspace",
     "inspect_spec_documents",
+    "integrate_lane",
     "main",
     "project_workspace_manifest",
     "dispatch_wave",
     "finalize_run",
     "heartbeat_task",
     "integrate_wave",
+    "merge_session_projection",
     "plan_waves",
+    "prepare_run_checkpoint",
     "prepare_wave",
+    "publish_task_result",
     "promote_wave",
+    "rearm_task",
     "recover_task",
+    "recover_handoff_projection",
+    "recover_replanned_plan_digest",
+    "recover_wave_resources",
     "replan_waves",
+    "remove_lane",
+    "reuse_project_workspace",
     "prompt_rows",
+    "queue_rows",
     "prompt_slug",
     "resolve_prompt_reference",
     "resolve_steering_revision",
     "route_project_prompt",
+    "resume_run",
     "snapshot_prompt",
+    "stage_coordinator_contract",
     "verify_command",
     "verify_run",
     "verify_workspace",
+    "verify_workspace_for_removal",
     "watch_task",
 ]
 
@@ -105,7 +162,7 @@ __all__ = [
 def open_in_editor(editor: str, target: Path, *, workspace: bool) -> None:
     arguments = [editor]
     if workspace:
-        arguments.extend(("--new-window", str(target)))
+        arguments.extend(("--reuse-window", str(target)))
     else:
         arguments.extend(("--reuse-window", "--goto", str(target)))
     try:
@@ -119,6 +176,12 @@ def open_in_editor(editor: str, target: Path, *, workspace: bool) -> None:
     except subprocess.TimeoutExpired:
         print(f"WARN editor did not return promptly; target: {target}", file=sys.stderr)
         return
+    except OSError:
+        print(
+            f"WARN editor could not be launched; open manually: {target}",
+            file=sys.stderr,
+        )
+        return
     if result.returncode != 0:
         print(
             f"WARN editor exited with status {result.returncode}; open manually: {target}",
@@ -126,12 +189,260 @@ def open_in_editor(editor: str, target: Path, *, workspace: bool) -> None:
         )
 
 
+def reuse_project_workspace(
+    project_path: Path,
+    codex_home: Path,
+) -> dict[str, object]:
+    """Validate and return one existing workspace without changing its lane."""
+
+    requested = project_path.expanduser().resolve()
+    workspace_path = project_workspace_manifest(requested, codex_home)
+    if not workspace_path.exists() and not workspace_path.is_symlink():
+        raise PromptWorkspaceError(
+            "WORKSPACE_NOT_FOUND",
+            "Task Implementer workspace does not exist; run workspace init for "
+            "this project folder",
+        )
+    classification = classify_generated_workspace(workspace_path)
+    if classification == "previous":
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "generated workspace requires explicit workspace init migration",
+        )
+    if classification == "tampered":
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "generated VS Code workspace was tampered with"
+        )
+    workspace = verify_workspace(workspace_path)
+    requested_root, _, requested_scope = repo_and_scope(requested, str(requested))
+    allowed_roots = {
+        Path(required_string(workspace, "primary_root", "workspace manifest")),
+        Path(required_string(workspace, "repo_root", "workspace manifest")),
+    }
+    if requested_root not in allowed_roots or requested_scope != required_string(
+        workspace, "scope", "workspace manifest"
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH",
+            "workspace reuse requires the primary project or its owning lane",
+        )
+    anchor = verify_workspace_anchor(workspace)
+    return {
+        "status": "reused",
+        "workspace": str(workspace_path),
+        "vscode_workspace": required_string(
+            workspace, "vscode_workspace", "workspace manifest"
+        ),
+        "prompt_root": required_string(workspace, "prompt_root", "workspace manifest"),
+        "project_id": required_string(workspace, "project_id", "workspace manifest"),
+        "scope_id": required_string(workspace, "scope_id", "workspace manifest"),
+        "lane_id": required_string(workspace, "lane_id", "workspace manifest"),
+        "lane_state": anchor["lane_state"],
+        "lane_status": anchor["status"],
+        "lane_branch": anchor["branch"],
+        "lane_worktree": anchor["worktree"],
+        "scope_cwd": required_string(workspace, "source_root", "workspace manifest"),
+    }
+
+
 def add_common_workspace(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--json", action="store_true")
 
 
+def _launch_codex_worker(
+    result: dict[str, object],
+    *,
+    reasoning_effort: str = "medium",
+    recovery_mode: bool = False,
+) -> dict[str, object]:
+    """Run one fresh worker while managed worktree resources remain visible."""
+
+    context = result.get("start_context")
+    if not isinstance(context, dict):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker launch requires the exact task start context",
+        )
+    scope_cwd = Path(required_string(context, "scope_cwd", "task start context"))
+    assignment_path = Path(
+        required_string(context, "assignment_path", "task start context")
+    )
+    start_argv = context.get("start_argv")
+    if (
+        not scope_cwd.is_absolute()
+        or not assignment_path.is_absolute()
+        or not isinstance(start_argv, list)
+        or not start_argv
+        or any(not isinstance(item, str) or not item for item in start_argv)
+    ):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker launch context must contain absolute paths and exact start argv",
+        )
+    if not scope_cwd.is_dir() or not assignment_path.is_file():
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker launch resources are unavailable before process start",
+        )
+    codex = shutil.which("codex")
+    if codex is None or not Path(codex).is_absolute():
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_UNAVAILABLE",
+            "codex executable is unavailable for the sequential worker fallback",
+        )
+    exact_start = shlex.join(start_argv)
+    preexisting_result: Path | None = None
+    if recovery_mode:
+        try:
+            recovery_assignment = json.loads(
+                assignment_path.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise PromptWorkspaceError(
+                "WORKER_EXEC_CONTEXT_INVALID",
+                "recovery assignment is unreadable before sequential execution",
+            ) from exc
+        if not isinstance(recovery_assignment, dict):
+            raise PromptWorkspaceError(
+                "WORKER_EXEC_CONTEXT_INVALID",
+                "recovery assignment must be a JSON object",
+            )
+        candidate = Path(
+            required_string(recovery_assignment, "result_path", "worker assignment")
+        )
+        if candidate.is_absolute() and candidate.is_file():
+            preexisting_result = candidate
+    if preexisting_result is not None:
+        prompt = (
+            "You are one isolated Task Implementer recovery verifier. You are not "
+            "alone in the repository; preserve other work and never revert changes "
+            "you did not make. Your first and only tool action must run this exact "
+            f"command from the current cwd: {exact_start}. The immutable result "
+            f"already exists at {preexisting_result}. If recovery succeeds without "
+            "replan_required, do not reimplement, modify, validate, commit, heartbeat, "
+            "or republish anything; exit immediately so the coordinator can perform "
+            "ordinary task-finish verification. If recovery reports replan_required, "
+            "follow only its exact terminal reporting context. Do not access network, "
+            "credentials, external services, or live runtimes."
+        )
+    else:
+        prompt = (
+            "You are one isolated Task Implementer worker. You are not alone in the "
+            "repository; preserve other work and never revert changes you did not make. "
+            f"Your first tool action must run this exact command from the current cwd: "
+            f"{exact_start}. After it succeeds, read only the immutable assignment at "
+            f"{assignment_path} and its referenced incoming handoff, then follow every "
+            "embedded guardrail and context exactly. Implement only the assigned task, "
+            "heartbeat as required, validate and review it. Never edit coordinator-owned "
+            "requirements, design, project instructions, README, or changelog paths even "
+            "when a broad task claim contains them; report required shared updates for the "
+            "post-integration coordinator reconciliation. Complete worker-local alignment, "
+            "then create exactly the authorized worker "
+            "commit, verify the worktree is clean, and only then publish the immutable "
+            "result. Publish successful work "
+            "with status exactly lower-case committed. If the first transition "
+            "returns replan_required, make no further edit or commit and immediately "
+            "publish a truthful terminal REPLAN_REQUIRED result with its exact changed "
+            "paths. Do not exit merely because start or recovery succeeded: successful "
+            "completion requires the assignment's exact immutable result file. Do not "
+            "access network, credentials, external services, or live runtimes."
+        )
+    completed = subprocess.run(
+        [
+            codex,
+            "exec",
+            "--ephemeral",
+            "-C",
+            str(scope_cwd),
+            "-s",
+            "danger-full-access",
+            "-c",
+            'approval_policy="never"',
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+            prompt,
+        ],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if completed.returncode != 0:
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_FAILED",
+            f"sequential worker exited with status {completed.returncode}",
+        )
+    try:
+        assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker assignment became unreadable after sequential execution",
+        ) from exc
+    if not isinstance(assignment, dict):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker assignment must remain a JSON object after sequential execution",
+        )
+    result_path = Path(required_string(assignment, "result_path", "worker assignment"))
+    if not result_path.is_absolute() or not result_path.is_file():
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_INCOMPLETE",
+            "sequential worker exited without its exact immutable result",
+        )
+    return {"mode": "codex-exec", "returncode": completed.returncode}
+
+
+def _launch_codex_recovery_worker(result: dict[str, object]) -> dict[str, object]:
+    context = result.get("worker_context")
+    if not isinstance(context, dict):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "recovery worker launch requires the exact recovery context",
+        )
+    return _launch_codex_worker(
+        {
+            "start_context": {
+                "scope_cwd": context.get("scope_cwd"),
+                "assignment_path": context.get("assignment_path"),
+                "start_argv": context.get("recover_argv"),
+            }
+        },
+        reasoning_effort="low",
+        recovery_mode=True,
+    )
+
+
+def parse_plan_digest_recovery(argv: list[str]) -> argparse.Namespace:
+    """Parse the owner-only repair without adding it to discoverable CLI help."""
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.set_defaults(command="plan-digest-recover")
+    add_common_workspace(parser)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--expected-plan-sha256", required=True)
+    parser.add_argument("--expected-index-sha256", required=True)
+    return parser.parse_args(argv)
+
+
+def parse_handoff_projection_recovery(argv: list[str]) -> argparse.Namespace:
+    """Parse the owner-only repair without adding it to discoverable help."""
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.set_defaults(command="handoff-projection-recover")
+    add_common_workspace(parser)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--expected-handoff-sha256", required=True)
+    return parser.parse_args(argv)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    if argv[:1] == ["plan-digest-recover"]:
+        return parse_plan_digest_recovery(argv[1:])
+    if argv[:1] == ["handoff-projection-recover"]:
+        return parse_handoff_projection_recovery(argv[1:])
+
     parser = argparse.ArgumentParser(
         description="Internal mechanical helper for task-implementer private state."
     )
@@ -151,6 +462,52 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--editor", default=os.environ.get("TASK_IMPLEMENTER_EDITOR", "code")
     )
     init_parser.add_argument("--json", action="store_true")
+
+    reuse_parser = subparsers.add_parser(
+        "reuse", help="Internal: validate and reopen one existing project workspace."
+    )
+    reuse_parser.add_argument("project_path", nargs="?", type=Path, default=Path.cwd())
+    reuse_parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+    )
+    reuse_parser.add_argument("--no-open", action="store_true")
+    reuse_parser.add_argument(
+        "--editor", default=os.environ.get("TASK_IMPLEMENTER_EDITOR", "code")
+    )
+    reuse_parser.add_argument("--json", action="store_true")
+
+    integrate_parser = subparsers.add_parser(
+        "integrate",
+        help="Internal: integrate all pending project-lane generations.",
+    )
+    integrate_parser.add_argument(
+        "project_path", nargs="?", type=Path, default=Path.cwd()
+    )
+    integrate_parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+    )
+    integrate_parser.add_argument("--validated-head", help=argparse.SUPPRESS)
+    integrate_parser.add_argument(
+        "--restart", action="store_true", help=argparse.SUPPRESS
+    )
+    integrate_parser.add_argument("--review-rejected-head", help=argparse.SUPPRESS)
+    integrate_parser.add_argument("--review-findings-sha256", help=argparse.SUPPRESS)
+    integrate_parser.add_argument("--json", action="store_true")
+
+    remove_parser = subparsers.add_parser(
+        "remove", help="Internal: retire one idle project lane."
+    )
+    remove_parser.add_argument("project_path", nargs="?", type=Path, default=Path.cwd())
+    remove_parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+    )
+    remove_parser.add_argument("--json", action="store_true")
 
     intake_parser = subparsers.add_parser(
         "intake", help="Internal: resolve one prompt to its next run transition."
@@ -178,6 +535,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     new_parser.add_argument(
         "--editor", default=os.environ.get("TASK_IMPLEMENTER_EDITOR", "code")
     )
+    session_merge = subparsers.add_parser(
+        "session-merge", help="Internal: merge one accepted project-intent projection."
+    )
+    add_common_workspace(session_merge)
+    session_merge.add_argument("--projection-file", type=Path, required=True)
+    session_merge.add_argument("--projection-sha256", required=True)
+    session_merge.add_argument("--prompt")
+    session_merge.add_argument("--expected-sha256")
+    session_merge.add_argument("--new-objective", action="store_true")
+    session_merge.add_argument("--operation-id", required=True)
 
     list_parser = subparsers.add_parser(
         "list", help="Internal: list prompt metadata without bodies."
@@ -185,6 +552,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common_workspace(list_parser)
     list_parser.add_argument("--query")
     list_parser.add_argument("--date")
+
+    queue_list_parser = subparsers.add_parser(
+        "queue-list", help="Internal: list accepted queued prompts without bodies."
+    )
+    add_common_workspace(queue_list_parser)
+
+    queue_cancel_parser = subparsers.add_parser(
+        "queue-cancel", help="Internal: cancel one accepted queued prompt."
+    )
+    add_common_workspace(queue_cancel_parser)
+    queue_cancel_parser.add_argument("--prompt", required=True)
+
+    queue_next_parser = subparsers.add_parser(
+        "queue-next", help="Internal: activate the FIFO queue head when idle."
+    )
+    lane_report_parser = subparsers.add_parser(
+        "lane-report",
+        help="Internal: inspect concise managed-lane status without mutation.",
+    )
+    add_common_workspace(lane_report_parser)
+    add_common_workspace(queue_next_parser)
 
     snapshot_parser = subparsers.add_parser(
         "snapshot", help="Internal: create an immutable prompt revision."
@@ -208,8 +596,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     wave_plan.add_argument("--run-id", required=True)
     wave_plan.add_argument("--capacity", required=True, type=int)
 
+    checkpoint_prepare = subparsers.add_parser(
+        "checkpoint-prepare",
+        help="Internal: reserve the first-generation lane candidate for review.",
+    )
+    add_common_workspace(checkpoint_prepare)
+    checkpoint_prepare.add_argument("--run-id", required=True)
+
     wave_replan = subparsers.add_parser(
-        "wave-replan", help="Internal: replace one resource-free planned wave."
+        "wave-replan",
+        help=(
+            "Internal: replace a resource-free plan or append a sealed "
+            "promotion-review correction round."
+        ),
     )
     add_common_workspace(wave_replan)
     wave_replan.add_argument("--run-id", required=True)
@@ -241,6 +640,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_start.add_argument("--run-id", required=True)
     task_start.add_argument("--task-id", required=True)
     task_start.add_argument("--assignment-sha256", required=True)
+    task_start.add_argument("--start-lease", required=True)
 
     task_arm = subparsers.add_parser(
         "task-arm", help="Internal: arm one available worker slot."
@@ -248,6 +648,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common_workspace(task_arm)
     task_arm.add_argument("--run-id", required=True)
     task_arm.add_argument("--task-id", required=True)
+    task_arm.add_argument(
+        "--launch-codex-worker", action="store_true", help=argparse.SUPPRESS
+    )
 
     task_heartbeat = subparsers.add_parser(
         "task-heartbeat", help="Internal: record bounded worker progress."
@@ -276,13 +679,41 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_watch.add_argument("--run-id", required=True)
     task_watch.add_argument("--task-id", required=True)
 
+    task_result_publish = subparsers.add_parser(
+        "task-result-publish",
+        help="Internal: validate and publish one private worker result.",
+    )
+    task_result_publish.add_argument("--assignment", required=True, type=Path)
+    task_result_publish.add_argument("--draft", required=True, type=Path)
+    task_result_publish.add_argument("--result", required=True, type=Path)
+
+    task_rearm = subparsers.add_parser(
+        "task-rearm", help="Internal: replace one expired clean prestart lease."
+    )
+    add_common_workspace(task_rearm)
+    task_rearm.add_argument("--run-id", required=True)
+    task_rearm.add_argument("--task-id", required=True)
+    task_rearm.add_argument("--expected-start-lease", required=True)
+    task_rearm.add_argument("--confirmed-stopped", action="store_true")
+    task_rearm.add_argument(
+        "--launch-codex-worker", action="store_true", help=argparse.SUPPRESS
+    )
+
     task_recover = subparsers.add_parser(
-        "task-recover", help="Internal: transfer one interrupted worker task."
+        "task-recover", help="Internal: transfer one interrupted running task."
     )
     add_common_workspace(task_recover)
     task_recover.add_argument("--run-id", required=True)
     task_recover.add_argument("--task-id", required=True)
     task_recover.add_argument("--confirmed-stopped", action="store_true")
+
+    wave_resource_recover = subparsers.add_parser(
+        "wave-resource-recover",
+        help="Internal: rehydrate exact missing active-wave worktrees.",
+    )
+    add_common_workspace(wave_resource_recover)
+    wave_resource_recover.add_argument("--run-id", required=True)
+    wave_resource_recover.add_argument("--confirmed-stopped", action="store_true")
 
     task_finish = subparsers.add_parser(
         "task-finish", help="Internal: verify one worker result."
@@ -296,6 +727,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     add_common_workspace(wave_integrate)
     wave_integrate.add_argument("--run-id", required=True)
+
+    coordinator_commit = subparsers.add_parser(
+        "coordinator-commit",
+        help="Internal: commit the exact prepared or post-integration contract delta.",
+    )
+    add_common_workspace(coordinator_commit)
+    coordinator_commit.add_argument("--run-id", required=True)
+
+    coordinator_stage = subparsers.add_parser(
+        "coordinator-stage",
+        help="Internal: stage the exact prepared canonical spec pair.",
+    )
+    add_common_workspace(coordinator_stage)
+    coordinator_stage.add_argument("--run-id", required=True)
 
     wave_promote = subparsers.add_parser(
         "wave-promote", help="Internal: fast-forward the primary branch."
@@ -311,11 +756,44 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     wave_cleanup.add_argument("--run-id", required=True)
 
     run_finalize = subparsers.add_parser(
-        "run-finalize", help="Internal: seal final alignment and release outer lease."
+        "run-finalize",
+        help="Internal: seal final alignment and release the lane generation.",
     )
     add_common_workspace(run_finalize)
     run_finalize.add_argument("--run-id", required=True)
     run_finalize.add_argument("--alignment", required=True)
+
+    run_resume = subparsers.add_parser(
+        "run-resume", help="Internal: plan one authoritative resume transition."
+    )
+    add_common_workspace(run_resume)
+    run_resume.add_argument("--run-id", required=True)
+    run_resume.add_argument("--capacity", type=int)
+    run_resume.add_argument("--alignment")
+    run_resume.add_argument(
+        "--launch-codex-recovery-worker",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
+    for transition_parser in (
+        checkpoint_prepare,
+        wave_plan,
+        wave_replan,
+        wave_prepare,
+        wave_dispatch,
+        batch_advance,
+        task_arm,
+        task_rearm,
+        task_recover,
+        wave_resource_recover,
+        task_finish,
+        wave_integrate,
+        wave_promote,
+        wave_cleanup,
+        run_finalize,
+    ):
+        transition_parser.add_argument("--resume-token", help=argparse.SUPPRESS)
 
     steering_parser = subparsers.add_parser(
         "steering-resolve", help="Internal: record one steering disposition."
@@ -375,9 +853,11 @@ def emit(value: object, json_output: bool) -> None:
                 "starter_created",
                 "action",
                 "prompt",
+                "prompt_ref",
                 "last_invoked_at",
                 "status",
                 "outcome",
+                "queue_position",
             ):
                 if key in value:
                     print(f"{key}: {value[key]}")
@@ -392,10 +872,65 @@ def emit(value: object, json_output: bool) -> None:
     print(value)
 
 
+def _resume_transition_arguments(args: argparse.Namespace) -> dict[str, object]:
+    if args.command in {"wave-plan", "wave-replan"}:
+        return {"capacity": args.capacity}
+    if args.command == "wave-dispatch":
+        return {"contract_commit": args.contract_commit}
+    if args.command in {"task-arm", "task-finish"}:
+        return {"task_id": args.task_id}
+    if args.command == "task-rearm":
+        return {
+            "task_id": args.task_id,
+            "expected_start_lease": args.expected_start_lease,
+            "confirmed_stopped": args.confirmed_stopped,
+        }
+    if args.command == "task-recover":
+        return {
+            "task_id": args.task_id,
+            "confirmed_stopped": args.confirmed_stopped,
+        }
+    if args.command == "wave-resource-recover":
+        return {"confirmed_stopped": args.confirmed_stopped}
+    if args.command == "wave-promote":
+        return {"evidence": str(args.evidence)}
+    if args.command == "run-finalize":
+        return {"alignment": args.alignment.strip()}
+    return {}
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    resume_context: tuple[dict[str, object], str, str, str | None] | None = None
+    resume_guard = None
+    resume_effect_complete = False
     try:
-        if args.command == "init":
+        if args.command in CONTROLLED_TRANSITIONS:
+            resume_workspace = verify_workspace(args.workspace)
+            resume_guard = resume_execution_lock(resume_workspace, args.run_id)
+            resume_guard.__enter__()
+            begun = begin_resume_transition(
+                resume_workspace,
+                args.run_id,
+                args.command,
+                args.resume_token,
+                arguments=_resume_transition_arguments(args),
+            )
+            if begun is not None:
+                resume_effect_complete = bool(begun.get("_effect_complete"))
+                resume_context = (
+                    resume_workspace,
+                    args.run_id,
+                    args.command,
+                    str(begun["resume_token"]),
+                )
+        if resume_effect_complete:
+            result = {
+                "status": "reconciled",
+                "run_id": args.run_id,
+                "transition": args.command,
+            }
+        elif args.command == "init":
             result = initialize_project_workspace(
                 args.project_path,
                 args.codex_home,
@@ -404,6 +939,43 @@ def main(argv: list[str]) -> int:
                 open_in_editor(
                     args.editor, Path(str(result["vscode_workspace"])), workspace=True
                 )
+        elif args.command == "reuse":
+            result = reuse_project_workspace(args.project_path, args.codex_home)
+            if not args.no_open:
+                open_in_editor(
+                    args.editor, Path(str(result["vscode_workspace"])), workspace=True
+                )
+        elif args.command == "integrate":
+            workspace_path = project_workspace_manifest(
+                args.project_path, args.codex_home
+            )
+            workspace = verify_workspace(workspace_path)
+            runs_root = Path(
+                required_string(workspace, "runs_root", "workspace manifest")
+            )
+            with scope_lock(runs_root.parent):
+                if pending_finalization_generations(runs_root, workspace):
+                    raise PromptWorkspaceError(
+                        "FINALIZATION_PENDING",
+                        "finish the released Task Implementer run before integration",
+                    )
+                result = integrate_lane(
+                    workspace,
+                    validated_head=args.validated_head,
+                    restart=args.restart,
+                    review_rejected_head=args.review_rejected_head,
+                    review_findings_sha256=args.review_findings_sha256,
+                )
+                if result.get("status") == "correction-required":
+                    record_integration_review_correction(
+                        workspace, result, args.review_findings_sha256
+                    )
+        elif args.command == "remove":
+            workspace_path = project_workspace_manifest(
+                args.project_path, args.codex_home
+            )
+            workspace = verify_workspace_for_removal(workspace_path, args.project_path)
+            result = remove_lane(workspace)
         elif args.command == "intake":
             result = route_project_prompt(
                 args.project_path,
@@ -414,8 +986,26 @@ def main(argv: list[str]) -> int:
             result = create_prompt(args.workspace, args.ask)
             if args.open:
                 open_in_editor(args.editor, Path(str(result["path"])), workspace=False)
+        elif args.command == "session-merge":
+            result = merge_session_projection(
+                args.workspace,
+                args.projection_file,
+                prompt_reference=args.prompt,
+                expected_sha256=args.expected_sha256,
+                new_objective=args.new_objective,
+                operation_id=args.operation_id,
+                projection_sha256=args.projection_sha256,
+            )
         elif args.command == "list":
             result = prompt_rows(args.workspace, args.query, args.date)
+        elif args.command == "queue-list":
+            result = queue_rows(args.workspace)
+        elif args.command == "queue-cancel":
+            result = cancel_queued_prompt(args.workspace, args.prompt)
+        elif args.command == "queue-next":
+            result = activate_next_queued_prompt(args.workspace)
+        elif args.command == "lane-report":
+            result = lane_report(args.workspace)
         elif args.command == "snapshot":
             result = snapshot_prompt(
                 args.workspace,
@@ -428,6 +1018,8 @@ def main(argv: list[str]) -> int:
                 result = verify_command(args.workspace, None, args.run_id)
             else:
                 result = verify_command(args.workspace, args.prompt, args.run_id)
+        elif args.command == "checkpoint-prepare":
+            result = prepare_run_checkpoint(args.workspace, args.run_id)
         elif args.command == "wave-plan":
             result = plan_waves(args.workspace, args.run_id, args.capacity)
         elif args.command == "wave-replan":
@@ -442,7 +1034,11 @@ def main(argv: list[str]) -> int:
             result = arm_task(args.workspace, args.run_id, args.task_id)
         elif args.command == "task-start":
             result = start_task(
-                args.workspace, args.run_id, args.task_id, args.assignment_sha256
+                args.workspace,
+                args.run_id,
+                args.task_id,
+                args.assignment_sha256,
+                args.start_lease,
             )
         elif args.command == "task-heartbeat":
             result = heartbeat_task(
@@ -454,6 +1050,16 @@ def main(argv: list[str]) -> int:
             )
         elif args.command == "task-watch":
             result = watch_task(args.workspace, args.run_id, args.task_id)
+        elif args.command == "task-result-publish":
+            result = publish_task_result(args.assignment, args.draft, args.result)
+        elif args.command == "task-rearm":
+            result = rearm_task(
+                args.workspace,
+                args.run_id,
+                args.task_id,
+                args.expected_start_lease,
+                confirmed_stopped=args.confirmed_stopped,
+            )
         elif args.command == "task-recover":
             result = recover_task(
                 args.workspace,
@@ -461,16 +1067,46 @@ def main(argv: list[str]) -> int:
                 args.task_id,
                 confirmed_stopped=args.confirmed_stopped,
             )
+        elif args.command == "wave-resource-recover":
+            result = recover_wave_resources(
+                args.workspace,
+                args.run_id,
+                confirmed_stopped=args.confirmed_stopped,
+            )
         elif args.command == "task-finish":
             result = accept_task_result(args.workspace, args.run_id, args.task_id)
         elif args.command == "wave-integrate":
             result = integrate_wave(args.workspace, args.run_id)
+        elif args.command == "coordinator-stage":
+            result = stage_coordinator_contract(args.workspace, args.run_id)
+        elif args.command == "coordinator-commit":
+            result = commit_coordinator_delta(args.workspace, args.run_id)
         elif args.command == "wave-promote":
             result = promote_wave(args.workspace, args.run_id, args.evidence)
         elif args.command == "wave-cleanup":
             result = cleanup_wave(args.workspace, args.run_id)
         elif args.command == "run-finalize":
             result = finalize_run(args.workspace, args.run_id, args.alignment)
+        elif args.command == "run-resume":
+            result = resume_run(
+                args.workspace,
+                args.run_id,
+                capacity=args.capacity,
+                alignment=args.alignment,
+            )
+        elif args.command == "plan-digest-recover":
+            result = recover_replanned_plan_digest(
+                args.workspace,
+                args.run_id,
+                args.expected_plan_sha256,
+                args.expected_index_sha256,
+            )
+        elif args.command == "handoff-projection-recover":
+            result = recover_handoff_projection(
+                args.workspace,
+                args.run_id,
+                args.expected_handoff_sha256,
+            )
         elif args.command == "steering-resolve":
             workspace = verify_workspace(args.workspace)
             runs_root = Path(str(workspace["runs_root"]))
@@ -493,6 +1129,23 @@ def main(argv: list[str]) -> int:
                         "RUN_STATE_INVALID",
                         "steering cannot resolve before the handoff binds its revision",
                     )
+                if args.disposition in {"applied", "no_effect"}:
+                    impact = load_current_prompt_impact(run_dir, required=True)
+                    assert impact is not None
+                    receipt, _receipt_sha256 = impact
+                    if receipt.get("revision") != args.revision:
+                        raise PromptWorkspaceError(
+                            "PROMPT_IMPACT_REQUIRED",
+                            "steering cannot resolve without impact evidence for its revision",
+                        )
+                    has_effect = bool(receipt.get("effects"))
+                    if (args.disposition == "no_effect" and has_effect) or (
+                        args.disposition == "applied" and not has_effect
+                    ):
+                        raise PromptWorkspaceError(
+                            "PROMPT_IMPACT_REQUIRED",
+                            "steering disposition does not match the validated prompt impact",
+                        )
                 result = resolve_steering_revision(
                     run_dir,
                     manifest_revisions(manifest),
@@ -504,18 +1157,69 @@ def main(argv: list[str]) -> int:
             result = inspect_spec_documents(workspace, commit=args.commit)
         else:  # pragma: no cover - argparse enforces the command set.
             raise AssertionError(args.command)
+        if resume_context is not None:
+            complete_resume_transition(*resume_context)
+            next_resume = resume_run(args.workspace, args.run_id)
+            if not isinstance(result, dict):
+                raise PromptWorkspaceError(
+                    "EXECUTION_STATE_INVALID",
+                    "resume-controlled transition returned an invalid result",
+                )
+            result = {**result, "resume": next_resume}
+        if args.command in {"task-arm", "task-rearm"} and getattr(
+            args, "launch_codex_worker", False
+        ):
+            if not isinstance(result, dict):
+                raise PromptWorkspaceError(
+                    "WORKER_EXEC_CONTEXT_INVALID",
+                    "worker launch requires a mapping result",
+                )
+            if resume_guard is not None:
+                resume_guard.__exit__(None, None, None)
+                resume_guard = None
+            result = {**result, "worker_launch": _launch_codex_worker(result)}
+        if args.command == "run-resume" and getattr(
+            args, "launch_codex_recovery_worker", False
+        ):
+            if (
+                not isinstance(result, dict)
+                or result.get("outcome") != "requires_confirmation"
+                or result.get("next_transition") != "task-recover"
+            ):
+                raise PromptWorkspaceError(
+                    "WORKER_EXEC_CONTEXT_INVALID",
+                    "recovery worker launch requires a current confirmed-recovery plan",
+                )
+            result = {
+                **result,
+                "worker_launch": _launch_codex_recovery_worker(result),
+            }
     except PromptWorkspaceError as exc:
+        if resume_context is not None:
+            try:
+                abort_resume_transition_if_unchanged(*resume_context)
+            except PromptWorkspaceError:
+                pass
         print(f"{exc.code}: {exc.message}", file=sys.stderr)
         return 2
-    if args.command == "init" and args.json:
+    finally:
+        if resume_guard is not None:
+            resume_guard.__exit__(None, None, None)
+    if args.command in {"init", "reuse"}:
         result = {
             key: value
             for key, value in result.items()
-            if key not in {"project_id", "scope_id"}
+            if key not in {"project_id", "scope_id", "lane_id"}
         }
-    if args.command == "intake" and args.json:
+    json_output = bool(
+        getattr(args, "json", False) or getattr(args, "internal_json", False)
+    )
+    if args.command == "intake" and getattr(args, "json", False):
         result = {key: value for key, value in result.items() if key != "_internal"}
-    emit(result, args.json or getattr(args, "internal_json", False))
+    if args.command == "lane-report" and not json_output:
+        print(render_lane_report(result), end="")
+    else:
+        emit(result, json_output)
     return 0
 
 

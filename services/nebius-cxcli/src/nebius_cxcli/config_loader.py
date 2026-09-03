@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import stat
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +38,38 @@ from .observability import (
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
 from .soperator_child_charts import materialize_soperator_child_chart_values
+from .soperator_config_materialization import _materialize_soperator_component_defaults
 from .soperator_validation import normalize_soperator_project_deployment_testing_settings
 from .ssh_public_keys import normalize_runtime_ssh_public_key_inputs
+
+
+def _write_text_atomic(path: Path, content: str, *, file_mode: int) -> None:
+    fd = -1
+    temporary: Path | None = None
+    try:
+        fd, raw_temporary = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temporary = Path(raw_temporary)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            os.fchmod(handle.fileno(), file_mode)
+            handle.write(content.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def normalize_runtime_config_payload(
@@ -55,11 +88,8 @@ def normalize_runtime_config_payload(
     if any(
         isinstance(row, dict) and row.get("id") == "soperator" and row.get("enabled") is True
         for row in chart_rows
-    ):
-        from .cli import _materialize_soperator_component_defaults
-
-        if _materialize_soperator_component_defaults(payload):
-            changed = True
+    ) and _materialize_soperator_component_defaults(payload):
+        changed = True
     if normalize_mk8s_gpu_project_deployment_testing_settings(payload):
         changed = True
     if normalize_soperator_project_deployment_testing_settings(payload):
@@ -114,11 +144,13 @@ def validate_config(payload: dict[str, Any], *, base_dir: Path | None = None) ->
 
 def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
     """Load one config.yaml file and return runtime-wrapped config."""
-    if not path.exists():
-        raise ValueError(f"Config file not found: {path}")
-    if path.is_dir():
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        raise ValueError(f"Config file not found: {path}") from None
+    if not stat.S_ISREG(path_stat.st_mode) or path_stat.st_nlink != 1:
         raise ValueError(
-            "Expected a project config.yaml file path, but got a directory: "
+            "Expected a single-link regular project config.yaml file path: "
             f"{path}. Pass <tenant-folder>/<project-folder>/config.yaml."
         )
     with path.open("r", encoding="utf-8") as handle:
@@ -132,7 +164,11 @@ def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
     before = dump_yaml(payload) if persist_normalized else ""
     config = validate_config(payload, base_dir=path.parent)
     if persist_normalized and dump_yaml(payload) != before:
-        path.write_text(dump_yaml(payload), encoding="utf-8")
+        _write_text_atomic(
+            path,
+            dump_yaml(payload),
+            file_mode=stat.S_IMODE(path_stat.st_mode),
+        )
     return config
 
 

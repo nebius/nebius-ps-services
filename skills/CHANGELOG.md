@@ -4,8 +4,607 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Unified project-spec management across ordinary sessions, Task Implementer,
+  and Agentic SDLC. The v2 owner contract separates requirement state, design
+  readiness, and delivery; publishes both documents with Git/file-digest
+  compare-and-set and split-write rollback; and records implementation and
+  verification evidence independently. Direct root prompts now receive
+  statement-level classification guidance from metadata-only intake, while
+  workers inherit the accepted intent/spec receipt and return typed
+  `spec_gaps` instead of reclassifying intent or editing specs. Concurrent
+  intake for one turn is serialized, gap text is sensitive-screened, and worker
+  path inventories disable rename folding so moving a protected spec cannot
+  hide its source. Paired publication now holds no-follow project/docs
+  descriptors, checks Git and document state at each replacement boundary,
+  uses guarded rollback, and serializes owner-aware readers. SessionStart
+  observes actual document markers through bounded no-follow regular-file reads
+  and no longer emits `ADVISORY_UNAVAILABLE` because a private `lifecycle.json`
+  is absent. Project-spec PreToolUse,
+  PostToolUse, and Stop registrations are retired; hook failures remain
+  nonblocking. Canonical v1, Task Implementer v1, and Agentic SDLC v1 pairs
+  upgrade only through explicit migration, with no normal-path compatibility
+  parser. Dedicated CI covers the canonical owner, transaction and hook paths,
+  Task planning/resume, SDLC prompt/start/hook/execution paths, installer
+  retirement, and project-instruction generation/retention.
+- Made historical project lifecycle phase state fully advisory. Ordinary hooks
+  now emit bounded context only and never deny tools, continue Stop, or gate a
+  session. Task Implementer owns its prompt-impact schemas and no longer has a
+  lifecycle authorization bridge, project-agent dispatch receipt, terminal
+  seal, reload gate, or runtime contract-delta overlay. Agentic SDLC likewise
+  excludes historical phase state and project-instruction lifecycle from its
+  golden path, while both workflows require the canonical v2 spec pair before
+  spec-dependent planning or dispatch and use general `align` before commit.
+  Explicit project-instruction mutation retains its own ownership,
+  concurrency, recovery, and verification safety.
+  The retired transition API is removed from both the CLI and importable
+  library, the real SessionStart path reaches the canonical bounded retention
+  classifier with an `unsafe` fallback and pre/post identity-and-digest proof
+  of its owner-controlled package tree; it executes only the snapshotted bytes
+  from an owner-only temporary tree. Project-instruction steering requires an
+  explicit current-user request, the orphaned Task receipt validator is
+  removed, the transient Task worker commit context uses `scope_cwd` under a
+  hard-cut v2 schema, ordinary `$commit` no longer waits for a lifecycle seal
+  or waiver, and stateful skill contracts expose their required structural
+  boundaries.
+- Fixed a same-session lifecycle coordinator deadlock during canonical
+  project-instruction render and seal verification. Nested renderer and verifier
+  subprocesses now inherit and validate the parent coordinator's already-held
+  workspace/session lock descriptors, while direct commands still acquire the
+  same locks normally. This preserves session serialization and maintenance
+  exclusion without waiting for the parent's bounded subprocess timeout.
+- Removed the count-based cross-session project-spec lifecycle audit that made
+  normal `SessionStart` context report a false failure after 128 private
+  records. Hook context is now current-session only. Owner-private maintenance
+  keeps terminal records for 30 days, expires abandoned resumable records after
+  90 days, and uses 1 GiB/768 MiB allocated-storage hysteresis without an
+  archive. Stable workspace/session locks, canonical ownership-registry
+  classification, non-authoritative activity, bounded cursor state, fsynced
+  rename journals, generation-plus-canonical-digest drift restoration, strict
+  status validation, root-cursor rotation across inactive workspaces,
+  complete-aggregate pressure admission, rotating journal recovery, and
+  directory-FD no-follow deletion protect active, `seal-armed`,
+  pending, legacy-required, missing sealed final state, malformed, linked, and
+  cross-device evidence. Staged bytes are counted once. Maintenance status remains
+  private and never gates the current implementation. Source verification is
+  separate from installation, restart, and fresh-session activation.
+- Fixed redundant project `AGENTS.md` adoption prompts in new Codex sessions.
+  Inspection and apply now carry exact managed-region authority through a
+  locked, monotonic workspace-private registry with durable retirement
+  tombstones. The lock spans preflight through target/state publication and
+  recovery release, preventing stale active writers from following
+  retirement. A missing subject can bootstrap once only from unanimous exact
+  active sealed history. First use atomically publishes a complete
+  generation-zero registry root; failed, empty, damaged, retired, mismatched,
+  or ambiguous bootstrap evidence publishes a blocked subject generation that
+  cannot be retried after evidence removal and is superseded only by exact
+  adoption. Initialized-but-missing, unsafe, or malformed registry state never
+  falls back. A completed apply interrupted before registry publication is
+  recorded as a pending generation bound to its exact receipt and state digest,
+  preserving original-writer recovery without granting observers authority.
+  The verified exact-target receipt is imported into the current private
+  bundle, while discovery and marker presence remain non-authoritative. Source
+  verification remains separate from installation and fresh-session
+  activation.
+- Fixed exact read-only Atlassian Rovo calls being denied as ambiguous project
+  effects before connector authentication or page access could run. The
+  lifecycle hook now recognizes only the reviewed provider-scoped canonical
+  read names in both PreToolUse and PostToolUse; reserved provider families
+  cannot fall through on read-like methods, and writes, unknown or drifted
+  names, browser-control tools, and arbitrary code remain fail-closed.
+  Connector-owned authentication/default-browser redirects stay under
+  connector and workspace policy. This tranche is source-only; installed
+  parity, restart, fresh-session behavior, and live page access remain separate
+  validation gates.
+- Fixed resolved remediation sessions so a later bare `$troubleshoot` keeps the
+  saved profile and admits discovery instead of preemptively creating a fresh
+  tranche and denying every tool. Explicit profile changes preserve the
+  resolved marker through the profile-only handshake; post-exhaustion behavior
+  stays fail-closed. Pending repair now requires an update for an existing
+  task-state file, permits add only when the file is absent, and rejects delete,
+  delete/add replacement, shell rewrites, and unrelated tools.
+- Fixed lifecycle coordinator guidance that advertised a repo-relative checkout
+  helper rejected by the installed hook. Workflow examples now require literal
+  absolute trusted Python and installed-helper paths, and malformed-command
+  feedback distinguishes that trust boundary from project-instructions inspect
+  bundle flags without weakening coordinator validation.
+- Fixed prompt-session intake so an active Task Implementer or Agentic SDLC
+  objective can no longer bind an unrelated fresh Codex session. Capture now
+  requires an exact init or run invocation in that same session; registry
+  entries retain objective identity and writer provenance without acting as a
+  workflow selector. Direct unbound prompts remain capture-inert, and focused
+  regressions cover both workflow owners.
+- Fixed `commit-push` under an active selected-project lifecycle. Exact safe
+  Git queries are now read-only, while a fixed-network `origin` query,
+  constrained current-branch tracking fetch, and non-force same-branch push
+  are explicit epoch-neutral Git control-plane effects. Alternate remotes,
+  unsafe or multiple transports, active pre-push or reference-transaction
+  hooks, force/delete/mirror/tag/wildcard shapes, extra refspecs, and
+  composition stay fail-closed. Dirty publication now reuses the claim-bound
+  commit transaction instead of raw staging and commit; source verification
+  remains separate from installation, restart, fresh-session behavior, and
+  live publication.
+- Fixed project-instruction decision revision after an earlier current-session
+  render. Rendering now rejects target-inapplicable dispositions before
+  publishing private evidence and atomically replaces changed private rules
+  only under a nonblocking private-bundle lock and after the final replacement
+  boundary revalidates both canonical state and rules predecessors. Interrupted
+  matching-state I/O publication returns the distinct exact-rerun result
+  `RENDER_STATE_PUBLICATION_INCOMPLETE`; an equal-bytes retry re-syncs the
+  private parent directory when replacement completed before that durability
+  boundary, while generic unsafe ownership remains terminal. Missing,
+  ownership-mismatched, unsafe, hard-linked, or concurrently changing
+  predecessors remain blocked. This removes the owned empty-render deadlock
+  without weakening lifecycle hooks or deleting retained session evidence.
+- Fixed ordinary `$troubleshoot` sensitive-report handling so Stop records a
+  terminal `sensitive_detected` disposition and emits one generic warning
+  instead of prompting the model for a second report. Report-obligation v3
+  removes correction counters and later tool denial, validates local evidence
+  against the full resolved Git repository root, and accepts contained
+  relative, native absolute, home-relative, and strict local `file:` targets
+  while keeping format-only defects advisory and escape or sensitive content
+  terminal. It parses balanced Markdown destinations, rejects ambiguous or
+  renderer-active link syntax, independently scans decoded targets for
+  sensitive values, and normalizes contained exhausted-fallback references
+  without truncating markup. It redacts unsafe values and fails old active
+  state to a fresh session, and keeps shared Stop peers running while preserving
+  first-terminal precedence and surfacing finalization failures generically.
+  Activation now has a schema/status-only preflight that preserves known v1/v2
+  terminal history while rejecting active or ambiguous legacy state, plus a
+  provenance-preserving targeted skill backup/sync path. Exhausted-budget
+  correction behavior is unchanged.
+- Restored the canonical Agentic SDLC phase-description prefix, aligned every
+  phase with `maintain-project-specs` as the single spec owner, restored the
+  required project-instructions workflow step, made authoring templates
+  Markdownlint-safe, corrected requirements-adapter safety wording, and added
+  real-source catalog and workflow ownership regressions.
+- Replaced the generated Task Implementer pending-change dump with a concise
+  human `Show Lane Status` task and hard-cut `lane-report-v2` machine view.
+  Status now reports only persistent-lane generations, current or latest
+  task/worker/wave progress, current and remaining steps, and the next public
+  action. It uses two matching bounded observations with one retry, never
+  computes or exposes changed-file data, and avoids workspace locks,
+  lease-resource inspection, checkpointing, integration, and metadata writes.
+  The exact previous four-task workspace shape migrates explicitly; all older
+  or altered shapes remain tampered.
+- Fixed project-contract recovery after a Task Implementer worker commit. The
+  canonical lifecycle library now accepts the hook-owned
+  `task-worker-delegated` waiver and lets a later prompt reopen normal planning,
+  matching the state already produced and validated by the installed hook.
+- Fixed the Task Implementer aggregate verifier's per-suite timeout so the
+  measured full wave and linked-worktree crash matrix completes within its
+  bounded validation window instead of being reported as a false timeout.
+- Fixed project-instruction terminal sealing after another authorized workflow
+  refreshed only the portable marker projection. A stale active receipt may be
+  re-adopted only with explicit approval of the exact current target digest and
+  unchanged project, Git root, scope, target path, and managed-body identity;
+  subject drift, body drift, and missing or stale approval remain blocked.
+- Fixed final Task Implementer cleanup after a sealed terminal lifecycle commit
+  carries the validated requirements, design, or project-instruction overlay.
+  Prompt-impact settlement now accepts that exact journal-bound direct child in
+  addition to the ordinary coordinator documentation commit; unrelated or
+  unsealed promoted spec drift remains blocked. The final-wave settlement also
+  accepts the same revision and intent when its immutable impact still records
+  the original request as `replan_required`, because no remaining wave exists;
+  non-final material impact continues to require replanning. Replay also
+  recognizes the exact partially published state where the new impact receipt
+  is current but its plan-basis binding is stale.
+- Fixed Task Implementer correction-contract preparation under an active
+  project lifecycle. A new hidden, journaled `coordinator-stage` transition
+  admits only the complete canonical requirements/design pair in the exact
+  registered integration worktree, and the existing coordinator commit owner
+  now creates or replays one clean direct-child prepared-contract commit after
+  current spec validation and project-instruction rendering. The lifecycle
+  hook authenticates both transitions during reconciliation while continuing
+  to deny direct staging, direct commits, partial specs, extra paths, stale
+  worktrees, and lookalike helpers.
+- Fixed Task Implementer resume deadlock when a resource-free `wave-prepare`
+  publishes newer prompt-impact evidence that invalidates its plan. Resume now
+  detects the exact stale impact, retires only a no-effect prepare intent with
+  no worktree, assignment, or pending Git journal, and routes to a fresh
+  digest-bound `wave-replan`; partial-resource states remain retained.
+- Fixed the project-contract lifecycle false-positive on validated task-owned
+  temporary cleanup. The exact literal
+  `find /tmp/<task-owned-tree> -depth -delete` form now reports its sole
+  system-temp descendant as a recursive external target, while temporary roots,
+  project or control-plane coverage, symlinks, dynamic paths, globs, multiple
+  roots, and alternate `find` actions remain fail-closed. Managed instructions
+  now require submitting the resolved literal so they match the hook parser;
+  independent destructive-action policy still owns deletion approval.
+- Fixed project-contract terminal decision recovery so an apply command that
+  returns without independently verified final state conservatively invalidates
+  the plan, advances the write epoch, and reopens reconciliation. The
+  current-session decision can then be corrected and replanned instead of
+  remaining irrecoverably stuck in `planned`.
+- Fixed Task Implementer promotion-pending resource recovery so a missing
+  registered integration checkout can be safely rehydrated when immutable task
+  history contains both merged corrections and superseded no-op predecessors.
+  Every active or failed non-superseded task state still blocks recovery.
+- Fixed Task Implementer source integration after combined review requests
+  changes. The exact rejected two-parent candidate is now digest-bound to the
+  blocking findings, archived behind compare-and-set proof, and released
+  through an interruption-safe private journal before the lane becomes
+  correction-ready; the source branch remains unchanged. The same explicit
+  integration workflow owns the serial correction continuation and repeats all
+  validation and review gates. Wave guidance now treats shared semantic
+  invariants, not only changed paths, as serialization boundaries. Lifecycle
+  authorization now also accepts the sole safe resume-controlled `wave-plan`
+  form only when its private token and capacity exactly match the active
+  mode-0600 resume journal. Resume also detects a changed resource-free task
+  contract and forces `wave-replan` before creating integration or worker
+  resources. A hidden atomic sequential-worker path now launches fresh
+  ephemeral `codex exec` inside `task-arm` or `task-rearm`, preserving managed
+  worktree visibility across host process-lifetime boundaries without
+  reconstructing resources or transferring work to the coordinator. Resume
+  now also routes hard worker-guard outcomes directly to confirmed recovery
+  instead of waiting for a fresh final heartbeat to become stale. The matching
+  hidden atomic `run-resume` recovery launch preserves the exact recovery cwd
+  and fresh-session ownership across the same host process-lifetime boundary.
+  Atomic normal launches now pin medium reasoning effort and recovery-only
+  launches pin low effort so a single worker turn cannot consume the hard
+  heartbeat-staleness lease and cause a false recovery loop.
+  Review rejection now also records an owner-only receipt for the exact
+  rejected candidate, findings digest, and unchanged source/lane heads. Its
+  completed-follow-up checkpoint may reopen only the current zero-write
+  `non-project` promotion waiver for normal reconciliation, preventing the
+  documented same-invocation correction from deadlocking in terminal waived
+  lifecycle state. The Worktree owner can idempotently re-read an already
+  terminal rejection while that correction has only a pending generation
+  checkpoint, allowing interrupted receipt publication to recover without
+  advancing integration or changing either head.
+  A sequential child exit now succeeds only when the assignment's exact
+  immutable result exists, preventing a start-only or recovery-only exit from
+  being misreported as completed work.
+  Worker-result publication now accepts only canonical `committed` or
+  `REPLAN_REQUIRED` status. Exact pre-fix `COMPLETED` evidence already retained
+  in a blocked failed state has a bounded strict migration after all commit,
+  tree, claim, digest, and evidence checks pass; new publication fails fast.
+  Worker-watch output now identifies the bounded changed and violating paths
+  needed for an evidence-based claim correction without exposing file bodies.
+  Recovery of such dirty scope expansion is now reporting-only and supplies no
+  commit authorization, allowing a fresh worker to publish terminal
+  `REPLAN_REQUIRED` evidence without silently discarding or adopting the dirt.
+- Fixed Task Implementer promotion after an adopted selected-lane contract was
+  legitimately reconciled by the one claim-bound final coordinator commit.
+  Resume now recognizes the exact unchanged lane overlay through its immutable
+  adoption ancestry, promotion clears it for fast-forward, and failed promotion
+  restores the original adopted bytes rather than the newer reconciled tip.
+  Cleanup now settles the advanced spec impact before deleting the promoted
+  integration. Recovery and completion recognize a completed promotion journal
+  as historical only when its exact done wave and promoted ancestry precede the
+  active wave. An interrupted post-fast-forward replay may defer stale spec-
+  impact rejection only when the clean selected lane exactly equals the sealed
+  integration target; cleanup still performs exact reconciliation.
+  Unrelated or materially plan-changing drift stays blocked.
+- Fixed Task Implementer lifecycle authorization after worker integration. The
+  coordinator can now validate its documented requirements, design, README,
+  and changelog reconciliation at the sealed `promotion_pending` head, while
+  product edits, untracked or deleted files, symlinks, and head drift remain
+  rejected. A journaled private `coordinator-commit` now stages and creates the
+  single claim-bound direct-child documentation commit, closing the same
+  selected-lifecycle hook boundary without permitting raw Git mutation.
+- Fixed Task Implementer correction recovery for terminal
+  `REPLAN_REQUIRED` results. Resume now accepts and replays the immutable
+  terminal result idempotently; an exact clean no-op failed task can be
+  retained as first-class `superseded` history, have only its proven worker
+  resource cleaned, and be followed by a corrected immutable assignment.
+  Exact tracked dirty evidence at the base can now be quarantined behind a
+  compare-and-set internal ref, tree-byte/path/parent verified on replay, and
+  restored by exact path before correction; the ref survives promotion and is
+  deleted only by successful cleanup. Untracked, committed, mismatched, or
+  unverifiable dirt remains blocked.
+- Fixed Task Implementer worker-result completion in two related failure
+  boundaries: commands without a `--json` option no longer crash during common
+  output emission after publication, and `changed_paths` are now canonicalized
+  as a sorted unique set so claim-order output cannot be misclassified as a
+  scope expansion. An exact digest-and-commit-bound retry can recover only the
+  prior ordering-only false-rejection state without rewriting private run data.
+- Fixed retained Task Implementer current-v7 workers becoming unreadable when
+  canonical worker guardrail wording grew after successful `task-start`.
+  Unstarted assignments still require current guardrails; already-started
+  assignments remain bound to their exact accepted digest and receive current
+  recovery, commit, and result-publication contexts without private-state
+  rewriting or an older-schema compatibility path.
+- Fixed Task Implementer delegated commits failing when a worker's canonical
+  Python version differed from the lifecycle hook runtime. Hook and adapter
+  trust now accept only the hook interpreter or an exact PATH-canonical
+  `python3`/`python3.N`, while retaining exact helper, digest, action, evidence,
+  repository, and owner checks. `task-start` and base-state `task-recover` now
+  return a transient canonical commit context with exact prepare argv and the
+  raw worker session; the separately named session fingerprint remains
+  persisted evidence and can no longer be mistaken for `--session-id`.
+- Fixed worker-result publication by returning an exact transient private
+  result path and explicit external publication working directory, preventing
+  selected-project lifecycle misclassification.
+- Renamed the worker-facing task-arm and task-rearm deadline output to the
+  canonical `start_lease` consumed by `task-start`, removing the ambiguous
+  internal `dispatched_at` name.
+- Added exact assignment-derived start and recovery contexts with canonical
+  cwd and argv, preventing coordinator path transcription from launching a
+  worker in a visually similar but nonexistent private checkout.
+- Added a claim-bound worker-result publisher that validates the complete draft,
+  computes the canonical final digest, and atomically publishes the immutable
+  result from its private external working directory.
+- Fixed explicit Task Implementer `run` failing after a package-manager Python
+  upgrade removed the resolved interpreter recorded in the generated VS Code
+  workspace. The exact stale-launcher failure now refreshes only that generated
+  file through canonical workspace initialization and revalidates the complete
+  workspace; all other mismatches and non-mutating `workspace reuse` remain
+  fail-closed.
+
 ### Added
 
+- Added the implicitly invokable `ai-agent-design` skill for provider-neutral
+  production agent-subsystem design. It classifies deterministic code, direct
+  calls, deterministic AI workflows, and agents; applies bounded single- and
+  multi-agent patterns; defines typed task, tool, context, memory, authority,
+  durability, security, evaluation, observability, and governance contracts;
+  and uses `ai-stack` for workload-driven technology selection without taking
+  implementation authority. Whole-product work now follows the non-recursive
+  `design` to `ai-agent-design` to `ai-stack` ownership chain.
+- Added canonical `evals/trigger-prompts.csv` coverage to all 70 source-owned
+  skills, migrated legacy Markdown trigger authorities, and retained detailed
+  workflow or output-quality scenarios as supplemental cases where needed.
+  Invocation policy and workflow behavior are unchanged.
+- Added crash-safe Task Implementer `run-summary-v1` completion evidence with
+  immutable replay, evidence-backed source movement, full-repository and scoped
+  Git file/line/binary statistics, queue status, exact integration readiness,
+  and sanitized structured next actions. The generated workspace now labels
+  `CODE — MANAGED PERSISTENT LANE` explicitly and provides a manual read-only
+  lane-status report without adding a sixth public action or hook privilege.
+- Added fail-closed generated-workspace classification. `workspace init` and
+  `run` migrate only the exact previous shape; non-mutating `workspace reuse`
+  requests an upgrade, and forged helpers, arguments, folders, or tasks fail
+  before lane creation, refresh, chmod, or other mutation.
+- Added authoritative idempotent resume control for long-running Task
+  Implementer runs. Repeating `run` now audits coordinator-v7, every indexed
+  wave/task/immutable artifact, Git and Worktree identity, the exact generation
+  lease, and lifecycle binding before returning one execute, wait,
+  stop-confirmation, blocked, or complete outcome. Private
+  `resume-control-v1` journals one digest-bound transition and fences stale or
+  concurrent execution. It stores canonical transition arguments, binds
+  capacity, task, evidence, stop authority, and final alignment, and completes
+  effect/state/projection phases without repeating an already-applied mutation;
+  the first controlled transition bootstraps the sidecar under both owning
+  locks, every successful transition returns the next authoritative resume
+  plan/token, and current journal-less v7 runs adopt only at validated
+  stable boundaries. Machine state now owns effective execution status after
+  coordinator creation, handoff is a CAS-protected human projection, atomic
+  private writes sync their parent directories, and terminal handoff/queue
+  publication follows proven external generation release and local interop
+  reconciliation. Promotion-review corrections stage immutable,
+  digest-addressed, resume-epoch-bound `pending-plan-v1` bytes before
+  coordinator or wave publication, so retries continue from staged bytes
+  instead of consuming a changed handoff task definition.
+  Handoff projection now keeps unpromoted committed or merged tasks in the
+  accepted `in_progress` vocabulary until promotion. A hidden, caller-digest-
+  bound current-v7 recovery journals and rewrites only the proven historical
+  `committed` projection so an affected retained run can repeat normal resume
+  without accepting a second handoff status or changing machine state.
+  Coordinator-v1 through v6 remain unsupported and no public resume action or
+  flag was added.
+- Raised the Task Implementer lightweight verifier's bounded per-suite default
+  from 300 to 600 seconds so the full disposable linked-worktree interruption
+  suite is not falsely reported as timed out.
+- Added a fail-closed Task Implementer correction transition for blockers found
+  by combined review before wave promotion. An exact clean
+  `promotion_pending` integration can append one independent worker-owned
+  correction round without advancing the persistent lane, rewriting prior
+  tasks, or discarding their commits. New workers branch from the sealed
+  integrated head, historical assignments remain bound to their own task-plane
+  bases, future-work dependencies are rejected, generation claims extend
+  before state, and the whole corrected wave must repeat combined validation
+  and review before one fast-forward promotion. Its rendered project contract
+  carries to the correction base only when the authoritative receipt differs
+  solely by an ancestral Git head and all spec, traceability, project,
+  validator, and instruction identities remain exact.
+- Added owner-validated prompt-revision impact evidence for Task Implementer
+  and Agentic SDLC. Existing exact-byte and normalized-intent digests continue
+  to detect editable prompt changes without a self-hash header; a shared pure
+  validator now requires one bounded disposition for every extracted statement
+  occurrence, reparses current requirements and design mappings, and derives
+  retain versus replan. Both workflows publish append-only private attempts,
+  serialize publication, compare-check ledger replacement, preserve and skip
+  crash-orphaned attempts, gate steering settlement and execution transitions,
+  separate the latest settled revision from the execution plan basis, and
+  require a distinct plan identity for material forward reconciliation. They
+  preserve terminal history without fabricated evidence and expose only a
+  sanitized public impact classification. Matching spec bytes or an
+  unsubstantiated `no_effect` label no longer unlocks progression.
+- Added evidence-preserving recovery for Task Implementer active-wave paths
+  that disappear while their Worktree lease and locked Git registrations
+  remain. A confirmed-stopped internal coordinator action now verifies the
+  exact active generation, resource tuple, branch and registered head,
+  administrative HEAD, clean index, and contract/base ancestry before using
+  Git's locked-worktree rehydration form; it journals and revalidates the
+  checkout, keeps the lease `present`, reports lost filesystem-only state, and
+  leaves task and promotion state unchanged for normal fresh-session
+  `task-recover`. Promotion-pending integration checkouts can now be restored
+  only at the recorded integrated head so combined validation can resume
+  without reconstructing refs or inferring promotion. Staged state, index
+  locks, broken paths, branch drift, and ambiguous registrations fail closed.
+  Worktree anchor discovery now skips
+  unrelated missing registrations before strictly resolving the current
+  managed checkout. The lifecycle bridge also attests exact active worker
+  commit transactions against the worker root when the hook is selected on
+  the outer lane. It now carries the command-derived worker session validated
+  by the Task adapter instead of requiring the nested command to equal the
+  outer lifecycle payload session, without admitting raw Git, future batches,
+  mismatched sessions, or sibling roots.
+- Added a fail-closed Task Implementer lifecycle adapter for the active
+  prepared integration checkout. The Task helper now attests the exact run,
+  wave, clean Git identity, selected project, co-located
+  project-instructions helper, command digest, and run-owned evidence paths;
+  the lifecycle hook independently rebinds that evidence to its selected lane
+  and records a successful first `wave-plan` checkpoint before dispatch.
+  The prepared-wave exception admits only inspect and render during
+  reconciliation; apply and verify retain the ordinary terminal seal path.
+  Exact integration identity permits either a clean checkout or only the
+  selected-project requirements and design staged, while every unstaged,
+  untracked, deleted, symlinked, sibling, or other staged path fails closed.
+  Arbitrary bundles, helpers, projects, flags, stale worktrees, and failed
+  commands remain denied. The bridge is automatic and requires no receipt
+  copying or user-managed lifecycle IDs. Its hook-only authorization command
+  is parsed outside discoverable helper subcommands, so CLI help exposes
+  neither the private action nor its flags.
+- Added `$task-implementer workspace reuse [project-folder]` as an explicit
+  existing-only reopen path. It resolves the same workspace from the primary
+  source project or owning managed lane, validates the generated VS Code
+  workspace, exact caller root, existing source ref, and authoritative live
+  lane identity, tolerates dirty or active live state without claiming
+  readiness, rejects unrelated worktree aliases, and never refreshes, repairs,
+  checkpoints, migrates, queues, runs, integrates, removes, or creates state.
+  Missing, unsafe, removed, or mismatched state fails closed, while editor
+  launch failures remain non-fatal after validation.
+- Added a built-in Task Implementer pre-run checkpoint for resource-free
+  persistent lanes. `run` now compiles planned claims, reserves the exact tree
+  and path digest, pauses dirty candidates for complete review, claims every
+  changed path, and uses a review-token-bound Worktree transaction to run
+  repository-root `git add -A`, normal hooks, and one fixed
+  direct-child checkpoint before opening the generation. Root, selected-project,
+  and sibling-project changes stay coherent; clean lanes remain commit-free;
+  the primary checkout stays untouched; and the resulting head becomes the
+  lane, lease, interop, coordinator, and first-wave baseline. Private journals
+  and compact run receipts recover exact staged or post-commit interruption
+  windows without duplicate history, while conflicts, Git operations,
+  gitlinks, tracked symlinks, hook-modified trees pending explicit review, and
+  dirt after generation open fail closed without reset, stash, clean, amend,
+  or unstage behavior. Hook-modified commits rotate the review token and cannot
+  be adopted by a blind retry.
+- Added a one-command, whole-repository `$commit` transaction for monorepos.
+  A leading `$commit` or bounded leading directive such as `run`, `apply`, or
+  `execute $commit` now mints a one-shot private authorization, while casual
+  mentions, questions, quotations, and help remain inert;
+  the digest-pinned helper previews repo-root `git add -A` in a temporary index,
+  binds the reviewed tree to a durable claim, revalidates drift under a shared
+  repository lock, runs normal commit hooks, and proves the exact direct-child
+  tree and clean result. Raw Git mutation remains denied, active Agentic SDLC
+  keeps `sdlc-commit` ownership, Worktree preparations share the repository
+  lock, Task workers receive assignment/session-bound commit authorization,
+  and dirty Task Implementer sources receive an explicit `$commit` handoff
+  instead of auto-commit or project-scoped staging. Hook-modified direct-child
+  commits now stay review-required until an exact private review transition
+  acknowledges the inspected commit and tree; failed hooks that create no
+  commit become stale for a fresh explicit retry. Fresh invocations reconcile
+  exact post-commit crash windows without duplicating history; merge commits
+  and malformed Worktree ownership or coordination records fail closed. A
+  successful prepare remains bound after its one-shot authorization is
+  consumed, so PostToolUse does not incorrectly reopen lifecycle evidence.
+  Exact-child crash recovery now revalidates live Task Implementer worker
+  ownership before completing a delegated claim. Caller-provided Git
+  environment that can reshape repository discovery, worktree/common-dir,
+  object storage, command configuration, or the real index now fails before
+  authorization or mutation; contradictory explicit origin markers are inert.
+- Made `troubleshoot` evidence-intensive and completion-gated. It now discovers
+  the deployed stack and compares it with official vendor architecture, verifies
+  every component and dependency, correlates bounded logs across component,
+  application, orchestrator, systemd, OS, kernel, network, storage, GPU, and
+  hardware layers, performs real code-path debugging, and uses one canonical
+  report with seven enforced `PASS`/`FAIL`/`UNKNOWN` criteria. Added Slurm,
+  Soperator, Kubernetes, Nebius, Linux, network, storage, GPU, and code-debugging
+  playbooks plus healthy-status/log-revealed-cause evaluation scenarios.
+  Structured `PASS` rows now require affirmative verified evidence and an exact
+  no-gap sentinel, and a valid report is finalized before any later terminal
+  Stop peer returns so report obligations cannot leak into subsequent turns.
+  Reports now bind conclusions to explicit included/excluded boundaries,
+  exercised paths, and incident-window endpoints; component proof names DNS and
+  restart history; and the Stop validator requires each canonical log layer
+  exactly once, in order, with a canonical coverage status. Evidence-bearing
+  table cells and `PASS:` detail are validated independently so neighboring
+  prose cannot make a placeholder satisfy the gate.
+- Added the internal explicit-only `prompt-session-intake` owner and its
+  non-blocking `UserPromptSubmit` capture hook for sessions explicitly bound to
+  Task Implementer or Agentic SDLC. Every direct prompt continues to the
+  current agent; safe input records only metadata-only event-v2 session/turn
+  provenance and never the submitted prompt body, while
+  secrets, stale writer provenance, ambiguity, conflicts, unsafe state, and
+  internal capture failures skip persistence without stopping delivery. The
+  staged/accepted/consumed sidecar records merge/no-op/sensitive and routes only
+  an agent-selected durable project-intent projection through prompt-only CAS
+  adapters. Mixed execution/conversation wrappers are excluded, project-contract
+  command examples remain eligible, and every merge marker binds both operation
+  ID and accepted projection digest. Exact retries and byte-identical
+  projections do not append twice; distinct concurrent same-base updates keep
+  one winner without auto-rebase. Event-v1 journals remain inert. Capture never
+  starts or resumes a workflow. Task primary and manifest-proven lane paths
+  share one logical objective; unrelated projects remain capture-ineligible.
+  Captured or manual prompt edits remain inert until explicit `run`.
+  Prompt-session cleanup always passes
+  the shared Stop arbiter and best-effort releases writer provenance without
+  adding a second registered Stop hook. Its one-shot reason digest still
+  excludes an exact peer-generated Stop continuation without relying on an
+  undocumented prompt-origin field.
+- Added the implicit `maintain-project-specs` skill as the single canonical
+  requirements/design owner for ordinary projects, Task Implementer, and
+  Agentic SDLC. It provides stable-ID managed regions, shared v3 receipts,
+  committed project opt-out, exact-scope lifecycle state, journaled paired
+  migration and recovery for both former formats, pre-implementation rule
+  rendering, deferred project `AGENTS.md` sealing, multi-edit-safe
+  reconciliation, and focused owner/hook tests. Its new hook bundle adds
+  SessionStart, UserPromptSubmit, PreToolUse, and PostToolUse guardrails plus a
+  shared single-Stop arbiter; installer registration migrates only the two
+  superseded Stop owners while preserving unrelated entries.
+- Hardened the new project-contract path so only an exact committed policy can
+  disable it, private lifecycle transitions use owner-only compare-and-swap state,
+  rendered rules and final project instructions are reverified by their
+  authoritative owner, and direct or misleading coordinator bypasses fail
+  closed. Paired migration atomically publishes a complete recovery transaction
+  outside Git and validates exact evidence without consuming backups during
+  rollback. Stop arbitration stays within its outer timeout and combines every
+  initial continuation unless a terminal result takes precedence. Task
+  Implementer no longer fabricates an owner receipt for historical commit
+  inspection. Valid non-Git directories now remain outside the managed project
+  lifecycle instead of being globally denied, while a broken Git marker still
+  fails closed. Planned and implementation lifecycle states now require a
+  verified project-instructions render receipt, interrupted transaction cleanup
+  retires atomically and is recoverable on the next locked invocation, and
+  environment-sensitive Git/ripgrep reads require explicit helper-disabling
+  arguments before the hook classifies them as non-material.
+- Repaired project-contract bootstrap and command classification. Installed
+  hooks now trust non-symlinked coordinators from canonical
+  `~/.agents/skills`, ordinary reads and read-only shell composition no longer
+  depend on a fixed system-owned executable allowlist, and quoted writer names
+  or shell-control text remain search data. Proven fixed effects wholly outside
+  the selected project now pass through epoch-neutral, while mixed, dynamic,
+  ambiguous, and authoritative control-plane effects stay fail-closed. Exact
+  canonical-spec intent-to-add, current-session task/runtime/decision inputs,
+  and numeric mode-`0600` normalization break bounded bootstrap cycles without
+  allowing general staging, permission, hard-link alias, or private-state
+  mutation. Multi-destination directory creation, explicit target-directory
+  options, hard-link sources, and tree moves retain every relevant effect
+  target. Owner
+  validation can atomically write its mode-`0600` receipt only at the exact
+  hook-bound session path without shell redirection, and opaque turn tokens let
+  agents run verified lifecycle transitions without access to raw hook turn
+  identifiers. Explicit selected-project writers, cross-session paths, and
+  unsafe helper options remain phase-gated.
+- Added the implicit `ai-stack` skill for effective, efficient AI technology
+  selection with explicit evidence classification across model providers,
+  PyTorch training, inference, agent frameworks and durability, MCP/A2A
+  interoperability, retrieval, evaluation, safety, and operations. The dated
+  baseline uses explicit switch conditions, exact protocol and compatibility
+  records, official-source verification, and logical-only implementation
+  handoffs; adjacent `app-stack`, `design`, and `research` skills now route
+  AI-specific decisions to it.
+- Added Prompt Durability v2 to Task Implementer and Agentic SDLC. Managed
+  prompts now require only generated metadata plus a meaningful Ask; optional
+  and custom sections feed a coordinator-owned requirements compiler with
+  selective stable clarifications. Generated `00-START-HERE.md` hubs and
+  default New Prompt tasks replace manual cloning. Exact raw and normalized
+  intent digests distinguish formatting from work, completed edits create
+  linked fresh-objective runs, and explicit cross-prompt run requests persist
+  in exact-byte and intent-drift-checked FIFO queues that activate after
+  authoritative resource release and recover interrupted dequeue. Fenced-code
+  indentation remains semantic, lineage and immutable snapshots are
+  integrity-checked, and ready refinement state must match the exact compiled
+  requirements contract before planning. Prompt-v1 execution is a hard cut
+  with read-only history and no migration. The disposable Task Implementer
+  live-test prompt renderer now accepts only the same v2 managed frontmatter.
+  Fence-aware parsing keeps Markdown examples inside Ask, revision and
+  refinement writes recover at an explicit manifest/binding commit point, and
+  execution coordinator v7 binds every plan to the exact accepted prompt
+  revision and intent before resources can be prepared.
 - Added the explicit-only `scaffold-project` composition skill for approved
   greenfield and additive brownfield repositories. It models logical
   capabilities, materialization units, runtime units, external services, and
@@ -49,27 +648,11 @@ All notable changes to the reusable Codex skills are tracked here.
   remain with `publish-image`, workflow YAML with `github-workflows`, and
   Kubernetes resources with `helmchart`.
 - Added the explicit-only shared `project-agent-instructions` skill. After
-  workflow-validated requirements and design, it uses deterministic
+  owner-validated requirements and design, it uses deterministic
   inspect/apply/verify state to decide whether the exact selected project needs
-  a concise root `AGENTS.md`. It preserves human-owned and override files,
-  exclusively creates missing files, refreshes only unchanged
-  provenance-owned content, records private evidence, and fails closed on
-  ownership, scope, conflict, safety, or concurrent-change ambiguity. Its
-  helper uses Python 3.9-compatible annotation syntax and reports a structured
-  prerequisite when an older runtime cannot parse Codex TOML configuration.
-  Final transition postconditions now prevent race-modified targets from being
-  attested, mixed workflow markers fail closed in either specification,
-  generated files cannot claim a human-owned disposition, refresh failures
-  restore verified prior content when safe, and private evidence shape and
-  mode are revalidated. The helper now computes the exact remaining generated
-  body capacity under Codex's cumulative project-document limit, caps generation
-  at 7 KiB, and rejects oversized bodies without truncation. It rejects
-  Git-ignored decision evidence while accepting tracked files that merely match
-  ignore patterns, and splits contracts, discovery, private state, target I/O,
-  and workflow transitions into focused modules behind the unchanged canonical
-  CLI. Generated-body safety validation now also rejects bracketed private IPv6
-  endpoints, including loopback, unique-local, link-local, and unspecified
-  addresses.
+  a concise `AGENTS.md`. It preserves human-owned and override files, records
+  private evidence, uses guarded filesystem transitions, and fails closed on
+  ownership, scope, recovery, safety, or concurrent-change ambiguity.
 - Added the explicit-only `nosleep4mac` skill with one no-argument,
   idempotent workflow that atomically converges a public-safe per-user macOS
   LaunchAgent running `/usr/bin/caffeinate -s`. It preserves display and
@@ -79,14 +662,383 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
-- Raised the global `troubleshoot` same-blocker remediation budget from three
-  attempts and 60 active minutes to five attempts and 120 active minutes. The
-  hook still requires new evidence and a new falsifiable hypothesis before
-  every retry and requires newly written state to use the canonical v3 schema.
+- Made `python-project` uv-first for new scaffolds while preserving existing
+  package managers unless migration is requested. The skill now treats
+  `pyproject.toml` as dependency intent and generated `uv.lock` as the reviewed
+  install graph, separates development groups from consumer extras, uses
+  locked uv commands in Makefile and CI templates, pins every CI action and uv,
+  binds generated systemd units to the project-owned environment and an
+  explicitly generated importable module, removes overridable
+  virtual-environment deletion, and adds dependency trust, library lower-bound,
+  resolver-failure, trigger, quality, and deterministic contract coverage.
+- Strengthened `ai-agent-design` with an explicit provider-neutral runtime
+  architecture that separates trusted control and policy, model-directed
+  execution, and durable session state behind versioned interfaces. The skill
+  now requires, when applicable, effect-aware checkpoints, bounded agent loops,
+  user and operator controls, recoverable context compaction, governed memory
+  curation,
+  credential mediation, sandbox and artifact boundaries, independent outcome
+  verification, resume compatibility, and ambiguous-effect reconciliation.
+  Additional quality cases cover controlled effects, governed memory, and a
+  deterministic-code lower bound. Direct calls retain their class across
+  bounded transport or schema-repair retries, deterministic-only designs skip
+  AI component selection, and one policy gateway owns approval decisions while
+  tool boundaries enforce them. Provider and runtime technology selection
+  remains owned by `ai-stack` when an AI component is actually required.
+  Alignment now persists authorized effect intent before dispatch, gives the
+  deterministic-only result precedence over an initial stack-review request,
+  and adds a quality case for the non-recursive originating `ai-stack`
+  contract-return path.
+- Shortened and front-loaded all 69 repo-owned skill descriptions while
+  preserving their invocation policies, primary trigger intent, adjacent
+  routing boundaries, safety constraints, full workflow instructions, and 724
+  canonical positive/near-miss trigger cases, adding two focused cases for the
+  Agentic SDLC PR publication boundary. The aggregate description
+  payload is roughly half its previous size, reducing Codex's initial skills
+  context cost without changing installed copies or skill workflow bodies.
+- Upgraded `align-skill` to make authorized writable targets lean and
+  independently evaluable. Alignment now reviews directive quality, removable
+  no-op prose, calibrated workflow freedom, focused domain references, and a
+  soft 500-line `SKILL.md` budget; creates canonical target-specific trigger
+  CSVs with at least three positive and three near-miss negative cases; selects
+  proportionate deterministic or output-quality evidence; and reports static,
+  fresh-runtime, and quality proof separately. The validator adds an
+  independent `--require-evals` gate while default catalog validation remains
+  compatible with legacy skills that have not yet been aligned. Long or
+  overloaded targets now use a conditionally loaded semantic refactor that
+  classifies instruction ownership, preserves safety rationale and rare
+  gotchas, records comparable line and token cost, separates independent jobs
+  only when their triggers and outcomes justify it, and permits specific
+  evidence-backed exceptions above the soft budget. Trigger-eval validation
+  now rejects symlinked file or directory components and keeps raw IDs and
+  prompts out of duplicate diagnostics.
+- Refined `design` and `ai-stack` around the least-agentic sufficient
+  architecture and revised `ai-stack` around a Pydantic AI-first portable
+  Python runtime for direct requests, bounded agents, and specialist agents.
+  The application owns its logical runtime facade, canonical state, tool and
+  authorization boundary, capability and governance routing, retry and
+  replay-safe fallback policy, budgets, telemetry, evaluation, and release
+  identity. Provider settings remain explicit, Pydantic AI capabilities and
+  Harness are conditional specialist layers, and provider-native agent SDKs
+  require a documented separate-runtime escape decision. The lean path stays
+  in-process; graphs, gateways, queues, durable engines, multiple stores, and
+  multi-agent topologies remain trigger-driven. Direct-call behavior now
+  selects between the low-level direct API and a no-tools single-request
+  `Agent` from required runtime services rather than framework naming;
+  authenticated resume and cancel mutations require optimistic concurrency,
+  and the durable workflow owner is selected from workload evidence.
+- Replaced the Task Implementer README's text-only lifecycle map with a
+  polished visual workflow that distinguishes long-lived and temporary Git
+  roles, isolated worker commits, verified wave promotion, repeated dependency
+  waves, run finalization, and explicit public source integration.
+- Project compatibility intent is now semantic and project-scoped. A clear
+  statement that existing users depend on safe future code or interface changes
+  produces durable rules for supported APIs/imports, CLI behavior,
+  configuration, persisted formats, and upgrade paths without requiring `GA`
+  or `backward compatibility`; breaking those surfaces requires explicit
+  approval, migration or deprecation planning, and regression coverage while
+  internals retain one canonical path. Personal global defaults are never
+  copied or allowed to suppress explicit project intent, active sufficient
+  project instructions are reused, and an incomplete same-directory override
+  fails closed. Nested selected projects now resolve instruction discovery from
+  the nearest effective marker ancestor within the enclosing Git worktree
+  while retaining their own receipt, evidence, and `AGENTS.md` target scope.
+- Upgraded Task Implementer and Agentic SDLC editable prompts to prompt-v3.
+  Every full prompt ID now has an exact collision-safe short reference stored
+  in metadata and prefixed to its filename, and public `run` accepts the ref,
+  full ID, exact filename, or managed path. Initialization performs a one-time
+  journaled and retryable v2-to-v3 metadata/name migration, repairs mutable
+  queue/run pointers, and leaves immutable historical revision bytes unchanged;
+  there is no v2 write path. Bound direct material turns can create a lossless
+  multiline objective or append a timestamped refinement with stale-base
+  rejection, and their operation marker makes interrupted merge retries
+  exactly-once.
+- Narrowed the project-contract hook to the authority it actually owns:
+  selected-project lifecycle sequencing and canonical
+  `${CODEX_HOME}/project-specs` state. Fixed writes to config, hooks, task
+  state, installed skills, credentials, and other external user files now pass
+  through epoch-neutral to Codex, OS, destructive-action, and domain-policy
+  owners. `config-codex` now distinguishes a proven repo-owned false denial
+  from an external or unrepairable policy, repairs canonical source and installs
+  it through the provenance path, then retries the identical authorized edit
+  without alternate writers, redirection, installed-only edits, or guard
+  disabling.
+- Refactored the session-private `$troubleshoot` report obligation around one
+  concise outcome, cause/fix, verification, and exact next-action report. The
+  new `DIAGNOSED-FIXED` classification distinguishes a proven, repaired, and
+  source-validated causal owner from complete end-to-end `VERIFIED_FIXED`
+  activation. Ordinary incomplete, malformed, partial, `FAIL`, or `UNKNOWN`
+  reports are advisory and cannot request another turn, deny tools, or emit a
+  generated fallback; sensitive output, invalid trusted state, missing
+  authority, peer Stop policy, and exact remediation-budget exhaustion remain
+  fail-closed. Remediation authorization remains on its independent schema.
+- Corrected `troubleshoot` fresh-state pending guidance to refer to the prior
+  terminal marker instead of assuming it was exhausted. A resolved-marker to
+  independent-blocker regression now verifies the exact patch-only handoff and
+  authorization promotion.
+- Fixed project-contract `PreToolUse` classification for read-only
+  `find -exec stat` compositions and exact `git branch --show-current`
+  inspection while keeping arbitrary `find -exec` helpers and other branch
+  actions material. Canonical project-instructions guidance now includes the
+  explicit Codex home and absolute current-session private paths required by
+  the hook, and malformed coordinator feedback names those inspect bindings.
+- Bound lifecycle-owned project-instructions inspect, render, plan, apply,
+  verify, and seal evidence to the canonical current-session private bundle.
+  Alternate same-project bundles and malformed coordinator-shaped
+  commands now fail closed. PostToolUse also treats admitted canonical spec
+  reconciliation as epoch-neutral and invalidates a concurrently completed
+  plan, armed seal, or seal when an earlier successful material write reports
+  late, preventing stale lifecycle completion.
+- Clarified that lifecycle reconciliation applies and verifies an explicit
+  project-instructions decision rather than promising `AGENTS.md` creation.
+  Missing plus `not-needed` now has direct render/apply/verify coverage and is
+  reported as a successful no-file outcome; the installed-hook refresh removes
+  the stale per-edit sentence that caused the ambiguity.
+- Changed project-contract reconciliation to keep successful PostToolUse
+  accounting silent while preserving per-write epochs, concurrent recorder
+  convergence, failure discrimination, and stale-plan sealing protection. Stop
+  now requests one accumulated semantic review; requirements change only for
+  accepted intent, design changes only for implemented boundaries or evidence,
+  and implementation-only or reverted deltas can revalidate and seal with
+  byte-identical specs. The PostToolUse registration no longer carries a static
+  status message.
+- Changed `project-agent-instructions` to a single v3 managed-tail contract.
+  Needed rules can attach to a tracked human `AGENTS.md` without changing any
+  existing byte; later human-prefix edits remain outside automation ownership,
+  while marker or managed-body edits fail closed. Refresh preserves the exact
+  prefix, retirement restores it or deletes a generated-only file, v1/v2
+  markers require manual resolution, and Task Implementer plus Agentic SDLC
+  consume the shared v3 schemas and `attached` outcome.
+- Documented the current source-hook catalog in the root README: five
+  installer-discovered bundles, 13 source entries converging to 11 distinct
+  registrations, seven manifest-referenced entrypoints, event-specific
+  behavior, concurrent peer boundaries, matcher aliases, single-Stop
+  arbitration, and the source-versus-installed trust boundary. The surrounding
+  ownership and `--install-all-hooks` guidance distinguishes peer policies and
+  dynamic bundle discovery.
+- Made pending `troubleshoot` remediation-budget repairs actionable across
+  UserPromptSubmit, PreToolUse, and Stop. Missing or invalid markers and invalid
+  same-blocker versus independent-blocker transitions now retain their precise
+  bounded validation reason instead of falling back to a generic pending
+  message. Fresh-tranche guidance requires the complete canonical v4 marker,
+  including `blocker_summary`; invalid active-resize markers get atomic restore
+  guidance, while deleted resize markers fail closed without suggesting a
+  budget reset. Authorization binding, patch-only repair, terminal locks, and
+  the one-continuation Stop bound remain unchanged.
+- Refactored Task Implementer around persistent Worktree-owned per-project
+  lanes. `workspace init` is idempotent by canonical repository, named source
+  ref, and scope; it permits dirty source state while basing the lane only on
+  committed `HEAD`. Runs now acquire monotonic generations with repository-wide
+  claims, may execute back-to-back, and leave immutable pending receipts.
+  Generation numbering remains monotonic across explicit lane removal and
+  reincarnation. Reuse/refresh now shares the lane transition lock with run
+  acquisition and removal, repository claims publish only after a complete
+  peer scan, and removal atomically guards lane-ref deletion with the exact
+  durable source ref/head proof.
+  Added public `integrate [project-folder]` for validated two-parent source
+  promotion plus same-lane rearm, and `workspace remove [project-folder]` for
+  proof-gated explicit cleanup that preserves prompt/run history. General
+  Worktree schema-v4 and public lifecycle behavior remain compatible, while
+  public Worktree integration/removal reject Task lanes. The Task Implementer
+  README now provides a generic post-run operator workflow covering source
+  integration, primary-checkout manual acceptance, defect follow-up,
+  independent publication, and optional lane retirement. It also defines the
+  primary checkout, persistent lane, temporary wave and worker worktrees,
+  source integration candidate, and private prompt state; distinguishes
+  internal wave integration from public source integration; and explains that
+  lane cleanliness is a managed precondition, not a request for a manual
+  `$commit` or destructive cleanup. The Task Implementer contract smoke test
+  now preserves those core README distinctions.
+- Changed `task-implementer workspace init` to ask VS Code to reuse its last
+  active window for the generated `CODE` + `PROMPTS` workspace instead of
+  always opening a new window. Focused tests now lock the workspace and prompt
+  editor arguments, and the runtime contract documents the extension-host
+  restart boundary.
+- Clarified in the Task Implementer README that `workspace init` creates no
+  project documentation, while `run` creates or updates Task
+  Implementer-managed `docs/requirements.md` and `docs/design.md` regions and
+  rejects Agentic SDLC-owned specification schemas.
+- Hardened Task Implementer prestart recovery with a coordinator-owned,
+  compare-and-swap lease rearm at the exact clean assigned base. A fresh lease
+  preserves the immutable assignment and existing wave/generation resources,
+  stale workers cannot start with the old lease, interrupted responses recover
+  by re-observing the current lease, and active, conflicting, or mutated
+  prestart state fails closed.
+- Hardened `project-agent-instructions` to schema v2 with owner-issued full-spec
+  and traceability receipts, layered effective Codex config fingerprints,
+  selected-project root markers, tracked evidence locators, structured
+  deterministic rules, a 2 KiB preferred and 4 KiB hard body budget, public
+  portable output independent of personal global instructions, separate exact
+  ownership receipts, explicit exact-digest adoption and retirement, and
+  recovery artifacts that block every transition. Legacy v1 output now fails
+  closed without a compatibility shim. Owner validators are replayed rather
+  than trusted by name, current file-based Codex profiles are fingerprinted,
+  rendered paths and common credential forms fail closed, and retirement
+  preserves concurrent replacements. Target writes are descriptor-anchored,
+  and refresh/retirement backups remain durable until private transition state
+  is persisted. Creation now rechecks recovery artifacts at the final anchored
+  mutation boundary, dot-segment root markers are rejected, and spec, renderer,
+  or evidence projection drift refreshes stale marker provenance even when the
+  rendered body is unchanged. Empty root-marker lists follow Codex's
+  no-parent-traversal semantics; ignored targets, untracked human instruction
+  sources, control-character rule injection, incomplete requirement coverage,
+  and Agentic marker/body mapping drift now fail closed. Task Implementer and
+  Agentic SDLC issue receipts only for tracked specs, and Task dispatch proves
+  specs plus active/ancestor project instructions belong to the exact clean
+  integration contract commit. Project-file changes require a fresh Codex
+  session. Added a concise skill README covering the coordinator-only flow,
+  decision and ownership model, safety boundaries, source layout, and focused
+  validation without promoting private helper actions into a public interface.
+- Standardized side-effect-free `$skill-name --help` and `$skill-name -h`
+  behavior across all repo-owned skills. Help now reports concise purpose and
+  invocation policy, shows exact usage for every public action, and describes
+  every public action, positional argument, and flag in one concise line while
+  keeping private helper actions and flags private. Internal and
+  coordinator-only skills report that they have no standalone public workflow
+  action; `align-skill`, its templates, and the shared validator enforce this
+  contract for created, existing, and future skills.
+- Added primary-anchored `worktree integrate` preflight and exact-head guards.
+  Fresh explicit integration may now delegate safe whole-repository commits for
+  an ordinary dirty child and then its dirty source before candidate creation;
+  durable source-scoped preparation claims serialize competing lifecycle
+  owners, reviewed-tree proof detects hook-added content, and nested ownership,
+  orphan candidates, relocated-source publication, lease-acquisition races,
+  interrupted handoffs, active attempts, unsafe dirt, and head races fail closed.
+  Successful preparatory commits are retained for retry. Documented the serial
+  child-integration topology and source-only publication boundary.
+- Aligned every Task Implementer and Agentic SDLC `worktree` composition
+  boundary with the explicit-only outer lifecycle. Coordinators now return the
+  exact integration command and stop for a fresh user invocation; the Agentic
+  Stop hook refuses to auto-continue `outer-integration-pending`; publication
+  skills keep managed children local; and runtime allowlists plus a canonical
+  static test reject public `add`, `integrate`, or `remove` calls from private
+  coordinator interop.
+- Kept Task Implementer and Agentic SDLC as separate peer development domains
+  over the shared Worktree lifecycle. Ordinary task leases and Agentic
+  preparation now reject Task Implementer persistent lanes before state or
+  resource mutation. Agentic execution hard-cuts to coordinator v7, task v4,
+  and assignment v3; adds coordinator arm/watch, worker start/direct heartbeat,
+  bounded prestart/read-only/stall/runtime enforcement, and coordinator-owned
+  task commits; rejects indexed gitlink and tracked-symlink claims before
+  resources; gives prestart scope violations fail-closed precedence; supports
+  exact confirmed-stopped prestart requeue; journals task-finish intent for both
+  commit/result crash windows; terminates each sequential worker process group
+  on every post-spawn failure; rejects incomplete live Task lane branch
+  identity; and makes verifier capability names resolve to declared regression
+  tests.
+- Closed two Task Implementer cross-lane claim gaps. Replanning now extends the
+  active generation's Worktree-owned claims before replacement state is
+  persisted while retaining earlier claims conservatively. External database,
+  Kubernetes, Terraform, migration execution, and publication domains now add
+  class-wide sentinel claims so distinct keys cannot bypass singleton behavior
+  in separate lanes.
+- Made successful `$worktree add` and exact `--reuse` hand off directly into
+  the returned project directory for subsequent development commands, with a
+  read-only child identity check. The skill now distinguishes command workdir
+  routing from a persistent parent-shell, Codex-workspace, or editor switch;
+  editor retargeting remains explicit and lifecycle actions remain anchored to
+  the primary checkout. Exact reuse also fails closed when the selected project
+  scope is no longer a directory.
+- Made description-less `$worktree` creation derive its public-safe task slug
+  from the resolved project directory basename instead of the generic `work`
+  label. The helper now reports that resolved slug with created, reused, and
+  inspected lifecycle output; explicit task slugs and exact reuse/duplicate
+  guards remain authoritative. Existing generic-`work` lifecycles remain
+  accessible only through an explicit `--task-slug work` exact reuse.
+- Hardened the local-source `worktree` composition contract. Rejected `add`
+  preflights no longer create or redirect private state; canonical non-symlink
+  state paths are shared by manifests, reservations, leases, and locks.
+  Publication guards now classify primary and linked checkouts, integration
+  candidates, and Task/Agentic workers from durable ownership instead of branch
+  config alone. Ownership manifests use hard-cut schema v4 to retain the exact
+  lease owner, token, and `active|released` participation state. Outer leases
+  use hard-cut schema v4 with an ordered promotion history, expected-head
+  compare-and-set, resource-resurrection checks, terminal release receipts, and
+  durable removal-intent snapshots across receipt/manifest deletion crashes.
+  Task Implementer and Agentic SDLC now reconcile local interop against live
+  clean Git plus durable lease truth, and Agentic promotion persists lease proof
+  before local interop and coordinator `promoted` state. Deterministic gates now
+  require removal-crash recovery, successive promotion history, both publication
+  consumers' managed-worktree guards, canonical project-scope rejection, Git
+  operation preflight, and the exact managed-child integration handoff. Agentic
+  multi-feature runs now reuse the run-scoped lease at each live feature base
+  and reconcile a later promotion from the exact lease-history predecessor.
+  Atomic state replacement and ordered receipt, manifest, reservation, and
+  removal-intent deletion now fsync their containing directories. Worker
+  session claims are fully written and fsynced before atomic no-replace
+  publication, eliminating empty-claim races and crash-stranded final claims.
+- Reworked `worktree` into a hard-cut local-source lifecycle. `add` now requires
+  the complete primary checkout to be clean on a named non-default branch and
+  creates a no-upstream child from the exact local `HEAD`; `--project` is only
+  a starting-directory label. `integrate` uses a durable private recovery
+  worktree, exact two-parent merge proof, non-mutating combined validation, and
+  ff-only source promotion. Child push/PR actions are rejected and `remove`
+  now depends only on exact local unused-or-integrated proof. Task Implementer
+  and Agentic SDLC use managed-local promotion, release into this outer
+  integration handoff, and record exact source-integration proof before
+  completion. Older worktree, interop, and coordinator schemas are unsupported.
+- Added a hook-free global live-product-validation invariant and detailed
+  `troubleshoot` proof contract. Each trial freezes its declared workflow, and
+  later changes start a new lineage rather than laundering prior intervention.
+  Codex may operate that workflow and perform authorized stabilization or
+  recovery without weakening production or high-impact approval boundaries,
+  but out-of-band mutations that perform, bypass, or pre-satisfy product-owned
+  steps now mark the affected evidence intervened; nominally read-only actions
+  are classified by their criterion-relevant effects. Product-fixed claims
+  require owner-correct implemented repair, replay from a declared or
+  independently proven known-good checkpoint before the earliest product
+  divergence or contamination, quiescent prior writers, observed product-owned
+  transitions, and independent postconditions; checkpoint replay does not
+  overclaim whole-workflow success. Config Codex validates exactly one
+  canonical compact managed global policy, recognizes active ATX and Setext
+  policy headings while ignoring fenced examples, rejects duplicate or
+  override-like conflicting sections, and adds no hook.
+- Unified Git-worktree ownership across `worktree`, Task Implementer, and
+  Agentic SDLC. Workflows now resolve the actual symbolic `origin` default,
+  automatically create deterministic `feature/*` promotion branches when
+  starting there, reuse recorded non-default/managed identities, and bind PR
+  authorization to the exact promoted head plus recorded default branch and
+  SHA, failing closed on later default drift. Public worktrees support explicit
+  exact-name reuse without altering dirty changes. Shared promotion is ff-only
+  under a common-Git-directory lock. The `--project` documentation now makes
+  clear that it selects an existing repository-relative operating scope, not a
+  worktree destination or branch-naming input. Worker worktrees are removed
+  after combined evidence, integration worktrees after promotion, and all
+  internal refs are deleted with expected-old SHAs. Upgraded Task Implementer
+  coordinator state to v5 and wave state to v4, Agentic SDLC coordinator state
+  to v5, and made corresponding hard schema cuts to worktree ownership, lease,
+  and reservation state.
+- Made the `troubleshoot` remediation budget session-configurable with optional
+  `$troubleshoot --attempt-limit=N --time-limit-minutes=N` flags, 5/120
+  defaults, and hard 10/180 maxima. Bare invocations preserve the profile,
+  partial overrides preserve the other field, explicit 5/120 resets it, and
+  active reductions at or below consumed work fail without exhausting or
+  changing the tranche. A dedicated `UserPromptSubmit` hook writes a bounded,
+  atomic, workspace/session/turn-bound private authorization; v4 markers bind
+  exact values to it, pending active resizes preserve the ledger and counters,
+  and a terminal lock prevents exhausted state from being reopened without a
+  new user instruction. Marker deletion now remains fail-closed under that lock
+  while still admitting an exact marker restore. Previous v3 state is
+  repair-only and is not reinterpreted. Kept attempt limits, retry-admission
+  rules, blocker-tranche semantics, and exhaustion reporting out of the global
+  `AGENTS.md` template so the workflow skill and optional enforcement hook
+  remain the canonical owners at their respective boundaries. Config Codex now
+  rejects stale managed blocks that still contain either policy version.
+  Task-specific earlier stops remain workflow-owned, and free-text override
+  summaries record same-blocker continuation but cannot authorize numeric
+  limits. The workflow still requires new evidence and a new falsifiable
+  hypothesis before every retry and requires newly written state to use the
+  canonical v4 schema.
   It preserves historical exhausted v1 report delivery, makes previous v2 state
   fail closed for exact marker repair instead of adding a dual-limits
   compatibility path, and keeps fallback reports bounded while covering every
-  counted attempt.
+  counted attempt. The skill now requires the hook-provided terminal report to
+  be returned verbatim so exact marker-derived fields are not paraphrased away.
+- Made partial planned remediation-attempt markers recover atomically. The
+  canonical ledger now explicitly contains only post-verification records;
+  planned and in-progress work remains in prose with an empty ledger. The hook
+  reports every missing canonical field together and gives one remove-or-
+  complete repair action instead of prompting field-by-field repair cycles.
 - Split complete application scaffolding into three explicit ownership layers:
   `app-stack` now emits a closed logical-only technology handoff;
   `scaffold-project` schema v2 owns repository topology, per-path routing,
@@ -284,6 +1236,10 @@ All notable changes to the reusable Codex skills are tracked here.
   `agents.max_concurrent_threads_per_session = 16`, removing the legacy
   `agents.max_threads` alias and undocumented `agents.max_depth` setting from
   the reusable baseline.
+- Required standalone custom-agent files to self-identify with aligned,
+  non-empty `name`, `description`, and `developer_instructions` metadata while
+  remaining read-only, with redacted regular non-symlink target validation plus
+  source, mirror, fixture, and preflight coverage.
 - Updated the public Codex config baseline to use `gpt-5.6-sol`, `xhigh`
   reasoning for normal and Plan modes, and the Fast service tier by default.
 - Refactored the read-only `code-info` skill to accept explicit project-folder
@@ -294,8 +1250,71 @@ All notable changes to the reusable Codex skills are tracked here.
   unit coverage and kept project code, manifests, package managers, builds,
   and tests unexecuted during inspection.
 
-### Fixed
+### Fixed (earlier entries)
 
+- Fixed Task Implementer's run-owned project-contract lifecycle adapter after a
+  sealed promotion-review correction advances the retained integration checkout.
+  The adapter now binds the initial prepared wave to its original base and an
+  active correction to its exact recorded contract commit, admitting an adopted
+  contract head only when the owner journal remains authoritative. It retains
+  the existing branch, registered linked-worktree, common-Git-directory, clean
+  or exact staged-spec-pair, selected-project, helper, command-digest, and
+  private-path checks. A real-Git
+  regression now crosses sealed contract adoption and the hidden lifecycle
+  authorization instead of relying only on the mocked dispatch gate, and
+  rejects unrelated descendants, forward or stale journal identity,
+  original-base substitution, and an independent repository substituted at
+  the retained integration path.
+- Fixed retained Task Implementer runs that were blocked when a sealed project-
+  contract reconciliation left only canonical requirements/design and a
+  provenance-only `AGENTS.md` dirty in the persistent lane. A hidden current-v7
+  owner transition now binds the sealed lifecycle, instruction-state, impact,
+  and file digests; journals one coordinator-owned integration commit; and
+  admits the overlay only while lane bytes, integration ancestry, and the lease
+  remain exact. Promotion journals temporary lane cleanup and restores the
+  overlay after interruption or failure. Promotion-review correction graphs now
+  advance one dependency-ready frontier at a time, and a resource-free future
+  task may change only its dependencies when its correction target is indexed.
+  Arbitrary, staged, untracked, partial, symlinked, or unsealed dirt remains
+  blocked.
+- Fixed Task Implementer correction replanning after completed waves. The
+  coordinator now hashes the final combined indexed wave plan instead of only
+  the replacement tail. A private current-v7 owner recovery accepts only the
+  proven historical tail-digest signature, exact caller-bound old and combined
+  digests, a done retained prefix, consistent deterministic replacement state,
+  and no live replacement worker; it journals a plan-basis-first repair and
+  never changes task, Git, Worktree, lease, promotion, or public workflow
+  state. Focused real-Git coverage reproduces the resume blocker, rejects live
+  worker repair, exercises interruption replay, refreshes and binds a validated
+  spec-receipt-only `retain_plan` impact, rejects stale refinement and material
+  impact, and reaches normal resume planning after recovery. Repeating an
+  unchanged retained-prefix replan is now byte-idempotent and never blocks its
+  active replacement wave.
+- Fixed a long-running Task Implementer/project-contract deadlock at the Stop
+  boundary. The initial project lifecycle Stop from `implementation-open` now
+  atomically enters `reconciliation-required`, preserves the implementation
+  write epoch, clears stale planning bindings, and admits canonical spec
+  reconciliation before generating its continuation. It no longer assumes a
+  Stop-generated synthetic turn will emit `UserPromptSubmit`; concurrent
+  material-write accounting retries safely and recursive Stop remains
+  fail-closed.
+- Fixed Task Implementer cross-wave contract refresh while the outer project
+  lifecycle remains implementation-open. The attested run-owned bridge now
+  admits only exact read-only inspect/render at that phase as well as during
+  reconciliation; terminal apply/verify and all existing run, checkout, path,
+  command-digest, helper, and clean-worktree constraints remain unchanged.
+- Fixed Task Implementer prompt-session acceptance from a verified managed
+  worktree lane. The prompt validator now admits either the canonical primary
+  project or the manifest-proven lane project for the same scope while retaining
+  strict prompt-root, source-root, and unrelated-project rejection checks.
+- Fixed prompt-session exactly-once and lifecycle arbitration gaps: new
+  objectives now publish their final marker-bearing bytes in one exclusive
+  create, reserved operation-marker input is rejected, prompt results are bound
+  to the exact event project workspace (including Task primary-to-lane scope
+  identity), interrupted prompt-v3 pointer migration
+  accepts already-repaired queue state, and the shared Stop arbiter stays within
+  one 25-second monotonic budget. Prompt-v2 migration now changes frontmatter
+  only, preserving body lines that resemble metadata.
 - Guarded active-run `gh pr create` and GitHub PR-creation MCP calls with
   branch-, phase-, exact-HEAD-, UAT-, and expiry-bound authorization while
   allowing read-only PR inspection without publication authorization. Guarded
@@ -369,9 +1388,10 @@ All notable changes to the reusable Codex skills are tracked here.
   Fallback attempt fields escape report delimiters so the generated report
   validates itself, and a user-lowered attempt limit now also bounds the ledger
   length.
-  Fallback redaction covers secrets, URLs, private IPv4/IPv6 addresses,
-  internal hostnames and localhost, cloud access-key shapes, and Unix or
-  Windows personal paths.
+  Fallback redaction covers secrets, private or credential-bearing URLs,
+  private IPv4/IPv6 addresses, internal hostnames and localhost, cloud
+  access-key shapes, and Unix or Windows personal paths while retaining public
+  vendor links and artifact identities as admissible evidence.
 - Made remediation-marker result failures actionable by naming the two
   canonical values and distinguishing counted same-blocker failures from
   unverified progress and causally independent blocker transitions, preventing
@@ -891,7 +1911,7 @@ All notable changes to the reusable Codex skills are tracked here.
 
 - Refactored Agentic SDLC entry and steering around two explicit public
   `sdlc-start` actions: idempotent `workspace init [project-folder]` and
-  prompt-bound `run <prompt-path-or-unique-filename>`. Private managed prompts,
+  prompt-bound `run <prompt-ref-or-file>`. Private managed prompts,
   immutable revisions, exact-once steering linkage, prompt-bound Stop
   continuation, terminal rerun semantics, non-Git greenfield identity, and
   fail-closed unfinished legacy handling now preserve user prompt history
@@ -934,7 +1954,7 @@ All notable changes to the reusable Codex skills are tracked here.
 
 - Refactored the explicit-only `task-implementer` from sequential
   execution-plane v1 into a resumable coordinator/worker v3. One unchanged
-  `run <prompt-path-or-unique-filename>` now builds deterministic dependency
+  `run <prompt-ref-or-file>` now builds deterministic dependency
   waves from locked write claims and conflict domains, dispatches isolated
   full-repository worktrees in capacity-sized batches, verifies one reviewed
   direct-child commit per worker, integrates task branches in stable order,
@@ -946,7 +1966,7 @@ All notable changes to the reusable Codex skills are tracked here.
 
 - Refactored the explicit-only `task-implementer` to two public actions:
   idempotent `workspace init [project-folder]` and retry-safe
-  `run <prompt-path-or-unique-filename>`. Initialization creates a starter only
+  `run <prompt-ref-or-file>`. Initialization creates a starter only
   when needed and preserves all prompt/run history; running privately creates,
   continues, or reconciles immutable revisions while implementing one task per
   fresh session. Stable prompt filenames are ordered in command output by

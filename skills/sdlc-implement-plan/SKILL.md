@@ -1,9 +1,23 @@
 ---
 name: sdlc-implement-plan
-description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-tdd` to coordinate one feature's dependency waves, with one fresh agent, branch, and private worktree per implementation task, ordered integration, combined validation, and non-force worker cleanup."
+description: "Use only as part of the Agentic SDLC workflow; after sdlc-tdd, coordinate one feature's dependency waves with isolated agents, branches, and worktrees, ordered integration, combined validation, and non-force cleanup."
 ---
 
 # Implement Plan
+
+## Help
+
+For `$sdlc-implement-plan --help` or `$sdlc-implement-plan -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -47,8 +61,8 @@ Coordinate isolated task agents to implement one locked feature safely.
 ## Writes
 
 - Worker-owned production/configuration/test-fixture changes inside declared
-  write claims.
-- One worker result and one direct-child commit per task.
+  write claims, without worker-created commits.
+- One worker result and one coordinator-created direct-child commit per task.
 - Ordered no-fast-forward merge commits, combined evidence, and cleanup state.
 
 ## Process
@@ -64,19 +78,40 @@ Coordinate isolated task agents to implement one locked feature safely.
    sequential `codex exec` fallback: one fresh `--ephemeral` process per task,
    exact `--cd <scope_cwd>`, `--sandbox workspace-write`, schema-bound output,
    and no session resume or extra writable directories.
-   After the batch commits, invoke private `batch-advance`; it creates the next
-   batch's assignments and worktrees. Never start a task outside the active
-   batch or reuse a session hash from a completed or recovered task.
+   Invoke private `task-arm` only after a real worker slot exists. From dispatch
+   onward, invoke read-only `task-watch` every 30 seconds. Interrupt immediately
+   on `WORKER_PRESTART_TIMEOUT`, `WORKER_PRESTART_MUTATION`, `WORKER_STALLED`,
+   `WORKER_READ_ONLY_TIMEOUT`, `WORKER_SCOPE_VIOLATION`, or `WORKER_TIMEOUT`.
+   `READ_ONLY_DEADLINE_NEAR` requires an immediate productive change or blocker
+   report. After the batch commits, invoke private `batch-advance`; it creates
+   the next batch's assignments and worktrees. Never start a task outside the
+   active batch or reuse a session hash from a completed or recovered task.
+   The sequential fallback starts each worker in a dedicated process session;
+   on spawn, arm, watch, timeout, or helper failure it terminates the full
+   process group, including descendants. If a worker never reached `task-start`,
+   confirm that group is stopped and invoke private `task-requeue` with the
+   exact recorded dispatch timestamp before allocating a fresh slot.
 4. Give each worker only its task record, assignment digest, digest-bound
-   incoming handoff from all earlier completed waves and batches, requirements,
+   incoming handoff from all earlier completed waves and batches, inherited
+   root-intent digest, canonical project-spec receipt, requirements,
    design/context reminders, test target, write claims, and stop conditions.
-   The worker calls `task-start`, implements the smallest coherent change,
-   including its part of the vertical end-to-end slice without widening feature scope,
+   The worker calls `task-start` before editing, emits direct bounded
+   `task-heartbeat` calls at least every 30 seconds without a background loop,
+   implements the smallest coherent change, including its part of the vertical
+   end-to-end slice without widening feature scope,
    validates it, runs a task-scoped `code-review`, fixes blocking findings, and
-   returns an explicit summary, decisions, open risks, validation, and review
-   evidence; a commit subject is never substituted for handoff evidence. The coordinator calls
-   `task-finish` with that structured evidence to scan staged paths/content, create exactly one direct-child
-   commit with normal Git hooks, and persist the result.
+   returns an explicit summary, decisions, open risks, typed `spec_gaps`,
+   validation, and review evidence; a commit subject is never substituted for
+   handoff evidence. Workers never reclassify user intent or edit canonical
+   specs. A non-empty gap list returns `replan_required` for root-coordinator
+   reconciliation and does not enter `task-finish`; every gap text field is
+   sensitive-screened before dispatcher output. Worker path validation keeps
+   rename folding disabled so both sides of a move remain enforceable. The
+   coordinator calls `task-finish` with that structured evidence to recheck
+   liveness, scan staged paths/content, create exactly one direct-child commit
+   with normal Git hooks, and persist the result. The helper journals an exact
+   tree/message/evidence finish intent before the commit so an interrupted retry
+   can adopt only that commit and exact result.
    Recovery passes the recorded current attempt with explicit stopped-worker
    confirmation so only one fresh session can win an ownership transfer.
    A corrective assignment also carries its exact diagnosis ID and original
@@ -84,11 +119,12 @@ Coordinate isolated task agents to implement one locked feature safely.
    repair, run that oracle first, then run the counterfactual or
    affected-boundary check. `task-finish` must receive structured oracle,
    `passed` outcome, and evidence-reference fields; it binds their digest to
-   the worker commit and rejects missing or mismatched proof. The worker must
+   the coordinator-created task commit and rejects missing or mismatched proof.
+   The worker must
    not reinterpret any completed task.
 5. The coordinator does not edit product files while workers run. It verifies
    every result, then runs `wave-integrate`; merges occur in stable task order
-   with retained worker commits and explicit merge commits.
+   with retained coordinator-created task commits and explicit merge commits.
 6. Run combined validation/tests at the exact integration tip. For corrective
    work, run the original failed oracle, the counterfactual or affected-boundary
    check, and then validation plus unit/integration tests. Pass evidence to
@@ -105,8 +141,8 @@ Coordinate isolated task agents to implement one locked feature safely.
 
 - Reruns converge instead of duplicating resources, commits, or merges.
 - If implementation already exists, verify it against the plan instead of rewriting.
-- If source drift invalidates the plan, or if the vertical slice cannot be
-  implemented inside the locked boundaries, stop and route to
+- If source drift invalidates the plan, or if the vertical end-to-end slice
+  cannot be implemented inside the locked boundaries, stop and route to
   `sdlc-create-plan` or `sdlc-create-design` instead of broadening scope.
 - Resume from recorded task/wave/coordinator state. Do not infer a successful
   Git mutation from an error; re-observe refs, worktree registration, ancestry,
@@ -140,6 +176,7 @@ Coordinate isolated task agents to implement one locked feature safely.
 - Hide failures.
 - Remove tests to pass.
 - Expand scope without design update.
+- Reclassify direct user intent or let a worker edit canonical specs.
 - Reopen sealed, promoted, or completed execution. A post-promotion defect
   starts a corrective run from the exact promoted commit.
 - Weaken acceptance criteria or change the regression oracle to make a repair
@@ -155,7 +192,8 @@ Coordinate isolated task agents to implement one locked feature safely.
 - Planned vertical slice is implemented or a plan/design defect is recorded.
 - Focused tests are runnable or blocker is recorded.
 - Changed files match implementation boundaries.
-- Each task has validation and review evidence plus one verified worker commit.
+- Each task has validation and review evidence plus one verified
+  coordinator-created task commit and an empty accepted `spec_gaps` list.
 - Every logical wave has ordered merge evidence and no unsafe retained worker
   resource.
 - Corrective workers are bound to a complete localized implementation handoff,
@@ -166,8 +204,11 @@ Coordinate isolated task agents to implement one locked feature safely.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

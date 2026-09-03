@@ -1,0 +1,12 @@
+id,should_trigger,prompt
+frontend-positive-01,true,"Create a React TypeScript and Vite frontend project with strict type checking and unit tests without installing dependencies."
+frontend-positive-02,true,"Standardize this existing React Vite package while preserving its current source and lockfile."
+frontend-positive-03,true,"Use frontend-project in coordinated-candidate scope for apps/web and return candidate files to the supplied private scaffold bundle."
+frontend-positive-04,true,"Materialize this approved React Vite assignment with a typed public VITE_API_ORIGIN contract React Router Oxlint and Prettier."
+frontend-positive-05,true,"Add strict type checking unit tests linting and production build scripts to this existing React TypeScript Vite frontend."
+frontend-negative-01,false,"Choose between React Vue and server-rendered HTML for this product."
+frontend-negative-02,false,"Create a Node.js API service."
+frontend-negative-03,false,"Add Docker and Compose to this React application."
+frontend-negative-04,false,"Build and host this website with OpenAI Sites."
+frontend-negative-05,false,"Scaffold a Vue frontend application."
+frontend-negative-06,false,"Create repository-root CI and deployment workflows for this frontend."

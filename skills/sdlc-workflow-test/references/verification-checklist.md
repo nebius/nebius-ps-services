@@ -4,7 +4,7 @@ Use this checklist as the durable test plan for `sdlc-workflow-test`.
 
 ## Required SDLC Skills
 
-- `sdlc-align-specs`
+- `align`
 - `sdlc-auto-steering`
 - `sdlc-classify-failure`
 - `sdlc-commit`
@@ -52,6 +52,9 @@ The report at `~/.codex/sdlc-verification/report.md` must include:
 
 Verify `docs/agentic-sdlc-design.md` includes:
 
+- canonical `maintain-project-specs` semantic, schema, template, validation,
+  and receipt ownership; routed `sdlc-create-requirements` and
+  `sdlc-create-design` authoring adapters; and no legacy phase-owner metadata
 - core workflow terms: no workflow CLI, `sdlc-start`, PreToolUse, Stop, private
   local run state, and resume/idempotency
 - `Workflow Verification`
@@ -61,11 +64,17 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `$sdlc-workflow-test`
 - `$sdlc-start`
 - `$sdlc-start workspace init [project-folder]`
-- `$sdlc-start run <prompt-path-or-unique-filename>`
-- `agentic-sdlc/prompt-v1`, immutable prompt revisions, same-prompt steering,
-  `ALREADY_COMPLETE`, and fail-closed `WORKFLOW_UPGRADE_REQUIRED`
-- schema-v4 execution, exact initialized-folder scope, `task-recover`,
-  `replan-future`, sequential `codex exec` fallback, and v2 coordinator leases
+- `$sdlc-start run <prompt-ref-or-file>`
+- `agentic-sdlc/prompt-v3`, Ask-only required input, immutable raw and intent
+  revisions, requirements refinement, same-prompt steering, durable FIFO
+  queueing, linked completed follow-ups, `ALREADY_COMPLETE`, and fail-closed
+  `WORKFLOW_UPGRADE_REQUIRED`; the private refinement verifier must bind the
+  latest accepted intent to the exact compiled requirements file before design
+- schema-v7 execution, exact initialized-folder scope, `task-arm`, direct
+  `task-heartbeat`, read-only `task-watch`, confirmed-stopped `task-requeue`,
+  `task-recover`, task-finish crash adoption, `replan-future`, process-group
+  monitored sequential `codex exec` fallback, and `worktree-interop-v2`
+  coordinator state over v4 Worktree leases
 - `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
 - `sdlc-auto-steering`
@@ -89,6 +98,13 @@ Verify `docs/agentic-sdlc-design.md` includes:
 
 Verify:
 
+- The real source catalog passes the shared skill-structure validator; fixture
+  self-tests are not a substitute for catalog validation.
+- Every required phase skill is free of legacy direct spec-owner or v2
+  project-instruction wording.
+- Both rich Agentic spec templates retain `maintain-project-specs` ownership,
+  managed-region markers, and their narrow Markdownlint envelopes.
+- The requirements adapter README states every main boundary as `Do not`.
 - Global skill folders exist under `~/.agents/skills` for all required Agentic
   SDLC phase skills.
 - Each skill has `SKILL.md`.
@@ -101,8 +117,10 @@ Verify:
   `policy.allow_implicit_invocation: false`.
 - No project-local `.agents/skills` directory is required by the disposable
   project.
-- The installed `worktree` and `nebius-grafana-query` support skills exist.
-- Every required SDLC skill, both runtime support skills, and
+- The installed `align`, `worktree`, `nebius-grafana-query`, and conditional
+  `troubleshoot` support skills exist. Project lifecycle observations are
+  advisory and are not runtime dependencies.
+- Every required SDLC skill, all four runtime support skills, and
   `sdlc-workflow-test` match their source copies, excluding installer
   provenance and bytecode artifacts.
 
@@ -123,6 +141,9 @@ Verify read-only:
 - `UserPromptSubmit` does not perform SDLC routing.
 - Stop continuation routes through the explicit prompt-bound `sdlc-start run`
   action.
+- Active PR and merge authorization binds both the exact promoted head and the
+  recorded symbolic remote-default branch and HEAD; later default drift fails
+  closed.
 
 Do not install, trust, edit, delete, or rewrite hooks during verification.
 
@@ -256,10 +277,20 @@ For a nested monorepo project, verify all claims, worker `scope_cwd`, staged
 paths, and committed paths remain inside the initialized folder. Exercise a
 confirmed interrupted-worker transfer, a resource-free future-wave replan, a
 rejected staged-secret attempt, and the fake-process sequential fallback. In a
-managed outer worktree, verify the `agentic-sdlc` v2 lease blocks publication,
-tracks all internal resources and promoted heads, releases only after final
-alignment/UAT/docs with a clean exact head, and allows the create-PR reservation
-only afterward. Keep live Codex execution `PARTIAL` when binary/auth/capacity is
+managed outer worktree, verify the `agentic-sdlc` v4 lease blocks outer
+integration, tracks all internal resources and promoted heads, survives every
+external-first promotion persistence boundary, rejects stale local
+promoted/released state, releases to an exact terminal receipt only after final
+alignment/UAT/docs with a clean exact head, then allows only the recorded
+primary path plus exact local `$worktree integrate` handoff. Verify the
+coordinator and Stop hook stop for a fresh explicit user invocation from that
+primary checkout, then record source-integration proof only after that separate
+action.
+For Task Implementer coexistence, verify replanning extends the active lane
+generation's claims before replacement state is written, and verify differently
+keyed external database, Kubernetes, Terraform, migration, and publication
+domains collide through class-wide sentinel claims across separate lanes.
+Keep live Codex execution `PARTIAL` when binary/auth/capacity is
 unavailable rather than treating deterministic fake-process proof as live proof.
 
 ## Opt-In Three-Tier Live Profile
@@ -411,6 +442,11 @@ before mutation. Invalid UTF-8 becomes a reported failure rather than a crash.
 A deterministic subprocess timeout becomes a named FAIL check; it must not
 prevent report generation. A custom report path must remain under the private
 verification root.
+
+Capability regression subprocesses use a 120-second default timeout. The
+measured slow worktree and Task Implementer wave matrices use bounded 300- and
+900-second timeouts respectively, so their full crash/recovery coverage is not
+misreported as a workflow failure.
 
 ## Idempotency And Change Request
 

@@ -15,7 +15,6 @@ from .runtime_config import to_plain_data
 JAIL_PERSISTENT_MOUNTS_VALUES_KEY = "jailPersistentMounts"
 JAIL_PERSISTENT_HOME_MOUNT_PATH = "/home"
 JAIL_LEGACY_ROOT_PATH = "/mnt/jail"
-JAIL_LEGACY_PVC_NAME = "jail-pvc"
 JAIL_MANAGED_STORE_PATH = "/mnt/jail-store"
 JAIL_MANAGED_ROOTFS_PATH = "/mnt/jail-store/rootfs"
 JAIL_MANAGED_SYSTEM_PATH = "/mnt/jail-store/.cxcli"
@@ -26,17 +25,23 @@ JAIL_EXTERNAL_HOME_LOCAL_PATH = "/mnt/jail/home"
 JAIL_ROOTFS_SLOT_A = "slot-a"
 JAIL_ROOTFS_SLOT_B = "slot-b"
 JAIL_LEGACY_ACTIVE_SOURCE = "legacy-rootfs"
-JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS = (
+JAIL_DEFAULT_SHARED_MOUNT_PATHS = (
     "/data",
     "/scripts",
     "/models",
 )
-JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS = (
+JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS = (
     JAIL_PERSISTENT_HOME_MOUNT_PATH,
-    *JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS,
+    *JAIL_DEFAULT_SHARED_MOUNT_PATHS,
 )
-JAIL_MANAGED_DEFAULT_SHARED_MOUNT_PATHS = JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS
-JAIL_MANAGED_AUTO_PERSISTENT_MOUNT_PATHS = JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS
+JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS = JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS
+JAIL_FORBIDDEN_OPTIONAL_MOUNT_ROOTS = (
+    "/dev",
+    "/proc",
+    "/run",
+    "/sys",
+    "/tmp",
+)
 _SAFE_POSIX_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$")
 
 
@@ -89,24 +94,6 @@ class JailPersistentMount:
             "mount_path": self.mount_path,
             "local_path": self.local_path,
             "pvc_name": self.pvc_name,
-        }
-
-
-@dataclass(frozen=True)
-class JailPersistentMountStatus:
-    status: str
-    reason: str
-    mounts: tuple[JailPersistentMount, ...] = ()
-
-    @property
-    def verified(self) -> bool:
-        return self.status in {"verified", "planned"}
-
-    def as_payload(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "reason": self.reason,
-            "mounts": [mount.as_payload() for mount in self.mounts],
         }
 
 
@@ -193,120 +180,6 @@ def _existing_submount_paths(values: Mapping[str, Any]) -> set[str]:
     return paths
 
 
-def jail_existing_submount_paths(values: Mapping[str, Any]) -> tuple[str, ...]:
-    return tuple(sorted(_existing_submount_paths(values)))
-
-
-def parse_jail_persistent_mount_spec(value: str) -> JailPersistentMount:
-    raw = str(value or "").strip()
-    if "=" not in raw:
-        raise ValueError(
-            "--jail-persistent-mount must use <mountPath>=<localPath>, "
-            f"for example /data=/mnt/jail/shared/data; got {value!r}."
-        )
-    mount_path, local_path = raw.split("=", 1)
-    return JailPersistentMount(
-        mount_path=_normalize_path(mount_path, field="jailPersistentMount.mountPath"),
-        local_path=_normalize_path(local_path, field="jailPersistentMount.localPath"),
-    )
-
-
-def parse_jail_persistent_mount_specs(
-    values: Sequence[str] | None,
-) -> tuple[JailPersistentMount, ...]:
-    if not values:
-        return ()
-    return tuple(parse_jail_persistent_mount_spec(value) for value in values)
-
-
-def jail_persistent_mount_decisions(
-    *,
-    original_values: Mapping[str, Any],
-    patched_values: Mapping[str, Any],
-    explicit_mounts: Sequence[JailPersistentMount | Mapping[str, Any]],
-) -> tuple[dict[str, Any], ...]:
-    existing_paths = set(jail_existing_submount_paths(original_values))
-    store = _mapping(_mapping(patched_values.get("jailRootfs")).get("store"))
-    store_path = _normalize_path(
-        store.get("mountPath") or JAIL_LEGACY_ROOT_PATH,
-        field="jailRootfs.store.mountPath",
-    )
-    explicit_by_path = {
-        _normalize_path(mount.mount_path, field="jailPersistentMount.mountPath"): mount
-        for mount in (_coerce_jail_persistent_mount(item) for item in explicit_mounts)
-    }
-    configured_by_path: dict[str, Mapping[str, Any]] = {}
-    for item in _sequence_of_mappings(patched_values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)):
-        mount_path = str(item.get("mountPath") or "").strip()
-        if not mount_path:
-            continue
-        configured_by_path[_normalize_path(mount_path, field="jailPersistentMount.mountPath")] = (
-            item
-        )
-
-    ordered_paths: list[str] = []
-    for path in (
-        *JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS,
-        *sorted(existing_paths),
-        *explicit_by_path,
-    ):
-        normalized = _normalize_path(path, field="jailPersistentMount.mountPath")
-        if normalized not in ordered_paths:
-            ordered_paths.append(normalized)
-
-    decisions: list[dict[str, Any]] = []
-    for mount_path in ordered_paths:
-        configured = configured_by_path.get(mount_path)
-        explicit = explicit_by_path.get(mount_path)
-        existing_submount = mount_path in existing_paths and configured is None
-        if existing_submount:
-            decisions.append(
-                {
-                    "mount_path": mount_path,
-                    "status": "existing-submount",
-                    "source_status": "existing-submount",
-                    "origin": "existing-submount",
-                    "copy_required": False,
-                }
-            )
-            continue
-        if configured is None:
-            continue
-        local_path = _normalize_path(
-            configured.get("localPath"),
-            field="jailPersistentMount.localPath",
-        )
-        source_path = f"{store_path}{mount_path}"
-        adopted_in_place = source_path == local_path
-        status = (
-            "adopted-in-place"
-            if adopted_in_place
-            else "explicit"
-            if explicit is not None
-            else "pending-probe"
-        )
-        source_status = (
-            "adopted-in-place"
-            if adopted_in_place
-            else "explicit"
-            if explicit is not None
-            else "pending-probe"
-        )
-        decisions.append(
-            {
-                "mount_path": mount_path,
-                "local_path": local_path,
-                "status": status,
-                "source_status": source_status,
-                "origin": "explicit" if explicit is not None else "auto",
-                "source_path": source_path,
-                "target_local_path": local_path,
-                "copy_required": not adopted_in_place,
-            }
-        )
-    return tuple(decisions)
-
-
 def _coerce_jail_persistent_mount(
     item: JailPersistentMount | Mapping[str, Any],
 ) -> JailPersistentMount:
@@ -330,7 +203,7 @@ def external_default_jail_persistent_mounts() -> tuple[JailPersistentMount, ...]
             mount_path=mount_path,
             local_path=f"{JAIL_LEGACY_ROOT_PATH}/{mount_path.strip('/')}",
         )
-        for mount_path in JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS
+        for mount_path in JAIL_DEFAULT_SHARED_MOUNT_PATHS
     )
 
 
@@ -340,8 +213,51 @@ def managed_default_jail_persistent_mounts() -> tuple[JailPersistentMount, ...]:
             mount_path=mount_path,
             local_path=f"{JAIL_MANAGED_STORE_PATH}/shared/{mount_path.strip('/')}",
         )
-        for mount_path in JAIL_MANAGED_DEFAULT_SHARED_MOUNT_PATHS
+        for mount_path in JAIL_DEFAULT_SHARED_MOUNT_PATHS
     )
+
+
+def managed_legacy_default_jail_persistent_mounts() -> tuple[JailPersistentMount, ...]:
+    """Bind first-adoption data paths directly below the retained legacy store."""
+
+    return tuple(
+        JailPersistentMount(
+            mount_path=mount_path,
+            local_path=f"{JAIL_MANAGED_STORE_PATH}/{mount_path.strip('/')}",
+        )
+        for mount_path in JAIL_DEFAULT_SHARED_MOUNT_PATHS
+    )
+
+
+def jail_persistent_mounts_from_paths(
+    paths: Sequence[str], *, layout: str, legacy_active_source: bool = False
+) -> tuple[JailPersistentMount, ...]:
+    """Derive layout-owned backing paths for optional persistent data directories."""
+
+    if layout not in {"managed", "external"}:
+        raise ValueError("layout must be managed or external.")
+    store_path = JAIL_LEGACY_ROOT_PATH
+    if layout == "managed":
+        store_path = (
+            JAIL_MANAGED_STORE_PATH if legacy_active_source else f"{JAIL_MANAGED_STORE_PATH}/shared"
+        )
+    result: list[JailPersistentMount] = []
+    for value in paths:
+        mount_path = _normalize_path(value, field="persistent data path")
+        if mount_path in {"/usr", "/opt", "/etc"}:
+            raise ValueError(
+                f"persistent data path {mount_path!r} is an image-owned system root; "
+                "select a dedicated data subdirectory instead."
+            )
+        if any(_path_contains(root, mount_path) for root in JAIL_FORBIDDEN_OPTIONAL_MOUNT_ROOTS):
+            raise ValueError(f"persistent data path {mount_path!r} is inside a runtime filesystem.")
+        result.append(
+            JailPersistentMount(
+                mount_path=mount_path,
+                local_path=f"{store_path.rstrip('/')}/{mount_path.strip('/')}",
+            )
+        )
+    return tuple(result)
 
 
 def normalize_jail_persistent_mounts(
@@ -411,6 +327,22 @@ def normalize_jail_persistent_mounts(
     for mount in normalized:
         mount_path = _normalize_path(mount.mount_path, field="jailPersistentMount.mountPath")
         local_path = _normalize_path(mount.local_path, field="jailPersistentMount.localPath")
+        if mount_path in {"/usr", "/opt", "/etc"}:
+            raise ValueError(
+                f"jailPersistentMounts.mountPath {mount_path!r} is an image-owned system root."
+            )
+        if any(_path_contains(root, mount_path) for root in JAIL_FORBIDDEN_OPTIONAL_MOUNT_ROOTS):
+            raise ValueError(
+                f"jailPersistentMounts.mountPath {mount_path!r} is inside a runtime filesystem."
+            )
+        if mount_path in existing_paths:
+            continue
+        for existing_path in existing_paths:
+            if _paths_overlap(mount_path, existing_path):
+                raise ValueError(
+                    "jailPersistentMounts.mountPath must not overlap an existing jail submount; "
+                    f"got {mount_path!r} overlapping {existing_path!r}."
+                )
         if mount_path in seen:
             raise ValueError(f"duplicate jailPersistentMounts mountPath {mount_path!r}.")
         seen.add(mount_path)
@@ -426,6 +358,11 @@ def normalize_jail_persistent_mounts(
                     f"rootfs or cxcli system paths; got {local_path!r} overlapping {blocked_path!r}."
                 )
         for existing_mount in result:
+            if _paths_overlap(mount_path, existing_mount.mount_path):
+                raise ValueError(
+                    "jailPersistentMounts.mountPath values must not overlap; "
+                    f"got {mount_path!r} overlapping {existing_mount.mount_path!r}."
+                )
             if _paths_overlap(local_path, existing_mount.local_path):
                 raise ValueError(
                     "jailPersistentMounts.localPath values must not overlap; "
@@ -514,6 +451,7 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
     """Return values with SlurmCluster volumeSources aligned to jail rootfs state."""
 
     patched = copy.deepcopy(dict(to_plain_data(values)))
+    jail_rootfs_active_source(patched)
     jail_rootfs = _mutable_mapping(patched, "jailRootfs")
     jail_rootfs["strategy"] = str(jail_rootfs.get("strategy") or "activePassive").strip()
     active_slot = str(jail_rootfs.get("activeSlot") or JAIL_ROOTFS_SLOT_A).strip()
@@ -578,8 +516,9 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
     # The chart renders active/passive slot and persistent-mount volumeSources
     # from jailRootfs/jailPersistentMounts. During first adoption, the legacy
     # `jail` alias and all login/worker consumers must remain on the discovered
-    # legacy PVC until the one-time persistent copy and passive-slot population
-    # have both completed. After the switch, the active slot becomes canonical.
+    # legacy PVC until the persistent mount identities and passive-slot
+    # population have both completed. After the switch, the active slot becomes
+    # canonical.
     volume_sources[:] = [
         item
         for item in volume_sources
@@ -662,7 +601,6 @@ def apply_jail_persistent_mount_values(
     target_ref: str,
     persistent_mounts: Sequence[JailPersistentMount | Mapping[str, Any]] = (),
     layout: str = "external",
-    include_default_shared_mounts: bool | None = None,
     legacy_active_source: bool | None = None,
 ) -> dict[str, Any]:
     """Return Soperator chart values patched for single-SFS active/passive rootfs slots."""
@@ -674,13 +612,18 @@ def apply_jail_persistent_mount_values(
     store_path = JAIL_MANAGED_STORE_PATH if managed else JAIL_LEGACY_ROOT_PATH
     rootfs_path = JAIL_MANAGED_ROOTFS_PATH if managed else JAIL_EXTERNAL_ROOTFS_PATH
     system_path = JAIL_MANAGED_SYSTEM_PATH if managed else JAIL_EXTERNAL_SYSTEM_PATH
-    home_local_path = JAIL_MANAGED_HOME_LOCAL_PATH if managed else JAIL_EXTERNAL_HOME_LOCAL_PATH
-    if include_default_shared_mounts is None:
-        include_default_shared_mounts = not managed
+    home_local_path = (
+        f"{JAIL_MANAGED_STORE_PATH}/home"
+        if managed and legacy_active_source
+        else JAIL_MANAGED_HOME_LOCAL_PATH
+        if managed
+        else JAIL_EXTERNAL_HOME_LOCAL_PATH
+    )
     if legacy_active_source is None:
         legacy_active_source = not managed
 
     patched = copy.deepcopy(dict(to_plain_data(values)))
+    jail_rootfs_active_source(patched)
     jail_rootfs = _mutable_mapping(patched, "jailRootfs")
     jail_rootfs["strategy"] = "activePassive"
     jail_rootfs.setdefault("activeSlot", JAIL_ROOTFS_SLOT_A)
@@ -698,24 +641,22 @@ def apply_jail_persistent_mount_values(
     for slot in (JAIL_ROOTFS_SLOT_A, JAIL_ROOTFS_SLOT_B):
         slot_values = _mutable_mapping(slots, slot)
         slot_values.update(_slot_values(rootfs_path, slot))
+    adoption = _mutable_mapping(jail_rootfs, "adoption")
     if legacy_active_source:
-        adoption = _mutable_mapping(jail_rootfs, "adoption")
         adoption["activeSource"] = JAIL_LEGACY_ACTIVE_SOURCE
         adoption["rollbackSource"] = JAIL_LEGACY_ACTIVE_SOURCE
         adoption["legacyPvcName"] = legacy_jail_pvc_name(patched)
-    elif "adoption" in jail_rootfs:
-        adoption = jail_rootfs.get("adoption")
-        if isinstance(adoption, MutableMapping) and not adoption:
-            jail_rootfs.pop("adoption", None)
+    else:
+        adoption["activeSource"] = "slot"
+        adoption["rollbackSource"] = "slot"
+        adoption.pop("legacyPvcName", None)
 
     default_mounts = (
-        (
-            managed_default_jail_persistent_mounts()
-            if managed
-            else external_default_jail_persistent_mounts()
-        )
-        if include_default_shared_mounts
-        else ()
+        managed_legacy_default_jail_persistent_mounts()
+        if managed and legacy_active_source
+        else managed_default_jail_persistent_mounts()
+        if managed
+        else external_default_jail_persistent_mounts()
     )
     configured_mounts = _sequence_of_mappings(patched.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY))
     mounts = normalize_jail_persistent_mounts(
@@ -733,52 +674,41 @@ def apply_jail_persistent_mount_values(
     return sync_jail_volume_sources(patched)
 
 
-def jail_persistent_mount_status(values: Mapping[str, Any]) -> JailPersistentMountStatus:
-    store = _mapping(_mapping(values.get("jailRootfs")).get("store"))
-    store_path = str(store.get("mountPath") or JAIL_LEGACY_ROOT_PATH)
-    rootfs_path = str(store.get("rootfsPath") or JAIL_EXTERNAL_ROOTFS_PATH)
-    system_path = f"{store_path.rstrip('/')}/.cxcli"
-    configured = normalize_jail_persistent_mounts(
-        _sequence_of_mappings(values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)),
-        values=values,
-        include_home=False,
-        store_path=store_path,
-        rootfs_path=rootfs_path,
-        system_path=system_path,
-    )
-    existing_paths = _existing_submount_paths(values)
-    has_home = any(mount.mount_path == JAIL_PERSISTENT_HOME_MOUNT_PATH for mount in configured)
-    if has_home:
-        return JailPersistentMountStatus(
-            status="planned",
-            reason="/home is configured as a persistent jail mount",
-            mounts=configured,
-        )
-    if JAIL_PERSISTENT_HOME_MOUNT_PATH in existing_paths:
-        return JailPersistentMountStatus(
-            status="verified",
-            reason="/home is already provided by an existing customer-owned jail submount",
-            mounts=configured,
-        )
-    return JailPersistentMountStatus(
-        status="blocked",
-        reason="/home is not configured as a persistent jail mount",
-        mounts=configured,
-    )
+def jail_rootfs_active_source(values: Mapping[str, Any]) -> str:
+    """Resolve the canonical active-rootfs source from materialized chart values."""
+
+    rootfs_value = values.get("jailRootfs")
+    if rootfs_value is None and "jailRootfs" not in values:
+        return JAIL_LEGACY_ACTIVE_SOURCE
+    if not isinstance(rootfs_value, Mapping):
+        raise ValueError("jailRootfs must be a mapping")
+    rootfs = rootfs_value
+
+    if "strategy" in rootfs:
+        strategy_value = rootfs.get("strategy")
+        if not isinstance(strategy_value, str) or strategy_value != "activePassive":
+            raise ValueError("jailRootfs.strategy must be activePassive when present")
+        strategy = "activePassive"
+    else:
+        strategy = ""
+
+    adoption_value = rootfs.get("adoption")
+    if adoption_value is None and "adoption" not in rootfs:
+        return "slot" if strategy == "activePassive" else JAIL_LEGACY_ACTIVE_SOURCE
+    if not isinstance(adoption_value, Mapping):
+        raise ValueError("jailRootfs.adoption must be a mapping")
+    adoption = adoption_value
+
+    if "activeSource" not in adoption:
+        return "slot" if strategy == "activePassive" else JAIL_LEGACY_ACTIVE_SOURCE
+    active_source_value = adoption.get("activeSource")
+    if not isinstance(active_source_value, str) or not active_source_value:
+        raise ValueError("jailRootfs.adoption.activeSource must be a non-empty string")
+    active_source = active_source_value
+    if active_source not in {"slot", JAIL_LEGACY_ACTIVE_SOURCE}:
+        raise ValueError("jailRootfs.adoption.activeSource must be slot or legacy-rootfs")
+    return active_source
 
 
 def jail_rootfs_uses_legacy_active_source(values: Mapping[str, Any]) -> bool:
-    adoption = _mapping(_mapping(values.get("jailRootfs")).get("adoption"))
-    return str(adoption.get("activeSource") or "").strip() == JAIL_LEGACY_ACTIVE_SOURCE
-
-
-def jail_persistent_mount_exclude_paths(values: Mapping[str, Any]) -> tuple[str, ...]:
-    store = _mapping(_mapping(values.get("jailRootfs")).get("store"))
-    store_path = str(store.get("mountPath") or JAIL_LEGACY_ROOT_PATH).strip()
-    system_path = str(store.get("systemPath") or f"{store_path.rstrip('/')}/.cxcli").strip()
-    paths = [system_path]
-    for mount in _sequence_of_mappings(values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)):
-        local_path = str(mount.get("localPath") or "").strip()
-        if local_path:
-            paths.append(_normalize_path(local_path, field="jailPersistentMount.localPath"))
-    return tuple(dict.fromkeys(paths))
+    return jail_rootfs_active_source(values) == JAIL_LEGACY_ACTIVE_SOURCE

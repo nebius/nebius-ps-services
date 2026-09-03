@@ -1,9 +1,10 @@
 # Research
 
 `research` is an implicit, read-only skill for senior-engineer technical due
-diligence. It investigates technologies, protocols, RFCs, APIs, frameworks,
-products, architecture patterns, and feature requirements by searching internal
-Slack and Confluence context first when organization context matters, using MCP
+diligence on one focal subject or disputed claim. It investigates technologies,
+protocols, RFCs, APIs, frameworks, products, architecture patterns, and feature
+requirements. It searches internal Slack and Confluence context first when
+organization context matters, using MCP
 or app-tool access when connectors are unavailable, verifying technical claims
 against vendor and authoritative external sources, comparing alternatives, and
 producing actionable recommendations for design decisions.
@@ -20,7 +21,8 @@ matter?".
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/research-methodology.md`: detailed source-ranking and research
   workflow guidance.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 
 ## Boundaries
 
@@ -35,6 +37,10 @@ matter?".
 - `brainstorm` owns open-ended chat-first ideation before deep research.
 - `design` owns solution design and `/plan` handoff after research findings are
   available.
+- `app-stack` owns technology selection for application layers, and `ai-stack`
+  owns technology selection for AI layers. `research` provides scoped due
+  diligence on one focal technology or recommendation-changing claim to either
+  workflow.
 - `system-design-rules` owns checklist-style review of an existing proposal.
-- `$sdlc-start run <prompt>` and the relevant `sdlc-*` skills own Agentic SDLC context packs
+- `$sdlc-start run <prompt-ref-or-file>` and the relevant `sdlc-*` skills own Agentic SDLC context packs
   and committed SDLC artifacts.

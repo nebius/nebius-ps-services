@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-requirements-positive-01,true,"Create canonical REQ records from this active Agentic SDLC prompt."
+sdlc-requirements-positive-02,true,"Update the SDLC product requirements through maintain-project-specs while preserving stable IDs."
+sdlc-requirements-positive-03,true,"Capture this safe live experiment environment in the active SDLC requirements."
+sdlc-requirements-negative-01,false,"Write requirements for an ordinary non-SDLC project."
+sdlc-requirements-negative-02,false,"Create the design for this already-approved SDLC requirement."
+sdlc-requirements-negative-03,false,"Edit docs requirements directly without the shared spec owner."

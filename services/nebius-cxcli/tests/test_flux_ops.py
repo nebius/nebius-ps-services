@@ -46,12 +46,242 @@ def _write_rendered_flux_bundle(flux_dir: Path, *, namespace: str = "flux-system
     )
 
 
-def test_delete_rendered_flux_uses_kubectl_delete_kustomize(
+def test_filtered_kubectl_apply_returns_summary_without_terminal_chatter(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        flux_ops.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "namespace/flux-system unchanged\n"
+                "deployment.apps/source-controller configured\n"
+                "customresourcedefinition/example created\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    summary = flux_ops._run_filtered_kubectl_apply(["kubectl", "apply", "-f", "manifest"])
+
+    assert summary == flux_ops.FluxApplySummary(
+        created=1,
+        configured=1,
+        unchanged=1,
+        other=0,
+    )
+    assert capsys.readouterr() == ("", "")
+
+
+def test_captured_flux_failure_is_bounded_and_redacts_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines = ["request failed at https://private.example.invalid/token"] + [
+        f"detail {index}" for index in range(20)
+    ]
+    monkeypatch.setattr(
+        flux_ops.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="\n".join(lines),
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        flux_ops._run_captured(["flux", "migrate"])
+
+    detail = str(excinfo.value)
+    assert "<url>" in detail
+    assert "private.example.invalid" not in detail
+    assert "lines omitted" in detail
+    assert len(detail.splitlines()) <= 11
+
+
+def test_captured_flux_failure_redacts_credential_shaped_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        flux_ops.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "Authorization: Bearer authorization-sensitive-value\n"
+                "Bearer bearer-sensitive-value\n"
+                "token=token-sensitive-value\n"
+                "NEBIUS_IAM_TOKEN=iam-sensitive-value\n"
+                "AWS_SECRET_ACCESS_KEY=aws-sensitive-value\n"
+                '{"access_token":"json-sensitive-value","safe":"visible"}\n'
+                "{'password': 'map-sensitive-value', 'safe': 'visible'}\n"
+                '{"tokens": ["array-sensitive-one", "array-sensitive-two"]}\n'
+                "token => arrow-sensitive-value\n"
+                "-----BEGIN PRIVATE KEY-----\n"
+                "pem-sensitive-value\n"
+                "-----END PRIVATE KEY-----\n"
+                "safe diagnostic\n"
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        flux_ops._run_captured(["flux", "migrate"])
+
+    detail = str(excinfo.value)
+    assert "authorization-sensitive-value" not in detail
+    assert "bearer-sensitive-value" not in detail
+    assert "token-sensitive-value" not in detail
+    assert "iam-sensitive-value" not in detail
+    assert "aws-sensitive-value" not in detail
+    assert "json-sensitive-value" not in detail
+    assert "map-sensitive-value" not in detail
+    assert "array-sensitive-one" not in detail
+    assert "array-sensitive-two" not in detail
+    assert "arrow-sensitive-value" not in detail
+    assert "pem-sensitive-value" not in detail
+    assert "PRIVATE KEY" not in detail
+    assert "<redacted>" in detail
+    assert "sensitive credential material redacted" in detail
+    assert "safe diagnostic" in detail
+
+
+def test_filtered_kubectl_failure_surfaces_bounded_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        flux_ops.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="migration refused by the Kubernetes API",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="migration refused by the Kubernetes API"):
+        flux_ops._run_filtered_kubectl_apply(["kubectl", "apply", "-f", "manifest"])
+
+
+def test_captured_command_output_is_bounded_by_character_count() -> None:
+    detail = flux_ops.sanitized_bounded_command_output("x" * 5000)
+
+    assert len(detail) <= 2048
+    assert detail.endswith("... truncated ...")
+
+
+def test_captured_flux_timeout_keeps_bounded_redacted_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _timeout(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise subprocess.TimeoutExpired(
+            ["flux", "migrate"],
+            600,
+            stderr=b"Authorization: Bearer timeout-sensitive-value",
+        )
+
+    monkeypatch.setattr(flux_ops.subprocess, "run", _timeout)
+
+    with pytest.raises(RuntimeError, match="flux timed out after 600 seconds") as excinfo:
+        flux_ops._run_captured(["flux", "migrate"], timeout=600)
+
+    assert "timeout-sensitive-value" not in str(excinfo.value)
+    assert "<redacted>" in str(excinfo.value)
+
+
+def test_flux_migration_summary_groups_resources_by_kind() -> None:
+    summary = flux_ops._flux_migration_summary(
+        "\n".join(
+            (
+                "✔ HelmRelease/flux-system/one migrated to version v2",
+                "✔ HelmRelease/flux-system/two migrated to version v2",
+                "✔ Kustomization/flux-system/main migrated to version v1",
+                "custom resources migrated successfully",
+            )
+        )
+    )
+
+    assert summary.total == 3
+    assert summary.kinds == (("HelmRelease", 2), ("Kustomization", 1))
+    assert summary.detail() == ("3 custom resources migrated (HelmRelease 2, Kustomization 1)")
+
+
+def test_flux_controller_install_emits_bounded_stage_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[flux_ops.SoperatorProgressEvent] = []
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
+    monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda **kwargs: None)
+    monkeypatch.setattr(flux_ops, "wait_for_flux_crds_clear", lambda **kwargs: None)
+    monkeypatch.setattr(flux_ops, "wait_for_flux_crds_ready", lambda **kwargs: None)
+    monkeypatch.setattr(
+        flux_ops,
+        "_run_filtered_kubectl_apply",
+        lambda *args, **kwargs: flux_ops.FluxApplySummary(
+            created=1,
+            configured=2,
+            unchanged=3,
+            other=0,
+        ),
+    )
+    rollout_commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        flux_ops,
+        "_run_captured",
+        lambda command, **kwargs: (
+            rollout_commands.append(tuple(command))
+            or subprocess.CompletedProcess(command, 0, stdout="ready\n", stderr="")
+        ),
+    )
+
+    summary = flux_ops._install_flux_controller_manifest(
+        "https://example.invalid/install.yaml",
+        progress=events.append,
+        phase_prefix="flux-target",
+        phase_label="Flux target controllers",
+    )
+
+    assert summary.total == 6
+    assert len(rollout_commands) == len(flux_ops.FLUX_CORE_DEPLOYMENTS)
+    assert [event.state for event in events] == [
+        flux_ops.SoperatorProgressState.START,
+        flux_ops.SoperatorProgressState.SUCCESS,
+        flux_ops.SoperatorProgressState.START,
+        flux_ops.SoperatorProgressState.SUCCESS,
+        flux_ops.SoperatorProgressState.START,
+        *(flux_ops.SoperatorProgressState.UPDATE for _ in flux_ops.FLUX_CORE_DEPLOYMENTS[1:]),
+        flux_ops.SoperatorProgressState.SUCCESS,
+    ]
+    assert events[-1].description == "Flux target controllers ready"
+    assert events[-1].current == events[-1].total == len(flux_ops.FLUX_CORE_DEPLOYMENTS)
+
+
+def test_kustomization_resource_inventory_rejects_paths_outside_flux_dir(
+    tmp_path: Path,
+) -> None:
+    flux_dir = tmp_path / "generated" / "flux"
+    flux_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: unsafe\n")
+    (flux_dir / "kustomization.yaml").write_text(
+        "resources:\n  - ../../outside.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes the rendered Flux directory"):
+        flux_ops._kustomization_resource_files(flux_dir)
+
+
+def test_delete_rendered_flux_uses_explicit_manifest_inventory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     _write_rendered_flux_bundle(fake_paths.flux_dir)
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], str]] = []
 
     monkeypatch.setattr(
         flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None
@@ -59,7 +289,7 @@ def test_delete_rendered_flux_uses_kubectl_delete_kustomize(
     monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: True)
 
     def _fake_run(cmd: list[str], **kwargs):
-        calls.append(cmd)
+        calls.append((cmd, str(kwargs.get("input") or "")))
         if cmd[:2] == ["kubectl", "cluster-info"]:
             return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
         if "delete" in cmd:
@@ -70,11 +300,12 @@ def test_delete_rendered_flux_uses_kubectl_delete_kustomize(
 
     flux_ops.delete_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
 
-    assert calls[0] == ["kubectl", "cluster-info"]
-    delete_cmd = calls[1]
+    assert calls[0][0] == ["kubectl", "cluster-info"]
+    delete_cmd, delete_manifest = calls[1]
     assert delete_cmd[:4] == ["kubectl", "--cache-dir", delete_cmd[2], "delete"]
-    assert "-k" in delete_cmd
-    assert str(fake_paths.flux_dir) in delete_cmd
+    assert delete_cmd[4:6] == ["-f", "-"]
+    assert "kind: HelmRelease" in delete_manifest
+    assert "name: demo" in delete_manifest
     assert "--ignore-not-found=true" in delete_cmd
     assert "--wait=true" in delete_cmd
     assert "--timeout=15m" in delete_cmd
@@ -102,6 +333,97 @@ def test_delete_rendered_flux_fails_fast_when_cluster_is_unreachable(
         match="kubectl could not reach the target Kubernetes cluster for local destroy",
     ):
         flux_ops.delete_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+
+def test_delete_rendered_flux_excludes_protected_and_shared_soperator_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.flux_dir / "kustomization.yaml").write_text(
+        "resources:\n  - soperator.yaml\n",
+        encoding="utf-8",
+    )
+    (fake_paths.flux_dir / "soperator.yaml").write_text(
+        """apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jail-rootfs-slot-a-pv
+  labels:
+    soperator.nebius.ai/managed-by: nebius-cxcli-adapter
+    soperator.nebius.ai/lifecycle: protected
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: soperator
+  labels:
+    soperator.nebius.ai/lifecycle: shared-adopted
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nebius-cxcli-soperator-jail-mount
+  namespace: soperator
+  labels:
+    soperator.nebius.ai/managed-by: nebius-cxcli-adapter
+    soperator.nebius.ai/lifecycle: recreatable
+""",
+        encoding="utf-8",
+    )
+    deleted: list[str] = []
+    messages: list[str] = []
+
+    monkeypatch.setattr(flux_ops.shutil, "which", lambda _name: "/usr/bin/kubectl")
+    monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: True)
+
+    def _fake_run(cmd: list[str], **kwargs):
+        if cmd[:2] == ["kubectl", "cluster-info"]:
+            return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+        deleted.append(str(kwargs.get("input") or ""))
+        return SimpleNamespace(returncode=0, stdout="deleted\n", stderr="")
+
+    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+
+    flux_ops.delete_rendered_flux(fake_paths, emit=messages.append)
+
+    assert len(deleted) == 1
+    assert "kind: DaemonSet" in deleted[0]
+    assert "kind: PersistentVolume" not in deleted[0]
+    assert "kind: Namespace" not in deleted[0]
+    assert messages and "PersistentVolume jail-rootfs-slot-a-pv" in messages[0]
+
+
+def test_delete_rendered_flux_rejects_unclassified_soperator_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.flux_dir / "kustomization.yaml").write_text(
+        "resources:\n  - soperator.yaml\n",
+        encoding="utf-8",
+    )
+    (fake_paths.flux_dir / "soperator.yaml").write_text(
+        """apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unsafe
+  namespace: soperator
+  labels:
+    soperator.nebius.ai/managed-by: nebius-cxcli-adapter
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flux_ops.shutil, "which", lambda _name: "/usr/bin/kubectl")
+    monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(
+        flux_ops.subprocess,
+        "run",
+        lambda cmd, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
+    )
+
+    with pytest.raises(ValueError, match="no lifecycle class"):
+        flux_ops.delete_rendered_flux(fake_paths)
 
 
 def test_delete_rendered_flux_skips_when_flux_crds_are_absent(

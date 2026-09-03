@@ -1,9 +1,25 @@
 ---
 name: github-workflows
-description: "Use for GitHub Actions workflow work: create, review, or standardize PR/merge CI, bot-safe merge automation, reusable workflows, permissions, service-scoped checks, and release/image workflow YAML. For full project-specific release, image, or Helm publication flows with scripts or changelogs, use the matching publish-* skill."
+description: "Create, review, or standardize GitHub Actions for PR/merge CI, bot-safe automation, reusable workflows, permissions, scoped checks, or release/image jobs. Use publish-* for complete publication flows."
 ---
 
 # GitHub Workflows
+
+## Help
+
+For `$github-workflows --help` or `$github-workflows -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Apply repository-native GitHub Actions patterns instead of inventing one-off workflows.
 

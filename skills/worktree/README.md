@@ -1,72 +1,214 @@
 # Worktree
 
-`worktree` creates and manages one full-repository linked Git worktree for a
-selected project inside a monorepo. It is explicit-only because its actions can
-create local branches, commit and push work, create GitHub PRs, and delete
-proved-complete local or remote branches.
-
-## Requirements
-
-- Python 3 on a Unix-like host; the lifecycle lock uses the Unix-only `fcntl`
-  module.
-- Git with an `origin` remote and `origin/main`, plus credentials for the
-  requested fetch, push, or exact-lease remote deletion.
-- An authenticated GitHub CLI for `create-pr` and `remove` so PR state and exact
-  head evidence can be verified.
+`worktree` creates full-repository linked worktrees for parallel monorepo work
+and integrates each committed child locally into the current non-default source
+branch. Child branches are never pushed or used for pull requests.
 
 ## Public Actions
 
 ```text
-$worktree [add] [<task description>] [--project <repo-relative-directory>]
-$worktree push [<commit-message request>]
-$worktree create-pr [<title/body request>]
-$worktree remove <generated-worktree-name>
+$worktree [add] [<task>] [--project <directory>] [--reuse <exact-name>]
+$worktree integrate <exact-name> [--restart]
+$worktree remove <exact-name>
 ```
 
-`add` starts from the latest fetched `origin/main`, creates the sibling
-`<repo-name>-worktrees/` parent when needed, and returns the selected project
-directory inside the new full-repository worktree. Dirty or unmerged work in
-that project blocks creation; unrelated monorepo project changes are preserved.
-Generated names use a constant `project` prefix plus the public-safe task slug
-and random suffix; repository and project-scope names are never copied into the
-branch or directory identity.
-The helper records its planned manifest after fetch preflight and before it
-creates the managed branch or linked worktree.
+Creation requires the complete primary checkout to be clean. It captures the
+exact current local feature-branch SHA and uses:
 
-`push` and `create-pr` acquire a private action-bound publication reservation,
-validate managed identity, and reject changes outside the recorded project
-scope before reusing the repository's existing `commit-push` and `create-pr`
-contracts. The reservation closes the check-to-mutation race only among
-cooperating worktree, Task Implementer, and Agentic SDLC lifecycle owners; it
-is not an OS sandbox against arbitrary writers. It is released only after the
-child workflow returns successfully. Repeating an interrupted action resumes
-it; `create-pr` never cleans up automatically.
+```text
+git worktree add --no-track -b <generated-child> <path> <captured-source-sha>
+```
 
-`remove` runs from the primary checkout with an exact generated name. It
-requires durable ownership state, a clean worktree, and either exact
-merged-PR/head proof or a never-published branch with no new commits. It removes
-the worktree before atomically deleting its local ref at the verified SHA, then
-conditionally deletes an unchanged remote branch with an exact SHA lease. It
-never force-removes a worktree or replaces the recorded cleanup head on retry.
-Interrupted setup can recover from partial Git metadata only while the exact
-registered resources remain clean at their recorded creation base.
+The helper completes a nonmutating preflight before it creates or locks private
+state, then repeats the same checks under the lifecycle lock. The sibling
+worktree parent and `.worktree-skill` directory must be canonical directories,
+never symlinks.
 
-When `task-implementer` or Agentic SDLC runs from a managed worktree, a private
-v2 owner lease holds the outer branch through internal execution, cleanup, and
-final alignment. The lease blocks outer push, PR creation, and removal. Worker
-branches/worktrees remain internal. Agentic SDLC releases only after alignment,
-UAT, and documentation gates, then uses the normal PR publication reservation.
-Publication reservations remain schema v1 and are independent of lease v2.
+`--project` selects the returned starting directory; it is not a sparse
+checkout, branch argument, staging boundary, or changed-path restriction.
 
-## Files
+When `<task>` is omitted, `add` normalizes the resolved project directory's
+basename into the task slug. For example, invoking `$worktree` from `skills/`
+creates `project-skills-<6-hex>` on branch `feature/skills-<6-hex>` under the
+sibling worktree parent and returns `<worktree>/skills` as the starting
+directory. An explicit task keeps using its derived public-safe slug; a
+basename that normalizes to empty falls back to `work`.
 
-- `SKILL.md`: runtime routing, permissions, guardrails, and output contract.
-- `agents/openai.yaml`: explicit-only UI metadata.
-- `references/lifecycle.md`: exact lifecycle and recovery guidance.
-- `scripts/worktree_manager.py`: deterministic identity, add, inspect, and
-  remove helper.
-- `scripts/worktree_state.py`: private atomic ownership-manifest persistence.
-- `scripts/worktree_interop.py`: fail-closed task leases, publication
-  reservations, and shared lifecycle locking.
-- `scripts/test-worktree-manager.py`: offline real-Git lifecycle tests.
-- `evals/trigger-prompts.md`: explicit trigger and boundary examples.
+After `add` or exact `--reuse`, Codex verifies the child from that returned
+directory and uses it as the working directory for subsequent development
+commands. This is command routing, not a promise that a subprocess changed the
+parent shell, Codex workspace, or editor window. Opening or retargeting an
+editor remains an explicit user action; integration and removal still run from
+the primary checkout.
+
+## Parallel Development, Serial Integration
+
+After creation, the source branch and its children may advance independently
+until integration starts. Later source commits do not appear automatically in
+existing children, and exact `--reuse` never rebases or refreshes a child.
+
+```text
+<source-branch> advances independently
+           +
+child A / child B / child C advance independently
+           |
+           v
+integrate each child serially into <source-branch>
+           |
+           v
+publish the accumulated <source-branch> once
+```
+
+Run `$worktree integrate <exact-name>` from the primary checkout. A fresh
+integration follows one canonical order:
+
+```text
+primary checkout on <source-branch>
+           |
+           v
+read-only child and source preflight
+           |
+           v
+safely commit eligible ordinary child dirt
+           |
+           v
+safely commit eligible source dirt
+           |
+           v
+revalidate exact clean source and child heads
+           |
+           v
+create and validate the private candidate
+           |
+           v
+fast-forward <source-branch> to that candidate
+```
+
+Use these boundaries:
+
+- `add` still requires a clean primary checkout. A fresh `integrate` may create
+  one whole-repository local child commit and then one source commit when the
+  complete diffs are coherent and safe, no Git operation or conflict exists,
+  and no integration reservation or orphan candidate exists.
+- Automatic integration commits apply only to ordinary children. A
+  resource-free Task Implementer `run` has its own private Worktree transaction:
+  `task-lane-generation-prepare` reserves the complete candidate tree, paths,
+  digest, and claims for review without real-index or history mutation; the
+  token-bound open then uses repo-root `git add -A` and normal hooks to create
+  at most one fixed-message direct-child checkpoint and atomically opens the
+  generation at that clean head. Hook mutation rotates the review token. Once a
+  Task Implementer or Agentic SDLC lease is active, nested/coordinated dirt
+  blocks and returns to its owning workflow.
+- Each automatic commit uses repo-root `git add -A`, a truthful message, and
+  normal hooks. The reviewed staged tree is bound to the resulting commit tree;
+  hook-added content requires complete actual-commit review before integration.
+  A durable source-scoped preparation claim blocks competing integration,
+  nested lease acquisition, removal, and publication while ordered commits are
+  created. A successful commit is retained if a later step fails; retry uses
+  the same preparation evidence instead of resetting or duplicating it.
+- Worktree ownership transitions and the direct `$commit` transaction share
+  one Codex-private lock derived from the Git common directory. An active
+  Worktree preparation or reservation for the source ref blocks direct commit;
+  neither workflow adopts or rewrites the other's claim.
+- The final preflight freezes exact clean source and child SHAs. Candidate
+  creation compares those SHAs and the private preparation token again while
+  atomically consuming the claim into its durable reservation.
+- If an interrupted handoff leaves both the exact preparation and its
+  reservation, a token-bound retry validates both records and consumes the
+  preparation before candidate work resumes.
+- Integrate one child at a time. The next child therefore starts from all
+  source commits and previously integrated children.
+- Once an integration attempt starts, keep both source and child heads stable.
+  Neither checkout is auto-committed during resume, validation, conflict
+  recovery, or restart. Source movement makes the retained attempt stale and
+  requires an explicit reviewed `--restart`; child movement also fails closed.
+- Explicitly aborting only a preparation claim preserves all Git commits and
+  requires a fresh preflight. Orphan candidate branches, paths, symlinks, and
+  registered worktrees always block instead of being adopted.
+- Resolve merge conflicts only in the returned recovery candidate, then repeat
+  the same integration command. Never resolve them in the primary or child
+  checkout.
+- After all children are integrated, publish only the accumulated source
+  branch. Remove each child separately after its exact local integration proof
+  is recorded.
+
+## VS Code Worktree Discovery
+
+VS Code users can enable automatic Git worktree discovery in their user or
+workspace settings:
+
+```json
+{
+  "git.detectWorktrees": true
+}
+```
+
+VS Code then lists detected worktrees in the Source Control Repositories view,
+where each worktree can be opened in the current or a new window. This optional
+editor setting is separate from the skill: `worktree` does not change VS Code
+settings or open an editor. See [Git branches and worktrees in VS Code][1].
+
+[1]: https://code.visualstudio.com/docs/sourcecontrol/branches-worktrees
+
+After the guarded commit phase, integration creates a durable private merge
+candidate from the exact preflight source head, merges the exact child head with
+`--no-ff`, retains conflicts for developer resolution, and exposes the exact
+candidate for non-mutating alignment/tests. Only that validated SHA may
+fast-forward the clean checked-out source branch. Cleanup remains a separate
+proof-gated action.
+
+Task Implementer adds one private recovery transition at this boundary. When
+combined review rejects an exact clean lane candidate, Worktree archives that
+commit under a candidate-specific compare-and-set ref, journals the findings
+digest, removes only the temporary candidate worktree and branch, releases the
+reservation, and returns the still-pending lane to correction-ready state. The
+source branch is unchanged. Repeating the transition is idempotent, and a later
+successful corrected integration removes the temporary archive ref.
+
+Agentic SDLC may use private nested worktrees inside one child. Its lease blocks
+outer integration until internal promotion, cleanup, alignment, and evidence
+gates finish. Managed Agentic SDLC remains pending
+until exact source-integration proof is recorded. At that boundary the caller
+returns the recorded primary path plus the exact
+`$worktree integrate <generated-name>` command and stops; only a fresh explicit
+user invocation from that primary checkout may start outer integration. A
+workflow continuation or recorded next skill must not invoke it automatically.
+Ownership-manifest schema v4
+records whether a nested lease is `active` or `released` plus its exact owner
+and token, so a missing lease record cannot silently unlock the outer lifecycle.
+Lease schema v4 retains ordered promotion heads and persists an exact
+`released` terminal receipt; replay is accepted only when owner, token,
+promoted head, clean outer checkout, and absent resources still agree.
+Integration and removal rebind the receipt to the exact manifest and live outer
+identity and rescan all private resources, so receipt tampering or resurrection
+cannot cross the outer lifecycle boundary.
+Removal keeps an exact private removal-intent snapshot until receipt, manifest,
+and resource revalidation finish; interruption at either deletion boundary is
+therefore retryable without losing the receipt compare-and-set anchor.
+
+Task Implementer uses a different private consumer boundary: Worktree owns its
+persistent per-project lane creation, monotonic generation leases,
+repository-wide claims, two-parent source integration, rearm, and removal
+primitives. Lane state and immutable generation receipts are separate from the
+general schema-v4 manifest, so ordinary public Worktree children remain
+compatible. Ordinary Task/Agentic coordinator lease acquisition also rejects a
+Task lane before mutation; workflows must use their own matching consumer
+boundary rather than nest or share execution state. The branch's `lane_id`,
+`source_ref`, and `incarnation` fields are one indivisible identity. Partial
+metadata fails closed, and a live lane whose branch or worktree matches but
+whose branch metadata is absent cannot fall through to ordinary managed-child
+classification. Public `$worktree integrate` and `$worktree remove` reject Task
+lanes; only `$task-implementer integrate` and `$task-implementer workspace
+remove` may drive those private lifecycle transitions.
+
+Push and PR guards classify the primary and every linked checkout against Git
+metadata, ownership manifests, integration reservations, and nested lease
+resources.
+Private candidates/workers, partial or malformed ownership, and resurrected
+absent resources fail closed; only the primary source and genuinely unmanaged
+manual worktrees may publish.
+
+Private state lives beneath the sibling worktree parent. Old state schemas are
+rejected without migration. The helper never fetches to choose a base, pushes,
+creates PRs, deletes remote refs, force-removes worktrees, rebases, or
+cherry-picks.

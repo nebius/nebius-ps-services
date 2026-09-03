@@ -23,7 +23,7 @@ class SdlcStartContractTests(unittest.TestCase):
     def test_public_interface_is_mirrored(self) -> None:
         terms = [
             "$sdlc-start workspace init [project-folder]",
-            "$sdlc-start run <prompt-path-or-unique-filename>",
+            "$sdlc-start run <prompt-ref-or-file>",
         ]
         for relative in (
             "sdlc-start/SKILL.md",
@@ -39,10 +39,11 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-start/references/prompt-workspace.md",
             [
-                "agentic-sdlc/prompt-v1",
-                "agentic-sdlc/prompt-binding-v1",
+                "agentic-sdlc/prompt-v3",
+                "agentic-sdlc/prompt-binding-v2",
                 "ALREADY_COMPLETE",
-                "ACTIVE_RUN_CONFLICT",
+                "private FIFO",
+                "QUEUED_PROMPT_DRIFT",
                 "WORKFLOW_UPGRADE_REQUIRED",
             ],
         )
@@ -78,41 +79,120 @@ class SdlcStartContractTests(unittest.TestCase):
             "sdlc-start/agents/openai.yaml",
             [
                 "workspace init [project-folder]",
-                "run <prompt-path-or-unique-filename>",
+                "run <prompt-ref-or-file>",
                 "allow_implicit_invocation: false",
             ],
         )
 
-    def test_project_instructions_route_after_design(self) -> None:
+    def test_direct_capture_never_invokes_sdlc(self) -> None:
         self.assert_terms(
             "sdlc-start/SKILL.md",
             [
-                "route to\n  `project-agent-instructions` before auto-steering",
-                "`agentic-sdlc` ownership",
-                "`created`,\n  `refreshed`, `existing-sufficient`, or `not-needed`",
+                "direct prompts may be captured into the canonical prompt",
+                "never invoke this coordinator",
+                "does not invoke either public action",
+                "durable project-intent projection",
+                "shell/tool",
+                "Capture failure never blocks the direct turn",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/README.md",
+            [
+                "runs normally in the current agent",
+                "Capture never starts",
+                "captured prompt updates still require explicit `run`",
+                "never stores the submitted",
+                "operation ID and projection digest",
+                "auto-rebase",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/references/prompt-workspace.md",
+            [
+                "current agent handles it normally",
+                "captured updates and manual changes require explicit",
+                "capture failures do not persist or block the direct request",
+                "Staging is event-v2 metadata only",
+                "commands used as project contracts",
+                "never auto-rebase",
+            ],
+        )
+
+    def test_project_specs_validate_without_becoming_workflow_authority(self) -> None:
+        self.assert_terms(
+            "sdlc-start/SKILL.md",
+            [
+                "`scripts/validate_project_specs.py`",
+                "exact canonical v2 pair",
+                "never authorizes auto-steering",
+                "Do not create, edit, retire, or reload project instructions automatically",
                 "`project-agent-instructions-change`",
             ],
         )
         self.assert_terms(
             "sdlc-start/references/state-schema.md",
             [
-                "4. project-agent-instructions",
-                "19. sdlc-merge-pr",
-                '"project-agent-instructions": 0',
+                '"project_spec_observation"',
+                '"status": "current|pending|invalid|migration-required"',
+                "recorded as advisory and does not block SDLC progress",
             ],
         )
         self.assert_terms(
             "sdlc-prepare-execution/SKILL.md",
             [
-                "provenance-owned generated project-root",
-                "Reject an\n   unverified or human-owned `AGENTS.md`",
+                "already-effective",
+                "canonical v2 spec pair itself",
             ],
         )
+        sequence = self.text("sdlc-start/references/state-schema.md")
+        self.assertNotIn("4. project-agent-instructions", sequence)
+
+    def test_project_instruction_change_is_explicit_only(self) -> None:
+        start = self.text("sdlc-start/SKILL.md")
+        state_schema = self.text("sdlc-start/references/state-schema.md")
+        steering = self.text("sdlc-auto-steering/SKILL.md")
+        for content in (start, state_schema, steering):
+            normalized = " ".join(content.split())
+            self.assertIn(
+                "current user explicitly requested the separate mutation workflow",
+                normalized,
+            )
+            self.assertIn("advisory", content)
+        self.assertNotIn(
+            "`project-agent-instructions-change` to `project-agent-instructions`",
+            start,
+        )
+        self.assertNotIn("rerun the conditional decision", steering)
 
     def test_no_current_bare_continuation_contract(self) -> None:
         hook = self.text("sdlc-start/assets/hooks/stop_sdlc_continue.py")
         self.assertIn("run {shlex.quote(prompt_filename)}", hook)
         self.assertNotIn('f"Use ${COORDINATOR_SKILL}."', hook)
+
+    def test_managed_outer_handoff_is_exact_and_local(self) -> None:
+        self.assert_terms(
+            "sdlc-start/SKILL.md",
+            [
+                "`outer-integration-pending`",
+                "`$worktree integrate <generated-name>`",
+                "recorded primary path/source branch",
+                "fresh user invocation from that primary checkout",
+                "auto-continue the explicit-only",
+                "never push the\n  child or open a PR from it",
+                "`complete-outer-integration` to bind",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/references/state-schema.md",
+            [
+                "recorded\n    primary path and await a fresh",
+                "`$worktree integrate` from that primary checkout",
+                "recorded primary path plus\nthe exact `$worktree integrate <generated-name>` command and stops",
+                "The child is never\npublished",
+                "create-pr` is publication-only",
+            ],
+        )
 
     def test_private_completion_helpers_do_not_expand_public_surface(self) -> None:
         skill = self.text("sdlc-start/SKILL.md")
@@ -122,11 +202,46 @@ class SdlcStartContractTests(unittest.TestCase):
             "Agentic SDLC: Prompt History",
             '"new"',
             '"list"',
+            '"queue-list"',
+            '"queue-cancel"',
+            '"queue-next"',
             '"verify"',
+            '"refinement-verify"',
         ):
             self.assertIn(term, helper)
-        self.assertIn("private `new`, `list`, and `verify`", skill)
+        self.assertIn(
+            "private `new`, `list`, `queue-list`, `queue-cancel`, `queue-next`, and",
+            skill,
+        )
+        self.assertIn("requirements lock helper", skill)
         self.assertIn("Expose exactly these two actions", skill)
+
+    def test_requirements_refinement_is_mechanically_locked(self) -> None:
+        self.assert_terms(
+            "sdlc-start/SKILL.md",
+            [
+                "prompt_workspace.py refinement-verify",
+                "complete private impact claim",
+                "exact current canonical specs",
+                "immutable impact receipt",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-create-requirements/SKILL.md",
+            [
+                "private `refinement-verify` action owned by `sdlc-start`",
+                "latest\n  accepted prompt identity and intent",
+                "every extracted statement occurrence",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/scripts/prompt_workspace.py",
+            [
+                "def verify_requirements_refinement_contract",
+                "REQUIREMENTS_REFINEMENT_REQUIRED",
+                "publish_prompt_impact",
+            ],
+        )
 
 
 if __name__ == "__main__":

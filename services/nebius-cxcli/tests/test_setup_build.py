@@ -52,13 +52,13 @@ def _write_catalog(
         if app_portable_repo is not None:
             app_source["portable"] = {
                 "repo": app_portable_repo,
-                "chart": "soperator",
+                "chart": "nccl-test",
                 "version": "0.1.0",
             }
         if app_local_path is not None:
             app_source["local"] = {"path": app_local_path}
         payload["components"]["apps"] = {
-            "soperator": {
+            "nccl-test": {
                 "source": app_source,
             }
         }
@@ -130,17 +130,17 @@ def test_render_bundled_component_sources_rewrites_app_chart_refs_and_strips_loc
         catalog,
         "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
         app_portable_repo=(
-            "https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator"
+            "https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/nccl-test"
         ),
-        app_local_path="../../helm-charts/soperator",
+        app_local_path="../../helm-charts/nccl-test",
     )
     monkeypatch.setenv("NEBIUS_CXCLI_BUILD_RELEASE_REF", "nebius-cxcli-v0.1.1")
 
     rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
 
-    app_source = rendered["components"]["apps"]["soperator"]["source"]
+    app_source = rendered["components"]["apps"]["nccl-test"]["source"]
     assert app_source["portable"]["repo"].endswith(
-        "/tree/nebius-cxcli-v0.1.1/helm-charts/soperator"
+        "/tree/nebius-cxcli-v0.1.1/helm-charts/nccl-test"
     )
     assert "local" not in app_source
 

@@ -39,6 +39,9 @@ src/<package_name>/systemd/
 └── <service>.timer
 ```
 
+Select a fully qualified service module and generate the matching importable
+module under `src/`. Do not infer a fixed path such as `<package>.agent.main`.
+
 ## systemd Service Hardening
 
 Use these defaults unless they conflict with runtime needs:
@@ -61,7 +64,15 @@ Relax hardening only with explicit justification.
 
 ## systemd Operational Notes
 
-- Prefer `ExecStart=/usr/bin/env python -m <package>.agent.main ...`.
+- Provision the application from its committed lock in `/opt/<project>` with
+  `uv sync --locked --no-dev` before enabling the unit.
+- Bind `ExecStart` to the exact project-owned interpreter and matching
+  importable module:
+  `/opt/<project>/.venv/bin/python -m <service_module>`. Do not use an ambient
+  `python`, assume a module path, or require uv itself in the service execution
+  path.
+- Add command arguments only when the generated service entrypoint implements
+  and tests the corresponding parser.
 - Avoid shell wrappers unless there is a strict need.
 - Keep service logs structured and readable in `journalctl`.
 - Define clear stop/reload behavior (`ExecReload` only when truly supported).
@@ -70,7 +81,9 @@ Relax hardening only with explicit justification.
 ## Minimal Validation
 
 ```bash
-python -m <package_name> --help
-python -m <package_name> --version
+uv run --locked python -m <package_name> --help
+uv run --locked python -m <package_name> --version
+uv run --locked python -c "import importlib; importlib.import_module('<service_module>')"
+test -x /opt/<project_name>/.venv/bin/python
 systemd-analyze verify src/<package_name>/systemd/*.service
 ```

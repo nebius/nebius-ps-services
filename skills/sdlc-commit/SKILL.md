@@ -1,9 +1,23 @@
 ---
 name: sdlc-commit
-description: "Use only as part of the Agentic SDLC workflow; use after one feature's dependency waves and downstream evidence pass to seal final integration changes, fast-forward the unchanged project branch to the exact integration tip, and non-force-clean the integration resource. It never pushes."
+description: "Use only as part of the Agentic SDLC workflow; after waves/evidence pass, seal integration changes, fast-forward the unchanged project branch to the exact tip, and non-force-clean the integration resource. Never push."
 ---
 
 # SDLC Commit
+
+## Help
+
+For `$sdlc-commit --help` or `$sdlc-commit -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -65,17 +79,28 @@ Seal and promote one completed feature locally without pushing.
    `FEAT-*`/`REQ-*` message. It creates at most one final integration commit and
    records the new exact tip. Do not squash, amend, or rewrite worker/merge
    history.
-4. Verify the original project checkout still has the recorded non-default
-   base branch, exact base HEAD, and a clean status.
-5. Run the private helper `promote`. It uses `git merge --ff-only` to move the
-   project branch to the exact sealed tip, verifies equality, then unlocks and
-   removes only the clean registered integration worktree and deletes its
-   reachable branch with non-force `git branch -d`.
+4. Verify the original project checkout still has the recorded named base
+   branch, exact base HEAD, and a clean status. In unmanaged mode, re-resolve
+   the symbolic remote default and require its branch and HEAD to equal the
+   recorded default identity. In managed-child mode, verify only the exact
+   recorded local child identity; do not fetch or consult a remote default.
+5. Run the private helper `promote`. A common-Git-directory lock covers the
+   exact branch/base precheck, `git merge --ff-only` to the sealed tip, and
+   postcheck. It then unlocks and removes only the clean registered integration
+   worktree before deleting its ref with
+   `git update-ref -d <ref> <exact-promoted-tip>`.
 6. Only after `promote` reports `done`, record the promoted SHA and empty
    cleanup result in structured commit evidence. Bind it to the clean project
    checkout HEAD on the recorded base branch and verified absence of the
    integration worktree and branch. Advance any repair revalidation cursor
    with that evidence, then move state to `committed`.
+
+This phase never performs the outer managed-child merge. After final
+alignment, UAT, and documentation release the outer lease, `sdlc-start` returns
+the recorded primary path plus the exact `$worktree integrate <generated-name>`
+command and stops for a fresh explicit user invocation from that primary
+checkout. It records the exact source merge proof only after that separate
+action.
 
 `permissions/commit-authorization.json` remains the guard for an explicitly
 operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use
@@ -92,7 +117,7 @@ the private transition helper and action-scoped execution state.
 ## Failure Handling
 
 - Dirty unrelated files map to a blocker.
-- Default branch maps to `POLICY_BLOCK`.
+- A default branch in unmanaged mode maps to `POLICY_BLOCK`.
 - Missing evidence maps to workflow blocker.
 - Hook denial maps to `POLICY_BLOCK`.
 - Missing or expired `commit-authorization.json` maps to `POLICY_BLOCK`.
@@ -121,8 +146,11 @@ the private transition helper and action-scoped execution state.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

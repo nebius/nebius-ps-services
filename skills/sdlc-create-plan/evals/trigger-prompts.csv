@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+sdlc-plan-positive-01,true,"Lock a dependency-safe implementation plan for this ready Agentic SDLC feature."
+sdlc-plan-positive-02,true,"Create corrective SDLC plan version two from the classified post-evaluation failure."
+sdlc-plan-positive-03,true,"Append diagnosis-bound corrective waves while preserving completed task definitions."
+sdlc-plan-negative-01,false,"Create an ordinary implementation plan outside Agentic SDLC."
+sdlc-plan-negative-02,false,"Implement the already-locked SDLC plan."
+sdlc-plan-negative-03,false,"Rewrite the completed SDLC task definitions after a failure."

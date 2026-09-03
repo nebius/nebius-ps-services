@@ -1,9 +1,23 @@
 ---
 name: sdlc-tui-test
-description: "Use only as part of the Agentic SDLC workflow; use when terminal, CLI wizard, or TUI behavior must be controlled, observed, transcripted, and evaluated against Agentic SDLC acceptance criteria using Pexpect-style interaction."
+description: "Use only as part of the Agentic SDLC workflow; control, observe, transcribe, and evaluate terminal, CLI-wizard, or TUI behavior against acceptance criteria with Pexpect-style interaction."
 ---
 
 # TUI Test
+
+## Help
+
+For `$sdlc-tui-test --help` or `$sdlc-tui-test -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -79,8 +93,11 @@ Control terminal applications like a user and capture prompts, inputs, outputs, 
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

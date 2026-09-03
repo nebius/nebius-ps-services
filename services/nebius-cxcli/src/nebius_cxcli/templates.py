@@ -155,6 +155,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - name: Prepare Nebius service-account auth
                 env:
+                  NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID: ${{{{ secrets.NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID }}}}
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                   NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
@@ -162,14 +163,15 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_S3_SECRET_ACCESS_KEY: ${{{{ secrets.NEBIUS_S3_SECRET_ACCESS_KEY }}}}
                 run: |
                   set -euo pipefail
-                  if [[ -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" || -z "${{NEBIUS_S3_ACCESS_KEY_ID:-}}" || -z "${{NEBIUS_S3_SECRET_ACCESS_KEY:-}}" ]]; then
-                    echo "Missing required secrets: NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_S3_ACCESS_KEY_ID, NEBIUS_S3_SECRET_ACCESS_KEY"
+                  if [[ -z "${{NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID:-}}" || -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" || -z "${{NEBIUS_S3_ACCESS_KEY_ID:-}}" || -z "${{NEBIUS_S3_SECRET_ACCESS_KEY:-}}" ]]; then
+                    echo "Missing required secrets: NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID, NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_S3_ACCESS_KEY_ID, NEBIUS_S3_SECRET_ACCESS_KEY"
                     exit 1
                   fi
                   KEY_PATH="${{RUNNER_TEMP}}/nebius-auth-private.pem"
                   printf '%s\\n' "${{NEBIUS_AUTH_PRIVATE_KEY_PEM}}" > "${{KEY_PATH}}"
                   chmod 600 "${{KEY_PATH}}"
                   {{
+                    echo "NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID=${{NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID}}"
                     echo "NEBIUS_SA_ID=${{NEBIUS_SA_ID}}"
                     echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${{NEBIUS_AUTH_PUBLIC_KEY_ID}}"
                     echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}"
@@ -241,6 +243,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
 
               - name: Prepare Nebius service-account auth
                 env:
+                  NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID: ${{{{ secrets.NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID }}}}
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
                   NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
@@ -248,14 +251,15 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   NEBIUS_S3_SECRET_ACCESS_KEY: ${{{{ secrets.NEBIUS_S3_SECRET_ACCESS_KEY }}}}
                 run: |
                   set -euo pipefail
-                  if [[ -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" || -z "${{NEBIUS_S3_ACCESS_KEY_ID:-}}" || -z "${{NEBIUS_S3_SECRET_ACCESS_KEY:-}}" ]]; then
-                    echo "Missing required secrets: NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_S3_ACCESS_KEY_ID, NEBIUS_S3_SECRET_ACCESS_KEY"
+                  if [[ -z "${{NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID:-}}" || -z "${{NEBIUS_SA_ID:-}}" || -z "${{NEBIUS_AUTH_PUBLIC_KEY_ID:-}}" || -z "${{NEBIUS_AUTH_PRIVATE_KEY_PEM:-}}" || -z "${{NEBIUS_S3_ACCESS_KEY_ID:-}}" || -z "${{NEBIUS_S3_SECRET_ACCESS_KEY:-}}" ]]; then
+                    echo "Missing required secrets: NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID, NEBIUS_SA_ID, NEBIUS_AUTH_PUBLIC_KEY_ID, NEBIUS_AUTH_PRIVATE_KEY_PEM, NEBIUS_S3_ACCESS_KEY_ID, NEBIUS_S3_SECRET_ACCESS_KEY"
                     exit 1
                   fi
                   KEY_PATH="${{RUNNER_TEMP}}/nebius-auth-private.pem"
                   printf '%s\\n' "${{NEBIUS_AUTH_PRIVATE_KEY_PEM}}" > "${{KEY_PATH}}"
                   chmod 600 "${{KEY_PATH}}"
                   {{
+                    echo "NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID=${{NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID}}"
                     echo "NEBIUS_SA_ID=${{NEBIUS_SA_ID}}"
                     echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${{NEBIUS_AUTH_PUBLIC_KEY_ID}}"
                     echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${{KEY_PATH}}"

@@ -23,11 +23,12 @@ Load this reference when infrastructure and production operations are in scope.
   - Integration tests for release/manual runs
   - Coverage for release/manual runs
   - Security scanning
-- Keep pipelines deterministic and pin action/tool major versions.
+- Keep pipelines deterministic. Pin third-party actions to reviewed immutable
+  references and pin the uv version used to validate `uv.lock`.
 
 ## Security Baseline
 
-- Dependency scanning: `pip-audit` (or equivalent) in CI.
+- Dependency scanning: `uv run --locked pip-audit` (or equivalent) in CI.
 - Static analysis: Ruff rules plus optional Bandit/Semgrep.
 - Secret scanning: detect-secrets/Gitleaks in CI.
 - Generate SBOM for release artifacts when required by policy.

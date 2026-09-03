@@ -1,3 +1,5 @@
+name = "test_strategist"
+description = "Read-only verification planner for tests, fixtures, CI commands, local commands, and validation gaps."
 sandbox_mode = "read-only"
 model_reasoning_effort = "medium"
 developer_instructions = """

@@ -1,17 +1,26 @@
 interface:
   display_name: "Task Implementer"
   short_description: "Coordinate internal workers through dependency waves"
-  default_prompt: "Use $task-implementer workspace init [project-folder] once,
-    then $task-implementer run <prompt-path-or-unique-filename>. Keep the
-    two-command public surface and IDs private; plan deterministic dependency
-    waves from complete write claims and conflict domains; use
-    isolated full-repository worktrees and one reviewed direct-child commit per
-    worker;
-    when nested in a worktree-managed checkout, base on and promote only to
-    that exact outer branch while its private lease blocks publication;
-    integrate in stable order; validate and review the combined result;
-    reconcile steering; promote only by ff-only merge; clean up internal
-    resources without force; and release the outer lease only after final
-    alignment."
+  default_prompt: "Use the explicit five-action Task Implementer workflow:
+    workspace init creates or reuses the persistent Worktree-owned project
+    lane, workspace reuse validates and reopens only the existing workspace
+    without refreshing or mutating that lane, run acquires one monotonic
+    generation and coordinates deterministic
+    dependency waves, integrate validates and promotes every pending generation
+    to the exact named source branch before rearming the same lane, and
+    workspace remove proof-gates explicit lane cleanup while preserving private
+    prompt history. Allow dirty source state for init and run but exclude it
+    from the committed baseline; on a resource-free fresh run, reserve the exact
+    dirty-lane tree and path digest, pause for complete review, then checkpoint
+    that token as one whole-repository direct-child commit and use its clean
+    resulting head as the generation baseline. Require active and resumed
+    generations clean, and require both source plus lane clean for integration.
+    Keep internal IDs private, enforce
+    repository-wide claims across lanes, use full-repository worker worktrees,
+    ordered no-ff task integration, ff-only internal promotion, exact-head CAS,
+    durable receipts, and non-forced cleanup. Never call public $worktree
+    lifecycle actions for a Task Implementer lane. A bound-session capture may
+    merge only its accepted durable project-intent projection; it never blocks
+    the direct prompt or invokes this workflow."
 policy:
   allow_implicit_invocation: false

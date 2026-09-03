@@ -1,9 +1,23 @@
 ---
 name: frontend-project
-description: "Use for creating, scaffolding, or standardizing a React, TypeScript, and Vite frontend project or bounded frontend component, including deterministic candidate manifests, package metadata, strict TypeScript configuration, source and route shells, public environment validation, tests, explicitly assigned lint/format tooling, and component documentation. Use standalone for a frontend repository or coordinated-candidate when scaffold-project assigns exact paths. Do not use for Node backends, other frontend frameworks, hosted Sites projects, Docker/Compose, repository-root CI, repository topology, or application stack selection."
+description: "Create or standardize React, TypeScript, and Vite frontends/components with strict config, routes, environment checks, tests, tooling, docs, and candidate manifests. Not for Node backends, other frameworks, Sites, containers, root CI, or stack selection."
 ---
 
 # Frontend Project
+
+## Help
+
+For `$frontend-project --help` or `$frontend-project -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 

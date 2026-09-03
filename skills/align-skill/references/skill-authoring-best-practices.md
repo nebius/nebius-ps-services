@@ -7,8 +7,7 @@ complete, or update a scaffolded Codex or Agent Skill folder or draft
 Source basis, verified through the current OpenAI Codex manual before updating
 this reference:
 
-- [OpenAI Codex Agent Skills](https://developers.openai.com/codex/skills)
-- [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
+- [OpenAI Build skills](https://learn.chatgpt.com/docs/build-skills)
 - [OpenAI Codex customization](https://developers.openai.com/codex/concepts/customization)
 - [Agent Skills specification](https://agentskills.io/specification)
 - [Agent Skills best practices](https://agentskills.io/skill-creation/best-practices)
@@ -34,11 +33,16 @@ this reference:
 ## Trigger Design
 
 - The front matter `name` must match the folder and stay lowercase hyphen-case.
-- The `description` is the primary trigger surface. It must say what the skill
-  does and when to use it.
-- OpenAI Codex may shorten skill descriptions or omit some skills from the
-  initial list when many skills are installed, so front-load the main job,
-  trigger words, accepted inputs, and boundaries.
+- The `description` is the primary trigger surface. Concisely communicate the
+  job and outcome, when user intent should trigger it, routing-relevant inputs
+  or operating mode, and adjacent cases it must not take.
+- Do not require literal "why", "when", "how", or "not" wording. Judge whether
+  those decisions are clear without bloating always-loaded metadata.
+- OpenAI Codex budgets at most 2% of the model context window for the initial
+  skill list, or 8,000 characters when the window is unknown. That list includes
+  each skill's name, description, and path; Codex shortens descriptions first
+  and may then omit skills. Keep descriptions concise and front-load the main
+  job, trigger words, accepted inputs, and boundaries.
 - Add, preserve, or repair `agents/openai.yaml` when the target repository
   convention expects OpenAI metadata. In this repository, every source-owned
   skill must keep it. Use the nested path `agents/openai.yaml`, not a top-level
@@ -74,8 +78,10 @@ this reference:
   tree, vendor docs, scripts, live validation, or report-only scope.
 - Avoid descriptions so broad that the skill steals unrelated work from sibling
   skills.
-- Create or update should-trigger and should-not-trigger prompts when trigger
-  behavior is important. Store reusable examples under `evals/` when useful.
+- For every authorized writable target that completes alignment, create or
+  update `evals/trigger-prompts.csv` with at least three realistic positives
+  and three near-miss negatives. Follow `references/evaluation-guide.md` for
+  schema, migration, execution, and evidence rules.
 
 ## Fast Progressive Disclosure
 
@@ -85,15 +91,43 @@ this reference:
 - Keep `SKILL.md` lean and specific. It should contain trigger, scope,
   required workflow, guardrails, validation, and output contract, not broad
   methodology or background prose.
+- Treat 500 lines as a soft review budget. Above it, move conditional detail
+  out or explain why the remaining instructions are core; do not split content
+  mechanically just to meet a number.
 - Move long checklists, examples, vendor notes, troubleshooting, detailed
   policy, and reusable templates into `references/` or `assets/`.
 - Tell the agent exactly when to load each reference. Avoid vague "see
   references/" instructions.
 - Keep references one level deep from `SKILL.md` and focused by task, provider,
   format, or workflow variant.
+- Split provider or domain guidance, such as AWS, GCP, and Azure procedures,
+  when the variants differ materially. Keep shared rules in one owner and add
+  exact conditional read directives from `SKILL.md`.
 - Put reusable templates and starter artifacts in `assets/` instead of loading
   them into `SKILL.md`.
 - Do not duplicate the same rule across files. Link to the owner file.
+
+## Help Interfaces
+
+- Add or repair the standard `## Help` contract for every repo-owned skill that
+  is created, refined, or aligned.
+- Inventory the documented public actions, positional arguments, and flags
+  before writing Help. Resolve ambiguity in the skill contract instead of
+  inventing an interface.
+- Treat `$skill-name --help` and `$skill-name -h` as report-only requests that
+  stop after the selected `SKILL.md` loads and before required reads, project
+  inspection, additional tools, delegation, workflow execution, or mutation.
+- Return concise purpose and invocation policy, show exact usage for every
+  public action, and describe every public action, positional argument, and
+  flag in one concise line. Include `-h, --help` and say "No additional public
+  flags" when there are no others.
+- For an internal or coordinator-only skill, state that boundary and that no
+  standalone public workflow action exists instead of synthesizing one from
+  private inputs or phases.
+- Never expose actions, flags, or transitions belonging only to private scripts
+  or workflow helpers.
+- Keep this contract in `SKILL.md`, which is the portable runtime authority;
+  do not add unsupported custom help fields to `agents/openai.yaml`.
 
 ## Stateful Workflow Skills
 
@@ -156,6 +190,21 @@ For these skills:
 - Avoid hidden network calls. If network access is required, state why, how it
   is scoped, and what safe fallback exists.
 
+## Directive And Freedom Calibration
+
+- Write operative steps as directives with explicit inputs, decisions, and
+  outputs. Remove passive background that cannot change behavior.
+- Preserve rationale when it changes a decision, constraint, route,
+  validation, safety outcome, or output. Text is no-op only when removing it
+  changes none of those.
+- Use flexible goals and constraints when several approaches are equally safe.
+- Use bounded defaults, examples, or pseudocode when one route is preferred but
+  local variation is expected.
+- Use a tested script or exact sequence when a step is fragile, mechanical,
+  repeated, or must be deterministic.
+- Reassess instructions when eval traces show wasted work. Fewer, clearer
+  directives are preferable to adding rules that do not improve outcomes.
+
 ## Validation
 
 - Validate the narrow target first, then broaden only when shared rules,
@@ -170,13 +219,13 @@ For these skills:
 - For this repository, run:
 
   ```bash
-  python3 align-skill/scripts/validate-skill-structure.py align-skill
+  python3 align-skill/scripts/validate-skill-structure.py --require-evals align-skill
   ```
 
 - For stateful workflow skills, also run:
 
   ```bash
-  python3 align-skill/scripts/validate-skill-structure.py --profile stateful-workflow <skill-or-parent>
+  python3 align-skill/scripts/validate-skill-structure.py --profile stateful-workflow --require-evals <skill-or-parent>
   ```
 
 - When changing `align-skill` validator logic, run the self-test and a

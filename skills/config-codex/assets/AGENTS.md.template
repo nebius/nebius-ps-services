@@ -30,23 +30,6 @@
 
 ## Working Defaults
 
-- After one remediation fails against the same blocker, use `troubleshoot`
-  before another repair. Each blocker tranche has a hard maximum of five
-  remediation attempts or 120 active minutes, whichever comes first; a current
-  instruction may lower but never raise or disable the attempt maximum. Require
-  newly acquired evidence and a genuinely new evidence-derived hypothesis
-  before every retry. Report attempts 1 through 4 as progress; at exhaustion,
-  make only the exact private task-state update that records the stop, then call
-  no other tool and return the complete troubleshooting report. If the evidence
-  or hypothesis gate cannot be satisfied earlier, stop and return the structured
-  investigation report. Only a new explicit user instruction may start another
-  bounded tranche.
-- When evidence establishes a causally independent blocker, start its own fresh
-  budget at attempt 1. Use the five-attempt maximum and default 120-minute limit
-  unless the current instruction sets a lower attempt limit or another time limit
-  for the new blocker. Do not carry attempts, active time, tranche,
-  exhaustion status, or stop trigger from another blocker. Permission denials
-  and marker validation or repair consume no attempt.
 - Default policy for logic/API/CLI behavior changes is **no legacy
   compatibility layer** and **no backward-compatibility shims**.
 - When behavior changes, prefer fail-fast and a single canonical path instead
@@ -60,9 +43,40 @@
   verify with the narrowest relevant checks before broadening.
 - Agents may clean up temporary trees they created during the current task.
   Resolve and validate the exact task-specific path under the system temporary
-  directory first, use a scoped non-forced deletion such as
-  `find "$task_temp_dir" -depth -delete`, and never target the temporary root or
-  an unresolved variable.
+  directory first, then submit that resolved absolute descendant literally in
+  a scoped non-forced deletion such as
+  `find /tmp/<task-owned-tree> -depth -delete`. Never target the temporary root
+  or pass an unresolved variable.
+
+## Live Product Validation
+
+- When a live target is used to verify product behavior, define and freeze the
+  expected product-owned behavior and keep the declared product workflow
+  separate from fixture setup, environment recovery, and independent
+  verification. Observation is non-intervening only when it cannot alter
+  criterion-relevant state or execution; classify nominally read-only actions
+  by their effect. Changing the declaration starts a new trial and never cleans
+  earlier evidence.
+- The agent may operate the product and perform authorized recovery, but a
+  mutation outside the declared product workflow that performs, bypasses, or
+  pre-satisfies a product-owned step marks the affected trial and dependent
+  evidence as intervened. Recovery authorization never makes that evidence
+  valid proof.
+- Confirmed non-production may receive bounded reversible changes within
+  existing authority. Production and unconfirmed targets remain read-only
+  without exact action authorization. Destructive, irreversible, credential,
+  IAM, data, public-exposure, deletion, material-cost, or material-availability
+  actions require action-specific approval in every environment.
+- Fix the proven causal owner at its authoritative boundary. A product-fixed
+  claim requires an implemented source or configuration repair; environment,
+  test, harness, or evaluator defects are repaired at their owner and rerun
+  without claiming a product fix.
+- Replay from a declared or independently proven known-good product-supported
+  checkpoint before the earliest product divergence or first contaminated
+  boundary, whichever came first. Prove prior writers are quiescent, observe
+  the product perform the relevant transition, and verify authoritative
+  postconditions independently. Otherwise report mitigation or a blocker, not
+  a verified fix.
 
 ## Git Workflow
 

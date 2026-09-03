@@ -1,0 +1,6 @@
+interface:
+  display_name: "Prompt Session Intake"
+  short_description: "Capture bound prompt intent without blocking delivery"
+  default_prompt: "Use $prompt-session-intake only when its non-blocking hook stages same-turn event-v2 metadata. Continue the direct request normally; record merge/noop/sensitive, project only durable project intent, merge the canonical prompt exactly once with its accepted digest, and consume the event without starting or resuming a workflow."
+policy:
+  allow_implicit_invocation: false

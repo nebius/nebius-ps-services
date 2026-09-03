@@ -202,14 +202,14 @@ def test_login_timeout_continuation_refines_unqualified_exact_acknowledgement() 
             "socket_fingerprint": fingerprint,
             "absence_observed_at": "2026-07-12T10:02:00Z",
             "acknowledged_at": "2026-07-12T10:03:00Z",
-            "acknowledged_by": "ext-soperator-jobs-cli",
+            "acknowledged_by": "soperator-upgrade-cli",
         }
     )
 
     acknowledgement = acknowledge_slurm_login_exit(
         journal,
         socket_fingerprint=fingerprint,
-        acknowledged_by="ext-soperator-jobs-cli",
+        acknowledged_by="soperator-upgrade-cli",
         disposition=SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION,
         acknowledged_at="2026-07-12T10:04:00Z",
     )

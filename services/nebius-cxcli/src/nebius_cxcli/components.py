@@ -19,6 +19,12 @@ from .component_sources import (
     load_component_sources,
     reset_component_sources_cache,
 )
+from .soperator_release import (
+    SOPERATOR_UPSTREAM_REGISTRY,
+    SOPERATOR_UPSTREAM_UMBRELLA_CHART,
+    SoperatorVersion,
+)
+from .soperator_wizard import soperator_wizard_settings
 
 ComponentScope = Literal["infra", "apps"]
 COMPONENT_ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -209,6 +215,33 @@ def _entry_from_helm_chart(
         defaults=defaults,
         outputs=outputs,
         input_bindings=input_bindings,
+    )
+
+
+def soperator_install_entry(version: str) -> ComponentEntry:
+    """Return the internal entry for one frozen official Soperator release."""
+    raw_version = str(version or "").strip()
+    if not raw_version or raw_version.lower() == "latest":
+        raise ValueError("Soperator internal entries require an exact frozen X.Y.Z release")
+    normalized_version = str(SoperatorVersion.parse(raw_version))
+    chart_name = SOPERATOR_UPSTREAM_UMBRELLA_CHART
+    chart_repo = f"{SOPERATOR_UPSTREAM_REGISTRY}/{chart_name}"
+    settings = soperator_wizard_settings()
+    return _entry_from_helm_chart(
+        component_id="soperator",
+        release_name=settings.release_name,
+        description="Official upstream Nebius Soperator",
+        group="Slurm",
+        source_ref=chart_repo,
+        repo=chart_repo,
+        chart_name=chart_name,
+        version=normalized_version,
+        namespace=settings.release_namespace,
+        release_timeout=settings.release_timeout,
+        release_install_after=settings.mk8s_gpu.install_after,
+        selectable=True,
+        wizard_fields=settings.wizard_fields,
+        defaults=settings.defaults,
     )
 
 

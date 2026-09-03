@@ -45,6 +45,7 @@ from .mk8s_node_groups import (
 from .mk8s_node_groups import gpu_node_groups
 from .runtime_config import to_plain_data
 from .runtime_introspection import helm_chart_default_values
+from .soperator_wizard import soperator_wizard_settings
 
 _GPU_QUANTITY_RE = re.compile(r"^\d+")
 _K8S_QUANTITY_RE = re.compile(
@@ -177,6 +178,7 @@ def _mk8s_gpu_app_policies() -> dict[str, Mk8sGpuAppPolicy]:
             continue
         if policy.role or policy.rules or policy.install_after or policy.disable_target_validations:
             policies[app_id] = policy
+    policies["soperator"] = soperator_wizard_settings().mk8s_gpu
     return policies
 
 
@@ -347,14 +349,10 @@ def _soperator_nccl_activechecks_target_refs(payload: Mapping[str, Any]) -> set[
     if not isinstance(rows, list):
         return set()
 
-    soperator_values_defaults: dict[str, Any] = {}
-    for entry in component_entries("apps"):
-        if entry.id == "soperator":
-            soperator_values_defaults = _defaults_to_mapping(
-                entry.defaults,
-                strip_root="values",
-            )
-            break
+    soperator_values_defaults = _defaults_to_mapping(
+        soperator_wizard_settings().defaults,
+        strip_root="values",
+    )
 
     target_refs: set[str] = set()
     for row in rows:
@@ -568,6 +566,16 @@ def _coerce_optional_positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _coerce_optional_nonnegative_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _coerce_optional_positive_float(value: Any) -> float | None:
@@ -784,12 +792,12 @@ def _node_group_expected_node_count(group: Any) -> int | None:
 
 
 def _raw_node_group_expected_node_count(raw_group: Mapping[str, Any]) -> int | None:
-    explicit = _coerce_optional_positive_int(raw_group.get("node_count"))
+    explicit = _coerce_optional_nonnegative_int(raw_group.get("node_count"))
     if explicit is not None:
         return explicit
     autoscaling = raw_group.get("autoscaling")
     if isinstance(autoscaling, Mapping):
-        return _coerce_optional_positive_int(autoscaling.get("min_node_count"))
+        return _coerce_optional_nonnegative_int(autoscaling.get("min_node_count"))
     return None
 
 
@@ -803,8 +811,8 @@ def _external_mk8s_gpu_contexts(payload: Mapping[str, Any]) -> tuple[Mk8sGpuClus
     for target in targets:
         if not isinstance(target, Mapping) or not deploy_target_is_external_mk8s(target):
             continue
-        onboarding = target.get("soperator_onboarding")
-        if not isinstance(onboarding, Mapping) or onboarding.get("accepted") is not True:
+        registration = target.get("soperator_registration")
+        if not isinstance(registration, Mapping) or registration.get("accepted") is not True:
             continue
         target_ref = component_instance_id(target)
         if not target_ref:
@@ -1978,7 +1986,10 @@ def mk8s_cluster_smoke_validation_specs(payload_or_config: Any) -> list[dict[str
                 target_ref=target_ref,
             ),
             "required": True,
-            "expect_gpu_nodes": bool(target_contexts),
+            "expect_gpu_nodes": any(
+                context.expected_gpu_node_count is None or context.expected_gpu_node_count > 0
+                for context in target_contexts
+            ),
             "expected_gpu_node_count": _target_expected_gpu_node_count(target_contexts),
             "expected_gpu_node_groups": _target_gpu_node_group_names(target_contexts),
             "expected_gpu_node_group_counts": _target_expected_gpu_node_group_counts(
@@ -2771,6 +2782,7 @@ def _gpu_nodes(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]:
     return [
         {
             "name": _as_text(node.get("name")),
+            "node_group": _as_text(node.get("node_group")) or "<none>",
             "gpu_count": int(node.get("gpu_count", 0) or 0),
             "allocatable_resources": dict(node.get("allocatable_resources", {}))
             if isinstance(node.get("allocatable_resources"), Mapping)
@@ -2863,7 +2875,11 @@ def _node_inventory(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]
             {
                 "name": name,
                 "ready": _node_ready(conditions),
-                "node_group": _as_text(labels.get("nebius.com/node-group")) or "<none>",
+                "node_group": (
+                    _as_text(labels.get("nebius.com/node-group"))
+                    or _as_text(labels.get("nebius.com/node-group-id"))
+                    or "<none>"
+                ),
                 "instance_type": (
                     _as_text(labels.get("node.kubernetes.io/instance-type"))
                     or _as_text(labels.get("beta.kubernetes.io/instance-type"))
@@ -3574,6 +3590,212 @@ def _pod_phase_snapshot(
     return phase_by_name, all_terminal, any_failed, summary
 
 
+def run_allocated_soperator_gpu_visibility_validation(
+    *,
+    spec: Mapping[str, Any],
+    report_path: Path,
+    skipped_report: Mapping[str, Any],
+    soperator_namespace: str,
+    soperator_instance: str,
+    extra_env: dict[str, str] | None,
+    emit: Callable[[str], None] | None = None,
+) -> Path:
+    """Probe CUDA inside exact Soperator workers when they own all node GPUs."""
+
+    namespace = _as_text(soperator_namespace)
+    instance = _as_text(soperator_instance)
+    if not namespace or not instance:
+        raise RuntimeError("allocated Soperator GPU validation requires namespace and instance")
+    if not re.fullmatch(r"[A-Za-z0-9](?:[-A-Za-z0-9_.]*[A-Za-z0-9])?", instance):
+        raise RuntimeError("allocated Soperator GPU validation has an invalid instance label")
+    skipped_nodes = skipped_report.get("skipped_nodes")
+    candidates: list[Mapping[str, Any]] = []
+    seen_candidate_nodes: set[str] = set()
+    for item in skipped_nodes if isinstance(skipped_nodes, list) else []:
+        if not isinstance(item, Mapping):
+            raise RuntimeError("allocated Soperator GPU validation has invalid node evidence")
+        node_name = _as_text(item.get("node_name"))
+        gpu_count = int(item.get("gpu_count", 0) or 0)
+        requested_gpu_count = int(item.get("requested_gpu_count", 0) or 0)
+        free_gpu_count = int(item.get("free_gpu_count", -1))
+        if (
+            not node_name
+            or node_name in seen_candidate_nodes
+            or gpu_count <= 0
+            or requested_gpu_count != gpu_count
+            or free_gpu_count != 0
+        ):
+            raise RuntimeError(
+                "allocated Soperator GPU validation node evidence does not prove exact saturation"
+            )
+        seen_candidate_nodes.add(node_name)
+        candidates.append(item)
+    if not candidates:
+        raise RuntimeError("allocated Soperator GPU validation has no saturated node evidence")
+    max_nodes = max(1, int(spec.get("max_nodes", 1) or 1))
+    selected_nodes = sorted(candidates, key=lambda item: _as_text(item.get("node_name")))[
+        :max_nodes
+    ]
+    selected_names = {_as_text(item.get("node_name")) for item in selected_nodes}
+    selector = (
+        "slurm.nebius.ai/worker=true,"
+        "app.kubernetes.io/managed-by=slurm-operator,"
+        f"app.kubernetes.io/instance={instance}"
+    )
+    pod_payload = _kubectl_json(
+        ["get", "pods", "-n", namespace, "-l", selector, "-o", "json"],
+        extra_env=extra_env,
+        timeout_seconds=30,
+    )
+    pods_by_node: dict[str, list[str]] = {node: [] for node in selected_names}
+    items = pod_payload.get("items")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        metadata = item.get("metadata")
+        pod_spec = item.get("spec")
+        status = item.get("status")
+        if (
+            not isinstance(metadata, Mapping)
+            or not isinstance(pod_spec, Mapping)
+            or not isinstance(status, Mapping)
+        ):
+            continue
+        if metadata.get("deletionTimestamp") is not None or status.get("phase") != "Running":
+            continue
+        node_name = _as_text(pod_spec.get("nodeName"))
+        pod_name = _as_text(metadata.get("name"))
+        if node_name not in selected_names or not pod_name:
+            continue
+        containers = pod_spec.get("containers")
+        slurmd = (
+            next(
+                (
+                    container
+                    for container in containers
+                    if isinstance(container, Mapping) and container.get("name") == "slurmd"
+                ),
+                None,
+            )
+            if isinstance(containers, list)
+            else None
+        )
+        if not isinstance(slurmd, Mapping):
+            continue
+        resources = slurmd.get("resources")
+        requests = resources.get("requests") if isinstance(resources, Mapping) else {}
+        limits = resources.get("limits") if isinstance(resources, Mapping) else {}
+        slurmd_gpu_count = max(
+            _parse_gpu_quantity(requests.get("nvidia.com/gpu"))
+            if isinstance(requests, Mapping)
+            else 0,
+            _parse_gpu_quantity(limits.get("nvidia.com/gpu")) if isinstance(limits, Mapping) else 0,
+        )
+        candidate = next(
+            item for item in selected_nodes if _as_text(item.get("node_name")) == node_name
+        )
+        if slurmd_gpu_count != int(candidate.get("gpu_count", 0) or 0):
+            continue
+        container_statuses = status.get("containerStatuses")
+        if not any(
+            isinstance(container_status, Mapping)
+            and container_status.get("name") == "slurmd"
+            and container_status.get("ready") is True
+            for container_status in (
+                container_statuses if isinstance(container_statuses, list) else []
+            )
+        ):
+            continue
+        pods_by_node[node_name].append(pod_name)
+
+    probe_script = (
+        "set -eu; "
+        "nvidia-smi --query-gpu=name,driver_version --format=csv,noheader; "
+        'python3 -c \'import ctypes; print("cuInit=%d" % '
+        'ctypes.CDLL("libcuda.so.1").cuInit(0))\''
+    )
+    node_reports: list[dict[str, Any]] = []
+    for node in selected_nodes:
+        node_name = _as_text(node.get("node_name"))
+        pod_names = sorted(pods_by_node.get(node_name, []))
+        if len(pod_names) != 1:
+            raise RuntimeError(
+                "allocated Soperator GPU validation requires exactly one Ready slurmd "
+                f"pod on node {node_name}; found {len(pod_names)}"
+            )
+        pod_name = pod_names[0]
+        completed = _run_kubectl(
+            [
+                "exec",
+                "-n",
+                namespace,
+                pod_name,
+                "-c",
+                "slurmd",
+                "--",
+                "sh",
+                "-lc",
+                probe_script,
+            ],
+            extra_env=extra_env,
+            timeout_seconds=60,
+        )
+        output_lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        gpu_lines = [line for line in output_lines if line != "cuInit=0"]
+        expected_gpu_count = int(node.get("gpu_count", 0) or 0)
+        if (
+            "cuInit=0" not in output_lines
+            or len(gpu_lines) != expected_gpu_count
+            or not all("NVIDIA" in line for line in gpu_lines)
+        ):
+            raise RuntimeError(
+                f"allocated Soperator GPU validation failed CUDA initialization on {node_name}"
+            )
+        node_reports.append(
+            {
+                "node_name": node_name,
+                "pod_name": pod_name,
+                "container_name": "slurmd",
+                "gpu_count": int(node.get("gpu_count", 0) or 0),
+                "requested_gpu_count": int(node.get("requested_gpu_count", 0) or 0),
+                "phase": "Running",
+                "passed": True,
+                "cuda_driver_api": "cuInit=0",
+                "gpu_summary": output_lines[0][:300],
+            }
+        )
+    report = dict(skipped_report)
+    report.pop("skip_reason", None)
+    report.update(
+        {
+            "passed": True,
+            "skipped": False,
+            "probe_mode": "allocated-soperator-worker",
+            "selected_node_count": len(node_reports),
+            "passed_node_count": len(node_reports),
+            "failed_node_count": 0,
+            "skipped_node_count": max(
+                0,
+                int(skipped_report.get("total_gpu_node_count", len(candidates)) or 0)
+                - len(node_reports),
+            ),
+            "nodes": node_reports,
+            "skipped_nodes": [
+                dict(item)
+                for item in candidates
+                if _as_text(item.get("node_name")) not in selected_names
+            ],
+        }
+    )
+    _write_report(report_path, report)
+    if emit:
+        emit(
+            f"Validated {len(node_reports)} allocated Soperator GPU worker(s) with "
+            "nvidia-smi and CUDA Driver API cuInit=0."
+        )
+    return report_path
+
+
 def _run_cuda_smoke_validation(
     *,
     spec: dict[str, Any],
@@ -3588,9 +3810,8 @@ def _run_cuda_smoke_validation(
     max_nodes = max(1, int(spec.get("max_nodes", 1) or 1))
     all_nodes_mode = bool(spec.get("all_nodes"))
     acceptance_mode = bool(spec.get("acceptance")) or all_nodes_mode
-    report_kind = (
-        _as_text(spec.get("kind"))
-        or ("mk8s_cuda_smoke" if acceptance_mode else "mk8s_gpu_visibility")
+    report_kind = _as_text(spec.get("kind")) or (
+        "mk8s_cuda_smoke" if acceptance_mode else "mk8s_gpu_visibility"
     )
     report_schema = (
         _MK8S_ACCEPTANCE_SMOKE_SCHEMA if acceptance_mode else _MK8S_DEPLOYMENT_TESTING_SCHEMA
@@ -3605,9 +3826,24 @@ def _run_cuda_smoke_validation(
     )
     report_path = reports_dir / _as_text(spec.get("report_file"))
     all_nodes = _gpu_nodes(extra_env=extra_env)
+    raw_node_groups = spec.get("node_groups")
+    selected_node_groups = (
+        {_as_text(group) for group in raw_node_groups if _as_text(group)}
+        if isinstance(raw_node_groups, list | tuple)
+        else set()
+    )
+    if selected_node_groups:
+        all_nodes = [
+            node for node in all_nodes if _as_text(node.get("node_group")) in selected_node_groups
+        ]
     if not all_nodes:
+        scope = (
+            " in node group(s) " + ", ".join(sorted(selected_node_groups))
+            if selected_node_groups
+            else ""
+        )
         raise RuntimeError(
-            "CUDA smoke test could not find any Ready Kubernetes node with allocatable GPUs"
+            "CUDA smoke test could not find any Ready Kubernetes node with allocatable GPUs" + scope
         )
     requested_by_node = _pod_request_totals_by_node(extra_env=extra_env)
     free_nodes, saturated_nodes = _gpu_nodes_with_free_capacity(all_nodes, requested_by_node)
@@ -3632,6 +3868,7 @@ def _run_cuda_smoke_validation(
             "namespace": namespace,
             "image": image,
             "max_nodes": max_nodes,
+            "node_groups": sorted(selected_node_groups),
             "selected_node_count": 0,
             "total_gpu_node_count": total_gpu_nodes,
             "skipped_node_count": total_gpu_nodes,
@@ -3837,6 +4074,7 @@ def _run_cuda_smoke_validation(
             "namespace": namespace,
             "image": image,
             "max_nodes": max_nodes,
+            "node_groups": sorted(selected_node_groups),
             "selected_node_count": len(nodes),
             "total_gpu_node_count": total_gpu_nodes,
             "skipped_node_count": skipped_nodes,
@@ -4441,8 +4679,10 @@ def _run_nccl_validation(
         one_gpu_platform = platform_gpu_count == 1 or (
             platform_gpu_count is None and worker_gpu_count == 1
         )
-        bandwidth_ok = bandwidth_observed or single_rank_smoke or (
-            one_gpu_platform and average_bandwidth_reported
+        bandwidth_ok = (
+            bandwidth_observed
+            or single_rank_smoke
+            or (one_gpu_platform and average_bandwidth_reported)
         )
         threshold_evaluated = threshold_enforced or (
             one_gpu_platform and average_bandwidth_reported
@@ -4464,8 +4704,7 @@ def _run_nccl_validation(
             )
         if single_rank_smoke and not average_bandwidth_reported:
             summary = (
-                "NCCL single-rank smoke completed; no collective bandwidth metric "
-                "was reported."
+                "NCCL single-rank smoke completed; no collective bandwidth metric was reported."
             )
         else:
             summary = (
@@ -4480,11 +4719,7 @@ def _run_nccl_validation(
             launcher_phase == "Succeeded"
             and bool(out_of_bounds_ok)
             and bandwidth_ok
-            and (
-                threshold_passed is True
-                or bool(threshold_comment)
-                or not threshold_enforced
-            )
+            and (threshold_passed is True or bool(threshold_comment) or not threshold_enforced)
         )
         report = {
             "validation": "NCCL test",
@@ -4876,5 +5111,6 @@ __all__ = [
     "mk8s_gpu_validation_warnings",
     "prune_inactive_mk8s_gpu_app_rows",
     "resolve_mk8s_gpu_app_selection",
+    "run_allocated_soperator_gpu_visibility_validation",
     "run_mk8s_gpu_validations",
 ]

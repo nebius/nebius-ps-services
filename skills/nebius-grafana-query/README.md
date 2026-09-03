@@ -151,7 +151,8 @@ User prompt
   signal-aware statistics, and coverage disclosure.
 - `references/evidence-provider.md`: embedded request and result contracts,
   one-time readiness, fast/deep budgets, and consumer boundaries.
-- `evals/trigger-prompts.md`: activation and routing examples.
+- `evals/trigger-prompts.csv`: canonical activation and routing examples.
+- `evals/process-cases.md`: supplemental query and provider-boundary cases.
 - `evals/evidence-provider-tool-traces.json`: fixed-envelope zero-call,
   readiness-reuse, cumulative-stage-budget, exact-cost, failure, and
   whole-envelope redaction scenarios.

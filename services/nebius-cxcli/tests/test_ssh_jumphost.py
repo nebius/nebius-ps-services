@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli_module
@@ -130,9 +131,7 @@ def test_select_ssh_jumphost_component_requires_selector_when_multiple() -> None
 
 
 def test_normalize_allowed_cidr_csv_canonicalizes_and_dedupes() -> None:
-    assert normalize_allowed_cidr_csv(
-        "203.0.113.10/32, 198.51.100.4/24,198.51.100.0/24"
-    ) == (
+    assert normalize_allowed_cidr_csv("203.0.113.10/32, 198.51.100.4/24,198.51.100.0/24") == (
         "203.0.113.10/32",
         "198.51.100.0/24",
     )
@@ -158,6 +157,7 @@ def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper() -> None:
             public_ip="203.0.113.10",
             ssh_user="ubuntu",
             ssh_private_key=None,
+            ssh_known_hosts_file=Path(__file__),
             operation="add",
             allowed_cidrs=("198.51.100.0/24",),
         ),
@@ -166,8 +166,73 @@ def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper() -> None:
 
     assert "add-allowed-cidrs" in calls[0][-1]
     assert "--allowed-cidr 198.51.100.0/24" in calls[0][-1]
+    assert "StrictHostKeyChecking=yes" in calls[0]
+    assert f"UserKnownHostsFile={Path(__file__).resolve()}" in calls[0]
+    assert "GlobalKnownHostsFile=/dev/null" in calls[0]
     assert result.added == ("198.51.100.0/24",)
     assert result.allowed_cidrs == ("203.0.113.10/32", "198.51.100.0/24")
+
+
+def test_update_ssh_jumphost_missing_trust_fails_before_remote_helper(
+    tmp_path: Path,
+) -> None:
+    component = select_ssh_jumphost_component(_ssh_jumphost_payload())
+
+    def fail_run(_cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("remote helper must not run without SSH trust")
+
+    with pytest.raises(RuntimeError, match="SSH known-hosts file does not exist"):
+        update_ssh_jumphost_allowed_cidrs(
+            SshJumphostAllowedCidrRequest(
+                component=component,
+                public_ip="203.0.113.10",
+                ssh_user="ubuntu",
+                ssh_private_key=None,
+                ssh_known_hosts_file=tmp_path / "missing-known-hosts",
+                operation="list",
+                allowed_cidrs=(),
+            ),
+            run_command=fail_run,
+        )
+
+
+@pytest.mark.parametrize(
+    "ssh_error",
+    [
+        "Host key verification failed.",
+        "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
+    ],
+)
+def test_update_ssh_jumphost_rejects_unknown_or_mismatched_host_identity(
+    tmp_path: Path,
+    ssh_error: str,
+) -> None:
+    component = select_ssh_jumphost_component(_ssh_jumphost_payload())
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("host ssh-ed25519 AAAATEST\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fail_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        raise subprocess.CalledProcessError(255, cmd, stderr=ssh_error)
+
+    with pytest.raises(RuntimeError, match=ssh_error):
+        update_ssh_jumphost_allowed_cidrs(
+            SshJumphostAllowedCidrRequest(
+                component=component,
+                public_ip="203.0.113.10",
+                ssh_user="ubuntu",
+                ssh_private_key=None,
+                ssh_known_hosts_file=known_hosts,
+                operation="list",
+                allowed_cidrs=(),
+            ),
+            run_command=fail_run,
+        )
+
+    assert len(calls) == 1
+    assert "StrictHostKeyChecking=yes" in calls[0]
+    assert f"UserKnownHostsFile={known_hosts.resolve()}" in calls[0]
 
 
 def test_ssh_jumphost_command_adds_allowed_cidrs_from_comma_separated_list(
@@ -179,7 +244,9 @@ def test_ssh_jumphost_command_adds_allowed_cidrs_from_comma_separated_list(
     _write_ssh_jumphost_config(paths.config_path)
     captured: dict[str, SshJumphostAllowedCidrRequest] = {}
 
-    monkeypatch.setattr(cli_module, "_load_deploy_context", lambda _path: (_ssh_jumphost_payload(), paths, {}))
+    monkeypatch.setattr(
+        cli_module, "_load_deploy_context", lambda _path: (_ssh_jumphost_payload(), paths, {})
+    )
     monkeypatch.setattr(cli_module, "_ensure_terraform_backend_ready", lambda *_a, **_kw: None)
     monkeypatch.setattr(cli_module, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(
@@ -214,6 +281,7 @@ def test_ssh_jumphost_command_adds_allowed_cidrs_from_comma_separated_list(
     request = captured["request"]
     assert request.operation == "add"
     assert request.allowed_cidrs == ("203.0.113.10/32", "198.51.100.0/24")
+    assert request.ssh_known_hosts_file == (paths.generated_dir / "ssh_known_hosts").resolve()
     assert "Added: 203.0.113.10/32, 198.51.100.0/24" in result.output
 
 
@@ -226,7 +294,9 @@ def test_ssh_jumphost_command_lists_allowed_cidrs(
     _write_ssh_jumphost_config(paths.config_path)
     captured: dict[str, SshJumphostAllowedCidrRequest] = {}
 
-    monkeypatch.setattr(cli_module, "_load_deploy_context", lambda _path: (_ssh_jumphost_payload(), paths, {}))
+    monkeypatch.setattr(
+        cli_module, "_load_deploy_context", lambda _path: (_ssh_jumphost_payload(), paths, {})
+    )
     monkeypatch.setattr(cli_module, "_ensure_terraform_backend_ready", lambda *_a, **_kw: None)
     monkeypatch.setattr(cli_module, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(
@@ -245,13 +315,21 @@ def test_ssh_jumphost_command_lists_allowed_cidrs(
 
     monkeypatch.setattr(cli_module, "update_ssh_jumphost_allowed_cidrs", fake_update)
 
+    explicit_trust = tmp_path / "operator-known-hosts"
     result = runner.invoke(
         app,
-        ["ssh-jumphost", "--list-allowed-cidrs", str(paths.config_path)],
+        [
+            "ssh-jumphost",
+            "--list-allowed-cidrs",
+            str(paths.config_path),
+            "--ssh-known-hosts-file",
+            str(explicit_trust),
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert captured["request"].operation == "list"
+    assert captured["request"].ssh_known_hosts_file == explicit_trust.resolve()
     assert "Current allowed CIDRs: 203.0.113.10/32" in result.output
 
 

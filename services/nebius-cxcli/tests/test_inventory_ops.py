@@ -388,10 +388,13 @@ def test_write_inventory_lists_selected_security_and_platform_components(
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert "- `mysterybox` (MysteryBox secrets): `enabled`" in markdown
-    assert "### MysteryBox Secrets" in markdown
+    assert (
+        "- `mysterybox` (SecretStash secrets (service identifier: mysterybox)): `enabled`"
+        in markdown
+    )
+    assert "### SecretStash Secrets (`mysterybox` service identifier)" in markdown
     assert "- `mysterybox`: `db-username-password`, `secret2`" in markdown
-    assert "### MysteryBox Kubernetes Sync" in markdown
+    assert "### SecretStash Kubernetes Sync (`mysterybox` service identifier)" in markdown
     assert (
         "- `mk8s`: namespaces `ns1`, `ns2`; refresh interval `1m`; store `nebius-mysterybox-shared`"
     ) in markdown

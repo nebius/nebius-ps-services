@@ -14,7 +14,8 @@ so design review stays practical rather than ceremonial.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/design-principles.md`: refined 100-rule system design checklist
   and decision worksheet.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 
 ## Boundaries
 

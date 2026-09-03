@@ -19,7 +19,7 @@ Keep training and inference paths separate.
 ## Dependency Strategy
 
 - Keep base runtime lightweight.
-- Use optional dependency groups for ML extras:
+- Use consumer extras for optional ML capabilities:
   - `[project.optional-dependencies].ml`
   - `[project.optional-dependencies].gpu`
 - Avoid forcing heavy ML packages for CLI-only/API-only users.

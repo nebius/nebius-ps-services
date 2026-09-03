@@ -1,9 +1,25 @@
 ---
 name: linter
-description: Lint and auto-fix Shell, Markdown, and Python files in a repository. Use when users ask to lint shell scripts with shellcheck and bash -n, lint all nested Markdown files with markdownlint (fix first, then .markdownlint.json fallback rules), or lint Python files with ruff (fix first, then targeted Ruff rules in pyproject.toml).
+description: "Lint and auto-fix repository Shell, Markdown, or Python files using shellcheck/bash -n, markdownlint with project fallbacks, or Ruff with targeted pyproject rules."
 ---
 
 # Linter
+
+## Help
+
+For `$linter --help` or `$linter -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Run repo linting with a fix-first workflow and conservative config fallback when direct fixes are not enough.
 

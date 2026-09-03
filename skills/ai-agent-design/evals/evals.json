@@ -1,0 +1,132 @@
+{
+  "skill_name": "ai-agent-design",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Design a provider-neutral production customer-support agent. It may search only documents the current user can access, draft an answer, and propose sending it through the existing support system. A human must approve the exact send. The team has not selected a model, agent runtime, retrieval layer, or observability stack. Keep the first release small and safe.",
+      "expected_output": "A complete deterministic AI workflow design for the fixed retrieve, draft, approval, send, and verify sequence, with a bounded agent introduced only if model-owned action or continuation is proven necessary. The design freezes the workload and policy contract, uses ai-stack for component selection, and defines evaluation, recovery, rollout, and ownership without inventing implementation paths.",
+      "files": [],
+      "assertions": [
+        "The design classifies the fixed retrieve, draft, approval, send, and verify sequence as a deterministic AI workflow; it introduces a bounded agent only if a named requirement establishes model-owned tool choice or continuation.",
+        "The design rejects an unnecessary agent, multi-agent topology, long-term memory, MCP, and a durable workflow engine unless a named current requirement justifies them.",
+        "Document and tenant authorization occurs before retrieval or relevance ranking, and retrieved content remains untrusted data rather than instructions.",
+        "Sending is a separate typed effect with deterministic authorization, an action-risk tier, exact preview, authenticated approver identity, authentication evidence, approver authorization, decision time, separation-of-duties status, state preconditions, expiry, policy version, one-use replay protection, idempotency, authoritative postcondition verification, audit, and stale-approval replanning.",
+        "The design distinguishes canonical task and approval state, conversation history, workflow working state, any justified agent working state, external knowledge, audit history, and cache.",
+        "The ai-stack handoff contains the frozen workload, behavior classification, acceptance gates, data and tenant constraints, tool risks, quality, latency, availability, cost, ownership, and unknowns, and the final result preserves component statuses and evidence states.",
+        "Evaluation covers tool selection and arguments, authorization, prompt injection, grounded answer quality, trajectory, end-to-end outcome, latency, cost, approval handling, and rollback for an exact versioned release identity.",
+        "The output remains logical and advisory: it does not assign repository files, install products, call a provider, or imply live execution authority."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Design a provider-neutral due-diligence agent subsystem. One coordinator must dynamically split an investigation into independent research tasks, run a bounded number in parallel, collect cited evidence, resolve conflicts, and synthesize a report. Runs can last hours, must survive worker crashes, and may receive duplicate queue deliveries. Workers are read-only and use different authorized source sets. The stack is undecided.",
+      "expected_output": "A complete orchestrator-worker architecture with typed task and evidence contracts, least-privilege context, durable and replay-safe coordination, bounded failure handling, ai-stack component decisions, layered evaluation, and an operational rollout plan.",
+      "files": [],
+      "assertions": [
+        "The design justifies orchestrator-workers from dynamic decomposition, parallelism, context isolation, and one synthesis owner, and rejects peer chat or choreography without an independent ownership requirement.",
+        "The orchestrator owns stable task identifiers, dependency readiness, fan-out, budgets, cancellation, worker authority, result validation, conflict policy, and synthesis; workers cannot expand their scope.",
+        "Worker contracts include immutable authorized sources, provenance requirements, output and evidence schemas, deadlines, retry classification, and partial-result semantics.",
+        "The design separates authoritative task state, append-only transition history, materialized current state, execution checkpoints, artifacts, audit, and caches, and uses explicit concurrency control instead of last-write-wins.",
+        "The runtime architecture separates trusted control, model-directed execution, and durable session state; uses leases or heartbeats, effect-aware checkpoints, and visible progress, steer, cancel, notification, and cleanup controls.",
+        "At-least-once delivery is assumed; idempotency and deduplication cover tasks and effects, repeated keys with changed arguments conflict, and unknown outcomes are verified before retry.",
+        "Failure handling covers worker crash, provider outage, timeout, duplicate delivery, stale state, budget exhaustion, cancellation, conflicting evidence, and partial results with one retry owner per class.",
+        "The ai-stack handoff selects only justified agent runtime, durability, retrieval, interoperability, evaluation, and observability components and labels each Required, Conditional, Deferred, or Rejected with evidence and revisit triggers.",
+        "Evaluation covers individual worker quality, provenance and conflicts, orchestrator trajectories, synthesis quality, security boundaries, crash and replay recovery, latency, saturation, fan-out, and cost per accepted report, followed by staged rollout and rollback."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Design a provider-neutral production diagnostic assistant for a service team. Each run is read-only, but the next diagnostic query must depend on the previous observation, so the sequence cannot be fixed in advance. It may call only an allowlisted metrics, logs, or topology query tool under the current operator's scope. Keep the first release to one agent, bound its work, and return a safe outcome when evidence is insufficient. The model and runtime stack are undecided.",
+      "expected_output": "A complete bounded single-agent design with model-owned diagnostic tool choice, deterministic identity and authorization, typed tools and observations, evidence-linked competing hypotheses, strict budgets, safe terminal states, independent outcome verification, a frozen ai-stack handoff, evaluation, and rollout, without multi-agent topology or write authority.",
+      "files": [],
+      "assertions": [
+        "The design classifies the workload as one genuinely agentic bounded loop because the model chooses the next diagnostic action from prior observations, while keeping authorization, budgets, and termination deterministic.",
+        "The design rejects deterministic fixed sequencing as insufficient for the named observation-driven choice and rejects multi-agent coordination because no decomposition, isolation, or ownership requirement justifies it.",
+        "Each read tool has a typed purpose, scoped identity and tenant context, constrained arguments, deadlines, output bounds, stable errors, and untrusted observation handling; read-only status does not bypass data authorization.",
+        "The design requires an evidence bundle with source, query or observation identity, time range, timestamp, and provenance; it tracks competing hypotheses, expected and observed evidence, and falsification status.",
+        "The agent has explicit step, time, token, cost, and query budgets and reaches solved, inconclusive, blocked, escalated, cancelled, or budget-exhausted terminal states without self-expanding authority.",
+        "The outcome verifier rejects unsupported causal certainty, uses calibrated language such as most likely when evidence is incomplete, and reports missing or contradictory telemetry instead of manufacturing confidence.",
+        "Any remediation remains a separate deterministic and explicitly authorized workflow with exact targets, risk, rollback, idempotency, and post-change verification; the diagnostic agent has no write authority.",
+        "The design separates conversation, agent working state, authoritative source observations, audit history, and caches, and does not introduce long-term memory without a named requirement.",
+        "The ai-stack handoff preserves the frozen single-agent behavior and topology while selecting only justified model, runtime, evaluation, and observability components with status, evidence, owner, gate, and revisit trigger.",
+        "Evaluation covers diagnostic outcome quality, tool and argument choice, authorization, prompt injection, trajectory efficiency, unsupported conclusions, latency, budget compliance, and escalation quality.",
+        "Rollout starts read-only with representative offline traces and shadow or canary evidence, defines rollback and incident owners, and does not imply live query or deployment authority."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Design the smallest provider-neutral AI subsystem for classifying one already-authorized support message into a fixed typed taxonomy and returning a confidence score. One bounded application-level inference operation is sufficient; deterministic code may make bounded transport or schema-repair retries, but there are no tools, side effects, session continuity, or long-running work. The model API is undecided.",
+      "expected_output": "A direct-model-call design that preserves that class across bounded application-owned transport or schema-repair retries, with deterministic input and output validation, no agent runtime or durable orchestration, a narrow ai-stack component handoff, proportionate evaluation and observability, and explicit failure and fallback behavior.",
+      "files": [],
+      "assertions": [
+        "The capability map places the task under direct model calls, explicitly lists deterministic code, deterministic AI workflows, and agents as empty or unused, and explains why one bounded application-level inference operation remains sufficient across application-owned transport or schema-repair retries.",
+        "The design rejects an agent runtime, tools, memory, retrieval, multi-agent topology, graph, queue, and durable workflow engine because no current requirement justifies them.",
+        "Deterministic code owns authorization before input assembly, schema validation, taxonomy versioning, confidence thresholds, timeout handling, output validation, and safe reject or human-review behavior.",
+        "The workload contract defines representative messages, taxonomy and release identity, quality thresholds, unacceptable outcomes, latency and cost limits, privacy constraints, owner, and blocking unknowns.",
+        "The ai-stack handoff is limited to the model API, structured-output support, evaluation, and observability components and preserves the frozen direct-call classification.",
+        "Evaluation covers per-class and aggregate quality, calibration, abstention, malformed output, drift, privacy, latency, and cost against deterministic or current baselines.",
+        "Failure handling covers timeout, provider failure, invalid schema, low confidence, and unavailable service with a deterministic safe fallback and no hidden retries across side effects.",
+        "The output remains logical and advisory, with a staged validation and rollback plan and no repository paths, installation, provider call, or live execution."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Design a provider-neutral operations agent that may inspect a staging service, propose restarting one exact instance, and execute only after the operator approves the immutable proposal. A network timeout may hide whether the restart was accepted. Diagnostic code may run in a sandbox. The workflow must survive process restarts, expose progress and cancellation, and never operate on production. The model, runtime, sandbox, and observability stack are undecided.",
+      "expected_output": "A governed controlled-effect agent architecture that separates control, execution, and durable session state; mediates credentials; binds approval to one exact staging action; reconciles ambiguous effects before retry; validates sandbox outputs; independently verifies the service outcome; and passes frozen technology requirements to ai-stack.",
+      "files": [],
+      "assertions": [
+        "The design justifies any agentic observation-driven choices while keeping identity, environment restriction, target resolution, authorization, approval, effect execution, state transitions, and verification deterministic.",
+        "The reference architecture separates product identity, trusted control and policy, model-directed sandbox or tool execution, durable session and effect state, context, and privacy-aware traces behind versioned interfaces.",
+        "The approval binds the authenticated and authorized approver, exact staging instance, normalized arguments, before-state, expected effect, risk, expiry, policy and tool versions, action digest, and one-use idempotency identity; any material drift requires a new proposal.",
+        "Reusable credentials never enter model context or the sandbox; a trusted gateway uses short-lived principal-, tenant-, scope-, audience-, destination-, and duration-bound authority and records a redacted effect receipt.",
+        "The sandbox is isolated, non-root where applicable, resource- and egress-bounded, uses controlled mounts and qualified dependencies, and exports only validated, scanned, secret-free artifacts through a trusted boundary.",
+        "The session state machine persists budgets, approvals, action and effect states, checkpoints, lease ownership, cancellation, notifications, and cleanup; progress means verified milestones rather than generated status text.",
+        "Before effect-capable dispatch, trusted state persists the authorized immutable intent, exact action digest, and idempotency identity; the receipt and independent verification are persisted after dispatch.",
+        "A crash or lost response after dispatch but before receipt persistence creates an unknown effect that is reconciled from the authoritative service before any retry; the same action ID cannot carry changed arguments and no high-impact effect is automatically replayed.",
+        "Completion requires authoritative postcondition verification and safe bounded revision or escalation, and ai-stack selects implementation components without weakening the frozen provider-neutral contracts."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Design governed long-term memory for an existing provider-neutral support agent. It should retain only useful cross-session preferences and verified facts, detect conflicts and poisoning, support correction and deletion, and periodically consolidate duplicates. The team wants to compare a candidate memory snapshot with the current one before gradual promotion. No memory technology is selected.",
+      "expected_output": "A governed memory subsystem that keeps session history, working state, external knowledge, preferences, verified facts, audit, and cache distinct; treats writes and curation as versioned proposals; evaluates retrieval and behavior impact; supports approval, promotion, rollback, correction, deletion, privacy, and incident response; and routes technology choice to ai-stack.",
+      "files": [],
+      "assertions": [
+        "The design first proves that durable memory adds value beyond task state, conversation continuity, and authorized retrieval, and defines a no-memory baseline and measurable acceptance gates.",
+        "Session record, working state, checkpoints, episodic summaries, verified semantic facts, preferences, source knowledge, artifacts, audit, and cache have distinct owners, authority, retention, and retrieval policies.",
+        "Every candidate memory binds subject and tenant scope, type, provenance, source-quality-derived confidence, sensitivity, consent, effective and expiry time, allowed consumers, immutable version, and review state.",
+        "The write pipeline validates and classifies, deduplicates and detects conflicts, approves, quarantines, or rejects, writes a versioned candidate, and evaluates retrieval and behavior impact before promotion.",
+        "Offline curation freezes its inputs, writes a separate candidate store, produces a provenance-preserving diff, runs poisoning, leakage, retrieval, and behavior regressions, promotes gradually with owner approval, and retains rollback.",
+        "The design supports correction, deletion, expiry, export, legal or policy retention, cross-tenant isolation, redaction, and incident containment without storing secrets, unrestricted transcripts, hidden reasoning, or unverified conclusions as facts.",
+        "Independent verification and grader loops use deterministic privacy and schema gates, bounded semantic review, false-accept and false-reject calibration, and human escalation; graders cannot waive hard gates.",
+        "The output calls this governed memory curation rather than model self-improvement and sends only frozen capability, privacy, lifecycle, evaluation, and rollback requirements to ai-stack for technology selection."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "A team proposes an AI agent to assign a fixed retention category from an authoritative table of document types, regions, and contract flags. The rules are complete, versioned, conflict-free, and already pass every representative acceptance case. Design the smallest production solution and say whether an AI stack is needed.",
+      "expected_output": "A deterministic-code design with ordinary typed inputs, versioned rules, tests, failure handling, ownership, and audit; an explicit rejection of model and agent components; and a Skipped - no AI component required decision instead of an ai-stack handoff.",
+      "files": [],
+      "assertions": [
+        "The capability map selects deterministic code and explicitly lists direct model calls, deterministic AI workflows, and agents as empty or rejected.",
+        "The design explains that complete conflict-free rules pass the acceptance gates and rejects a model, agent runtime, tools, retrieval, memory, and AI orchestration as unnecessary.",
+        "The output records Skipped - no AI component required and does not invoke ai-stack or invent AI technology choices.",
+        "The deterministic design still defines typed inputs and outputs, rule and data versions, ownership, validation, tests, observability, safe failure behavior, rollout, and rollback.",
+        "The output remains logical and advisory and identifies a revisit trigger if future requirements introduce ambiguity that deterministic rules cannot resolve."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "You are the ai-agent-design specialist called from an active ai-stack workflow. The caller has a disputed provisional classification for a document-review capability and asks you only to freeze whether the model or application owns continuation, the autonomy ceiling, and the governing policy contract. Return that contract so the originating ai-stack can select components exactly once.",
+      "expected_output": "Only the frozen behavior, autonomy, policy, workload, assumptions, and unresolved-contract decision returned to the originating ai-stack, with no nested ai-stack invocation, no component selection, and no complete subsystem synthesis in this delegated return path.",
+      "files": [],
+      "assertions": [
+        "The output recognizes the active originating ai-stack workflow and limits its work to the disputed behavior, autonomy, policy, and workload contract.",
+        "The output classifies whether application code or the model owns continuation and freezes the least-agentic sufficient result with its acceptance evidence.",
+        "The output returns only the frozen contract to the caller and performs no nested ai-stack handoff.",
+        "The output does not select models, runtimes, retrieval, evaluation, observability, or other AI components and does not synthesize a complete subsystem architecture.",
+        "The originating ai-stack remains the sole component-selection owner and executes that selection exactly once."
+      ]
+    }
+  ]
+}

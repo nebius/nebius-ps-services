@@ -1,18 +1,32 @@
 ---
 name: sdlc-align-specs
-description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
+description: "Use only as part of the Agentic SDLC workflow; when explicitly requested, produce an advisory spec-consistency report that never gates phases, commit, or completion. Use align for required changed-surface alignment."
 ---
 
 # Align Specs
 
+## Help
+
+For `$sdlc-align-specs --help` or `$sdlc-align-specs -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
 ## Purpose
 
-Verify that SDLC specs, plans, implementation, documentation, tests, and
-evidence tell one consistent story.
+Produce an optional advisory report on whether SDLC specs, plans,
+implementation, documentation, tests, and evidence tell one consistent story.
 
 ## When To Use
 
-- Before committing or PR creation, specs and evidence need consistency review.
+- The user explicitly asks for the legacy SDLC-specific consistency view.
 - A failure suggests drift between requirements, design, tests, implementation,
   documentation, steering, or evidence.
 - The user asks for SDLC spec alignment.
@@ -25,16 +39,16 @@ evidence tell one consistent story.
 
 ## Inputs
 
-- Requirements, design, current project-instruction decision, current feature
-  plan, changed files, tests, documentation, steering, and evidence.
+- Requirements, design, current feature plan, changed files, tests,
+  documentation, steering, and evidence. Lifecycle observations are optional.
 - Current feature ID or full-run scope.
 
 ## Required Reads
 
 - `docs/requirements.md`.
 - `docs/design.md`.
-- The verified private `project-agent-instructions` state and active
-  selected-project instruction file when present.
+- The effective selected-project instruction chain. Lifecycle state may be read
+  as advisory context when present.
 - Locked plans.
 - Validation, test, evaluation, documentation, UAT, and commit evidence.
 - Changed implementation and tests.
@@ -58,11 +72,10 @@ evidence tell one consistent story.
   evidence all describe the same slice or explicitly record why no slice
   applies.
 - Check stable IDs and status fields.
-- Check that no manual spec edits bypassed owner skills.
-- Check that the conditional project-instruction decision matches current
-  requirements, design, inherited instructions, and target bytes. Validate a
-  generated file's provenance; preserve a human-owned file and report any
-  material gap or conflict.
+- Check that no spec publication bypassed the `maintain-project-specs` paired
+  transaction or canonical validation contract.
+- Report lifecycle or project-instruction drift as advisory context. Never make
+  it a prerequisite for alignment, commit readiness, or workflow completion.
 - Check that evidence supports claimed state transitions.
 - Check that project-facing docs do not describe behavior that implementation
   and evaluation evidence have not proven.
@@ -86,8 +99,9 @@ evidence tell one consistent story.
   unsupported wording.
 - Documentation mismatch maps to `DOCUMENTATION_DRIFT` and routes to
   `sdlc-update-documents`.
-- Stale, missing, or invalid project-instruction decision evidence routes to
-  `project-agent-instructions`; a human-owned conflict remains blocked there.
+- Stale, missing, or invalid historical lifecycle-phase evidence is advisory.
+  An explicit project-instruction mutation request routes to
+  `project-agent-instructions`.
 
 ## Must Not
 
@@ -103,19 +117,19 @@ evidence tell one consistent story.
 - Alignment report exists.
 - Each drift item has an owner skill or blocker.
 - Vertical flow, layer map, locked slice, and evidence agree when applicable.
-- No unresolved inconsistency remains before commit or PR readiness is claimed.
-- The project-instruction decision and any active file agree with current
-  committed specs and inherited policy.
+- Unresolved inconsistencies are reported with owners, without changing commit
+  or workflow readiness.
+- Any lifecycle observation is labeled advisory and does not affect the
+  alignment verdict.
 
 ## SDLC Invariants
 
-- Treat `docs/requirements.md`, `docs/design.md`, and any
-  provenance-owned generated project-root `AGENTS.md` as committed project
-  truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`; only `project-agent-instructions` creates or
-  refreshes its generated project-root `AGENTS.md`. Other skills route changes
-  to those owners.
+- Treat `docs/requirements.md`, `docs/design.md`, and every already-effective
+  selected-project instruction file as project truth.
+- `maintain-project-specs` is the sole semantic, schema, paired-publication,
+  migration, and validation owner for both canonical specs. Agentic SDLC
+  requirement and design skills are phase adapters over that contract. Explicit
+  project-instruction mutation stays outside the automatic SDLC workflow.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

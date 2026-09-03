@@ -33,5 +33,6 @@ and agent instructions stay with their specialist owners.
 - `scripts/frontend_project.py`: closed deterministic candidate renderer and
   validator.
 - `scripts/test_frontend_project.py`: offline contract tests.
-- `evals/trigger-prompts.md`: trigger and boundary cases.
+- `evals/trigger-prompts.csv`: trigger and boundary cases.
+- `evals/process-cases.md`: supplemental workflow and quality cases.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.

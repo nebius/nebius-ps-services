@@ -1,0 +1,10 @@
+id,should_trigger,prompt
+auth-setup-positive-01,true,"Use agent-nebius-auth-setup to bootstrap Codex Agent access for this project."
+auth-setup-positive-02,true,"Invoke the Nebius auth setup skill to repair the project-bound credential and profile."
+auth-setup-positive-03,true,"Run agent-nebius-auth-setup in preview mode for the selected project."
+auth-setup-positive-04,true,"Use agent-nebius-auth-setup to issue a bounded local-repair lease for this configured project."
+auth-setup-positive-05,true,"Invoke agent-nebius-auth-setup's separate hook-install action for this project."
+auth-setup-negative-01,false,"Diagnose this Nebius authentication failure without changing credentials or IAM."
+auth-setup-negative-02,false,"Query tenant quota usage with the existing authenticated profile."
+auth-setup-negative-03,false,"Install the Grafana MCP server for Nebius observability."
+auth-setup-negative-04,false,"A Nebius command failed authentication; determine the cause without invoking setup."

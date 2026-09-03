@@ -5,10 +5,55 @@ This folder contains deployment helpers that are separate from the installed
 
 ## Contents
 
-- `gcp-vpngw.sh`: configure one GCP-side HA VPN connection to a Nebius VPN
-  gateway and print the matching Nebius `connections:` block.
+- `gcp-vpngw.sh`: configure either the supported legacy single-peer tunnel
+  pair or an explicit two-member/four-tunnel GCP HA VPN peer and print the
+  matching Nebius `connections:` block.
 - `fix-vpngw-esp4.sh`: repair gateway VMs where the Ubuntu image or a temporary
   Dirty Frag mitigation left the required `esp4` module blocked.
+- `vm_ha_one_way_probe.py`: observe one-way 5 Hz ICMP recovery from an explicit
+  test VM while failover or failback is run separately.
+
+## VM-HA one-way traffic observation
+
+`vm_ha_one_way_probe.py` is a diagnostic trial helper, not an installed product
+command or a gateway health check. It never invokes failover/failback and never
+changes Compute, allocation, route, tunnel, or forwarding state. Start it from
+one terminal, then run the ordinary product command from another terminal.
+
+The helper requires a literal observer IPv4 address, literal destination IPv4
+address, explicit bounded packet count, and an existing non-symlink OpenSSH
+known-hosts file. It also requires an explicit current-user-owned private key
+with no group or other permissions. SSH is fail-closed: host verification and
+that exact identity are required, password and keyboard authentication and
+proxies are disabled, and no ambient SSH configuration or identities are
+loaded.
+
+```bash
+python misc/vm_ha_one_way_probe.py \
+  --ssh-target observer@192.0.2.10 \
+  --known-hosts-file /path/to/known_hosts \
+  --identity-file /path/to/id_ed25519 \
+  --destination 198.51.100.20 \
+  --count 1500 \
+  --direction-label nebius-to-peer >one-way-trial.jsonl
+```
+
+The endpoint-free JSONL contains timestamped unique replies and a terminal
+summary with the complete transmitted domain, exact missing sequences, and the
+first five-consecutive-reply recovery after the last loss. SSH failure or
+stderr, timeout, ping send/runtime errors, malformed/localized output, or a
+missing/inconsistent terminal summary produces no partial JSONL and exits
+nonzero.
+
+Synchronize the observer and operator clocks to the same time source before
+starting and record their measured offset and uncertainty. Start the helper
+before invoking the product command in another terminal. Keep JSONL and CLI
+stderr in a private untracked location, then correlate them offline only when
+clock uncertainty cannot change phase attribution. Independently verify the
+gateway's cloud, allocation, route, VPN, forwarding, and restored-redundancy
+postconditions. One direction is useful for timing diagnosis but is not
+bidirectional VM-HA acceptance evidence; run an independent reverse-direction
+trial for that acceptance.
 
 ## `fix-vpngw-esp4.sh`
 
@@ -89,6 +134,212 @@ This helper is intentionally narrow.
 The main `nebius-vpngw` CLI is responsible for validating and applying the
 Nebius side. This helper only configures the GCP side and prints the Nebius
 connection block to paste into your YAML config.
+
+### Explicit two-member VM-HA peer mode
+
+`--vm-ha-peer` is additive. Without it, every legacy argument, resource shape,
+and two-tunnel behavior above remains unchanged. With it, the helper delegates
+to the isolated VM-HA planner and requires explicit project, region, connection,
+ASN, and active/passive Nebius public IPs.
+
+The VM-HA mode converges the current GCP multi-VM topology:
+
+- one regional GCP HA VPN gateway
+- one regional Cloud Router
+- two mirrored global external VPN gateway resources, each describing the two
+  Nebius public IPs in the interface order required by its tunnel pair
+- four unique HA VPN tunnels and APIPA `/30` links
+- four Cloud Router interfaces and BGP peers
+- lower numeric advertised priorities for both configured-active VM sessions
+  and higher numeric priorities for both configured-passive VM sessions
+
+The priority is the MED on routes Cloud Router advertises toward Nebius. It
+does not select GCP's return path for routes learned from Nebius; the
+`nebius-vpngw` controller independently gates forwarding and route writes to
+the authoritative VM owner.
+
+Each VM receives one `ha_role: active` and one `ha_role: passive` tunnel in the
+single generated Nebius connection, so the configured-active VM does not
+create an intra-VM ECMP path. VM role remains independent of tunnel role.
+
+The four PSKs must already be present in the derived environment variables
+(`GCP_<CONNECTION>_TUNNEL_1_PSK` through `_4_PSK`) when a missing tunnel is
+created. Override those variable names with `PSK1_ENV_NAME` through
+`PSK4_ENV_NAME`. The helper never prints secret values; generated YAML contains
+only `${...}` references. Tunnel creation passes the secret to `gcloud` through
+an inherited anonymous flags-file descriptor, so it is absent from the process
+argument list and is never written to disk. Every `gcloud` child environment is
+also scrubbed of the complete resolved PSK set and the planned PSK variable
+names.
+
+For an explicit migration, `--psk-source-config <private-config.yaml>` may read
+the four existing PSKs from one regular, non-symlink mode-`0600` VPNGW YAML
+file. The helper selects exactly one connection matching `--connection-name`
+and binds each secret to the exact planned tunnel name, independent of YAML
+order. It validates the complete four-secret topology before the first GCP
+mutation and rejects use together with any planned PSK environment value. It
+still prints only environment-variable references and never prints the source
+secrets.
+
+Preview and status are non-mutating:
+
+```bash
+./misc/gcp-vpngw.sh --vm-ha-peer \
+  --connection-name <name> \
+  --gcp-project-id <gcp-project-id> \
+  --region <gcp-region> \
+  --network <gcp-network> \
+  --vpn-gateway-name <regional-ha-vpn-gateway> \
+  --cloud-router-name <cloud-router> \
+  --cloud-router-asn <gcp-asn> \
+  --nebius-active-public-ip <vm0-public-ip> \
+  --nebius-passive-public-ip <vm1-public-ip> \
+  --nebius-asn <nebius-asn> \
+  --dry-run
+
+./misc/gcp-vpngw.sh --vm-ha-peer \
+  --connection-name <name> \
+  --gcp-project-id <gcp-project-id> \
+  --region <gcp-region> \
+  --nebius-active-public-ip <vm0-public-ip> \
+  --nebius-passive-public-ip <vm1-public-ip> \
+  --nebius-asn <nebius-asn> \
+  --status
+```
+
+Both commands require an existing active `gcloud` login. They never start a
+browser login or change the active gcloud project. Apply mode prompts unless
+`--yes` is provided, validates every existing resource by shape and binding,
+and fails closed instead of adopting a same-name foreign resource. It does not
+delete or rotate resources; migration cleanup remains a separately reviewed
+operation after the four replacement tunnels are healthy.
+
+### Isolated Classic static VM-HA peer mode
+
+`--classic-vm-ha-peer` delegates to a separate static-only planner. It creates
+two independent one-to-one GCP Classic VPN paths, one for each Nebius VM:
+
+- two Premium-tier regional external addresses and target VPN gateways
+- three Premium-tier `EXTERNAL` forwarding rules per gateway for ESP, UDP 500,
+  and UDP 4500
+- one IKEv2 Classic tunnel per gateway with `0.0.0.0/0` traffic selectors
+- one explicit GCP route per Nebius prefix and path, with a lower priority for
+  the configured-active path and a higher priority for the configured-passive
+  path
+
+The mode creates no HA VPN gateway, Cloud Router, router interface, or BGP
+peer. Keep its Nebius gateway group, VM-HA cluster, configuration, GCP names,
+and routes separate from the BGP fixture.
+
+Preview the exact graph without changing GCP:
+
+```bash
+./misc/gcp-vpngw.sh --classic-vm-ha-peer \
+  --connection-name <static-connection-name> \
+  --gcp-project-id <gcp-project-id> \
+  --region <gcp-region> \
+  --network <gcp-network> \
+  --nebius-active-public-ip <vm0-public-ip> \
+  --nebius-passive-public-ip <vm1-public-ip> \
+  --gcp-prefix <gcp-workload-prefix> \
+  --nebius-prefix <nebius-workload-prefix> \
+  --dry-run
+```
+
+Apply requires `GCP_<CONNECTION>_CLASSIC_A_PSK` and
+`GCP_<CONNECTION>_CLASSIC_B_PSK` only when their corresponding tunnels are
+missing. Override those variable names with `PSK_A_ENV_NAME` and
+`PSK_B_ENV_NAME`. Secrets are validated before the first mutation and passed
+through an inherited anonymous flags-file descriptor; they are never printed,
+written to disk, or placed in a child process argument or environment.
+
+When environment variables are inconvenient, `--psk-source-config
+<private-config.yaml>` reads exactly the two planned named tunnel PSKs from one
+regular, non-symlink mode-`0600` VPNGW YAML. The matching connection must
+contain exactly those two tunnel names and literal PSKs; `${...}` references
+are rejected so no source-secret environment variable reaches the initial
+`gcloud` probes. The helper also rejects a source file when either planned PSK
+environment variable is set, validates the complete two-secret topology before
+mutation, and never prints the values. Actual rotation also requires an enabled
+two-member VM-HA declaration, `vendor: gcp`, static routing, exact local/remote
+prefixes, one endpoint per member, and exact member, inner-link, and observed
+peer-address bindings. Dry-run remains secret-free and therefore does not read
+or validate the private source file.
+
+```bash
+./misc/gcp-vpngw.sh --classic-vm-ha-peer \
+  --connection-name <static-connection-name> \
+  --gcp-project-id <gcp-project-id> \
+  --region <gcp-region> \
+  --network <gcp-network> \
+  --nebius-active-public-ip <vm0-public-ip> \
+  --nebius-passive-public-ip <vm1-public-ip> \
+  --gcp-prefix <gcp-workload-prefix> \
+  --nebius-prefix <nebius-workload-prefix> \
+  --yes
+```
+
+Changing a Classic tunnel PSK requires explicit tunnel recreation. Preview the
+exact delete/create plan first, then apply it with the same private config:
+
+```bash
+./misc/gcp-vpngw.sh --classic-vm-ha-peer \
+  --connection-name <static-connection-name> \
+  --gcp-project-id <gcp-project-id> \
+  --region <gcp-region> \
+  --network <gcp-network> \
+  --nebius-active-public-ip <vm0-public-ip> \
+  --nebius-passive-public-ip <vm1-public-ip> \
+  --gcp-prefix <gcp-workload-prefix> \
+  --nebius-prefix <nebius-workload-prefix> \
+  --psk-source-config <private-config.yaml> \
+  --rotate-existing-tunnels \
+  --dry-run
+```
+
+First establish the successful fenced Nebius-side checkpoint with the same
+private config:
+
+```bash
+nebius-vpngw apply \
+  --local-config-file <private-config.yaml> \
+  --prepare-vm-ha-peer-rotation
+```
+
+For this GCP Classic helper, the provider-neutral preparation checkpoint is
+invoked with the helper's required static-only config. It stages and activates
+the exact generation, then returns with both VM-HA members passively fenced and
+locked. Other compatible peers use the same core checkpoint but their own
+reviewed peer-update workflow; see the
+[provider-neutral rotation contract](../README.md#provider-neutral-vm-ha-peer-credential-rotation).
+Remove `--dry-run` from the GCP helper only after the preparation succeeds. Rotation requires the
+normal confirmation unless `--yes` is supplied. It validates the complete
+retained address, target-gateway, and forwarding-rule graph plus both secrets
+first; planned tunnels and routes alone may be absent for retry. Immediately
+after confirmation it re-reads immutable resource identity and exact bindings,
+then deletes all planned static routes, deletes only the two planned tunnels,
+recreates both tunnels, and restores the routes. Retained infrastructure is
+never deleted or recreated by rotation. If any mutation or final verification
+fails, the helper removes every planned route that it can observe and fails
+unless it can prove every planned route is absent. Rerun the same explicit
+command with the unchanged private config to complete the missing graph.
+
+After GCP rotation succeeds, run ordinary apply with the same private config.
+Only ordinary apply releases the exact owner lock, establishes the owner tunnel,
+reconciles the exact static route receipt, and enables forwarding.
+
+Every run inspects the full expected graph first and rejects same-name foreign
+resources, including missing or incompatible network-tier and load-balancing
+scheme fields, before resolving secrets or creating anything. Rotation also
+rejects missing retained infrastructure and confirmation-time replacement or
+binding drift before deleting anything. Repeating apply
+is idempotent. Apply creates all missing non-route resources for both paths
+before it creates any missing static route, so a path-construction failure
+cannot expose a newly routed one-path graph. Compatible resources and routes
+are retained for an idempotent retry. `--status` is read-only, and the helper
+never deletes resources unless `--rotate-existing-tunnels` is explicitly
+selected; that mode deletes only the planned routes and tunnels described
+above.
 
 ## Prerequisites
 
@@ -322,6 +573,9 @@ From inside `misc/`:
   because Google documents that combination as unsupported for HA VPN.
 - Existing tunnel PSKs cannot be read back from GCP. Reuse keeps them in place;
   `--rotate-existing-tunnels` is how you force new PSKs to be printed.
+- Legacy `--status` and VM-HA `--status` require an existing active gcloud
+  account. Neither status path runs `gcloud auth login` or changes the active
+  project.
 - A second connection to the same single-IP Nebius peer cannot reuse the same
   GCP HA VPN gateway after mappings `0->0` and `1->0` are already occupied.
   The helper detects this and tells you to create a new GCP HA VPN gateway.
@@ -342,5 +596,7 @@ From inside `misc/`:
   `https://cloud.google.com/network-connectivity/docs/vpn/concepts/advanced`
 - HA VPN topology guidance:
   `https://cloud.google.com/network-connectivity/docs/vpn/concepts/topologies`
+- HA VPN to VM instances:
+  `https://cloud.google.com/network-connectivity/docs/vpn/how-to/connect-ha-vpn-vm`
 - Cloud Router overview:
   `https://cloud.google.com/network-connectivity/docs/router/concepts/overview`

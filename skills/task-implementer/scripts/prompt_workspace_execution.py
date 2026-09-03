@@ -16,10 +16,10 @@ from prompt_workspace_core import (
 from prompt_workspace_runs import markdown_section
 
 
-COORDINATOR_SCHEMA = "task-implementer/coordinator-v4"
-WAVE_SCHEMA = "task-implementer/wave-v3"
-ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v7"
-RESULT_SCHEMA = "task-implementer/worker-result-v3"
+COORDINATOR_SCHEMA = "task-implementer/coordinator-v7"
+WAVE_SCHEMA = "task-implementer/wave-v4"
+ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v8"
+RESULT_SCHEMA = "task-implementer/worker-result-v4"
 TASK_PLANE_SCHEMA = "task-implementer/task-plane-v5"
 WORKER_HEARTBEAT_SECONDS = 30
 WORKER_START_SECONDS = 60
@@ -53,8 +53,19 @@ WORKER_GUARDRAILS = (
     "canonical digest validation, so never recompute it with ad hoc JSON. Read the "
     "incoming handoff and perform deeper preflight only after task-start. Treat "
     "the immutable assignment and incoming handoff as the complete task context; "
-    "do not reread the full managed prompt or coordinator-only state. Stop before "
-    "any unassigned side effect."
+    "do not reread the full managed prompt or coordinator-only state. Publish the "
+    "worker result only after verifying that no canonical docs/requirements.md, "
+    "docs/design.md, project AGENTS.md, README.md, or CHANGELOG.md path changed; "
+    "those shared paths remain coordinator-owned even when a broad task write "
+    "claim lexically contains them. Route required documentation or contract "
+    "updates through typed spec_gaps in the result for root-coordinator "
+    "reconciliation. Inherit root_intent_sha256 and project_spec_receipt exactly; "
+    "never independently reclassify user intent, edit project specs, or claim a "
+    "gap was accepted. Publish the "
+    "worker result only through the exact transient result_context returned by "
+    "task-start or task-recover, using its publication_cwd as the explicit external "
+    "working directory and its exact draft_path and publish_argv for canonical "
+    "digesting and atomic publication. Stop before any unassigned side effect."
 )
 INCOMING_HANDOFF_SCHEMA = "task-implementer/incoming-handoff-v1"
 LEGACY_EXECUTION_SCHEMA = "task-implementer/execution-plane-v1"
@@ -71,7 +82,15 @@ WAVE_STATES = (
     "done",
     "blocked",
 )
-TASK_STATES = ("planned", "assigned", "running", "committed", "merged", "failed")
+TASK_STATES = (
+    "planned",
+    "assigned",
+    "running",
+    "committed",
+    "merged",
+    "failed",
+    "superseded",
+)
 ACTIVE_WAVE_STATES = set(WAVE_STATES) - {"done", "blocked"}
 EXCLUSIVE_CONFLICT_CLASSES = {
     "external-database",
@@ -237,6 +256,11 @@ def parse_write_claims(section: str) -> tuple[tuple[WriteClaim, ...], bool]:
             item = item[2:].strip()
         if item.startswith("`") and item.endswith("`"):
             item = item[1:-1]
+        if re.search(r";\s*(?:exact|prefix):", item):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "each write claim must appear on its own line",
+            )
         match = re.fullmatch(r"(exact|prefix):\s*(.+)", item)
         if match is None:
             raise PromptWorkspaceError(
@@ -458,7 +482,7 @@ def assert_no_unfinished_v1(run_dir: Path) -> None:
             )
     raise PromptWorkspaceError(
         "WORKFLOW_UPGRADE_REQUIRED",
-        "execution-plane-v1 is unsupported; start a new v4 run",
+        "execution-plane-v1 is unsupported; start a new v7 run",
     )
 
 
@@ -472,16 +496,26 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         "task-implementer/coordinator-v1",
         "task-implementer/coordinator-v2",
         "task-implementer/coordinator-v3",
+        "task-implementer/coordinator-v4",
+        "task-implementer/coordinator-v5",
+        "task-implementer/coordinator-v6",
     }:
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "coordinator-v1/v2/v3 is unsupported; start a new v4 run",
+            "legacy coordinator state is unsupported; start a new v7 run",
         )
     required = {
         "schema",
         "run_id",
         "base_branch",
         "initial_head",
+        "default_remote",
+        "default_branch",
+        "default_ref",
+        "default_head",
+        "promotion_source",
+        "prompt_revision",
+        "prompt_intent_sha256",
         "plan_sha256",
         "waves",
         "active_wave",
@@ -493,6 +527,9 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         set(value) != required
         or value.get("schema") != COORDINATOR_SCHEMA
         or value.get("run_id") != run_dir.name
+        or re.fullmatch(r"r[0-9]{4}", str(value.get("prompt_revision") or "")) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("prompt_intent_sha256") or ""))
+        is None
     ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator state is invalid"
@@ -504,6 +541,19 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
     if value.get("status") not in {"running", "blocked", "done"}:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator status is invalid"
+        )
+    lane_identity_valid = value.get("promotion_source") == "managed-local" and all(
+        value.get(field) is None
+        for field in (
+            "default_remote",
+            "default_branch",
+            "default_ref",
+            "default_head",
+        )
+    )
+    if not lane_identity_valid:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "coordinator promotion identity is invalid"
         )
     return value
 

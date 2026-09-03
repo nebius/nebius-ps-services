@@ -923,7 +923,7 @@ profile_exists() {
   output="$(nebius profile list 2>/dev/null)" \
     || die "CLI profile lookup failed; refusing to treat unknown state as absent."
   while IFS= read -r line || [[ -n "$line" ]]; do
-    normalized="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+\[active\]$//')"
+    normalized="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+\[(active|default)\]$//')"
     [[ -n "$normalized" ]] || continue
     [[ "$normalized" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] \
       || die "CLI profile lookup returned unsupported output."

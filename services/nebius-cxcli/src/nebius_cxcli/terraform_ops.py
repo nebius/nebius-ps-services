@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,72 @@ from .terraform_provider import PROVIDER_MODULE_NAME_MAX_LENGTH
 
 def _require_terraform() -> str:
     return resolve_terraform_binary()
+
+
+def _saved_plan_identity(
+    infra_dir: Path,
+    plan_file: Path,
+    *,
+    create: bool,
+) -> tuple[Path, tuple[int, int]]:
+    resolved_infra = infra_dir.resolve()
+    absolute_plan = Path(os.path.abspath(plan_file))
+    try:
+        relative = absolute_plan.relative_to(resolved_infra)
+    except ValueError as exc:
+        raise ValueError(
+            "Terraform saved plan must be inside the rendered infra directory"
+        ) from exc
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("Terraform saved plan path is invalid")
+
+    current = resolved_infra
+    for part in relative.parts[:-1]:
+        current = current / part
+        if not current.exists():
+            current.mkdir(mode=0o700)
+        current_stat = current.lstat()
+        if (
+            not stat.S_ISDIR(current_stat.st_mode)
+            or current_stat.st_uid != os.geteuid()
+            or current_stat.st_mode & 0o022
+        ):
+            raise ValueError("Terraform saved plan parent directory is not privately owned")
+
+    parent_stat = absolute_plan.parent.lstat()
+    if (
+        not stat.S_ISDIR(parent_stat.st_mode)
+        or parent_stat.st_uid != os.geteuid()
+        or parent_stat.st_mode & 0o022
+    ):
+        raise ValueError("Terraform saved plan parent directory is not privately owned")
+
+    if create and not absolute_plan.exists() and not absolute_plan.is_symlink():
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(absolute_plan, flags, 0o600)
+        os.close(descriptor)
+    try:
+        plan_stat = absolute_plan.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Terraform saved plan does not exist: {absolute_plan}") from exc
+    if (
+        not stat.S_ISREG(plan_stat.st_mode)
+        or plan_stat.st_nlink != 1
+        or plan_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(plan_stat.st_mode) != 0o600
+    ):
+        raise ValueError(
+            "Terraform saved plan must be an owner-only, single-link regular file"
+        )
+    return absolute_plan, (plan_stat.st_dev, plan_stat.st_ino)
+
+
+def _saved_plan_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
 
 
 def _format_command(cmd: list[str]) -> str:
@@ -427,12 +495,31 @@ def terraform_plan(
     extra_env: dict[str, str] | None = None,
     initialize: bool = True,
     quiet: bool = False,
+    plan_file: Path | None = None,
+    destroy: bool = False,
+    targets: Sequence[str] = (),
 ) -> None:
     """Run terraform plan in the rendered infra directory."""
     terraform_bin = _require_terraform()
     if initialize:
         terraform_init(infra_dir, extra_env=extra_env)
     cmd = [terraform_bin, "plan", "-input=false", "-lock-timeout=5m"]
+    if destroy:
+        cmd.append("-destroy")
+    for target in targets:
+        normalized = str(target).strip()
+        if not normalized or normalized.startswith("-") or any(
+            char.isspace() for char in normalized
+        ):
+            raise ValueError("Terraform target address is invalid")
+        cmd.append(f"-target={normalized}")
+    if plan_file is not None:
+        resolved_plan, plan_identity = _saved_plan_identity(
+            infra_dir,
+            plan_file,
+            create=True,
+        )
+        cmd.append(f"-out={resolved_plan}")
     if quiet:
         _run_capture(cmd, cwd=infra_dir, timeout=1800, extra_env=extra_env)
     else:
@@ -442,6 +529,14 @@ def terraform_plan(
             timeout=1800,
             extra_env=extra_env,
         )
+    if plan_file is not None:
+        verified_plan, verified_identity = _saved_plan_identity(
+            infra_dir,
+            plan_file,
+            create=False,
+        )
+        if verified_plan != resolved_plan or verified_identity != plan_identity:
+            raise RuntimeError("Terraform saved plan identity changed while planning")
 
 
 def terraform_validate(
@@ -531,21 +626,43 @@ def terraform_apply(
     initialize: bool = True,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
     abort_check: Callable[[], str | None] | None = None,
+    plan_file: Path | None = None,
+    expected_plan_sha256: str | None = None,
 ) -> None:
     """Run terraform apply in the rendered infra directory."""
     terraform_bin = _require_terraform()
     if initialize:
         terraform_init(infra_dir, extra_env=extra_env)
+    resolved_plan: Path | None = None
+    if plan_file is not None:
+        resolved_plan, _plan_identity = _saved_plan_identity(
+            infra_dir,
+            plan_file,
+            create=False,
+        )
+        if expected_plan_sha256 is not None:
+            actual_plan_sha256 = _saved_plan_sha256(resolved_plan)
+            if actual_plan_sha256 != expected_plan_sha256:
+                raise RuntimeError(
+                    "Terraform saved plan no longer matches its approved receipt digest"
+                )
+    apply_args = [terraform_bin, "apply", "-input=false"]
+    if resolved_plan is None:
+        apply_args.append("-auto-approve")
+    apply_args.append("-lock-timeout=5m")
+    if resolved_plan is not None:
+        apply_args.append(str(resolved_plan))
     if event_callback is None:
         _run(
-            [terraform_bin, "apply", "-input=false", "-auto-approve", "-lock-timeout=5m"],
+            apply_args,
             cwd=infra_dir,
             timeout=7200,
             extra_env=extra_env,
         )
         return
+    json_apply_args = [terraform_bin, "apply", "-json", *apply_args[2:]]
     _stream_json_events(
-        [terraform_bin, "apply", "-json", "-input=false", "-auto-approve", "-lock-timeout=5m"],
+        json_apply_args,
         cwd=infra_dir,
         timeout=7200,
         extra_env=extra_env,
@@ -668,15 +785,25 @@ def terraform_show_json(
     *,
     extra_env: dict[str, str] | None = None,
     initialize: bool = True,
+    plan_file: Path | None = None,
 ) -> dict[str, object]:
-    """Render the current Terraform state as JSON from the rendered infra directory."""
+    """Render the current Terraform state or a saved plan as JSON."""
     terraform_bin = _require_terraform()
     if not infra_dir.exists():
         raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
     if initialize:
         terraform_init(infra_dir, extra_env=extra_env)
+    command = [terraform_bin, "show", "-json"]
+    if plan_file is not None:
+        resolved_plan, _plan_identity = _saved_plan_identity(
+            infra_dir,
+            plan_file,
+            create=False,
+        )
+        relative_plan = resolved_plan.relative_to(infra_dir.resolve())
+        command.append(str(relative_plan))
     stdout, stderr = _run_capture(
-        [terraform_bin, "show", "-json"],
+        command,
         cwd=infra_dir,
         timeout=120,
         extra_env=extra_env,

@@ -1,9 +1,23 @@
 ---
 name: sdlc-create-design
-description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md`, gathered context, and codebase evidence. This skill owns design.md, stable FEAT IDs, design decisions, alternatives, vertical end-to-end feature flow, and implementation-ready validation boundaries."
+description: "Use only as part of the Agentic SDLC workflow; adapt requirements and evidence into canonical FEAT records in docs/design.md through maintain-project-specs, preserving stable IDs and shared-owner validation."
 ---
 
 # Create Design
+
+## Help
+
+For `$sdlc-create-design --help` or `$sdlc-create-design -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -47,7 +61,9 @@ and feature designs in `docs/design.md`.
 
 ## Writes
 
-- `docs/design.md`.
+- The design managed region through the `maintain-project-specs` paired
+  publisher. The exact requirements bytes participate in validation and
+  compare-and-set even when this adapter does not change them.
 - Feature blocks using `FEAT-*`.
 - Design decisions, design change log, and local design fingerprint.
 
@@ -95,6 +111,10 @@ and feature designs in `docs/design.md`.
   criteria, rollback, and done definition per ready feature.
 - Mark features as ready, draft, blocked, or stale and update the decision log,
   change log, and design fingerprint.
+- Before implementation, use delivery `not-started` for ready features. After
+  implementation, the root SDLC coordinator reconciles separate implementation
+  and verification evidence through the same paired publisher; verified
+  delivery is required before mapped requirements become satisfied.
 - If reconsideration reaffirms the current design, do not create a new design
   loop or fingerprint. Return the reaffirmation evidence through
   `sdlc-classify-failure` so it can route to the proven localized owner.
@@ -131,6 +151,8 @@ and feature designs in `docs/design.md`.
 - Create local execution plans.
 - Implement code.
 - Modify tests.
+- Change the requirements managed region. Passing its exact existing bytes to
+  the paired publisher is required and is not a requirements edit.
 - Delete feature blocks without explicit requirement removal.
 - Ignore acceptance criteria.
 - Treat implementation size or difficulty inside one existing private boundary
@@ -153,8 +175,10 @@ and feature designs in `docs/design.md`.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` owns both canonical documents and their paired
+  transaction. This skill may change design only while routed as its Agentic
+  SDLC authoring adapter;
+  `sdlc-create-requirements` has the corresponding requirements boundary.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

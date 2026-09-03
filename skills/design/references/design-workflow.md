@@ -5,6 +5,68 @@ multiple unfamiliar technologies, unclear architecture choices, non-trivial
 `system-design-rules` decision review, or any design that will become a
 committed artifact.
 
+## AI Application Control-Flow Rule
+
+For each AI-enabled capability, have `ai-agent-design` use the least-agentic
+sufficient level:
+
+1. **Deterministic code**: no model judgment is needed.
+2. **Direct model call**: one model request can solve the task.
+3. **Deterministic workflow containing model calls**: application code knows
+   the sequence rules and owns every transition and continuation condition;
+   model calls are explicit steps inside that workflow.
+4. **Agent**: the model must choose an action, continuation, or next step from
+   observations, including an unknown step count controlled by the model, or
+   the task needs a model-driven observe-act-observe loop.
+
+Use this decision table:
+
+| Question | If yes | If no |
+| --- | --- | --- |
+| Is model judgment unnecessary? | Deterministic code | Continue |
+| Can one model request solve the task? | Direct model call | Continue |
+| Does application code own the operation and continuation rules? | Deterministic workflow | Continue |
+| Must the model choose which application tool or action to use? | Agent candidate | Normal workflow |
+| Must the model decide the next step from previous results? | Agent | Workflow |
+| Must the model decide whether an unknown-count loop continues? | Agent | Workflow |
+| Does the task need a model-driven observe-act-observe loop? | Agent | Direct call or workflow |
+| Does it require delegation between specialists? | An agent runtime may help | Probably unnecessary |
+| Does it require persistent agent sessions? | An agent runtime may help | Direct API may suffice |
+| Is latency or cost predictability critical? | Prefer direct call or workflow | Agent may be acceptable |
+
+Apply this tree in order:
+
+```text
+New task
+  -> Is model judgment required?
+       no  -> deterministic code
+       yes -> Can one model call solve it?
+                yes -> direct model API
+                no  -> Do we know the steps?
+                         yes -> deterministic workflow, with model calls
+                         no  -> Must the model choose actions or next steps?
+                                  yes -> agent
+                                  no  -> deterministic workflow
+```
+
+The application architecture can use all four behavior classes at once:
+
+```text
+Application
+  -> deterministic code
+  -> direct model calls
+  -> deterministic AI workflows
+  -> agentic tasks
+```
+
+Keep APIs, PostgreSQL or other authoritative state, RBAC, approvals, tool
+authorization, and known business transitions outside model discretion.
+Delegation and persistent sessions help choose an agent runtime only after the
+work requires agentic control flow. Tool use or several model calls alone do
+not require an agent. Classify orchestration and durability separately: a graph
+or durable workflow may wrap a direct call, deterministic workflow, agent, or
+mixture, and does not itself create model autonomy.
+
 ## Phase Checklist
 
 ### 1. Understand Requirements
@@ -72,7 +134,7 @@ For each technology, capture design-relevant facts:
 If a fact cannot be verified from official docs, say that it is unverified and
 avoid making it a hard design dependency.
 
-### 4. Use `app-stack` For Stack Decisions
+### 4. Delegate Agent Design And Stack Decisions
 
 When the application stack or any layer's technology is undecided, being
 reviewed, or being modernized, use `app-stack` before completing the solution
@@ -98,6 +160,25 @@ The handoff is scoped: `app-stack` returns the stack decision to the active
 If all applicable technologies are already approved and the request does not
 reconsider them, state that the design follows the fixed stack and skip
 `app-stack`.
+
+Use `ai-agent-design` once for undecided agent-subsystem behavior, topology,
+authority, contracts, context, memory, durability, effects, evaluation, or
+governance. Pass product constraints and acceptance gates. Preserve its frozen
+four-class capability map and complete logical subsystem contract.
+
+`ai-agent-design` delegates the frozen workload and policy contract to
+`ai-stack` for model, SDK, runtime, durability technology, interoperability,
+retrieval, evaluation, safety, and operations component selection. Preserve
+the returned component status and evidence classifications. Do not reopen the
+behavior, topology, policy, or contract decision, and do not recurse into an
+active `design` workflow. Use `ai-stack` directly only for a stack-only request
+that does not require agent-subsystem design.
+
+When both scopes are open, `app-stack` owns the surrounding product stack,
+`ai-agent-design` owns AI subsystem behavior and policy, and `ai-stack` owns AI
+component selection. Keep all handoffs scoped and let `design` synthesize their
+interfaces, data/control flow, failure behavior, rollout, and `/plan`. Skip any
+handoff when that scope is fixed.
 
 ### 5. Design Solution
 
@@ -194,6 +275,10 @@ Assumptions And Open Questions:
 Design Review:
 - `research` used/skipped: ...
 - `app-stack` used/skipped: ...
+- `ai-agent-design` used/skipped: ...
+- `ai-stack` used/skipped: ...
+- AI behavior classification: deterministic code / direct call /
+  deterministic workflow / agent ...
 - selected stack or fixed-stack boundary: ...
 - `system-design-rules` used/skipped: ...
 - Checklist findings that changed the design: ...
@@ -270,6 +355,12 @@ ownership, new platform, or costly rollback.
 - Design needs to select or reconsider the application stack or technology for
   any layer: use `app-stack`, then return to `design` for cross-layer synthesis
   and `/plan` handoff.
+- Design needs agent-subsystem behavior, topology, policy, or contracts: use
+  `ai-agent-design`; it calls `ai-stack` for component selection, then returns
+  the complete subsystem to `design` for cross-layer synthesis and `/plan`.
+- Design needs only model access, training, inference, interoperability,
+  retrieval, or AI technology selection: use `ai-stack` directly, then return
+  to `design` for cross-layer synthesis and `/plan` handoff.
 - The application stack is approved and no stack decision remains: keep the
   fixed stack and continue `design` without `app-stack`.
 - Design exposes changed docs or contracts after implementation: run `align` on

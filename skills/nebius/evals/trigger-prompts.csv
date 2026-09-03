@@ -1,0 +1,7 @@
+id,should_trigger,prompt
+nebius-positive-01,true,"Write Python automation for Nebius IAM Object Storage and VPC resources."
+nebius-positive-02,true,"Check Nebius quota and MK8s GPU platform readiness with the SDK."
+nebius-positive-03,true,"Design safe Nebius service-account and observability endpoint wiring in Python."
+nebius-negative-01,false,"Scaffold a Terraform module for Nebius infrastructure."
+nebius-negative-02,false,"Query metrics and logs from the configured Nebius Grafana MCP server."
+nebius-negative-03,false,"Onboard a component into nebius-cxcli."

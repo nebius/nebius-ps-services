@@ -1,9 +1,23 @@
 ---
 name: research
-description: "Use for senior-engineer technical research and due diligence on a topic, technology, architecture pattern, product, framework, RFC, protocol, API, problem statement, or feature requirement. Search internal Slack and Confluence sources first when organization context matters, fall back to MCP access for internal systems when connectors are unavailable, verify technical claims with official vendor docs and authoritative external sources, and distinguish internal guidance from vendor facts and industry practice. Do not use for implementation, open-ended brainstorming, final software design or `/plan` handoff, checklist-only design review, or Agentic SDLC artifact creation."
+description: "Research one technical topic, technology, pattern, product, framework, RFC, protocol, API, requirement, or disputed claim using ranked authoritative sources. Not for implementation, brainstorming, stack selection, final design, or SDLC artifacts."
 ---
 
 # Research
+
+## Help
+
+For `$research --help` or `$research -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -18,8 +32,9 @@ to use it, and what tradeoffs matter for a real project.
   library, architecture pattern, feature requirement, or problem statement.
 - Understanding internals, control flow, major components, protocols, data
   models, scaling patterns, failure modes, and operational behavior.
-- Comparing alternatives and producing actionable knowledge for design,
-  architecture, adoption, migration, or build-versus-buy decisions.
+- Comparing alternatives around one focal subject and producing actionable
+  evidence for an owning design, stack, adoption, migration, or build-versus-buy
+  decision without selecting the application or AI layer itself.
 - Preparing source-backed recommendations before design or implementation.
 
 ## When Not To Use
@@ -30,10 +45,15 @@ to use it, and what tradeoffs matter for a real project.
   before research depth; use `brainstorm`.
 - Do not use for creating a final software design or `/plan` handoff; use
   `design` after the research is complete.
+- Do not choose technology for an application or AI stack layer. Use
+  `app-stack` for the surrounding application or `ai-stack` for model,
+  training, inference, agent, interoperability, retrieval, and AI evaluation
+  selection; use `research` as their bounded due-diligence input when one focal
+  technology or recommendation-changing claim needs depth.
 - Do not use for checklist-only review of an existing design; use
   `system-design-rules`.
 - Do not use for Agentic SDLC-owned context packs or committed design docs; use
-  the relevant `sdlc-*` skill through the bound `$sdlc-start run <prompt>` command.
+  the relevant `sdlc-*` skill through the bound `$sdlc-start run <prompt-ref-or-file>` command.
 
 ## Inputs
 
@@ -214,5 +234,5 @@ best-practice evidence separately.
 
 - Read `references/research-methodology.md` for the detailed phase checklist,
   source-tier rubric, conflict handling, and report template.
-- Use `evals/trigger-prompts.md` when reviewing or tuning implicit invocation
+- Use `evals/trigger-prompts.csv` when reviewing or tuning implicit invocation
   behavior.

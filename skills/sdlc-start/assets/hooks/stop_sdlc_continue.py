@@ -38,14 +38,14 @@ REVALIDATION_ROUTES = {
     "tests": "sdlc-unit-tests",
     "evaluation": "sdlc-evaluate",
     "documentation": "sdlc-update-documents",
-    "alignment": "sdlc-align-specs",
+    "alignment": "align",
     "commit": "sdlc-commit",
 }
 
 
 def _normalize_skill_name(value: str) -> str:
     aliases = {
-        "align-specs": "sdlc-align-specs",
+        "align-specs": "align",
         "auto-steering": "sdlc-auto-steering",
         "classify-failure": "sdlc-classify-failure",
         "commit": "sdlc-commit",
@@ -292,9 +292,11 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         blocker.get("time_limit_seconds", 3600) or 3600
     ):
         return "Agentic SDLC repair loop reached its active-time ceiling."
-    if int(control.get("feature_dispatches", 0) or 0) >= int(
-        control.get("feature_dispatch_limit", 4) or 4
-    ) and status != "resolved":
+    if (
+        int(control.get("feature_dispatches", 0) or 0)
+        >= int(control.get("feature_dispatch_limit", 4) or 4)
+        and status != "resolved"
+    ):
         return "Agentic SDLC repair loop reached its feature dispatch ceiling."
     next_skill = _normalize_skill_name(
         str(current_state.get("next_recommended_skill") or "")
@@ -311,8 +313,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         completed_ids = revalidation.get("completed_revalidation_ids")
         cursor = revalidation.get("cursor")
         if (
-            revalidation.get("schema")
-            != "agentic-sdlc/revalidation-cursor-v1"
+            revalidation.get("schema") != "agentic-sdlc/revalidation-cursor-v1"
             or revalidation.get("classification_id")
             != control.get("current_classification_id")
             or not isinstance(required, list)
@@ -350,18 +351,15 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         ).hexdigest()
         invalidated_surfaces = classification.get("invalidates")
         if (
-            classification.get("schema")
-            != "agentic-sdlc/failure-classification-v1"
+            classification.get("schema") != "agentic-sdlc/failure-classification-v1"
             or recorded_classification_id != classification_id
             or calculated_classification_id != classification_id
-            or classification.get("feature_id")
-            != current_state.get("current_feature")
+            or classification.get("feature_id") != current_state.get("current_feature")
             or classification.get("event_id") != event.get("event_id")
             or classification.get("blocker_key") != event.get("blocker_key")
             or not isinstance(invalidated_surfaces, list)
             or any(
-                surface not in REVALIDATION_ROUTES
-                for surface in invalidated_surfaces
+                surface not in REVALIDATION_ROUTES for surface in invalidated_surfaces
             )
         ):
             return "Agentic SDLC revalidation classification is inconsistent."
@@ -450,10 +448,8 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             if (
                 recorded_id != revalidation_id
                 or calculated_id != revalidation_id
-                or evidence.get("schema")
-                != "agentic-sdlc/revalidation-evidence-v1"
-                or evidence.get("feature_id")
-                != current_state.get("current_feature")
+                or evidence.get("schema") != "agentic-sdlc/revalidation-evidence-v1"
+                or evidence.get("feature_id") != current_state.get("current_feature")
                 or evidence.get("event_id") != event.get("event_id")
                 or evidence.get("classification_id")
                 != control.get("current_classification_id")
@@ -474,8 +470,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
                 return "Agentic SDLC gate evidence is unreadable."
             if (
                 not isinstance(gate_evidence, dict)
-                or gate_evidence.get("schema")
-                != "agentic-sdlc/gate-evidence-v1"
+                or gate_evidence.get("schema") != "agentic-sdlc/gate-evidence-v1"
                 or gate_evidence.get("feature_id")
                 != current_state.get("current_feature")
                 or gate_evidence.get("surface") != evidence.get("surface")
@@ -484,8 +479,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
                 or gate_evidence.get("status") != "passed"
                 or gate_evidence.get("integration_commit")
                 != evidence.get("integration_commit")
-                or gate_evidence.get("fingerprints")
-                != evidence.get("fingerprints")
+                or gate_evidence.get("fingerprints") != evidence.get("fingerprints")
                 or not isinstance(gate_evidence.get("evidence"), list)
                 or not gate_evidence["evidence"]
             ):
@@ -503,10 +497,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             except (json.JSONDecodeError, OSError):
                 return "Agentic SDLC execution coordinator is unreadable."
             integration_value = coordinator.get("integration_worktree")
-            if (
-                coordinator.get("schema")
-                != "agentic-sdlc/execution-coordinator-v4"
-            ):
+            if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v7":
                 return "Agentic SDLC execution coordinator is inconsistent."
             fingerprint_ids = current_state.get("fingerprint_ids")
             current_fingerprints: dict[str, str] = {}
@@ -522,11 +513,9 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
                 )
             elif isinstance(integration_value, str):
                 integration = resolve_path(integration_value, active.run_dir)
-                commit_is_current = (
-                    is_inside(integration, active.run_dir)
-                    and git_head(integration)
-                    == latest_evidence.get("integration_commit")
-                )
+                commit_is_current = is_inside(integration, active.run_dir) and git_head(
+                    integration
+                ) == latest_evidence.get("integration_commit")
             if (
                 not commit_is_current
                 or not current_fingerprints
@@ -534,20 +523,14 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             ):
                 return "Agentic SDLC revalidation evidence is stale."
         if status == "revalidation_required":
-            if (
-                revalidation.get("status") != "pending"
-                or cursor >= len(required)
-            ):
+            if revalidation.get("status") != "pending" or cursor >= len(required):
                 return "Pending Agentic SDLC revalidation cursor is inconsistent."
             authoritative_skill = _normalize_skill_name(
                 str(required[cursor].get("next_recommended_skill") or "")
             )
             if not authoritative_skill or next_skill != authoritative_skill:
                 return "Invalidated evidence must rerun through its authoritative gate."
-        elif (
-            revalidation.get("status") != "complete"
-            or cursor != len(required)
-        ):
+        elif revalidation.get("status") != "complete" or cursor != len(required):
             return "Resolved repair still has invalidated evidence to rerun."
     if status == "diagnosis_required" and next_skill != "troubleshoot":
         return "Diagnosis-required failure must route to troubleshoot."
@@ -603,12 +586,10 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         history = control.get("route_history")
         latest_route = history[-1] if isinstance(history, list) and history else {}
         if (
-            classification.get("schema")
-            != "agentic-sdlc/failure-classification-v1"
+            classification.get("schema") != "agentic-sdlc/failure-classification-v1"
             or classification.get("classification_id") != classification_id
             or recorded_classification_id != calculated_classification_id
-            or classification.get("feature_id")
-            != current_state.get("current_feature")
+            or classification.get("feature_id") != current_state.get("current_feature")
             or classification.get("event_id") != event.get("event_id")
             or classification.get("blocker_key") != event.get("blocker_key")
             or latest_route.get("classification_id") != classification_id
@@ -660,7 +641,7 @@ def _bound_prompt_filename(active, run_state: dict[str, Any]) -> str | None:
     except (json.JSONDecodeError, OSError):
         return None
     if (
-        binding.get("schema") != "agentic-sdlc/prompt-binding-v1"
+        binding.get("schema") != "agentic-sdlc/prompt-binding-v2"
         or binding.get("run_id") != active.run_id
     ):
         return None
@@ -827,6 +808,19 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             "WORKFLOW_UPGRADE_REQUIRED: unfinished SDLC run has no valid managed prompt binding."
         )
 
+    next_skill = _normalize_skill_name(
+        str(current_state.get("next_recommended_skill") or "").strip()
+    )
+    if (
+        current_state.get("current_phase") == "outer-integration-pending"
+        or next_skill == "worktree"
+    ):
+        return stop(
+            "Local worktree integration requires a fresh explicit user invocation "
+            "from the recorded primary checkout and will not be continued "
+            "automatically."
+        )
+
     steering_reason = _steering_reason(active)
     if steering_reason:
         prompt = _continuation_prompt(
@@ -853,8 +847,6 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)
 
-    next_skill = str(current_state.get("next_recommended_skill") or "").strip()
-    next_skill = _normalize_skill_name(next_skill)
     if next_skill == "sdlc-merge-pr":
         return stop(
             "Merge requires an explicit user request and will not be continued automatically."

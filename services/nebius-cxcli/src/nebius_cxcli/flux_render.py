@@ -31,7 +31,7 @@ from .component_wiring import (
     resolve_component_output_value,
     resolve_input_binding_source,
 )
-from .components import component_entries, component_entry_chart_name
+from .components import component_entries, component_entry_chart_name, soperator_install_entry
 from .deploy_targets import (
     app_chart_target_ref,
     enabled_cluster_target_refs,
@@ -49,7 +49,38 @@ from .mysterybox_eso import (
 from .nfs_csi import NFS_CSI_APP_ID, nfs_instance_id_for_target
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
+from .soperator_adapter import (
+    SOPERATOR_ADAPTER_NAMESPACE,
+    SOPERATOR_LIFECYCLE_LABEL,
+    SOPERATOR_LIFECYCLE_RECREATABLE,
+    SOPERATOR_LIFECYCLE_SHARED,
+    SOPERATOR_VALUES_CONFIGMAP,
+    SOPERATOR_VALUES_NAMESPACE,
+    compile_upstream_soperator_values,
+    render_soperator_adapter_documents,
+    render_soperator_monitoring_dashboard_documents,
+    soperator_monitoring_dashboards_require_post_flux,
+)
 from .soperator_child_charts import SOPERATOR_APP_ID
+from .soperator_flux_graph import (
+    render_soperator_flux_graph_documents,
+    soperator_graph_post_render_patches,
+)
+from .soperator_registration import (
+    soperator_registration_is_accepted,
+    soperator_registration_target,
+)
+from .soperator_release import (
+    SOPERATOR_UPSTREAM_REGISTRY,
+    SOPERATOR_UPSTREAM_UMBRELLA_CHART,
+    SoperatorReleaseSnapshot,
+    soperator_release_snapshot_path,
+    write_soperator_release_snapshot,
+)
+from .soperator_release_resolver import (
+    current_frozen_soperator_release,
+    freeze_soperator_release,
+)
 
 _CLUSTER_SCOPED_RENDER_KINDS = {
     ("", "Namespace"),
@@ -72,7 +103,6 @@ _CLUSTER_SCOPED_RENDER_KINDS = {
 }
 _CERT_MANAGER_CERTIFICATE_API_VERSION = "cert-manager.io/v1"
 _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY = "Always"
-_SOPERATOR_STATIC_SOURCE_KIND = "static_helm_chart"
 
 
 def _ensure_parent(path: Path) -> None:
@@ -93,6 +123,33 @@ def _helm_repository_doc(name: str, url: str, *, repo_type: str = "default") -> 
         "kind": "HelmRepository",
         "metadata": {"name": name, "namespace": "flux-system"},
         "spec": spec,
+    }
+
+
+def _oci_repository_doc(
+    name: str,
+    url: str,
+    *,
+    digest: str,
+    labels: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "apiVersion": "source.toolkit.fluxcd.io/v1",
+        "kind": "OCIRepository",
+        "metadata": {
+            "name": name,
+            "namespace": "flux-system",
+            **({"labels": dict(labels)} if labels else {}),
+        },
+        "spec": {
+            "interval": "30m",
+            "url": url,
+            "layerSelector": {
+                "mediaType": "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+                "operation": "copy",
+            },
+            "ref": {"digest": digest},
+        },
     }
 
 
@@ -160,64 +217,6 @@ def _make_cert_manager_certificate_rotation_policy_explicit(doc: dict[str, Any])
         private_key["rotationPolicy"] = _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY
 
 
-def _cert_manager_certificate_rotation_policy_post_render_patch(
-    *,
-    name: str,
-    namespace: str,
-    rotation_policy: str = _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY,
-) -> dict[str, Any]:
-    return {
-        "target": {
-            "group": "cert-manager.io",
-            "version": "v1",
-            "kind": "Certificate",
-            "name": name,
-            "namespace": namespace,
-        },
-        "patch": yaml.safe_dump(
-            {
-                "apiVersion": _CERT_MANAGER_CERTIFICATE_API_VERSION,
-                "kind": "Certificate",
-                "metadata": {"name": name, "namespace": namespace},
-                "spec": {
-                    "privateKey": {
-                        "rotationPolicy": rotation_policy,
-                    }
-                },
-            },
-            sort_keys=False,
-        ),
-    }
-
-
-def _soperator_certificate_rotation_policy_post_render_patches(
-    *,
-    release_name: str,
-    namespace: str,
-    values: Mapping[str, Any],
-) -> list[dict[str, Any]]:
-    cert_manager_values = values.get("certManager")
-    private_key_values = (
-        cert_manager_values.get("privateKey") if isinstance(cert_manager_values, Mapping) else None
-    )
-    rotation_policy = ""
-    if isinstance(private_key_values, Mapping):
-        rotation_policy = str(private_key_values.get("rotationPolicy") or "").strip()
-    if not rotation_policy:
-        rotation_policy = _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY
-    return [
-        _cert_manager_certificate_rotation_policy_post_render_patch(
-            name=f"{release_name}-serving-cert",
-            namespace=namespace,
-            rotation_policy=rotation_policy,
-        ),
-        _cert_manager_certificate_rotation_policy_post_render_patch(
-            name=f"{release_name}-mariadb-operator-webhook-cert",
-            namespace=namespace,
-        ),
-    ]
-
-
 def _inject_local_chart_namespace(rendered: str, *, namespace: str) -> str:
     rendered_docs = [
         doc for doc in yaml.safe_load_all(rendered) if _is_kubernetes_manifest_doc(doc)
@@ -237,11 +236,11 @@ def _inject_local_chart_namespace(rendered: str, *, namespace: str) -> str:
     return _multi_doc_yaml(docs)
 
 
-def _namespace_doc(name: str) -> dict[str, Any]:
+def _namespace_doc(name: str, *, labels: Mapping[str, str] | None = None) -> dict[str, Any]:
     return {
         "apiVersion": "v1",
         "kind": "Namespace",
-        "metadata": {"name": name},
+        "metadata": {"name": name, **({"labels": dict(labels)} if labels else {})},
     }
 
 
@@ -250,11 +249,16 @@ def _configmap_doc(
     name: str,
     namespace: str,
     data: dict[str, str],
+    labels: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "apiVersion": "v1",
         "kind": "ConfigMap",
-        "metadata": {"name": name, "namespace": namespace},
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            **({"labels": dict(labels)} if labels else {}),
+        },
         "data": data,
     }
 
@@ -365,14 +369,6 @@ def _runtime_app_chart_name(
     if configured_chart_name:
         return configured_chart_name
     return entry_id
-
-
-def _requires_static_helm_render(*, entry_id: str, source_kind: str) -> bool:
-    # The Soperator umbrella chart is large enough that storing Helm release
-    # state in Kubernetes Secrets can exceed the 1 MiB object data limit.
-    # Static rendering keeps the exact selected chart source while preserving
-    # cxcli's established post-Flux apply model for Soperator resources.
-    return entry_id == SOPERATOR_APP_ID and source_kind == "helm_repository"
 
 
 def _file_slug(value: str) -> str:
@@ -628,6 +624,155 @@ def _materialize_soperator_backup_values(
     bucket.setdefault("endpoint", bucket_endpoint)
 
 
+def _soperator_target_cluster_id(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    resolved_component_outputs: Mapping[str, Any],
+) -> str:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if isinstance(targets, list):
+        for row in targets:
+            if not isinstance(row, Mapping):
+                continue
+            if component_instance_id(row) != target_ref:
+                continue
+            cluster_id = str(row.get("cluster_id") or "").strip()
+            if cluster_id:
+                return cluster_id
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    entries = component_entry_lookup()
+    if isinstance(components, list):
+        for row in components:
+            if not isinstance(row, Mapping) or component_instance_id(row) != target_ref:
+                continue
+            entry = entries.get(component_type_id(row))
+            handoff = getattr(entry, "handoff", None) if entry is not None else None
+            output_name = str(getattr(handoff, "cluster_id_output_name", "") or "").strip()
+            if not output_name:
+                continue
+            source_ref = component_output_ref(target_ref, output_name)
+            cluster_id = str(resolved_component_outputs.get(source_ref) or "").strip()
+            if cluster_id:
+                return cluster_id
+    # Initial rendering happens before Terraform has created a managed cluster.
+    # Keep the graph stable; the standard post-Terraform refresh replaces this
+    # exact target identity with the immutable Nebius cluster ID before apply.
+    return target_ref
+
+
+def _materialize_soperator_observability_values(
+    *,
+    payload: Mapping[str, Any],
+    values: dict[str, Any],
+    target_ref: str,
+    release: str,
+    resolved_component_outputs: Mapping[str, Any],
+) -> None:
+    client_info = payload.get("client_info")
+    nebius = client_info.get("nebius") if isinstance(client_info, Mapping) else None
+    project_id = str(nebius.get("project_id") if isinstance(nebius, Mapping) else "").strip()
+    tenant_id = str(nebius.get("tenant_id") if isinstance(nebius, Mapping) else "").strip()
+    region = str(nebius.get("region_id") if isinstance(nebius, Mapping) else "").strip()
+    if not project_id or not tenant_id or not region:
+        raise ValueError(
+            "Soperator direct-upstream observability requires client_info.nebius "
+            "tenant_id, project_id, and region_id"
+        )
+    cluster_id = _soperator_target_cluster_id(
+        payload=payload,
+        target_ref=target_ref,
+        resolved_component_outputs=resolved_component_outputs,
+    )
+    if not cluster_id:
+        raise ValueError(
+            "Soperator direct-upstream observability requires a target cluster identity"
+        )
+    normalized_release = str(release or "").strip()
+    if not normalized_release:
+        raise ValueError("Soperator direct-upstream observability requires an exact release")
+    configured = values.get("observability")
+    if configured is not None and not isinstance(configured, dict):
+        raise ValueError("Soperator values.observability must be a mapping")
+    observability = configured if isinstance(configured, dict) else {}
+    if observability.get("enabled") is False:
+        raise ValueError("Soperator authoritative observability cannot be disabled")
+    cluster_name = str(values.get("clusterName") or "soperator").strip() or "soperator"
+    observability.update(
+        {
+            "enabled": True,
+            "clusterName": cluster_name,
+            "clusterId": cluster_id,
+            "publicEndpointEnabled": True,
+            "publicEndpointTokenKind": "secret",
+            "logsProjectId": project_id,
+            "metricsProjectId": project_id,
+            "projectId": project_id,
+            "region": region,
+        }
+    )
+    opentelemetry = observability.setdefault("opentelemetry", {})
+    if not isinstance(opentelemetry, dict):
+        raise ValueError("Soperator values.observability.opentelemetry must be a mapping")
+    opentelemetry["enabled"] = True
+    vm_stack = observability.setdefault("vmStack", {})
+    if not isinstance(vm_stack, dict):
+        raise ValueError("Soperator values.observability.vmStack must be a mapping")
+    vm_stack["enabled"] = True
+    tsa_token = vm_stack.setdefault("tsaToken", {})
+    if not isinstance(tsa_token, dict):
+        raise ValueError("Soperator values.observability.vmStack.tsaToken must be a mapping")
+    writer = tsa_token.setdefault("writer", {})
+    if not isinstance(writer, dict):
+        raise ValueError("Soperator values.observability.vmStack.tsaToken.writer must be a mapping")
+    writer.update(
+        {
+            "enabled": True,
+            "source": "imds",
+            "namespaces": ["monitoring-system", "logs-system"],
+        }
+    )
+    vm_values = vm_stack.setdefault("values", {})
+    if not isinstance(vm_values, dict):
+        raise ValueError("Soperator values.observability.vmStack.values must be a mapping")
+    bundled_grafana = vm_values.setdefault("grafana", {})
+    if not isinstance(bundled_grafana, dict):
+        raise ValueError("Soperator values.observability.vmStack.values.grafana must be a mapping")
+    bundled_grafana["enabled"] = False
+    vmagent = vm_values.setdefault("vmagent", {})
+    if not isinstance(vmagent, dict):
+        raise ValueError("Soperator values.observability.vmStack.values.vmagent must be a mapping")
+    vmagent_spec = vmagent.setdefault("spec", {})
+    if not isinstance(vmagent_spec, dict):
+        raise ValueError(
+            "Soperator values.observability.vmStack.values.vmagent.spec must be a mapping"
+        )
+    vmagent_spec["externalLabels"] = {
+        "iam_tenant_id": tenant_id,
+        "iam_project_id": project_id,
+        "mk8s_cluster_id": cluster_id,
+        "soperator_release": normalized_release,
+    }
+    values["observability"] = observability
+
+
+def _registered_source_release_is_handoff(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+    release: str,
+) -> bool:
+    target = soperator_registration_target(payload, target_ref=target_ref)
+    registration = target.get("soperator_registration") if isinstance(target, Mapping) else None
+    return bool(
+        isinstance(registration, Mapping)
+        and str(registration.get("source_version") or "").strip() == release
+        and soperator_registration_is_accepted(payload, target_ref=target_ref)
+    )
+
+
 def _configured_app_release_specs(
     config: Any,
     *,
@@ -653,6 +798,8 @@ def _configured_app_release_specs(
                 if not entry_id or not bool(raw_chart.get("enabled", False)):
                     continue
                 entry = entry_by_id.get(entry_id)
+                if entry_id == SOPERATOR_APP_ID:
+                    entry = soperator_install_entry(str(raw_chart.get("version", "") or "").strip())
                 chart_node = dict(raw_chart)
                 instance_id = str(chart_node.get("instance_id", entry_id)).strip() or entry_id
                 target_ref = app_chart_target_ref(chart_node)
@@ -679,6 +826,15 @@ def _configured_app_release_specs(
                         preserve_existing_shared=False,
                         include_shared=False,
                     )
+                if entry_id == SOPERATOR_APP_ID and _registered_source_release_is_handoff(
+                    payload,
+                    target_ref=target_ref,
+                    release=str(chart_node.get("version") or "").strip(),
+                ):
+                    # Registration renders only the external-cluster handoff. The
+                    # upgrade planner owns the first target release graph after it
+                    # changes the chart version to the separately frozen target.
+                    continue
 
                 if entry is not None and entry.input_bindings:
                     conflicts = input_binding_conflicts(chart_node, entry)
@@ -767,6 +923,15 @@ def _configured_app_release_specs(
                         f"apps.charts[{entry_id}].values must be a mapping for enabled chart '{entry_id}'"
                     )
 
+                if entry_id == SOPERATOR_APP_ID:
+                    _materialize_soperator_observability_values(
+                        payload=payload,
+                        values=values_node,
+                        target_ref=target_ref,
+                        release=str(chart_node.get("version") or ""),
+                        resolved_component_outputs=resolved_component_outputs,
+                    )
+
                 chart_repo = str(chart_node.get("repo", "")).strip()
                 local_chart_path = _local_chart_path_from_entry(entry)
                 chart_name = _runtime_app_chart_name(
@@ -796,18 +961,77 @@ def _configured_app_release_specs(
                     source_url = source["repo_url"]
                     source_ref = source.get("repo_ref", "")
                     source_repo_type = source.get("repo_type", "default")
-                    if _requires_static_helm_render(
-                        entry_id=entry_id,
-                        source_kind=source_kind,
-                    ):
-                        source_kind = _SOPERATOR_STATIC_SOURCE_KIND
-                if (
-                    source_kind in {"helm_repository", _SOPERATOR_STATIC_SOURCE_KIND}
-                    and not chart_version
-                ):
+                if source_kind == "helm_repository" and not chart_version:
                     raise ValueError(
                         f"apps.charts[{entry_id}].version is required for enabled chart '{entry_id}'"
                     )
+
+                soperator_upstream_values: dict[str, Any] | None = None
+                soperator_adapter_docs: list[dict[str, Any]] | None = None
+                soperator_post_flux_docs: list[dict[str, Any]] | None = None
+                soperator_umbrella_digest = ""
+                soperator_umbrella_oci_url = ""
+                soperator_graph_docs: list[dict[str, Any]] | None = None
+                soperator_release_snapshot: SoperatorReleaseSnapshot | None = None
+                if entry_id == SOPERATOR_APP_ID:
+                    expected_repo = (
+                        f"{SOPERATOR_UPSTREAM_REGISTRY}/{SOPERATOR_UPSTREAM_UMBRELLA_CHART}"
+                    )
+                    if (
+                        chart_repo.rstrip("/") != expected_repo
+                        or chart_name != SOPERATOR_UPSTREAM_UMBRELLA_CHART
+                    ):
+                        raise ValueError(
+                            "Soperator must use the official upstream umbrella OCI repository"
+                        )
+                    frozen = current_frozen_soperator_release(chart_version)
+                    if frozen is None:
+                        frozen = freeze_soperator_release(chart_version)
+                    release_snapshot = frozen.snapshot
+                    if release_snapshot.release != chart_version:
+                        raise ValueError("resolved Soperator release differs from config.yaml")
+                    soperator_release_snapshot = release_snapshot
+                    soperator_upstream_values, _ = compile_upstream_soperator_values(
+                        values_node,
+                        release=release_snapshot,
+                    )
+                    soperator_adapter_docs, _ = render_soperator_adapter_documents(
+                        values_node,
+                        release=release_snapshot,
+                    )
+                    if soperator_monitoring_dashboards_require_post_flux(
+                        values_node,
+                        release=release_snapshot,
+                    ):
+                        source = getattr(frozen, "source", None)
+                        source_dir = str(getattr(source, "source_dir", "") or "").strip()
+                        if not source_dir:
+                            raise ValueError(
+                                "the frozen Soperator source is required for dashboard delivery"
+                            )
+                        soperator_post_flux_docs = render_soperator_monitoring_dashboard_documents(
+                            values_node,
+                            release=release_snapshot,
+                            source_root=Path(source_dir),
+                        )
+                    else:
+                        soperator_post_flux_docs = []
+                    soperator_graph_docs = render_soperator_flux_graph_documents(
+                        release_snapshot,
+                        soperator_upstream_values,
+                        adapter_documents=soperator_adapter_docs,
+                    )
+                    graph_patches = soperator_graph_post_render_patches(
+                        release_snapshot,
+                        soperator_upstream_values,
+                    )
+                    existing_patches = list(chart_node.get("post_render_patches") or [])
+                    chart_node["post_render_patches"] = [*existing_patches, *graph_patches]
+                    soperator_umbrella_digest = release_snapshot.umbrella.digest
+                    soperator_umbrella_oci_url = chart_repo
+                    chart_values = soperator_upstream_values
+                else:
+                    chart_values = values_node
 
                 namespace = str(chart_node.get("namespace", "")).strip()
                 if not namespace:
@@ -819,7 +1043,6 @@ def _configured_app_release_specs(
                 repo_name = repo_name_default
                 interval = "5m"
                 scope = str(chart_node.get("group", "")).strip().lower() or "workloads"
-                chart_values = values_node
                 release_timeout = (
                     str(entry.default_release_timeout or "").strip() if entry is not None else ""
                 )
@@ -838,12 +1061,18 @@ def _configured_app_release_specs(
                         "source_ref": source_ref,
                         "source_repo_type": source_repo_type,
                         "chart_ref": chart_ref,
-                        "chart_version": chart_version
-                        if source_kind in {"helm_repository", _SOPERATOR_STATIC_SOURCE_KIND}
-                        else "",
+                        "chart_version": chart_version if source_kind == "helm_repository" else "",
                         "interval": interval,
                         "timeout": release_timeout,
                         "values": chart_values,
+                        "soperator_upstream_values": soperator_upstream_values,
+                        "soperator_adapter_docs": soperator_adapter_docs,
+                        "soperator_post_flux_docs": soperator_post_flux_docs,
+                        "soperator_graph_docs": soperator_graph_docs,
+                        "soperator_umbrella_digest": soperator_umbrella_digest,
+                        "soperator_umbrella_oci_url": soperator_umbrella_oci_url,
+                        "soperator_release_snapshot": soperator_release_snapshot,
+                        "post_render_patches": chart_node.get("post_render_patches") or [],
                         "depends_on": [],
                         "install_after": tuple(entry.default_release_install_after or ())
                         if entry is not None
@@ -895,14 +1124,6 @@ def _configured_app_release_specs(
         if depends_on:
             release["depends_on"] = depends_on
         patches = list(release.get("post_render_patches") or [])
-        if entry_id == "soperator":
-            patches.extend(
-                _soperator_certificate_rotation_policy_post_render_patches(
-                    release_name=str(release["release_name"]),
-                    namespace=str(release["namespace"]),
-                    values=release["values"] if isinstance(release.get("values"), Mapping) else {},
-                )
-            )
         patches.extend(post_render_patch_map.get((target_ref, entry_id)) or ())
         if patches:
             release["post_render_patches"] = [dict(item) for item in patches]
@@ -923,20 +1144,31 @@ def _helm_release_doc(
     depends_on: list[dict[str, str]] | None = None,
     post_render_patches: list[dict[str, Any]] | None = None,
     disable_wait: bool = False,
+    labels: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    chart_spec: dict[str, Any] = {
-        "chart": chart_ref,
-        "sourceRef": {
-            "kind": source_kind,
-            "name": source_name,
-            "namespace": "flux-system",
-        },
-    }
-    if chart_version:
-        chart_spec["version"] = chart_version
+    if source_kind == "OCIRepository":
+        source: dict[str, Any] = {
+            "chartRef": {
+                "kind": source_kind,
+                "name": source_name,
+                "namespace": "flux-system",
+            }
+        }
+    else:
+        chart_spec: dict[str, Any] = {
+            "chart": chart_ref,
+            "sourceRef": {
+                "kind": source_kind,
+                "name": source_name,
+                "namespace": "flux-system",
+            },
+        }
+        if chart_version:
+            chart_spec["version"] = chart_version
+        source = {"chart": {"spec": chart_spec}}
     spec: dict[str, Any] = {
         "interval": interval,
-        "chart": {"spec": chart_spec},
+        **source,
         "install": {"createNamespace": True},
         "values": values,
     }
@@ -967,7 +1199,11 @@ def _helm_release_doc(
     return {
         "apiVersion": "helm.toolkit.fluxcd.io/v2",
         "kind": "HelmRelease",
-        "metadata": {"name": release_name, "namespace": namespace},
+        "metadata": {
+            "name": release_name,
+            "namespace": namespace,
+            **({"labels": dict(labels)} if labels else {}),
+        },
         "spec": spec,
     }
 
@@ -1098,13 +1334,16 @@ class _FluxRenderState:
         self.repositories.append(doc)
         self.seen_repo_names.add(repo_name)
 
-    def ensure_namespace(self, namespace: str) -> None:
+    def ensure_namespace(self, namespace: str, *, labels: Mapping[str, str] | None = None) -> None:
         normalized = namespace.strip()
         if not normalized or normalized in self.seen_namespaces:
             return
         namespace_file = Path(f"namespace-{_file_slug(normalized)}.yaml")
         absolute_file = self.paths.flux_dir / namespace_file
-        _write_text(absolute_file, yaml.safe_dump(_namespace_doc(normalized), sort_keys=False))
+        _write_text(
+            absolute_file,
+            yaml.safe_dump(_namespace_doc(normalized, labels=labels), sort_keys=False),
+        )
         self.files.append(absolute_file)
         self.resources.append(f"./{namespace_file.as_posix()}")
         self.seen_namespaces.add(normalized)
@@ -1191,24 +1430,33 @@ def _render_flux_app_helm_releases(
                 ),
             )
             continue
-        if source_kind == _SOPERATOR_STATIC_SOURCE_KIND:
-            state.ensure_namespace(namespace)
-            rendered_chart_file_name = (
-                f"post-flux-helmrender-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
+        is_soperator = release.get("entry_id") == SOPERATOR_APP_ID
+        if is_soperator:
+            snapshot = release.get("soperator_release_snapshot")
+            if not isinstance(snapshot, SoperatorReleaseSnapshot):
+                raise ValueError("Soperator release snapshot is required")
+            write_soperator_release_snapshot(
+                soperator_release_snapshot_path(
+                    state.paths.reports_dir,
+                    str(release.get("target_ref") or "default"),
+                ),
+                snapshot,
             )
-            state.write_post_flux_raw(
-                Path(rendered_chart_file_name),
-                _render_remote_helm_chart_static(
-                    release_name=release_name,
-                    namespace=namespace,
-                    chart_ref=str(release["chart_ref"]),
-                    source_url=source_url,
-                    chart_version=str(release["chart_version"]),
-                    values=release["values"],
+            digest = str(release.get("soperator_umbrella_digest") or "").strip()
+            oci_url = str(release.get("soperator_umbrella_oci_url") or "").strip()
+            if not digest or not oci_url:
+                raise ValueError("Soperator umbrella OCI URL and digest are required")
+            state.add_repository_doc(
+                repo_name=source_name,
+                doc=_oci_repository_doc(
+                    source_name,
+                    oci_url,
+                    digest=digest,
+                    labels={SOPERATOR_LIFECYCLE_LABEL: SOPERATOR_LIFECYCLE_RECREATABLE},
                 ),
             )
-            continue
-        if source_kind == "helm_repository":
+            flux_source_kind = "OCIRepository"
+        elif source_kind == "helm_repository":
             state.add_repository_doc(
                 repo_name=source_name,
                 doc=_helm_repository_doc(source_name, source_url, repo_type=source_repo_type),
@@ -1220,7 +1468,52 @@ def _render_flux_app_helm_releases(
                 doc=_git_repository_doc(source_name, source_url, source_ref or "main"),
             )
             flux_source_kind = "GitRepository"
-        state.ensure_namespace(namespace)
+        state.ensure_namespace(
+            namespace,
+            labels=(
+                {SOPERATOR_LIFECYCLE_LABEL: SOPERATOR_LIFECYCLE_SHARED} if is_soperator else None
+            ),
+        )
+        if is_soperator:
+            state.ensure_namespace(SOPERATOR_VALUES_NAMESPACE)
+            state.ensure_namespace(
+                SOPERATOR_ADAPTER_NAMESPACE,
+                labels={SOPERATOR_LIFECYCLE_LABEL: SOPERATOR_LIFECYCLE_SHARED},
+            )
+            upstream_values = release.get("soperator_upstream_values")
+            adapter_docs = release.get("soperator_adapter_docs")
+            post_flux_docs = release.get("soperator_post_flux_docs")
+            graph_docs = release.get("soperator_graph_docs")
+            if (
+                not isinstance(upstream_values, dict)
+                or not isinstance(adapter_docs, list)
+                or not isinstance(post_flux_docs, list)
+                or not isinstance(graph_docs, list)
+            ):
+                raise ValueError(
+                    "Soperator upstream values, graph, and adapter documents are required"
+                )
+            state.write_doc(
+                Path("configmap-terraform-fluxcd-values.yaml"),
+                _configmap_doc(
+                    name=SOPERATOR_VALUES_CONFIGMAP,
+                    namespace=SOPERATOR_VALUES_NAMESPACE,
+                    data={"values.yaml": yaml.safe_dump(upstream_values, sort_keys=False)},
+                    labels={SOPERATOR_LIFECYCLE_LABEL: SOPERATOR_LIFECYCLE_RECREATABLE},
+                ),
+            )
+            state.write_raw_resource(
+                Path("soperator-nebius-adapter.yaml"),
+                _multi_doc_yaml(adapter_docs),
+            )
+            state.write_raw_resource(
+                Path("soperator-release-graph.yaml"),
+                _multi_doc_yaml(graph_docs),
+            )
+            state.write_post_flux_docs(
+                Path("post-flux-soperator-monitoring-dashboards.yaml"),
+                post_flux_docs,
+            )
         _externalize_dashboard_json_values(state, release=release)
         release_file_name = f"helmrelease-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
         state.write_doc(
@@ -1238,6 +1531,11 @@ def _render_flux_app_helm_releases(
                 depends_on=release.get("depends_on") or None,
                 post_render_patches=release.get("post_render_patches") or None,
                 disable_wait=_release_has_managed_mysterybox_external_secret(release["values"]),
+                labels=(
+                    {SOPERATOR_LIFECYCLE_LABEL: SOPERATOR_LIFECYCLE_RECREATABLE}
+                    if is_soperator
+                    else None
+                ),
             ),
         )
 
@@ -1286,73 +1584,6 @@ def _render_local_helm_chart(
     if not injected.strip():
         raise ValueError(
             f"local Helm chart render produced only hook manifests for {chart_path}; "
-            "mark required hooks with nebius-cxcli.nebius.ai/include-local-render=true"
-        )
-    return injected
-
-
-def _remote_helm_template_chart_arg(*, source_url: str, chart_ref: str) -> str:
-    if _is_oci_repo(source_url):
-        repo = source_url.strip().rstrip("/")
-        repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
-        if repo_tail == chart_ref.strip().lower():
-            return repo
-        return f"{repo}/{chart_ref.strip()}"
-    return chart_ref
-
-
-def _render_remote_helm_chart_static(
-    *,
-    release_name: str,
-    namespace: str,
-    chart_ref: str,
-    source_url: str,
-    chart_version: str,
-    values: dict[str, Any],
-) -> str:
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml") as values_file:
-        yaml.safe_dump(values, values_file, sort_keys=False)
-        values_file.flush()
-        command = [
-            "helm",
-            "template",
-            release_name,
-            _remote_helm_template_chart_arg(source_url=source_url, chart_ref=chart_ref),
-            "--namespace",
-            namespace,
-            "--include-crds",
-            "--values",
-            values_file.name,
-        ]
-        if chart_version:
-            command.extend(["--version", chart_version])
-        if source_url and not _is_oci_repo(source_url):
-            command.extend(["--repo", source_url])
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip()
-        source_label = source_url.strip() or chart_ref
-        raise ValueError(
-            "remote Helm chart static render failed for "
-            f"{source_label}: {stderr or 'helm exited without diagnostic output'}"
-        )
-    rendered = result.stdout.strip()
-    if not rendered:
-        source_label = source_url.strip() or chart_ref
-        raise ValueError(
-            f"remote Helm chart static render produced no manifests for {source_label}"
-        )
-    injected = _inject_local_chart_namespace(rendered, namespace=namespace)
-    if not injected.strip():
-        source_label = source_url.strip() or chart_ref
-        raise ValueError(
-            f"remote Helm chart static render produced only hook manifests for {source_label}; "
             "mark required hooks with nebius-cxcli.nebius.ai/include-local-render=true"
         )
     return injected

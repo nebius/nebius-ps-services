@@ -1,9 +1,25 @@
 ---
 name: review-pr
-description: "Use for GitHub PR review by number, URL, or current branch: inspect base/head, issues, checks, reviews, conflicts, and changed files; fix safe issues or conflicts on writable branches; route to sibling skills; report merge readiness and blockers. In an active Agentic SDLC run, use findings-and-readiness-only mode and never mutate the exact promoted PR head."
+description: "Use only when explicitly asked to review a GitHub PR by number, URL, or branch: inspect changes, checks, reviews, and conflicts; fix safe writable findings and report readiness. In Agentic SDLC, report only."
 ---
 
 # Review PR
+
+## Help
+
+For `$review-pr --help` or `$review-pr -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Use this skill for GitHub-backed pull request review work when the goal is to
 inspect any provided PR, identify real issues, fix safe problems when branch

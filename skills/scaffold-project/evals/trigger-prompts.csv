@@ -1,0 +1,9 @@
+id,should_trigger,prompt
+scaffold-positive-01,true,"Use $scaffold-project to plan a new repository from this approved component graph without applying it yet."
+scaffold-positive-02,true,"Use $scaffold-project to add the approved React and Vite component to this existing Python monorepo while preserving every existing file and showing brownfield merges first."
+scaffold-positive-03,true,"Use $scaffold-project to finalize this reviewed private scaffold bundle, then apply exactly the approved digest to the selected disposable target."
+scaffold-negative-01,false,"Choose whether this application should use React or server-rendered HTML."
+scaffold-negative-02,false,"Create a Python CLI project with Typer."
+scaffold-negative-03,false,"Add a Dockerfile to this established service."
+scaffold-negative-04,false,"Implement the next product feature in this repository."
+scaffold-negative-05,false,"Run the Agentic SDLC workflow with feature-prompt.md."

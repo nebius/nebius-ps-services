@@ -66,4 +66,5 @@ or participate in Agentic SDLC.
 - `scripts/test_scaffold_project.py`: disposable unit and race fixtures.
 - `scripts/test_frontend_scaffold_e2e.py`: offline app-stack to frontend apply
   contract.
-- `evals/trigger-prompts.md`: positive, negative, overlap, and quality cases.
+- `evals/trigger-prompts.csv`: positive, negative, and overlap trigger cases.
+- `evals/process-cases.md`: supplemental workflow and output-quality cases.

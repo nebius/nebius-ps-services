@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Commit"
   short_description: "Seal and promote one validated feature"
-  default_prompt: "Use $sdlc-commit to seal the final integration tip for one completed Agentic SDLC feature, fast-forward the unchanged project feature branch to that exact SHA, record promotion evidence, and clean internal execution resources without pushing."
+  default_prompt: "Use $sdlc-commit to seal the final integration tip for one completed Agentic SDLC feature, fast-forward the unchanged promotion branch to that exact SHA under the shared Git lock, record promotion evidence, clean worker resources after combined evidence, and clean integration resources only after promotion, without pushing or changing the default branch."
 policy:
   allow_implicit_invocation: false

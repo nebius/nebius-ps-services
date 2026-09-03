@@ -1,3 +1,5 @@
+name = "risk_reviewer"
+description = "Read-only reviewer focused on correctness, regressions, security, compatibility, edge cases, and missing tests."
 sandbox_mode = "read-only"
 model_reasoning_effort = "high"
 developer_instructions = """

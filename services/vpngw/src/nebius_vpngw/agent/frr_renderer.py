@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import grp
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -8,8 +10,22 @@ BGPD_CONF = Path("/etc/frr/bgpd.conf")
 FRR_CONF = Path("/etc/frr/frr.conf")
 DAEMONS_FILE = Path("/etc/frr/daemons")
 
+VM_HA_PASSIVE_MED_OFFSET = 1000
+VM_HA_FRR_GROUP = "frr"
+VM_HA_FRR_MODE = 0o660
+
 
 class FRRRenderer:
+    def _enable_vm_ha_controller_writes(self) -> None:
+        """Grant the fenced controller narrow write access to integrated FRR config."""
+
+        try:
+            group_id = grp.getgrnam(VM_HA_FRR_GROUP).gr_gid
+            os.chown(FRR_CONF, -1, group_id)
+            os.chmod(FRR_CONF, VM_HA_FRR_MODE)
+        except (KeyError, OSError) as error:
+            raise RuntimeError("failed to establish VM-HA FRR configuration access") from error
+
     def _ensure_bgpd_enabled(self, enable_bfd: bool = False) -> bool:
         """Ensure bgpd daemon is enabled and listening on all interfaces."""
         if not DAEMONS_FILE.exists():
@@ -94,11 +110,20 @@ class FRRRenderer:
         )
         return
 
-    def render_and_apply(self, cfg: dict[str, Any]) -> None:
+    def render_and_apply(
+        self,
+        cfg: dict[str, Any],
+        *,
+        activate: bool = True,
+        advertise_local_prefixes: bool = True,
+        require_reload: bool = False,
+        prepare_vm_ha_controller_access: bool = False,
+    ) -> None:
         """Render FRR bgpd.conf for BGP tunnels and prefix advertisement.
 
         When routing_mode is bgp, configures neighbors for each active tunnel with APIPA link IPs.
-        Advertises gateway.local_prefixes to neighbors where connection.bgp.advertise_local_prefixes=true.
+        Advertises gateway.local_prefixes to neighbors where connection.bgp.advertise_local_prefixes=true
+        only while the caller grants local-prefix origination authority.
         Supports hold/keepalive and graceful-restart defaults.
         """
         d_bgp = cfg.get("defaults", {}).get("routing", {}).get("bgp", {})
@@ -108,16 +133,18 @@ class FRRRenderer:
         bfd_rx = int(bfd_cfg.get("receive_interval_ms", 300))
         bfd_multiplier = int(bfd_cfg.get("detect_multiplier", 3))
 
-        daemons_changed = self._ensure_bgpd_enabled(enable_bfd=bfd_enabled)
+        daemons_changed = self._ensure_bgpd_enabled(enable_bfd=bfd_enabled) if activate else False
         BGPD_CONF.parent.mkdir(parents=True, exist_ok=True)
 
         gateway = cfg.get("gateway", {})
         local_asn = gateway.get("local_asn", 65010)
+        vm_ha_node_role = ((cfg.get("vm_ha") or {}).get("node") or {}).get("role")
+        vm_ha_med_offset = VM_HA_PASSIVE_MED_OFFSET if vm_ha_node_role == "passive" else 0
         # Gateway-level local_prefixes: single source of truth for Nebius-side subnets
         gateway_local_prefixes: list[str] = gateway.get("local_prefixes", [])
 
         # Ensure kernel routes exist for local_prefixes so BGP can advertise them
-        if gateway_local_prefixes:
+        if activate and advertise_local_prefixes and gateway_local_prefixes:
             self.ensure_local_prefix_routes(cfg)
 
         hold = d_bgp.get("hold_time_seconds", 60)
@@ -133,15 +160,16 @@ class FRRRenderer:
         # Track prefix-list filters for inbound BGP routes (optional whitelist)
         prefix_list_filters: dict[str, list[str]] = {}  # neighbor_ip -> list of allowed prefixes
 
-        # Track which local prefixes should be advertised outbound
-        # This prevents re-advertising routes learned from peers back to them
-        outbound_prefix_list_needed = len(gateway_local_prefixes) > 0
-
         # Track which tunnels use which local-pref (for route-map generation)
         tunnels_by_localpref: dict[int, list[str]] = {
             200: [],  # Active tunnels
             100: [],  # Passive tunnels
         }
+        outbound_peers_by_localpref: dict[int, list[str]] = {
+            200: [],
+            100: [],
+        }
+        denied_outbound_peers: set[str] = set()
         bfd_peers: set[str] = set()
 
         # First pass: collect tunnel info for route-maps and prefix-list filters
@@ -152,6 +180,11 @@ class FRRRenderer:
             if routing_mode != "bgp":
                 continue
             conn_bgp = conn.get("bgp", {}) or {}
+            connection_can_advertise = bool(
+                conn_bgp.get("advertise_local_prefixes", True)
+                and advertise_local_prefixes
+                and gateway_local_prefixes
+            )
             conn_remote_prefixes = (
                 conn.get("remote_prefixes", []) or conn_bgp.get("remote_prefixes", []) or []
             )
@@ -168,6 +201,10 @@ class FRRRenderer:
                     # Track tunnel for local-pref route-map
                     local_pref = 200 if ha_role == "active" else 100
                     tunnels_by_localpref[local_pref].append(remote_ip)
+                    if connection_can_advertise:
+                        outbound_peers_by_localpref[local_pref].append(remote_ip)
+                    else:
+                        denied_outbound_peers.add(remote_ip)
 
                     # Track prefix-list filters
                     if conn_remote_prefixes:
@@ -175,7 +212,7 @@ class FRRRenderer:
                     if bfd_enabled:
                         bfd_peers.add(remote_ip)
 
-        if bfd_enabled and bfd_peers:
+        if activate and bfd_enabled and bfd_peers:
             lines.append("!")
             lines.append("! BFD peers for fast failure detection (if supported by peer)")
             lines.append("bfd")
@@ -188,12 +225,15 @@ class FRRRenderer:
             lines.append("!")
 
         # Define route-maps for Active/Passive HA (before prefix-lists)
-        # Active tunnels:
+        # Configured-active VM tunnels:
         #   - local-preference 200 (inbound, LOCAL only) = preferred for outbound traffic
-        #   - MED 0 (outbound, TRANSMITTED to peer) = peer prefers this tunnel
-        # Passive tunnels:
+        #   - MED 0/100 (outbound, TRANSMITTED to peer) = peer prefers the active tunnel
+        # Configured-passive VM tunnels retain the same intra-VM ordering but add a
+        # 1000 MED standby tier. This keeps their BGP sessions hot without allowing
+        # the remote peer to ECMP traffic across the non-forwarding standby VM.
+        # Passive-role tunnels:
         #   - local-preference 100 (inbound, LOCAL only) = standby for outbound
-        #   - MED 100 (outbound, TRANSMITTED to peer) = peer deprioritizes this tunnel
+        #   - MED 100/1100 (outbound, TRANSMITTED to peer) = peer deprioritizes this tunnel
         # This prevents ECMP on both sides and ensures symmetric routing
         if tunnels_by_localpref[200]:
             lines.append("!")
@@ -212,20 +252,32 @@ class FRRRenderer:
             lines.append("!")
 
         # Outbound route-maps: combine prefix-list filtering with MED setting
-        # Active tunnel: only advertise local prefixes, set MED=0
-        if outbound_prefix_list_needed and tunnels_by_localpref[200]:
-            lines.append("! Outbound for active tunnel: filter prefixes + set MED 0")
+        active_tunnel_med = vm_ha_med_offset
+        passive_tunnel_med = vm_ha_med_offset + 100
+
+        # Active tunnel: only advertise local prefixes, set the VM/tunnel-tier MED
+        if outbound_peers_by_localpref[200]:
+            lines.append(
+                f"! Outbound for active tunnel: filter prefixes + set MED {active_tunnel_med}"
+            )
             lines.append("route-map ADVERTISE-ACTIVE permit 10")
             lines.append(" match ip address prefix-list ADVERTISE-LOCAL")
-            lines.append(" set metric 0")
+            lines.append(f" set metric {active_tunnel_med}")
             lines.append("!")
 
-        # Passive tunnel: only advertise local prefixes, set MED=100
-        if outbound_prefix_list_needed and tunnels_by_localpref[100]:
-            lines.append("! Outbound for passive tunnel: filter prefixes + set MED 100")
+        # Passive tunnel: only advertise local prefixes, set the VM/tunnel-tier MED
+        if outbound_peers_by_localpref[100]:
+            lines.append(
+                f"! Outbound for passive tunnel: filter prefixes + set MED {passive_tunnel_med}"
+            )
             lines.append("route-map ADVERTISE-PASSIVE permit 10")
             lines.append(" match ip address prefix-list ADVERTISE-LOCAL")
-            lines.append(" set metric 100")
+            lines.append(f" set metric {passive_tunnel_med}")
+            lines.append("!")
+
+        if denied_outbound_peers:
+            lines.append("! Outbound deny-all policy for peers without origination authority")
+            lines.append("route-map ADVERTISE-NONE deny 10")
             lines.append("!")
 
         # Define prefix-lists before router bgp section
@@ -239,7 +291,7 @@ class FRRRenderer:
             lines.append("!")
 
         # Outbound filter (mandatory - only advertise local prefixes, never re-advertise learned routes)
-        if outbound_prefix_list_needed:
+        if any(outbound_peers_by_localpref.values()):
             lines.append("!")
             lines.append(
                 "! Outbound filter: only advertise local prefixes (gateway.local_prefixes)"
@@ -260,6 +312,9 @@ class FRRRenderer:
             lines.append(" bgp graceful-restart")
         # Disable policy requirement for eBGP (FRR 8.4+)
         lines.append(" no bgp ebgp-requires-policy")
+        # Require explicit address-family activation so a blocked render cannot
+        # establish IPv4-unicast sessions if bgpd starts independently.
+        lines.append(" no bgp default ipv4-unicast")
         # Disable network import-check to allow advertising local_prefixes without kernel routes
         # This is critical for VPN gateways where local_prefixes are source subnets
         lines.append(" no bgp network import-check")
@@ -296,7 +351,7 @@ class FRRRenderer:
                 lines.append(f" neighbor {remote_ip} remote-as {rasn}")
                 lines.append(f" neighbor {remote_ip} timers {keep} {hold}")
                 lines.append(f" neighbor {remote_ip} maximum-prefix {max_prefixes_default}")
-                if bfd_enabled:
+                if activate and bfd_enabled:
                     lines.append(f" neighbor {remote_ip} bfd")
 
                 # CRITICAL: Configure update-source to use tunnel interface IP
@@ -312,7 +367,7 @@ class FRRRenderer:
                 tunnel_index += 1
 
                 # Track prefixes to advertise for this connection
-                if advertise:
+                if advertise and advertise_local_prefixes:
                     advertised_prefixes.update(gateway_local_prefixes)
 
         # Advertise accumulated prefixes and activate neighbors
@@ -335,6 +390,12 @@ class FRRRenderer:
             ).get("mode", "bgp")
             if routing_mode != "bgp":
                 continue
+            conn_bgp = conn.get("bgp", {}) or {}
+            connection_can_advertise = bool(
+                conn_bgp.get("advertise_local_prefixes", True)
+                and advertise_local_prefixes
+                and gateway_local_prefixes
+            )
             for tun in conn.get("tunnels", []):
                 ha_role = tun.get("ha_role", "active")
                 if ha_role == "disable":
@@ -346,12 +407,16 @@ class FRRRenderer:
                     local_pref = 200 if ha_role == "active" else 100
                     lines.append(f"  neighbor {remote_ip} route-map SET-LOCAL-PREF-{local_pref} in")
 
-                    # Outbound: Apply combined route-map (prefix filter + MED)
-                    if outbound_prefix_list_needed:
+                    # Every enabled peer receives one explicit outbound policy.
+                    # Allowed peers get the local-prefix filter plus MED; every
+                    # other peer is fail-closed so learned routes cannot leak.
+                    if connection_can_advertise:
                         route_map_name = (
                             "ADVERTISE-ACTIVE" if ha_role == "active" else "ADVERTISE-PASSIVE"
                         )
-                        lines.append(f"  neighbor {remote_ip} route-map {route_map_name} out")
+                    else:
+                        route_map_name = "ADVERTISE-NONE"
+                    lines.append(f"  neighbor {remote_ip} route-map {route_map_name} out")
 
         # Apply inbound prefix-list filters to neighbors (if configured)
         for neighbor_ip in prefix_list_filters:
@@ -392,7 +457,7 @@ class FRRRenderer:
                     continue
                 tbgp = tun.get("bgp", {}) or {}
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
-                if remote_ip:
+                if remote_ip and activate:
                     lines.append(f"  neighbor {remote_ip} activate")
 
         lines.append(" exit-address-family")
@@ -400,11 +465,21 @@ class FRRRenderer:
         rendered = "\n".join(lines) + "\n"
         # FRR 8+ uses integrated config in frr.conf
         FRR_CONF.write_text(rendered, encoding="utf-8")
+        if prepare_vm_ha_controller_access:
+            self._enable_vm_ha_controller_writes()
         print(f"[FRR] Wrote bgp config with {len(advertised_prefixes)} advertised prefix(es)")
+        if not activate:
+            return
         # Reload bgpd to apply config (soft reload if only bgp changed; restart if daemons changed)
-        cmd = ["systemctl", "restart" if daemons_changed else "reload", "frr"]
+        if daemons_changed:
+            action = "restart"
+        elif require_reload:
+            action = "reload-or-restart"
+        else:
+            action = "reload"
+        cmd = ["systemctl", action, "frr"]
         try:
-            subprocess.run(
+            result = subprocess.run(
                 cmd,
                 check=False,
                 stdout=subprocess.PIPE,
@@ -413,4 +488,16 @@ class FRRRenderer:
                 timeout=20,
             )
         except Exception:
-            pass
+            message = (
+                "required FRR configuration reload failed"
+                if require_reload
+                else "FRR configuration reload failed"
+            )
+            raise RuntimeError(message) from None
+        if result.returncode != 0:
+            message = (
+                "required FRR configuration reload failed"
+                if require_reload
+                else "FRR configuration reload failed"
+            )
+            raise RuntimeError(message)

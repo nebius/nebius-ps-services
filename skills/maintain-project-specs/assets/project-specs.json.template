@@ -1,0 +1,5 @@
+{
+  "schema": "maintain-project-specs.project.v1",
+  "mode": "managed",
+  "scope": "."
+}

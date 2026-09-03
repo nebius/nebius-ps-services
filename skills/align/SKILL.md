@@ -1,9 +1,25 @@
 ---
 name: align
-description: "Use for project-wide alignment or post-change validation: reconcile code, wiring, tests, CI, CLI/help, config, docs, workflows, and project skills; run changed-scope code-review, lint/syntax, security, and regression gates. Integrate current thread, relevant Agent Memory, and task state before low-risk evidence-backed fixes. Do not use for skill-folder-only validation; use align-skill."
+description: "Align a project after changes across code, wiring, tests, CI, CLI/help, config, docs, workflows, and skills, with focused quality gates. Use align-skill for skill-folder-only work."
 ---
 
 # Align
+
+## Help
+
+For `$align --help` or `$align -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Use this skill for safe, end-to-end project alignment and post-change
 validation. It coordinates code review as one validation lane; it is not a

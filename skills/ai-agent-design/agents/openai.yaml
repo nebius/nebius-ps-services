@@ -1,0 +1,6 @@
+interface:
+  display_name: "AI Agent Design"
+  short_description: "Design governed production AI agent systems"
+  default_prompt: "Use $ai-agent-design to classify behavior, separate control, execution, and durable session state when needed, define governed production contracts and verification, use $ai-stack only if AI technology selection remains, and return a complete logical agent-subsystem architecture."
+policy:
+  allow_implicit_invocation: true

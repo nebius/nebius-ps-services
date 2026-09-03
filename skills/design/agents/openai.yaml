@@ -1,6 +1,6 @@
 interface:
   display_name: "Design"
-  short_description: "Design software solutions before implementation"
-  default_prompt: "Use $design to understand requirements, inspect the existing system, route missing due diligence through $research, use $app-stack when application-stack or layer technology choices are undecided or under review, apply $system-design-rules to non-trivial design decisions, design vertical end-to-end slices, compare alternatives, and create a /plan handoff."
+  short_description: "Design software and delegate governed AI subsystem choices"
+  default_prompt: "Use $design to understand requirements, inspect the existing system, route missing due diligence through $research, use $app-stack for undecided application layers, delegate AI behavior, topology, policy, and contracts once to $ai-agent-design, consume its scoped $ai-stack component decision, apply $system-design-rules, compare alternatives, and create a /plan handoff."
 policy:
   allow_implicit_invocation: true

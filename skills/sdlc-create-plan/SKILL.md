@@ -1,9 +1,23 @@
 ---
 name: sdlc-create-plan
-description: "Use only as part of the Agentic SDLC workflow; use when one ready feature needs a locked dependency-safe plan, or a classified post-evaluation repair needs immutable corrective plan vN+1 with preserved completed task definitions and appended corrective waves."
+description: "Use only as part of the Agentic SDLC workflow; lock a dependency-safe plan for one ready feature, or append immutable corrective waves in plan vN+1 after a classified evaluation failure."
 ---
 
 # Create Plan
+
+## Help
+
+For `$sdlc-create-plan --help` or `$sdlc-create-plan -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -124,8 +138,11 @@ a dependency-safe task graph.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` is the sole semantic, schema, and validation owner
+  of both canonical specs. Inside Agentic SDLC, only its routed
+  `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
+  write their respective managed records; all other phase skills route changes
+  through those adapters and return validation to the shared owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

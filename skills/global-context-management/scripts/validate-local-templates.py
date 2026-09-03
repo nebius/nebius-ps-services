@@ -25,6 +25,37 @@ ROOT_MARKERS = ("SKILL.md", "assets", "references")
 SENTINEL_MARKER = "PROMPT_CONTENT_SENTINEL_DO_NOT_PERSIST"
 STATE_REUSE_MARKER = "TASK_STATE_REUSE_SENTINEL_KEEP_FOR_AGENT_READ"
 RELATED_STATE_CONTENT_MARKER = "RELATED_STATE_CONTENT_SENTINEL_DO_NOT_INJECT"
+REQUIRED_AGENT_METADATA = {
+    "repo_mapper": (
+        "Read-only codebase explorer for relevant files, symbols, execution "
+        "paths, dependencies, and conventions."
+    ),
+    "test_strategist": (
+        "Read-only verification planner for tests, fixtures, CI commands, "
+        "local commands, and validation gaps."
+    ),
+    "risk_reviewer": (
+        "Read-only reviewer focused on correctness, regressions, security, "
+        "compatibility, edge cases, and missing tests."
+    ),
+}
+
+
+def markdown_section(value: str, heading: str) -> str:
+    lines = value.splitlines()
+    try:
+        start = lines.index(heading)
+    except ValueError:
+        return ""
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end]).strip()
 
 
 def skill_dir() -> Path:
@@ -52,8 +83,26 @@ def parse_templates(root: Path) -> dict:
             "subagent delegation"
         )
 
-    for path in sorted((root / "assets").glob("*.toml.template")):
-        tomllib.loads(path.read_text(encoding="utf-8"))
+    toml_templates = {
+        path.name: tomllib.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((root / "assets").glob("*.toml.template"))
+    }
+    for name, description in REQUIRED_AGENT_METADATA.items():
+        filename = f"{name}.toml.template"
+        if filename not in toml_templates:
+            raise AssertionError(f"required agent template missing: {filename}")
+        agent = toml_templates[filename]
+        if agent.get("name") != name:
+            raise AssertionError(f"{filename} name must match its role")
+        if agent.get("description") != description:
+            raise AssertionError(f"{filename} description must match its role")
+        instructions = agent.get("developer_instructions")
+        if not (isinstance(instructions, str) and instructions.strip()):
+            raise AssertionError(
+                f"{filename} developer_instructions must be a non-empty string"
+            )
+        if agent.get("sandbox_mode") != "read-only":
+            raise AssertionError(f"{filename} sandbox_mode must be read-only")
 
     for path in (
         root / "assets" / "global_context_state.py.template",
@@ -176,13 +225,34 @@ config_file = "agents/write_worker.toml"
 """,
         encoding="utf-8",
     )
-    for name in ("alpha_mapper", "beta_test_planner", "gamma_risk_reviewer"):
+    descriptions = {
+        "alpha_mapper": "Read-only repository mapper.",
+        "beta_test_planner": "Read-only verification planner.",
+        "gamma_risk_reviewer": "Read-only risk reviewer.",
+    }
+    for name, description in descriptions.items():
         (agents_dir / f"{name}.toml").write_text(
-            'sandbox_mode = "read-only"\n',
+            "\n".join(
+                (
+                    f'name = "{name}"',
+                    f'description = "{description}"',
+                    'sandbox_mode = "read-only"',
+                    'developer_instructions = "Inspect and report only."',
+                    "",
+                )
+            ),
             encoding="utf-8",
         )
     (agents_dir / "write_worker.toml").write_text(
-        'sandbox_mode = "workspace-write"\n',
+        "\n".join(
+            (
+                'name = "write_worker"',
+                'description = "Write-capable worker that must not be injected."',
+                'sandbox_mode = "workspace-write"',
+                'developer_instructions = "Implement only authorized changes."',
+                "",
+            )
+        ),
         encoding="utf-8",
     )
     policy_path = codex_home / "hooks" / "global_context_policy.json"
@@ -376,6 +446,9 @@ def validate_path_contract_helpers(temp_dir: Path) -> None:
 def assert_doc_contracts(root: Path) -> None:
     gcm_readme = (root / "README.md").read_text(encoding="utf-8")
     gcm_skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    gcm_local_setup = (root / "references" / "local-setup.md").read_text(
+        encoding="utf-8"
+    )
     state_template = (root / "assets" / "task-state-template.md").read_text(
         encoding="utf-8"
     )
@@ -394,6 +467,33 @@ def assert_doc_contracts(root: Path) -> None:
     agents_template = (config_root / "assets" / "AGENTS.md.template").read_text(
         encoding="utf-8"
     )
+    live_policy_headings = [
+        line
+        for line in agents_template.splitlines()
+        if line.startswith("#")
+        and line.lstrip("# ").startswith("Live Product Validation")
+    ]
+    if live_policy_headings != ["## Live Product Validation"]:
+        raise AssertionError(
+            "AGENTS.md.template must contain exactly one live-product section"
+        )
+    manual_live_match = re.search(
+        r"```markdown\n(## Live Product Validation\n.*?)(?=\n## Context Management\n)",
+        gcm_local_setup,
+        flags=re.DOTALL,
+    )
+    if manual_live_match is None:
+        raise AssertionError(
+            "global-context-management local setup missing live-product snippet"
+        )
+    canonical_live_section = markdown_section(
+        agents_template, "## Live Product Validation"
+    )
+    if manual_live_match.group(1).strip() != canonical_live_section:
+        raise AssertionError(
+            "global-context-management live-product snippet drifts from "
+            "AGENTS.md.template"
+        )
 
     forbidden_needles = (
         "$CODEX_HOME/task-state/<workspace>-<hash>/manual/current.md",
@@ -532,14 +632,21 @@ def assert_doc_contracts(root: Path) -> None:
         "Treat that policy request as sufficient\n  authorization",
         "do not ask for another user prompt only because the original",
         "close completed helpers when close controls are available",
-        "hard maximum of five\n  remediation attempts or 120 active",
-        "never raise or disable the attempt maximum",
-        "newly acquired evidence and a genuinely new evidence-derived hypothesis",
-        "When evidence establishes a causally independent blocker",
-        "lower attempt limit or another time limit\n  for the new blocker",
-        "Permission denials\n  and marker validation or repair consume no attempt",
         "Agents may clean up temporary trees they created during the current task",
         'find "$task_temp_dir" -depth -delete',
+        "## Live Product Validation",
+        "define and freeze the\n  expected product-owned behavior",
+        "Observation is non-intervening only when it cannot alter",
+        "classify nominally read-only actions\n  by their effect",
+        "Changing the declaration starts a new trial",
+        "performs, bypasses, or\n  pre-satisfies",
+        "Recovery authorization never makes that evidence\n  valid proof",
+        "Production and unconfirmed targets remain read-only",
+        "action-specific approval in every environment",
+        "Fix the proven causal owner at its authoritative boundary",
+        "checkpoint before the earliest product divergence or first contaminated",
+        "boundary, whichever came first",
+        "Prove prior writers are quiescent",
         "Preserve an active `codex-remediation-budget:v1` marker exactly",
         "## Nested project instructions",
         "read every applicable instruction file from the repository root",
@@ -551,6 +658,19 @@ def assert_doc_contracts(root: Path) -> None:
     for needle in required_agents_template:
         if needle not in agents_template:
             raise AssertionError(f"AGENTS.md template missing: {needle}")
+
+    forbidden_agents_template = (
+        "After one remediation fails against the same blocker",
+        "When evidence establishes a causally independent blocker",
+        "remediation attempts or 60 active minutes",
+        "remediation attempts or 120 active minutes",
+    )
+    for needle in forbidden_agents_template:
+        if needle in agents_template:
+            raise AssertionError(
+                "AGENTS.md template contains troubleshoot-owned remediation "
+                f"policy: {needle}"
+            )
 
 
 def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:

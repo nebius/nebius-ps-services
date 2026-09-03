@@ -1,9 +1,25 @@
 ---
 name: nebius-audit-log
-description: "Use only when the user explicitly asks to query Nebius Control Plane Audit Logs for a resource, subject, service, action, status, region, or time range. Requires explicit invocation because it reads tenant-level audit/security data; do not use for broad Nebius SDK/IAM/VPC/quota/MK8s/observability automation."
+description: "Use only when explicitly asked to query tenant-level Nebius Control Plane Audit Logs by resource, subject, service, action, status, region, or time. Not for general Nebius cloud/observability work."
 ---
 
 # Nebius Audit Log
+
+## Help
+
+For `$nebius-audit-log --help` or `$nebius-audit-log -h`, return concise help and stop before
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
+
+## Purpose
 
 Query Nebius Control Plane Audit Logs with the Nebius CLI while keeping the
 operation read-only, bounded, and sanitized by default.
@@ -151,4 +167,4 @@ Report:
 - `references/audit-log-querying.md`
 - `scripts/query_audit_logs.py`
 - `scripts/test_query_audit_logs.py`
-- `evals/trigger-prompts.md`
+- `evals/trigger-prompts.csv`

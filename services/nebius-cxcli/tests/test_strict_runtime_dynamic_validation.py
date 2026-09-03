@@ -12,7 +12,11 @@ from nebius_cxcli.component_sources import (
     set_component_sources_file_override,
     set_component_sources_profile_override,
 )
-from nebius_cxcli.components import component_entries, reset_component_entry_cache
+from nebius_cxcli.components import (
+    component_entries,
+    reset_component_entry_cache,
+    soperator_install_entry,
+)
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
@@ -988,3 +992,60 @@ def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
         "chart_repo": network_operator.source,
         "chart_version": network_operator.version,
     }
+
+
+def test_validate_enabled_soperator_uses_dedicated_official_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    entry = soperator_install_entry("4.1.7")
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "enabled": True,
+            "group": "slurm",
+            "repo": entry.chart_repo,
+            "version": entry.version,
+            "namespace": entry.default_namespace,
+            "release-name": entry.default_release_name,
+            "values": {},
+        }
+    ]
+    captured: dict[str, str] = {}
+
+    def _fake_validate(**kwargs) -> tuple[str, ...]:
+        captured.update(
+            {key: str(value) for key, value in kwargs.items() if key != "chart_meta_cache"}
+        )
+        return ()
+
+    monkeypatch.setattr("nebius_cxcli.cli._resolve_helm_chart_validation_issues", _fake_validate)
+
+    assert _validate_enabled_chart_sources(payload, chart_meta_cache={}) == []
+    assert captured == {
+        "chart_name": "helm-soperator-fluxcd",
+        "chart_repo": entry.chart_repo,
+        "chart_version": "4.1.7",
+    }
+
+
+def test_validate_enabled_soperator_rejects_non_official_repository() -> None:
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "enabled": True,
+            "group": "slurm",
+            "repo": "oci://example.invalid/downstream/soperator",
+            "version": "4.1.7",
+            "namespace": "flux-system",
+            "release-name": "soperator-fluxcd",
+            "values": {},
+        }
+    ]
+
+    issues = _validate_enabled_chart_sources(payload, chart_meta_cache={})
+    assert len(issues) == 1
+    assert "must use the official upstream OCI repository" in issues[0]

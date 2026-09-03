@@ -4,7 +4,13 @@ from copy import deepcopy
 
 import pytest
 
-from nebius_vpngw.schema import validate_config
+from nebius_vpngw.schema import (
+    VMHAMigrationRouteBinding,
+    VMHARouteTarget,
+    VMHARuntimeBinding,
+    VMHARuntimeNodeBinding,
+    validate_config,
+)
 
 
 def _base_bgp_config(sample_config: dict) -> dict:
@@ -64,6 +70,240 @@ def _duplicate_site_1_apipa(second_connection: dict) -> None:
     second_connection["tunnels"][0]["inner_cidr"] = "169.254.10.0/30"
     second_connection["tunnels"][0]["inner_local_ip"] = "169.254.10.1"
     second_connection["tunnels"][0]["inner_remote_ip"] = "169.254.10.2"
+
+
+def _enable_vm_ha(cfg: dict) -> None:
+    cfg["gateway_group"]["instance_count"] = 2
+    cfg["gateway_group"]["external_ips"] = [["203.0.113.10"], ["203.0.113.20"]]
+    cfg["gateway_group"]["vm_ha"] = {
+        "enabled": True,
+        "cluster_id": "gateway-cluster",
+        "members": [
+            {
+                "node_id": "gateway-a",
+                "instance_index": 0,
+                "role": "active",
+            },
+            {
+                "node_id": "gateway-b",
+                "instance_index": 1,
+                "role": "passive",
+            },
+        ],
+    }
+    second_tunnel = deepcopy(cfg["connections"][0]["tunnels"][0])
+    second_tunnel.update(
+        {
+            "name": "site-1-tunnel-node-b",
+            "gateway_instance_index": 1,
+            "remote_public_ip": "198.51.100.11",
+            "inner_cidr": "169.254.11.0/30",
+            "inner_local_ip": "169.254.11.1",
+            "inner_remote_ip": "169.254.11.2",
+        }
+    )
+    cfg["connections"][0]["tunnels"].append(second_tunnel)
+
+
+def test_schema_accepts_explicit_vm_ha_with_roles_distinct_from_tunnel_roles(
+    sample_config: dict,
+) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+
+    validated = validate_config(cfg)
+
+    assert validated.gateway_group.vm_ha is not None
+    assert [member.role.value for member in validated.gateway_group.vm_ha.members] == [
+        "active",
+        "passive",
+    ]
+    assert [tunnel.ha_role.value for tunnel in validated.connections[0].tunnels] == [
+        "active",
+        "active",
+    ]
+
+
+def test_schema_rejects_removed_member_credential_path(sample_config: dict) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+    cfg["gateway_group"]["vm_ha"]["members"][0]["nebius_credentials_path"] = (
+        "/operator-secrets/legacy.json"
+    )
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        validate_config(cfg)
+
+
+def test_schema_rejects_removed_vm_ha_tls_sources(
+    sample_config: dict,
+) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+    member = cfg["gateway_group"]["vm_ha"]["members"][0]
+    member["credential_sources"] = {
+        "certificate_authority": "/old/ca.pem",
+        "certificate": "/old/node.pem",
+        "private_key": "/old/node.key",
+        "nebius_credentials": "/old/nebius-credentials.json",
+    }
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        validate_config(cfg)
+
+
+def test_vm_ha_runtime_binding_is_secret_free_and_requires_absolute_references() -> None:
+    digest = "a" * 64
+    route_targets = (
+        VMHARouteTarget(
+            project_id="project-1",
+            network_id="network-1",
+            workload_subnet_id="subnet-1",
+            route_table_id="route-table-1",
+        ),
+    )
+    binding = VMHARuntimeBinding(
+        cluster_id="gateway-cluster",
+        shared_allocation_id="allocation-1",
+        nodes=(
+            VMHARuntimeNodeBinding(
+                node_id="gateway-a",
+                role="active",
+                compute_id="compute-a",
+                network_interface_name="eth0",
+                peer_endpoint="10.0.0.10:9443",
+                nebius_credentials_path="/etc/nebius-vpngw/vm-ha/nebius-credentials.json",
+            ),
+            VMHARuntimeNodeBinding(
+                node_id="gateway-b",
+                role="passive",
+                compute_id="compute-b",
+                network_interface_name="eth0",
+                peer_endpoint="10.0.0.11:9443",
+                nebius_credentials_path="/etc/nebius-vpngw/vm-ha/nebius-credentials.json",
+            ),
+        ),
+        route_targets=route_targets,
+        route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
+            "gateway-cluster", "allocation-1", route_targets
+        ),
+        generation_id=digest,
+        configuration_digest=digest,
+        static_routes_digest="b" * 64,
+        bgp_policy_digest="c" * 64,
+    )
+
+    assert binding.migration_routes == ()
+    serialized = binding.model_dump_json()
+    assert "private_key" not in serialized
+    assert "certificate" not in serialized
+    with pytest.raises(ValueError, match="absolute path"):
+        VMHARuntimeNodeBinding(
+            node_id="gateway-a",
+            role="active",
+            compute_id="compute-a",
+            network_interface_name="eth0",
+            peer_endpoint="10.0.0.10:9443",
+            nebius_credentials_path="relative.json",
+        )
+
+    migration = VMHAMigrationRouteBinding(
+        route_id="route-old",
+        name="vpngw-10.20.0.0-16",
+        prefix="10.20.0.0/16",
+        allocation_id="primary-allocation",
+        resource_revision="7",
+        route_target=route_targets[0],
+    )
+    payload = binding.model_dump(mode="json")
+    payload["migration_routes"] = [migration.model_dump(mode="json")]
+    assert VMHARuntimeBinding.model_validate(payload).migration_routes == (migration,)
+    payload["migration_routes"][0]["allocation_id"] = "allocation-1"
+    adopted = VMHARuntimeBinding.model_validate(payload)
+    assert adopted.migration_routes[0].allocation_id == "allocation-1"
+
+
+def test_vm_ha_runtime_binding_requires_one_shared_credential_digest() -> None:
+    digest = "a" * 64
+    route_targets = (
+        VMHARouteTarget(
+            project_id="project-1",
+            network_id="network-1",
+            workload_subnet_id="subnet-1",
+            route_table_id="route-table-1",
+        ),
+    )
+
+    def node(node_id: str, compute_id: str, credential_digest: str) -> VMHARuntimeNodeBinding:
+        return VMHARuntimeNodeBinding(
+            node_id=node_id,
+            role="active" if node_id == "gateway-a" else "passive",
+            compute_id=compute_id,
+            network_interface_name="eth0",
+            peer_endpoint="10.0.0.10:9443",
+            nebius_credentials_path=(
+                f"/etc/nebius-vpngw/vm-ha-credentials/{digest}/{node_id}/"
+                f"{credential_digest}/nebius-credentials.json"
+            ),
+            nebius_credentials_sha256=credential_digest,
+        )
+
+    with pytest.raises(ValueError, match="one shared credential digest"):
+        VMHARuntimeBinding(
+            cluster_id="gateway-cluster",
+            shared_allocation_id="allocation-1",
+            nodes=(
+                node("gateway-a", "compute-a", "d" * 64),
+                node("gateway-b", "compute-b", "e" * 64),
+            ),
+            route_targets=route_targets,
+            route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
+                "gateway-cluster", "allocation-1", route_targets
+            ),
+            generation_id=digest,
+            configuration_digest=digest,
+            static_routes_digest="b" * 64,
+            bgp_policy_digest="c" * 64,
+            nebius_project_id="project-1",
+            nebius_service_account_id="service-account-1",
+            nebius_authorized_key_id="authorized-key-1",
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda cfg: cfg["gateway_group"].update(instance_count=3), "instance_count=2"),
+        (
+            lambda cfg: cfg["gateway_group"]["vm_ha"]["members"].pop(),
+            "exactly two nodes",
+        ),
+        (
+            lambda cfg: cfg["gateway_group"]["vm_ha"]["members"][1].update(role="active"),
+            "exactly one active and one passive",
+        ),
+    ],
+)
+def test_schema_rejects_invalid_vm_ha_topologies(
+    sample_config: dict,
+    mutation,
+    message: str,
+) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+    mutation(cfg)
+
+    with pytest.raises(ValueError, match=message):
+        validate_config(cfg)
+
+
+def test_schema_rejects_vm_ha_connection_missing_one_member(sample_config: dict) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+    cfg["connections"][0]["tunnels"] = cfg["connections"][0]["tunnels"][:1]
+
+    with pytest.raises(ValueError, match="must define tunnels for both VM-HA members"):
+        validate_config(cfg)
 
 
 def test_schema_accepts_multiple_connections_with_unique_tunnel_identity(

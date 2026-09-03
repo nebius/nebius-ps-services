@@ -4,7 +4,9 @@
 implementation. It reads requirements, inspects existing code or greenfield
 context, routes topic, requirement, and technology due diligence through
 `research` when available, routes undecided application-stack and layer
-technology choices through `app-stack`, applies `system-design-rules` to
+technology choices through `app-stack`, routes undecided AI subsystem behavior,
+topology, policy, and contracts through `ai-agent-design`, consumes its scoped
+`ai-stack` component decision, and applies `system-design-rules` to
 non-trivial solution decisions, chooses components and boundaries, compares
 alternatives, designs vertical end-to-end slices for serial multi-layer
 applications, and produces a Codex `/plan` handoff.
@@ -19,11 +21,12 @@ that scaffold and the scaffold workflow does not call back into design.
 - `SKILL.md`: runtime workflow, seven-phase process, boundaries, guardrails, and
   output contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
-- `references/design-workflow.md`: detailed phase checklist, `research`
-  and `app-stack` handoff guidance, `system-design-rules` decision-review
-  guidance, depth guidance, vertical-slice strategy, and `/plan` handoff
-  template.
-- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `references/design-workflow.md`: detailed phase checklist, `research`,
+  `app-stack`, `ai-agent-design`, and `ai-stack` handoff guidance,
+  `system-design-rules` decision-review guidance, depth guidance,
+  vertical-slice strategy, and `/plan` handoff template.
+- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 
 ## Boundaries
 
@@ -46,6 +49,18 @@ that scaffold and the scaffold workflow does not call back into design.
   layer is undecided or being reconsidered. Skip it when the stack is fixed.
 - Use `app-stack` directly when the user wants only a stack decision rather
   than a complete design and `/plan` handoff.
+- Use `ai-agent-design` once for undecided AI subsystem behavior, topology,
+  policy, authority, contracts, context, memory, failure handling, evaluation,
+  or governance. It freezes the four-class capability map and delegates only
+  component selection to `ai-stack`.
+- Use `ai-stack` directly for an undecided AI-specific technology layer when
+  no agent-subsystem design or complete `/plan` handoff is needed.
+- For AI applications, keep known logic and transitions deterministic, use a
+  direct model call when one request is sufficient, and introduce an agent only
+  when the model must choose actions or observation-driven next steps. One
+  application may contain deterministic code, direct calls, deterministic AI
+  workflows, and agents. Treat graph and durable execution as an independent
+  orchestration choice that may wrap any class.
 - Use `system-design-rules` inside `design` for standard, deep,
   architecture-heavy, ADR-like, or hard-to-reverse solution decisions before
   finalizing the `/plan`.

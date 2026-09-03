@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from nebius_cxcli.components import component_entries
+from nebius_cxcli.components import component_entries, soperator_install_entry
 from nebius_cxcli.config_loader import validate_config
 from nebius_cxcli.config_template import starter_config_yaml
 from nebius_cxcli.mysterybox_eso import (
@@ -23,6 +23,10 @@ def _starter_payload(
     selected_infra: set[str] | None = None,
     selected_apps: set[str] | None = None,
 ) -> dict:
+    requested_apps = selected_apps or set()
+    app_entries = component_entries("apps")
+    if "soperator" in requested_apps:
+        app_entries = (*app_entries, soperator_install_entry("4.1.7"))
     payload = yaml.safe_load(
         starter_config_yaml(
             client_name="client-a",
@@ -31,9 +35,9 @@ def _starter_payload(
             region_id="eu-north1",
             email="ops@example.com",
             selected_infra=selected_infra or {"mk8s", "mysterybox"},
-            selected_apps=selected_apps or set(),
+            selected_apps=requested_apps,
             infra_entries=component_entries("infra"),
-            app_entries=component_entries("apps"),
+            app_entries=app_entries,
         )
     )
     assert isinstance(payload, dict)
