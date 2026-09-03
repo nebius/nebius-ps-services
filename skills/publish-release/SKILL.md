@@ -26,7 +26,7 @@ current project folder. This is a doer-first skill: setup/guidance is still
 supported, but release execution is the primary workflow when the user asks to
 publish.
 
-## Use This Skill For
+## When To Use
 
 - Publishing package artifacts to GitHub Releases end to end.
 - Setting up release assets only when requested or missing.
@@ -34,7 +34,15 @@ publish.
 - Producing a final publish report with PR, tag, workflow, release URL, and
   asset verification.
 
-## Inputs Accepted
+## When Not To Use
+
+- Use `create-pr` for a PR that is not part of an explicitly requested release.
+- Use the artifact-specific publish skill for Helm charts, container images, or
+  another separately owned publication flow.
+- Do not run a release workflow from a managed child worktree or active SDLC
+  integration branch; return to that workflow's publication owner.
+
+## Inputs
 
 Common flags:
 
@@ -58,22 +66,47 @@ Release inputs:
 If required values are missing and cannot be derived from the repository, ask
 the user before continuing.
 
-## Workflow
+## Required Reads
+
+- Read applicable repository instructions, current Git status and branch,
+  default-branch and remote state, `CHANGELOG.md`, package version metadata, and
+  the tag-triggered release workflow before mutation.
+- Read the setup assets only when setup is requested or required files are
+  missing.
+- Resolve and follow `create-pr` and `merge-pr` for their owned publication and
+  merge gates during `complete` mode.
+
+## Writes
+
+- `setup` may create or update the project changelog, helper, and release
+  workflow after the user requests setup or complete publication needs them.
+- `prep` updates and commits the changelog, then pushes either the reused
+  feature branch or a new `release/<tag>` branch created from the default
+  branch.
+- `complete` may create and merge the release-prep PR; `publish` and `complete`
+  may create and push the annotated tag under the explicit release request.
+- Do not create repository-local private workflow state.
+
+## Process
 
 1. Inspect the current project folder and Git repository.
 2. Parse the requested mode and tag. Normalize tags to
    `<tag-prefix>-vMAJOR.MINOR.PATCH`.
 3. For `setup`, create or update reusable release assets from `assets/`,
    validate the generated shell/workflow files, and stop with a setup report.
-4. For `prep`, require the current checkout to be the clean, synced default
-   branch. If the user is on any other branch, or the tree is dirty, stop and
-   ask them to merge their branch to the default branch, switch to it,
-   fast-forward, and rerun. Then run the skill-owned helper script:
+4. For `prep`, require a clean named branch, an absent release tag, and current
+   default-branch history. If the current branch is the default branch, require
+   it to equal `origin/<default>` and create `release/<tag>`. If it is a feature
+   branch, require current `origin/<default>` to be an ancestor, require any
+   same-named remote branch to be an ancestor of local `HEAD`, and reuse the
+   current branch. Then run the skill-owned helper script:
    `scripts/publish-release-doer.sh --mode prep ...`
-   The helper creates `release/<tag>` from the default branch, updates
-   `CHANGELOG.md`, commits release prep, and pushes that release branch.
-5. For `complete`, run `prep`, invoke `create-pr` for `release/<tag>`, then
-   invoke `merge-pr` after checks pass.
+   The helper updates `CHANGELOG.md`, commits release prep, and pushes the
+   selected PR branch without committing directly on the default branch.
+5. For `complete`, run `prep`, invoke `create-pr` for the selected prep branch,
+   then invoke `merge-pr` after checks pass. Reuse an existing PR for that
+   feature branch when `create-pr` resolves one; do not create a nested release
+   branch from a feature branch.
 6. After merge, switch to the default branch, fetch, and fast-forward only.
    Verify the release changelog section from prep is present.
 7. Run `publish` only from the clean, synced default branch:
@@ -99,17 +132,41 @@ helper template, not a documentation stub. Keep it behaviorally aligned with
 the skill-owned `scripts/publish-release-doer.sh`, which remains the canonical
 doer path.
 
-## Guardrails
+## Idempotency
+
+- Refuse an existing local or remote release tag before changelog mutation.
+- Reuse the current feature branch and any matching open PR instead of creating
+  duplicate branches or PRs. From the default branch, refuse a colliding
+  `release/<tag>` branch rather than overwriting it.
+- A repeated feature-branch prep for an untagged version may merge new
+  `Unreleased` notes into the existing release section; never duplicate or
+  empty an already prepared release section.
+- Before tagging, re-read the merged changelog and current remote/default
+  identity instead of relying on prep-time state.
+
+## Failure Handling
+
+- Stop before changelog mutation on a dirty or detached checkout, a stale
+  feature branch, remote feature-branch divergence, an empty release payload,
+  a duplicate tag, or an unsynchronized default branch.
+- Stop at failing checks, required reviews or approvals, merge conflicts,
+  missing credentials, or branch protection. Preserve the prepared branch and
+  report the exact next owner action; do not retry by bypassing the gate.
+- If prep succeeds but merge or publication fails, resume from the existing
+  branch, PR, or tag state only after re-verifying its exact identity.
+
+## Must Not
 
 - Do not hardcode repository names, private endpoints, or secrets in skill
   sources or generated examples.
 - Store only variable and secret names in workflow templates.
 - Do not print, request, or persist secret values.
-- Treat the default branch as the release source of truth. `prep` and
-  `publish` must start from a clean, synced default branch.
-- If the user is on a feature branch or has local changes, fail fast before
-  editing files and ask them to create and merge a PR to the default branch,
-  switch to the default branch, fast-forward, and rerun.
+- Do not update the changelog in a dirty worktree or commit release prep
+  directly on the default branch.
+- Do not create a second release branch when a clean current feature branch can
+  be the PR head.
+- Do not publish a tag from a feature branch, a detached checkout, or a default
+  branch that differs from `origin/<default>`.
 - Do not use cherry-pick or commit-copy workflows to move release content
   between branches unless the user explicitly asks for that reconstruction.
 - Do not force-push, use admin merge, bypass branch protection, or ignore
@@ -118,6 +175,19 @@ doer path.
   branch protection require human action.
 - Verify runtime/artifact version alignment before pushing a release tag when
   package metadata is available.
+
+## Completion Criteria
+
+- Prep selected the correct branch path, committed a non-empty release section,
+  and pushed the exact PR head.
+- Complete mode merged that prep branch through required checks and reviews,
+  refreshed the default branch by fast-forward only, and verified the release
+  section before tagging.
+- Publish pushed the annotated tag from the clean synchronized default branch;
+  when waiting is enabled, the tag-triggered workflow completed successfully
+  and the GitHub Release contains every expected asset.
+- The final report distinguishes source/static, Git/PR, workflow, release, and
+  asset evidence and names every skipped or blocked lane.
 
 ## Learning Loop
 

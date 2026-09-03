@@ -6,6 +6,17 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed `publish-release` prep branch selection so a clean current feature
+  branch that contains the latest default-branch history is reused for the
+  changelog commit and PR instead of being rejected or wrapped in a second
+  release branch. Prep from the clean synced default branch still creates
+  `release/<tag>`, while tag publication remains restricted to the clean synced
+  default branch. Canonical and generated helpers now fail before changelog
+  mutation when the release payload is empty, feature/default history has
+  diverged, or the remote feature branch cannot be fast-forwarded. Exact remote
+  head destinations and remote-tracking refreshes prevent ref-like branch names
+  from creating tags and prevent stale fetch configuration from authorizing a
+  tag on outdated default-branch history.
 - Unified project-spec management across ordinary sessions, Task Implementer,
   and Agentic SDLC. The v2 owner contract separates requirement state, design
   readiness, and delivery; publishes both documents with Git/file-digest

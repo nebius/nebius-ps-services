@@ -1510,10 +1510,11 @@ report.
 
 `publish-release` publishes a package or application release to GitHub Releases
 end to end from the current project folder. It collects package and artifact
-inputs, can create setup assets when missing or explicitly requested, preps
-release changes on a feature branch, hands off to `create-pr` and `merge-pr`,
-tags from the default branch, waits for the tag-triggered workflow, verifies
-the GitHub Release and expected assets, and returns a publish report.
+inputs, can create setup assets when missing or explicitly requested, reuses a
+clean current feature branch for release prep or creates a release branch from
+the clean synced default branch, hands off to `create-pr` and `merge-pr`, tags
+only from the clean synced default branch, waits for the tag-triggered workflow,
+verifies the GitHub Release and expected assets, and returns a publish report.
 
 ### `python-project`
 

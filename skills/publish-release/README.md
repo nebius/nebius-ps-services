@@ -7,8 +7,8 @@ but its primary job is to execute a release and return a completion report.
 ## What It Does
 
 - Collects or derives project, package, tag, branch, and workflow inputs.
-- Runs release prep only from a clean synced default branch, creating and
-  pushing a `release/<tag>` branch from it.
+- Reuses a clean current feature branch for release prep, or creates and pushes
+  `release/<tag>` when prep starts from the clean synced default branch.
 - Uses `create-pr` and `merge-pr` for the release-prep PR path.
 - Tags only from a clean synced default branch.
 - Verifies package runtime version before tag push when configured.
@@ -33,8 +33,8 @@ GitHub Release with assets
 
 1. Resolve release inputs and normalize the release tag.
 2. Run setup mode only when requested or required assets are missing.
-3. Prep from the clean synced default branch; the helper creates and pushes
-   `release/<tag>`.
+3. Prep on the clean current feature branch, or create `release/<tag>` from the
+   clean synced default branch.
 4. Create and merge the release-prep PR in complete mode.
 5. Publish the tag from the default branch.
 6. Wait for the workflow and verify the GitHub Release assets.
@@ -45,9 +45,11 @@ GitHub Release with assets
 - Doer mode does not depend on a project-local `publish-release.sh`, but the
   setup template is a maintained runnable helper and should keep the same
   `--mode prep|publish|verify` contract as the skill-owned doer.
-- The default branch is the release source of truth. If work is still on a
-  feature branch, merge that branch to the default branch before prep or
-  publish.
+- The default branch is the release source of truth for tagging. Prep may reuse
+  a clean feature branch that contains current default-branch history; it must
+  never create a nested release branch from that feature branch.
+- Prep from the default branch creates `release/<tag>` before changing the
+  changelog, so release changes still reach the default branch through a PR.
 - Package import name and asset glob are inputs, not hardcoded skill knowledge.
 - Secret values stay in GitHub secrets or local auth state, not in skill
   sources.
