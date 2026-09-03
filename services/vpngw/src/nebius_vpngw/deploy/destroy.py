@@ -2230,8 +2230,9 @@ class NebiusDestroyBackend:
             request = DeleteAllocationRequest(id=resource.resource_id)
         else:
             raise ValueError("Destroy cannot delete a retained public allocation")
+        delete_call = t.cast(t.Callable[..., object], call)
         try:
-            return self._wait(call(request, **vm_ha_request_kwargs(operation_id)))
+            return self._wait(delete_call(request, **vm_ha_request_kwargs(operation_id)))
         except Exception as error:
             if self._not_found(error):
                 return None
