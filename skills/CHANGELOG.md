@@ -6,6 +6,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed `publish-release` runtime-version validation for SCM-derived packages.
+  Publish now creates the annotated tag locally before importing the package,
+  pushes only after the final version matches, and removes that exact unpushed
+  tag on mismatch while retaining ambiguous push failures for inspection.
+  Canonical and rendered-helper tests cover tag-derived resolution and
+  mismatch rollback.
 - Fixed `publish-release` prep branch selection so a clean current feature
   branch that contains the latest default-branch history is reused for the
   changelog commit and PR instead of being rejected or wrapped in a second

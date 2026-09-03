@@ -440,9 +440,9 @@ verify_runtime_version() {
   local resolved_version=""
   [[ -n "${package_import_name}" ]] || return 0
 
-  log_note "Verifying runtime version resolves to ${expected_version} before tagging..."
+  log_note "Verifying runtime version resolves to ${expected_version} on the local tag..."
   if ! resolved_version="$(
-    PYTHONPATH="src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${expected_version}" "${package_import_name}" <<'PY'
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PWD}/src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${expected_version}" "${package_import_name}" <<'PY'
 import importlib
 import sys
 
@@ -459,8 +459,8 @@ print(resolved, end="")
 PY
   )"; then
     log_error \
-      "Runtime version mismatch before tagging. Source checkout resolved to '${resolved_version:-unknown}' instead of '${expected_version}'."
-    exit 1
+      "Runtime version mismatch on the local tag. Source checkout resolved to '${resolved_version:-unknown}' instead of '${expected_version}'."
+    return 1
   fi
   log_success "Runtime version resolved to ${resolved_version}."
 }
@@ -507,8 +507,15 @@ publish_tag() {
   ensure_clean_worktree
   ensure_release_section_ready "${tag}"
   ensure_tag_absent "${tag}"
-  verify_runtime_version "${PACKAGE_IMPORT_NAME}" "${version}"
   git tag -a "${tag}" -m "Release ${tag}"
+  if ! verify_runtime_version "${PACKAGE_IMPORT_NAME}" "${version}"; then
+    if git tag -d "${tag}" >/dev/null 2>&1; then
+      log_note "Removed unpushed local tag ${tag} after runtime verification failed."
+    else
+      log_error "Unable to remove unpushed local tag ${tag} after runtime verification failed."
+    fi
+    return 1
+  fi
   git push origin "refs/tags/${tag}"
   log_success "Tag pushed: ${tag}"
   log_success "Release workflow will run from this tag push."

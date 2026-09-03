@@ -378,7 +378,7 @@ print(resolved, end="")
 PY
   )"; then
     log_error "Runtime version '${resolved_version:-unknown}' does not match '${expected_version}'."
-    exit 1
+    return 1
   fi
   log_success "Runtime version resolved to ${resolved_version}."
 }
@@ -459,8 +459,15 @@ publish_tag() {
   ensure_clean_worktree
   ensure_release_section_ready "${tag}" "${changelog}"
   ensure_tag_absent "${tag}"
-  verify_runtime_version "${package_import_name}" "${expected_version}"
   git tag -a "${tag}" -m "Release ${tag}"
+  if ! verify_runtime_version "${package_import_name}" "${expected_version}"; then
+    if git tag -d "${tag}" >/dev/null 2>&1; then
+      log_note "Removed unpushed local tag ${tag} after runtime verification failed."
+    else
+      log_error "Unable to remove unpushed local tag ${tag} after runtime verification failed."
+    fi
+    return 1
+  fi
   git push origin "refs/tags/${tag}"
   log_success "Tag pushed: ${tag}"
 }
