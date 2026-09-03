@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from click import unstyle
 from typer.testing import CliRunner
 
 from nebius_vpngw.cli import app
@@ -38,22 +39,23 @@ def test_create_config_no_interactive_explicitly_writes_same_template(tmp_path: 
 
 def test_vm_ha_help_exposes_idempotent_convergence_contract() -> None:
     result = CliRunner().invoke(app, ["vm-ha", "--help"])
+    output = unstyle(result.output)
 
     assert result.exit_code == 0, result.output
-    assert "--local-config-file" in result.output
-    assert "--output" in result.output
-    assert "--force" in result.output
-    assert "--region" in result.output
-    assert "--zone" not in result.output
-    assert "--dry-run" in result.output
-    assert "--approve" in result.output
-    assert "--output-format" in result.output
-    assert "--rotate-mtls" in result.output
-    assert "--target" not in result.output
-    assert "idempotently" in result.output
-    assert "default-No" in result.output
-    assert "stderr" in result.output
-    assert "Examples:" in result.output
+    assert "--local-config-file" in output
+    assert "--output" in output
+    assert "--force" in output
+    assert "--region" in output
+    assert "--zone" not in output
+    assert "--dry-run" in output
+    assert "--approve" in output
+    assert "--output-format" in output
+    assert "--rotate-mtls" in output
+    assert "--target" not in output
+    assert "idempotently" in output
+    assert "default-No" in output
+    assert "stderr" in output
+    assert "Examples:" in output
 
 
 @pytest.mark.parametrize(
@@ -89,7 +91,7 @@ def test_tunnel_operator_help_identifies_regular_non_ha_gateways(
     result = CliRunner().invoke(app, list(arguments))
 
     assert result.exit_code == 0, result.output
-    normalized_output = " ".join(result.output.split())
+    normalized_output = " ".join(unstyle(result.output).split())
     assert "supported only on regular gateways (non-HA)" in normalized_output
     assert routing_contract in normalized_output
 
@@ -216,6 +218,13 @@ def test_create_config_wizard_outputs_validate(
     vm_ha_enabled: bool,
 ) -> None:
     config_path = tmp_path / name
+    ssh_directory = tmp_path / "home" / ".ssh"
+    ssh_directory.mkdir(parents=True)
+    (ssh_directory / "id_ed25519.pub").write_text(
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyPublicKey\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(ssh_directory.parent))
 
     result = CliRunner().invoke(
         app,
