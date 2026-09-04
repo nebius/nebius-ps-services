@@ -207,7 +207,7 @@ jobs:
           set -euo pipefail
           make env
       - name: Download exact nebius-cxcli wheel
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nebius-cxcli-wheel
           path: services/nebius-cxcli/dist
