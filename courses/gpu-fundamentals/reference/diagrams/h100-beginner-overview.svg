@@ -1,0 +1,42 @@
+<svg viewBox="0 0 1200 940" role="img" aria-labelledby="h100-entry-title h100-entry-desc">
+<title id="h100-entry-title">H100 overview: physical resources and logical work</title>
+<desc id="h100-entry-desc">A CPU prepares host data and submits command launches separately from data transfers. H100 HBM backs ordinary global allocations and a device-wide L2 serves SMs grouped in GPCs and TPCs. One SM is enlarged: unified L1 and shared memory plus four SM subpartitions with schedulers, registers and execution units. A logical grid contains blocks, warps and threads. Blocks are scheduled onto SMs. This is a conceptual map, not a silicon floorplan; shared memory is not a compulsory cache stage and product resource counts vary.</desc>
+<defs><marker id="h100-entry-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L0 8 L8 4Z" fill="#245880"/></marker></defs>
+<rect x="25" y="25" width="1150" height="85" rx="12" fill="#eef5fc" stroke="#245880"/>
+<text x="600" y="58" text-anchor="middle" font-weight="700">Host: CPU application + host RAM</text>
+<text x="600" y="85" text-anchor="middle">Prepare data, select a device implementation, submit work, consume completed results</text>
+<rect x="25" y="165" width="720" height="680" rx="12" fill="#f7fafc" stroke="#245880"/>
+<text x="50" y="193" font-weight="700">Physical H100 resources</text>
+<rect x="50" y="215" width="670" height="65" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="385" y="240" text-anchor="middle" font-weight="700">HBM: high-bandwidth device memory</text>
+<text x="385" y="263" text-anchor="middle" class="diagram-label">Ordinary global allocations: weights, inputs, outputs and large state</text>
+<rect x="50" y="315" width="670" height="55" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="385" y="348" text-anchor="middle">L2 cache — device-wide, shared across SMs</text>
+<rect x="45" y="410" width="680" height="405" rx="12" fill="#eef8f2" stroke="#206757"/>
+<text x="385" y="440" text-anchor="middle" font-weight="700">One streaming multiprocessor (SM), enlarged</text>
+<rect x="65" y="465" width="640" height="65" rx="9" fill="#fff7e7" stroke="#86500e"/>
+<text x="385" y="490" text-anchor="middle">Unified L1 / texture cache and shared memory (SHMEM)</text>
+<text x="385" y="514" text-anchor="middle" class="diagram-label">Automatic caching and explicit block storage share finite capacity</text>
+<text x="385" y="558" text-anchor="middle" font-weight="700">Four SM subpartitions (SMSPs)</text>
+<g fill="#ffffff" stroke="#206757">
+<rect x="65" y="578" width="145" height="130" rx="8"/><rect x="230" y="578" width="145" height="130" rx="8"/><rect x="395" y="578" width="145" height="130" rx="8"/><rect x="560" y="578" width="145" height="130" rx="8"/>
+</g>
+<g text-anchor="middle" class="diagram-label">
+<text x="137" y="600" font-weight="700">SMSP 0</text><text x="302" y="600" font-weight="700">SMSP 1</text><text x="467" y="600" font-weight="700">SMSP 2</text><text x="632" y="600" font-weight="700">SMSP 3</text>
+<text x="137" y="625">warp scheduler</text><text x="302" y="625">warp scheduler</text><text x="467" y="625">warp scheduler</text><text x="632" y="625">warp scheduler</text>
+<text x="137" y="648">registers</text><text x="302" y="648">registers</text><text x="467" y="648">registers</text><text x="632" y="648">registers</text>
+<text x="137" y="673">CUDA / Tensor</text><text x="302" y="673">CUDA / Tensor</text><text x="467" y="673">CUDA / Tensor</text><text x="632" y="673">CUDA / Tensor</text>
+<text x="137" y="694">execution units</text><text x="302" y="694">execution units</text><text x="467" y="694">execution units</text><text x="632" y="694">execution units</text>
+<text x="385" y="744">Registers hold logically private thread values.</text>
+<text x="385" y="769">Many resident warps share finite scheduling and execution resources.</text>
+<text x="385" y="794">GPCs contain TPCs; TPCs contain SMs. Only one SM is enlarged here.</text>
+</g>
+<rect x="785" y="165" width="390" height="680" rx="12" fill="#fffdf7" stroke="#86500e"/>
+<text x="980" y="193" text-anchor="middle" font-weight="700">Logical CUDA work</text>
+<g fill="#fff7e7" stroke="#86500e"><rect x="810" y="215" width="340" height="65" rx="10"/><rect x="810" y="345" width="340" height="80" rx="10"/><rect x="810" y="495" width="340" height="80" rx="10"/><rect x="810" y="645" width="340" height="80" rx="10"/></g>
+<g text-anchor="middle"><text x="980" y="254">One kernel launch → grid</text><text x="980" y="378">Grid contains thread blocks</text><text x="980" y="405" class="diagram-label">A block is assigned to one SM</text><text x="980" y="528">Block contains warps</text><text x="980" y="555" class="diagram-label">A warp groups 32 threads</text><text x="980" y="678">Threads have lane IDs</text><text x="980" y="705" class="diagram-label">Each thread owns indices and values</text><text x="980" y="777" class="diagram-label">Logical work is scheduled on hardware;</text><text x="980" y="800" class="diagram-label">threads are not physical CUDA cores.</text></g>
+<g stroke="#245880" stroke-width="2.5" fill="none" marker-end="url(#h100-entry-arrow)"><path d="M700 110 V215"/><path d="M980 110 V165"/><path d="M385 280 V315"/><path d="M385 370 V410"/><path d="M980 280 V345"/><path d="M980 425 V495"/><path d="M980 575 V645"/><path d="M810 390 H765 V430 H725" stroke-dasharray="5 4"/></g>
+<text x="590" y="140" class="diagram-label">data transfer</text><text x="800" y="140" class="diagram-label">command launch</text>
+<text x="600" y="884" text-anchor="middle">Conceptual map, not a silicon floorplan. Shared memory is not a mandatory global-load stage.</text>
+<text x="600" y="911" text-anchor="middle" class="diagram-label">SM subpartitions are not whole-GPU quadrants. Enabled SM count, cache size and HBM capacity depend on the product.</text>
+</svg>

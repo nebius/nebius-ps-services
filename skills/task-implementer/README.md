@@ -29,6 +29,19 @@ state identifiers. Help is report-only and is not another workflow action.
 - `workspace remove` removes only an idle, clean, fully integrated lane and
   preserves private history.
 
+`[project-folder]` is the only public locator. If the primary checkout is on a
+different branch from the lane's recorded source branch, omitting it from that
+checkout may resolve a different workspace. Target the project directory
+inside the existing lane instead:
+
+```text
+$task-implementer workspace remove "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>"
+```
+
+Every angle-bracketed path component above is an illustrative placeholder;
+replace it with the corresponding local value. Do not switch the Task
+Implementer lane itself to a different branch.
+
 ## Git Roles
 
 | Location | Lifetime | Owner and purpose |

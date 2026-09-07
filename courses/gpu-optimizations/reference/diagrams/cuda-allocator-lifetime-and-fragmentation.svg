@@ -1,0 +1,18 @@
+<svg viewBox="0 0 1000 330" role="img" aria-labelledby="detail-cuda-allocator-lifetime-and-fragmentation-alloc-title detail-cuda-allocator-lifetime-and-fragmentation-alloc-desc">
+<title id="detail-cuda-allocator-lifetime-and-fragmentation-alloc-title">CUDA allocator lifetime and fragmentation</title>
+<desc id="detail-cuda-allocator-lifetime-and-fragmentation-alloc-desc">Reserved segments contain active allocations, a freed reusable hole, and inactive split space; deleting tensors changes allocated bytes before empty cache can release eligible segments.</desc>
+<rect x="45" y="70" width="900" height="90" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<rect x="65" y="90" width="270" height="50" fill="#d8eedf"/>
+<rect x="335" y="90" width="170" height="50" fill="#f5e8c8"/>
+<rect x="505" y="90" width="310" height="50" fill="#d8eedf"/>
+<rect x="815" y="90" width="105" height="50" fill="#eee5f5"/>
+<g text-anchor="middle" font-weight="700">
+<text x="200" y="121">live tensor A</text>
+<text x="420" y="121">reusable hole</text>
+<text x="660" y="121">live tensor C</text>
+<text x="868" y="121">split</text>
+</g>
+<text x="500" y="200" text-anchor="middle">reserved bytes include live allocations and allocator-owned reusable space</text>
+<path d="M190 225 V280 H810 V225" fill="none" stroke="#86500e" stroke-width="4"/>
+<text x="500" y="315" text-anchor="middle" fill="#86500e">empty_cache can release only wholly unused eligible cache—not live tensors</text>
+</svg>

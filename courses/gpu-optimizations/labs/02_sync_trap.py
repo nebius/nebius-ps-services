@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import statistics
 import time
 
@@ -63,7 +64,11 @@ def main() -> None:
     delayed_ms = measure(torch, delayed_loop, args.warmup, args.iterations)
     expected = synchronized_loop()
     actual = delayed_loop()
-    correct = abs(expected - actual) <= max(1e-4, abs(expected) * 1e-5)
+    correct = (
+        math.isfinite(expected)
+        and math.isfinite(actual)
+        and abs(expected - actual) <= 1e-6 + abs(expected) * 1e-5
+    )
     if not correct:
         raise SystemExit("The two reduction strategies returned different values.")
     target = write_result(

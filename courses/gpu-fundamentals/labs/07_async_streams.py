@@ -89,7 +89,7 @@ def main() -> None:
 
     assert sequential_result is not None and concurrent_result is not None
     correct = all(
-        torch.allclose(expected, observed, rtol=2e-2, atol=2e-2)
+        torch.allclose(expected, observed, rtol=1e-2, atol=1e-2)
         for expected, observed in zip(sequential_result, concurrent_result, strict=True)
     )
     if not correct:

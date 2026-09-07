@@ -1,0 +1,35 @@
+<svg viewBox="0 0 1050 390" role="img" aria-labelledby="detail-post-training-rollout-and-update-loop-rl-title detail-post-training-rollout-and-update-loop-rl-desc">
+<title id="detail-post-training-rollout-and-update-loop-rl-title">Post-training rollout and update loop</title>
+<desc id="detail-post-training-rollout-and-update-loop-rl-desc">An orchestrator sends prompts to rollout generation, reward or sandbox verification, and policy training; updated versioned weights return to the rollout engine.</desc>
+<defs>
+<marker id="detail-post-training-rollout-and-update-loop-rl-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g fill="#fff" stroke="#245880" stroke-width="2">
+<rect x="35" y="115" width="190" height="75" rx="10"/>
+<rect x="285" y="45" width="205" height="75" rx="10"/>
+<rect x="285" y="230" width="205" height="75" rx="10"/>
+<rect x="565" y="115" width="205" height="75" rx="10"/>
+<rect x="825" y="115" width="190" height="75" rx="10"/>
+</g>
+<g text-anchor="middle" font-weight="700">
+<text x="130" y="158">orchestrator</text>
+<text x="387" y="79">rollout engine</text>
+<text x="387" y="103">policy version N</text>
+<text x="387" y="264">reward / verifier</text>
+<text x="387" y="288">isolated sandbox</text>
+<text x="667" y="148">training backend</text>
+<text x="667" y="172">policy update</text>
+<text x="920" y="148">checkpoint /</text>
+<text x="920" y="172">weight transfer</text>
+</g>
+<g stroke="#245880" stroke-width="4" fill="none" marker-end="url(#detail-post-training-rollout-and-update-loop-rl-arr)">
+<path d="M225 140 C250 110 260 90 285 85"/>
+<path d="M387 120 V230"/>
+<path d="M490 267 C535 250 555 205 590 190"/>
+<line x1="770" y1="152" x2="825" y2="152"/>
+<path d="M920 115 C920 25 450 10 410 45"/>
+</g>
+<text x="525" y="355" text-anchor="middle">record rollout tokens, reward validity, stragglers, weight version, transfer time, and update cadence</text>
+</svg>

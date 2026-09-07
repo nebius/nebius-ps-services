@@ -11,6 +11,7 @@ from common import (
     load_torch,
     require_h100,
     resolve_int_override,
+    seed_everything,
     validate_common_args,
     write_result,
 )
@@ -52,6 +53,7 @@ def main() -> None:
         option="--size-mib",
     )
     torch = load_torch()
+    seed_everything(torch, args.seed)
     environment = require_h100(torch)
     elements = size_mib * 2**20 // 4
     pageable = torch.randn(elements, dtype=torch.float32)

@@ -1,4 +1,4 @@
-"""Compare eager pointwise work with a torch.compile fused graph."""
+"""Compare eager and compiled execution of a pointwise workload."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def main() -> None:
         iterations=args.iterations,
     )
     correct = bool(
-        torch.allclose(workload(x, bias), compiled(x, bias), rtol=1e-4, atol=1e-5)
+        torch.allclose(workload(x, bias), compiled(x, bias), rtol=1e-5, atol=1e-6)
     )
     if not correct:
         raise SystemExit("Compiled and eager results diverged.")

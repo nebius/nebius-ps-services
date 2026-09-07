@@ -1,0 +1,92 @@
+<svg viewBox="0 0 1200 560" role="img" aria-labelledby="detail-adjacent-and-strided-warp-memory-access-coalesce-title detail-adjacent-and-strided-warp-memory-access-coalesce-desc">
+<title id="detail-adjacent-and-strided-warp-memory-access-coalesce-title">Adjacent and strided warp memory access</title>
+<desc id="detail-adjacent-and-strided-warp-memory-access-coalesce-desc">In the upper example, adjacent warp lanes request adjacent words that fit into a small set of memory sectors. In the lower example, strided lanes request one word from many separated sectors, transferring more bytes than the warp uses.</desc>
+<text x="35" y="45" font-size="20" font-weight="700">Lane addresses determine useful bytes per transaction</text>
+<text x="45" y="88" font-weight="700"><tspan x="45">Adjacent</tspan><tspan x="45" dy="23">lanes</tspan></text>
+<g text-anchor="middle">
+<g fill="#e0edfa" stroke="#245880">
+<rect x="180" y="70" width="60" height="50"/>
+<rect x="245" y="70" width="60" height="50"/>
+<rect x="310" y="70" width="60" height="50"/>
+<rect x="375" y="70" width="60" height="50"/>
+<rect x="440" y="70" width="60" height="50"/>
+<rect x="505" y="70" width="60" height="50"/>
+<rect x="570" y="70" width="60" height="50"/>
+<rect x="635" y="70" width="60" height="50"/>
+</g>
+<g class="diagram-small">
+<text x="210" y="100">lane 0</text>
+<text x="275" y="100">lane 1</text>
+<text x="340" y="100">lane 2</text>
+<text x="405" y="100">lane 3</text>
+<text x="470" y="100">lane 4</text>
+<text x="535" y="100">lane 5</text>
+<text x="600" y="100">lane 6</text>
+<text x="665" y="100">lane 7</text>
+</g>
+</g>
+<rect x="175" y="155" width="540" height="75" rx="8" fill="#e0f0e6" stroke="#206757"/>
+<g stroke="#fff" stroke-width="2">
+<line x1="242" y1="155" x2="242" y2="230"/>
+<line x1="309" y1="155" x2="309" y2="230"/>
+<line x1="376" y1="155" x2="376" y2="230"/>
+<line x1="443" y1="155" x2="443" y2="230"/>
+<line x1="510" y1="155" x2="510" y2="230"/>
+<line x1="577" y1="155" x2="577" y2="230"/>
+<line x1="644" y1="155" x2="644" y2="230"/>
+</g>
+<text x="445" y="198" text-anchor="middle" font-weight="700">nearby words in a small set of aligned sectors</text>
+<text x="890" y="190" text-anchor="middle" class="diagram-label">most transferred bytes are useful</text>
+<text x="45" y="325" font-weight="700">Large stride</text>
+<g text-anchor="middle">
+<g fill="#e0edfa" stroke="#245880">
+<rect x="180" y="295" width="60" height="50"/>
+<rect x="310" y="295" width="60" height="50"/>
+<rect x="440" y="295" width="60" height="50"/>
+<rect x="570" y="295" width="60" height="50"/>
+<rect x="700" y="295" width="60" height="50"/>
+<rect x="830" y="295" width="60" height="50"/>
+<rect x="960" y="295" width="60" height="50"/>
+<rect x="1090" y="295" width="60" height="50"/>
+</g>
+<g class="diagram-small">
+<text x="210" y="325">lane 0</text>
+<text x="340" y="325">lane 1</text>
+<text x="470" y="325">lane 2</text>
+<text x="600" y="325">lane 3</text>
+<text x="730" y="325">lane 4</text>
+<text x="860" y="325">lane 5</text>
+<text x="990" y="325">lane 6</text>
+<text x="1120" y="325">lane 7</text>
+</g>
+</g>
+<g fill="#fff7e7" stroke="#86500e">
+<rect x="175" y="380" width="100" height="70" rx="7"/>
+<rect x="305" y="380" width="100" height="70" rx="7"/>
+<rect x="435" y="380" width="100" height="70" rx="7"/>
+<rect x="565" y="380" width="100" height="70" rx="7"/>
+<rect x="695" y="380" width="100" height="70" rx="7"/>
+<rect x="825" y="380" width="100" height="70" rx="7"/>
+<rect x="955" y="380" width="100" height="70" rx="7"/>
+<rect x="1085" y="380" width="100" height="70" rx="7"/>
+</g>
+<g text-anchor="middle" class="diagram-small">
+<text x="225" y="412">one useful</text>
+<text x="225" y="434">word</text>
+<text x="355" y="412">one useful</text>
+<text x="355" y="434">word</text>
+<text x="485" y="412">one useful</text>
+<text x="485" y="434">word</text>
+<text x="615" y="412">one useful</text>
+<text x="615" y="434">word</text>
+<text x="745" y="412">one useful</text>
+<text x="745" y="434">word</text>
+<text x="875" y="412">one useful</text>
+<text x="875" y="434">word</text>
+<text x="1005" y="412">one useful</text>
+<text x="1005" y="434">word</text>
+<text x="1135" y="412">one useful</text>
+<text x="1135" y="434">word</text>
+</g>
+<text x="600" y="515" text-anchor="middle" fill="#52626b">The consuming kernel and exact addresses decide the transactions; “noncontiguous” alone is not a diagnosis.</text>
+</svg>

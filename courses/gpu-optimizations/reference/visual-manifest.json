@@ -1,0 +1,150 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/end-to-end-gpu-performance-system.svg",
+      "title": "End-to-end GPU performance system",
+      "lessons": [
+        1
+      ],
+      "after": "Start here",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/five-primary-gpu-performance-bottleneck-classes.svg",
+      "title": "Five primary GPU performance bottleneck classes",
+      "lessons": [
+        1
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/tool-scope-from-service-objective-to-selected-kernel.svg",
+      "title": "Tool scope from service objective to selected kernel",
+      "lessons": [
+        3
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/framework-to-kernel-attribution-with-nvtx.svg",
+      "title": "Framework-to-kernel attribution with NVTX",
+      "lessons": [
+        3
+      ],
+      "after": "Practice",
+      "home": "lab:07_profile_workload"
+    },
+    {
+      "path": "reference/diagrams/nsight-systems-evidence-for-synchronization-and-launch-fixes.svg",
+      "title": "Nsight Systems evidence for synchronization and launch fixes",
+      "lessons": [
+        3,
+        2
+      ],
+      "after": "Check your results",
+      "home": "lab:07_profile_workload"
+    },
+    {
+      "path": "reference/diagrams/reading-arithmetic-intensity-and-achieved-tflop-per-second-on-a-roofline.svg",
+      "title": "Reading arithmetic intensity and achieved TFLOP per second on a roofline",
+      "lessons": [
+        3
+      ],
+      "after": "Check your results",
+      "home": "lab:14_profiler_bottlenecks"
+    },
+    {
+      "path": "reference/diagrams/evidence-driven-optimization-loop.svg",
+      "title": "Evidence-driven optimization loop",
+      "lessons": [
+        1,
+        13
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/kernel-geometry-residency-and-wave-tails.svg",
+      "title": "Kernel geometry, residency, and wave tails",
+      "lessons": [
+        10
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/cuda-allocator-lifetime-and-fragmentation.svg",
+      "title": "CUDA allocator lifetime and fragmentation",
+      "lessons": [
+        8
+      ],
+      "after": "Practice",
+      "home": "lab:12_allocator_lifetime"
+    },
+    {
+      "path": "reference/diagrams/fixed-work-one-rank-and-two-rank-critical-paths.svg",
+      "title": "Fixed-work one-rank and two-rank critical paths",
+      "lessons": [
+        12
+      ],
+      "after": "Mental model",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/serialized-versus-overlapped-two-node-work.svg",
+      "title": "Serialized versus overlapped two-node work",
+      "lessons": [
+        12
+      ],
+      "after": "Practice",
+      "home": "lab:13_collective_overlap"
+    },
+    {
+      "path": "reference/diagrams/optimization-keep-or-reject-decision.svg",
+      "title": "Optimization keep or reject decision",
+      "lessons": [
+        13
+      ],
+      "after": "Check your results",
+      "home": "lab:16_library_first_decision"
+    },
+    {
+      "path": "reference/diagrams/network-evidence-sequence.svg",
+      "title": "Network evidence before application tuning",
+      "lessons": [
+        11
+      ],
+      "after": "Mental model",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/all-reduce-result-units.svg",
+      "title": "Reading an illustrative all-reduce result",
+      "lessons": [
+        11
+      ],
+      "after": "Check your results",
+      "home": "lab:17_nccl_transport_sweep"
+    },
+    {
+      "path": "reference/diagrams/h2d-slot-ownership.svg",
+      "title": "Input slots protect copy and compute",
+      "lessons": [
+        6
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/d2h-output-ownership.svg",
+      "title": "Output ownership lasts through consumption",
+      "lessons": [
+        8
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    }
+  ]
+}

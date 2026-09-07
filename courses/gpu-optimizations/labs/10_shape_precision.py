@@ -56,7 +56,7 @@ def main() -> None:
             torch.linalg.vector_norm(result.float() - reference)
             / torch.linalg.vector_norm(reference)
         )
-        acceptable = relative_l2_error < (5e-2 if dtype == torch.bfloat16 else 1e-5)
+        acceptable = relative_l2_error < (1e-2 if dtype == torch.bfloat16 else 1e-5)
         rows.append(
             {
                 "mode": label,

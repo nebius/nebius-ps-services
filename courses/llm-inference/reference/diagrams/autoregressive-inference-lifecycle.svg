@@ -1,0 +1,37 @@
+<svg viewBox="0 0 1200 650" role="img" aria-labelledby="detail-autoregressive-inference-lifecycle-infer-life-title detail-autoregressive-inference-lifecycle-infer-life-desc">
+<title id="detail-autoregressive-inference-lifecycle-infer-life-title">Autoregressive inference lifecycle</title>
+<desc id="detail-autoregressive-inference-lifecycle-infer-life-desc">Tokenization produces prompt IDs; prefill produces first-token logits and prompt KV. Both prefill and later decode logits feed one sampling policy. The chosen ID passes through a common append, stopping, buffering, detokenization and streaming policy. Emit only allowed content, withholding EOS and matched stop strings. Continuing requests feed the chosen token to decode; finished requests finalize the response.</desc>
+<defs><marker id="detail-autoregressive-inference-lifecycle-infer-life-title-flow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#245880"/></marker></defs>
+<rect x="20" y="55" width="210" height="90" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="125" y="94" text-anchor="middle" font-size="18" font-weight="700">Formatted prompt</text>
+<text x="125" y="118" text-anchor="middle" font-size="16">Template → token IDs</text>
+<rect x="285" y="55" width="230" height="90" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="400" y="94" text-anchor="middle" font-size="18" font-weight="700">Prefill</text>
+<text x="400" y="118" text-anchor="middle" font-size="16">Prompt KV + newest logits</text>
+<rect x="610" y="55" width="230" height="90" rx="10" fill="#fff7e7" stroke="#245880"/>
+<text x="725" y="94" text-anchor="middle" font-size="18" font-weight="700">Choose token ID</text>
+<text x="725" y="118" text-anchor="middle" font-size="16">Fixed decoding policy</text>
+<rect x="890" y="220" width="270" height="140" rx="10" fill="#eee5f5" stroke="#245880"/>
+<text x="1025" y="260" text-anchor="middle" font-size="18" font-weight="700">Append and check stop</text>
+<text x="1025" y="284" text-anchor="middle" font-size="16">EOS / stop string / length</text>
+<text x="1025" y="308" text-anchor="middle" font-size="16">Buffer and detokenize</text>
+<text x="1025" y="332" text-anchor="middle" font-size="16">Stream only permitted content</text>
+<rect x="465" y="430" width="350" height="100" rx="10" fill="#eef8f2" stroke="#245880"/>
+<text x="640" y="462" text-anchor="middle" font-size="18" font-weight="700">Decode if continuing</text>
+<text x="640" y="486" text-anchor="middle" font-size="16">Consume selected ID; read/append KV</text>
+<text x="640" y="510" text-anchor="middle" font-size="16">Compute following-token logits</text>
+<rect x="890" y="460" width="270" height="85" rx="10" fill="#eee5f5" stroke="#245880"/>
+<text x="1025" y="496.5" text-anchor="middle" font-size="18" font-weight="700">Finalize if finished</text>
+<text x="1025" y="520.5" text-anchor="middle" font-size="16">Complete response metadata</text>
+<path d="M230 100 H285" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-autoregressive-inference-lifecycle-infer-life-title-flow)"/>
+<path d="M515 100 H610" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-autoregressive-inference-lifecycle-infer-life-title-flow)"/>
+<path d="M840 100 H1025 V220" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-autoregressive-inference-lifecycle-infer-life-title-flow)"/>
+<path d="M890 315 H850 V480 H815" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-autoregressive-inference-lifecycle-infer-life-title-flow)"/>
+<text x="840" y="394" text-anchor="end" font-size="16" fill="#52626b">Continue</text>
+<path d="M1025 360 V460" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-autoregressive-inference-lifecycle-infer-life-title-flow)"/>
+<text x="1083" y="415" text-anchor="middle" font-size="16" fill="#52626b">Stop</text>
+<path d="M465 480 H370 V260 H725 V145" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-autoregressive-inference-lifecycle-infer-life-title-flow)"/>
+<text x="514" y="247" text-anchor="middle" font-size="16" fill="#52626b">Later decode logits</text>
+<text x="600" y="589" text-anchor="middle" font-size="16" fill="#52626b">The same stop/buffer/stream policy handles token 1 and all subsequent tokens.</text>
+<text x="600" y="620" text-anchor="middle" font-size="16" fill="#52626b">Weights stay fixed; KV, random-generator state and active scheduler membership evolve.</text>
+</svg>

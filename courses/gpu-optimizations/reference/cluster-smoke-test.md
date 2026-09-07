@@ -1,5 +1,11 @@
 # Cluster smoke-test runbook
 
+This is a target-qualification checklist, not the lesson execution order.
+Follow the [syllabus](../SYLLABUS.md) for the learning route and complete each
+exercise's relevant safety/setup gate before running it. Distributed and optional
+checks qualify those paths; they are not prerequisites for earlier single-GPU
+lessons that do not use them.
+
 Run from the `gpu-optimizations` course root. Keep JSON results, Slurm output,
 profiler reports, and environment metadata private. Share only a sanitized
 summary that follows [evidence-security.md](evidence-security.md). A profiler
@@ -25,8 +31,9 @@ image identity is unavailable.
 sbatch slurm/tooling_preflight.sbatch
 ```
 
-Record PyTorch, CUDA, driver, Nsight, DCGM, GenAI-Perf, and AIPerf versions or
-explicit absence. Do not record hostnames, executable paths, GPU UUIDs, or
+Record PyTorch, CUDA, driver, Nsight, and DCGM versions or explicit absence.
+Serving-client qualification belongs to the LLM Inference environment.
+Do not record hostnames, executable paths, GPU UUIDs, or
 other asset identifiers in the shareable summary. Stop only the dependent
 profiler exercise when a command or permission is unavailable; do not replace
 missing evidence with a guess.
@@ -86,8 +93,6 @@ sbatch slurm/single_gpu.sbatch labs/10_shape_precision.py --profile smoke
 sbatch slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile smoke
 sbatch slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile smoke
 sbatch slurm/single_gpu.sbatch labs/05_input_pipeline.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/06_activation_checkpointing.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/11_sdpa_attention.py --profile smoke
 sbatch slurm/single_gpu.sbatch labs/12_allocator_lifetime.py --profile smoke
 ```
 
@@ -95,9 +100,28 @@ Keep a change only if its correctness check and the predeclared end-to-end metri
 For Lab 05, retain the batch-ready gap, H2D event time, device-consumption event
 time, and end-to-end wall time for every variant. These single-stream component
 measurements are serialized evidence, not a claim of overlap; use a profiler to
-prove overlap. For Lab 06, require the bounded matched-state BF16 probe to pass
-loss and full input/layer-gradient tolerances before interpreting memory or
-timing differences.
+prove overlap. Activation checkpointing is now Training Lab 14, where matched-state loss and
+all trainable parameter gradients must pass before memory or timing is interpreted.
+Attention/SDPA practice is now Inference Lab 24; these specialized exercises
+remain in the learning path with their own course environments.
+
+Qualify complete transfer paths separately from Lab 05's serialized components:
+
+```bash
+sbatch slurm/single_gpu.sbatch labs/19_h2d_pipeline.py --mode serial --slots 2
+sbatch slurm/single_gpu.sbatch labs/19_h2d_pipeline.py --mode pipeline --slots 2
+sbatch slurm/single_gpu.sbatch labs/20_d2h_pipeline.py --mode serial --slots 2
+sbatch slurm/single_gpu.sbatch labs/20_d2h_pipeline.py --mode pipeline --slots 2
+```
+
+Follow the complete Lab 20 guide for the intervening workers, pooled and
+nonblocking modes; the endpoints alone do not isolate their causes. Require
+every batch to match, every output to be consumed once and the final drain to
+complete. Keep workload, slot count and sink delay fixed between comparisons.
+Use separate short Nsight runs to establish copy/compute overlap; CPU controls
+or a lower wall time alone do not prove concurrency. Record bounded pool
+capacity separately from measured host memory. The synthetic sink is not a
+storage-throughput experiment.
 
 ## Gate 6: scale and capstone
 
@@ -109,3 +133,41 @@ sbatch slurm/single_gpu.sbatch labs/09_capstone.py --profile smoke
 ```
 
 Compare the one-node and two-node scaling runs using the same global batch. Use the slowest-rank time for global throughput. Record speedup, scaling efficiency, exposed collective time, correctness, and memory. Run the capstone on one node because it is not a distributed program. For the overlap lab, require exact reduction and finite-compute gates, then use an Nsight Systems timeline before attributing any ratio to simultaneous communication and compute.
+
+## Gate 7: tails and library-first escalation
+
+```bash
+sbatch slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile smoke
+sbatch slurm/single_gpu.sbatch labs/16_library_first_decision.py --profile smoke
+```
+
+Distinguish warp divergence, variable block work, rank skew, and a partial final
+wave. A proposed custom kernel must address a measured residual hotspot after
+framework, compiler, and library options have been evaluated. Repeat accepted
+candidates across independent trials and keep unavailable profiler or H100
+evidence pending.
+
+## Networking workshop: qualification before tuning
+
+After two-node preflight, qualify Lab 17 at a small range, then the full curve.
+Lab 18 additionally requires the reviewed external MPI-enabled NCCL Tests
+binary and a site-qualified MPI/Slurm integration. Follow each lab's complete
+guide for configuration, output interpretation and independent-run comparisons.
+
+```bash
+sbatch slurm/two_node.sbatch labs/17_nccl_transport_sweep.py --max-bytes 1048576
+sbatch slurm/nccl_tests.sbatch default --diagnostic --max-bytes 1048576
+sbatch slurm/nccl_tests.sbatch default
+```
+
+The dedicated launcher requires COURSE_NCCL_TESTS and COURSE_MPI supplied by
+the learner. Do not pass its binary to torchrun. Require two distinct rank-host
+records, visible GPU zero per task, complete checked rows and a successful
+launcher exit. Keep diagnostic logs private and separate from timing runs.
+Collect at least three independent baseline/candidate jobs; only then repeat
+the candidate in scaling and overlap Labs 08/13.
+
+Socket operation can satisfy the communication baseline. IB/RoCE and GDR
+claims remain conditional on independent path evidence. Do not tune or repair
+NICs, switches, kernel modules, security settings or Slurm as part of this
+procedure. This checklist is pending live execution on the declared cluster.

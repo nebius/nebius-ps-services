@@ -1,0 +1,76 @@
+<svg viewBox="0 0 1200 620" role="img" aria-labelledby="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-title detail-kernel-geometry-residency-and-wave-tails-kernel-balance-desc">
+<title id="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-title">Kernel geometry, residency, and wave tails</title>
+<desc id="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-desc">A grid of blocks is scheduled in waves across four example SMs. Register, shared-memory, thread, and block limits determine resident blocks, while a partial final wave leaves some SMs idle.</desc>
+<defs>
+<marker id="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<text x="35" y="45" font-size="20" font-weight="700">Grid blocks</text>
+<g fill="#e0edfa" stroke="#245880">
+<rect x="35" y="70" width="70" height="45" rx="7"/>
+<rect x="115" y="70" width="70" height="45" rx="7"/>
+<rect x="195" y="70" width="70" height="45" rx="7"/>
+<rect x="275" y="70" width="70" height="45" rx="7"/>
+<rect x="355" y="70" width="70" height="45" rx="7"/>
+<rect x="435" y="70" width="70" height="45" rx="7"/>
+<rect x="515" y="70" width="70" height="45" rx="7"/>
+<rect x="595" y="70" width="70" height="45" rx="7"/>
+<rect x="675" y="70" width="70" height="45" rx="7"/>
+<rect x="755" y="70" width="70" height="45" rx="7"/>
+</g>
+<g text-anchor="middle" class="diagram-small">
+<text x="70" y="98">B0</text>
+<text x="150" y="98">B1</text>
+<text x="230" y="98">B2</text>
+<text x="310" y="98">B3</text>
+<text x="390" y="98">B4</text>
+<text x="470" y="98">B5</text>
+<text x="550" y="98">B6</text>
+<text x="630" y="98">B7</text>
+<text x="710" y="98">B8</text>
+<text x="790" y="98">B9</text>
+</g>
+<path d="M420 125 V170" fill="none" stroke="#245880" stroke-width="3" marker-end="url(#detail-kernel-geometry-residency-and-wave-tails-kernel-balance-arr)"/>
+<text x="35" y="200" font-size="20" font-weight="700">Example residency: two blocks per SM</text>
+<g text-anchor="middle">
+<rect x="35" y="225" width="245" height="205" rx="12" fill="#eef5fc" stroke="#245880"/>
+<rect x="315" y="225" width="245" height="205" rx="12" fill="#eef5fc" stroke="#245880"/>
+<rect x="595" y="225" width="245" height="205" rx="12" fill="#eef5fc" stroke="#245880"/>
+<rect x="875" y="225" width="245" height="205" rx="12" fill="#eef5fc" stroke="#245880"/>
+<g font-weight="700">
+<text x="157" y="258">SM 0</text>
+<text x="437" y="258">SM 1</text>
+<text x="717" y="258">SM 2</text>
+<text x="997" y="258">SM 3</text>
+</g>
+<g fill="#e0f0e6">
+<rect x="75" y="285" width="165" height="45" rx="7"/>
+<rect x="75" y="345" width="165" height="45" rx="7"/>
+<rect x="355" y="285" width="165" height="45" rx="7"/>
+<rect x="355" y="345" width="165" height="45" rx="7"/>
+<rect x="635" y="285" width="165" height="45" rx="7"/>
+<rect x="635" y="345" width="165" height="45" rx="7"/>
+<rect x="915" y="285" width="165" height="45" rx="7"/>
+<rect x="915" y="345" width="165" height="45" rx="7"/>
+</g>
+<text x="157" y="313">wave 1: B0</text>
+<text x="157" y="373">wave 1: B1</text>
+<text x="437" y="313">wave 1: B2</text>
+<text x="437" y="373">wave 1: B3</text>
+<text x="717" y="313">wave 1: B4</text>
+<text x="717" y="373">wave 1: B5</text>
+<text x="997" y="313">wave 1: B6</text>
+<text x="997" y="373">wave 1: B7</text>
+</g>
+<g text-anchor="middle">
+<rect x="240" y="470" width="300" height="70" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<text x="390" y="498" font-weight="700">partial final wave</text>
+<text x="390" y="523" class="diagram-label">B8 and B9 use only part of the GPU</text>
+<rect x="650" y="470" width="340" height="95" rx="10" fill="#fff" stroke="#245880"/>
+<text x="820" y="498" font-weight="700">resident-block limits</text>
+<text x="820" y="525" class="diagram-label">threads · registers · shared memory</text>
+<text x="820" y="548" class="diagram-label">block limit · architectural limit</text>
+</g>
+<text x="600" y="605" text-anchor="middle" fill="#52626b">The best launch balances useful work, residency, latency hiding, and tail waste.</text>
+</svg>

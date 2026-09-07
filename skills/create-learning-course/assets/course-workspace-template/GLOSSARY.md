@@ -1,10 +1,7 @@
-# {Course Topic} Glossary
+# Glossary
 
-Use this file for terms the learner can already use correctly. Do not turn it
-into a dictionary of concepts that have only been introduced.
+## {Canonical term}
 
-## Terms
-
-**{Canonical term}**:
-{One or two sentence definition.}
-_Avoid_: {ambiguous synonym or misleading phrase}
+{Plain-English definition consistent with first use in the lesson. State the
+important distinction from a commonly confused term. Link to its primary
+lesson. The glossary supplements rather than replaces concept explanations.}

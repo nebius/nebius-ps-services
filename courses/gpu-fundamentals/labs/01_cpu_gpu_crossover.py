@@ -64,7 +64,7 @@ def main() -> None:
             result = result_gpu.cpu()
             transfer_samples.append((time.perf_counter() - start) * 1_000)
         reference = x_cpu * y_cpu + x_cpu
-        correct = bool(torch.allclose(reference, result, rtol=1e-5, atol=1e-6))
+        correct = bool(torch.allclose(result, reference, rtol=1e-5, atol=1e-6))
         all_correct = all_correct and correct
         rows.append(
             {

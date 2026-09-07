@@ -1,0 +1,54 @@
+<svg viewBox="0 0 1150 430" role="img" aria-labelledby="detail-optimization-keep-or-reject-decision-decision-title detail-optimization-keep-or-reject-decision-decision-desc">
+<title id="detail-optimization-keep-or-reject-decision-decision-title">Optimization keep or reject decision</title>
+<desc id="detail-optimization-keep-or-reject-decision-decision-desc">A candidate change passes four visible gates: correctness, end-to-end objective, memory budget, and repeatability. Any failed gate leads to reject and learn; only a branch that passes all four is kept.</desc>
+<defs>
+<marker id="detail-optimization-keep-or-reject-decision-decision-arr-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+<marker id="detail-optimization-keep-or-reject-decision-decision-arr-red" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#923c49"/>
+</marker>
+</defs>
+<g text-anchor="middle" font-weight="700">
+<rect x="25" y="70" width="150" height="70" rx="12" fill="#e0edfa"/>
+<text x="100" y="112">candidate</text>
+<rect x="220" y="70" width="150" height="70" rx="12" fill="#fff7e7"/>
+<text x="295" y="112">correct?</text>
+<rect x="415" y="70" width="170" height="70" rx="12" fill="#fff7e7"/>
+<text x="500" y="102">end-to-end</text>
+<text x="500" y="126">objective?</text>
+<rect x="630" y="70" width="145" height="70" rx="12" fill="#fff7e7"/>
+<text x="702" y="112">memory?</text>
+<rect x="820" y="70" width="165" height="70" rx="12" fill="#fff7e7"/>
+<text x="902" y="112">repeatable?</text>
+<rect x="960" y="260" width="150" height="70" rx="12" fill="#e0f0e6"/>
+<text x="1035" y="302">keep</text>
+<rect x="440" y="260" width="190" height="70" rx="12" fill="#f9e8eb"/>
+<text x="535" y="290">reject / learn</text>
+<text x="535" y="314" class="diagram-label">preserve evidence</text>
+</g>
+<g stroke="#245880" stroke-width="4" fill="none" marker-end="url(#detail-optimization-keep-or-reject-decision-decision-arr-blue)">
+<line x1="175" y1="105" x2="220" y2="105"/>
+<line x1="370" y1="105" x2="415" y2="105"/>
+<line x1="585" y1="105" x2="630" y2="105"/>
+<line x1="775" y1="105" x2="820" y2="105"/>
+<path d="M985 105 H1035 V260"/>
+</g>
+<g stroke="#923c49" stroke-width="3" fill="none" marker-end="url(#detail-optimization-keep-or-reject-decision-decision-arr-red)">
+<path d="M295 140 V205 H475 V260"/>
+<path d="M500 140 V260"/>
+<path d="M702 140 V205 H590 V260"/>
+<path d="M902 140 V225 H630 V275"/>
+</g>
+<g class="diagram-small" fill="#52626b">
+<text x="390" y="92">yes</text>
+<text x="605" y="92">yes</text>
+<text x="795" y="92">yes</text>
+<text x="1000" y="92">yes</text>
+<text x="318" y="190">no</text>
+<text x="515" y="190">no</text>
+<text x="718" y="190">no</text>
+<text x="880" y="190">no</text>
+</g>
+<text x="575" y="395" text-anchor="middle" fill="#52626b">A faster kernel is rejected when the declared workload, objective, or evidence contract does not pass.</text>
+</svg>

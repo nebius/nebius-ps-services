@@ -1,19 +1,17 @@
-# {Reference Title}
+# {Reference title}
 
 ## Use When
 
-{When a learner or future lesson should consult this reference.}
+{A specific task or decision that calls for this reference.}
 
-## Key Ideas
+## Key Relationships
 
-- {Compressed idea with citation}
+{Concise definitions and relationships, consistent with the primary lesson.}
 
-## Procedure Or Checklist
+## Procedure Or Decision Aid
 
-1. {Step}
-2. {Step}
-3. {Step}
+{Actionable steps or selection criteria with assumptions and limitations.}
 
-## Sources
+## Official References
 
 - [{Public source title}]({public-url})

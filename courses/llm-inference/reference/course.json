@@ -1,0 +1,190 @@
+{
+  "title": "LLM Inference",
+  "estimated_guided_hours": 47,
+  "labs": [
+    {
+      "path": "labs/35_inference_basics.py",
+      "optional": false,
+      "lessons": [
+        1
+      ]
+    },
+    {
+      "path": "labs/00_cluster_preflight.py",
+      "optional": false,
+      "lessons": [
+        14
+      ]
+    },
+    {
+      "path": "labs/08_kv_cache.py",
+      "optional": false,
+      "lessons": [
+        2,
+        4
+      ]
+    },
+    {
+      "path": "labs/09_hf_prefill_decode.py",
+      "optional": false,
+      "lessons": [
+        2
+      ]
+    },
+    {
+      "path": "labs/10_vllm_offline.py",
+      "optional": false,
+      "lessons": [
+        6
+      ]
+    },
+    {
+      "path": "labs/11_serving_client.py",
+      "optional": false,
+      "lessons": [
+        6,
+        7
+      ]
+    },
+    {
+      "path": "labs/12_moe_expert_parallel.py",
+      "optional": false,
+      "lessons": [
+        14
+      ]
+    },
+    {
+      "path": "labs/15_streaming_client.py",
+      "optional": false,
+      "lessons": [
+        7
+      ]
+    },
+    {
+      "path": "labs/16_model_artifact_audit.py",
+      "optional": false,
+      "lessons": [
+        1
+      ]
+    },
+    {
+      "path": "labs/17_sampling_semantics.py",
+      "optional": false,
+      "lessons": [
+        3
+      ]
+    },
+    {
+      "path": "labs/18_padding_bucketing.py",
+      "optional": false,
+      "lessons": [
+        5,
+        9
+      ]
+    },
+    {
+      "path": "labs/19_tensor_parallel_linear.py",
+      "optional": false,
+      "lessons": [
+        14
+      ]
+    },
+    {
+      "path": "labs/20_prefix_cache_client.py",
+      "optional": false,
+      "lessons": [
+        10
+      ]
+    },
+    {
+      "path": "labs/23_speculative_decoding.py",
+      "optional": false,
+      "lessons": [
+        13
+      ]
+    },
+    {
+      "path": "labs/24_sdpa_attention.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/25_workload_metrics.py",
+      "optional": false,
+      "lessons": [
+        5,
+        7
+      ]
+    },
+    {
+      "path": "labs/26_kv_capacity.py",
+      "optional": false,
+      "lessons": [
+        4
+      ]
+    },
+    {
+      "path": "labs/27_paged_kv.py",
+      "optional": false,
+      "lessons": [
+        8
+      ]
+    },
+    {
+      "path": "labs/28_continuous_batching.py",
+      "optional": false,
+      "lessons": [
+        9
+      ]
+    },
+    {
+      "path": "labs/29_quantization.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/30_engine_profile.py",
+      "optional": false,
+      "lessons": [
+        6,
+        15
+      ]
+    },
+    {
+      "path": "labs/32_inference_capstone.py",
+      "optional": false,
+      "lessons": [
+        16
+      ]
+    },
+    {
+      "path": "labs/33_speculative_engine_client.py",
+      "optional": true,
+      "lessons": [
+        13
+      ]
+    },
+    {
+      "path": "labs/34_policy_equivalence_client.py",
+      "optional": false,
+      "lessons": [
+        9,
+        10
+      ]
+    },
+    {
+      "path": "labs/36_kv_tiering.py",
+      "optional": false,
+      "lessons": [
+        10
+      ]
+    }
+  ],
+  "extensions": [
+    "Dynamo disaggregated serving and KV-aware routing"
+  ]
+}

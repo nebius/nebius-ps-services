@@ -1,0 +1,41 @@
+<svg viewBox="0 0 1100 520" role="img" aria-labelledby="detail-fixed-work-one-rank-and-two-rank-critical-paths-timeline-title detail-fixed-work-one-rank-and-two-rank-critical-paths-timeline-desc">
+<title id="detail-fixed-work-one-rank-and-two-rank-critical-paths-timeline-title">Fixed-work one-rank and two-rank critical paths</title>
+<desc id="detail-fixed-work-one-rank-and-two-rank-critical-paths-timeline-desc">A one-rank baseline contains the complete compute interval. A two-rank fixed-global-work run shortens per-rank compute but adds an arrival wait for the early rank and collective communication. The non-overlapped collective is exposed communication, not an additional interval after the collective. Speedup is determined by the slowest rank's complete interval, not by shorter local compute alone.</desc>
+<g font-weight="700">
+<text x="30" y="95">one rank</text>
+<text x="30" y="245">rank 0</text>
+<text x="30" y="345">rank 1</text>
+</g>
+<g stroke="#24343d" stroke-width="2">
+<line x1="145" y1="85" x2="1030" y2="85"/>
+<line x1="145" y1="235" x2="1030" y2="235"/>
+<line x1="145" y1="335" x2="1030" y2="335"/>
+</g>
+<g text-anchor="middle">
+<rect x="175" y="50" width="720" height="70" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<text x="535" y="80" font-weight="700">complete fixed global work on one GPU</text>
+<text x="535" y="106" class="diagram-label">baseline end-to-end interval</text>
+<rect x="175" y="200" width="340" height="70" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<text x="345" y="230" font-weight="700">rank 0 local compute</text>
+<text x="345" y="256" class="diagram-label">half of fixed global work</text>
+<rect x="175" y="300" width="385" height="70" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<text x="367" y="330" font-weight="700">rank 1 local compute</text>
+<text x="367" y="356" class="diagram-label">straggler example</text>
+<rect x="560" y="200" width="245" height="70" rx="9" fill="#e0edfa" stroke="#245880"/>
+<text x="682" y="230" font-weight="700">collective</text>
+<text x="682" y="256" class="diagram-label">message size + fabric</text>
+<rect x="560" y="300" width="245" height="70" rx="9" fill="#e0edfa" stroke="#245880"/>
+<text x="682" y="330" font-weight="700">collective</text>
+<text x="682" y="356" class="diagram-label">all ranks participate</text>
+<rect x="515" y="200" width="45" height="70" fill="#f9e8eb" stroke="#923c49"/>
+<text x="537" y="188" class="diagram-small">arrival wait</text>
+<line x1="805" y1="185" x2="805" y2="390" stroke="#923c49" stroke-width="3"/>
+<text x="909" y="288" class="diagram-label">step ends here</text>
+<text x="682" y="399" class="diagram-label">collective = exposed communication</text>
+</g>
+<path d="M895 130 V150 H805 V185" fill="none" stroke="#52626b" stroke-width="2" stroke-dasharray="6 6"/>
+<text x="990" y="158" text-anchor="middle" class="diagram-label">compare full intervals</text>
+<rect x="160" y="420" width="800" height="62" rx="10" fill="#fff" stroke="#dbe5e1"/>
+<text x="560" y="447" text-anchor="middle" font-weight="700">Hold global work fixed for strong scaling</text>
+<text x="560" y="470" text-anchor="middle" class="diagram-label">speedup = one-rank interval ÷ slowest two-rank interval</text>
+</svg>

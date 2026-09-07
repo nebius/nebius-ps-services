@@ -1,0 +1,47 @@
+<svg viewBox="0 0 1200 520" role="img" aria-labelledby="detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-title detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-desc">
+<title id="detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-title">Text, tokens, token IDs, embeddings, and shifted labels</title>
+<desc id="detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-desc">Text passes through a pinned tokenizer to token pieces and integer IDs. IDs index learned embedding rows. A shifted copy of the ID sequence supplies next-token labels, and a mask removes padding or prompt targets from the loss.</desc>
+<defs>
+<marker id="detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g text-anchor="middle">
+<rect x="30" y="65" width="170" height="100" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="245" y="65" width="170" height="100" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="460" y="65" width="170" height="100" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<rect x="675" y="75" width="205" height="80" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<rect x="925" y="75" width="235" height="80" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<text x="115" y="108" font-weight="700">text</text>
+<text x="115" y="134" class="diagram-label">“GPU training”</text>
+<text x="330" y="108" font-weight="700">tokenizer</text>
+<text x="330" y="130" class="diagram-label"><tspan x="330">pinned rules</tspan><tspan x="330" dy="20">+ vocabulary</tspan></text>
+<text x="545" y="108" font-weight="700">tokens</text>
+<text x="545" y="130" class="diagram-label"><tspan x="545">piece A · piece B</tspan><tspan x="545" dy="20">· piece C</tspan></text>
+<text x="777" y="108" font-weight="700">token IDs</text>
+<text x="777" y="134" class="diagram-label">[i, j, k]</text>
+<text x="1042" y="108" font-weight="700">embedding lookup</text>
+<text x="1042" y="134" class="diagram-label">rows E[i], E[j], E[k]</text>
+</g>
+<g stroke="#245880" stroke-width="3" marker-end="url(#detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-arr)">
+<line x1="200" y1="115" x2="245" y2="115"/>
+<line x1="415" y1="115" x2="460" y2="115"/>
+<line x1="630" y1="115" x2="675" y2="115"/>
+<line x1="880" y1="115" x2="925" y2="115"/>
+</g>
+<g text-anchor="middle">
+<rect x="150" y="245" width="390" height="105" rx="12" fill="#eef5fc" stroke="#245880"/>
+<text x="345" y="277" font-weight="700">model input IDs</text>
+<text x="345" y="308">[i, j, k]</text>
+<text x="345" y="333" class="diagram-label">positions 0, 1, 2; T = 3</text>
+<rect x="660" y="245" width="390" height="105" rx="12" fill="#fff7e7" stroke="#86500e"/>
+<text x="855" y="277" font-weight="700">next-token labels</text>
+<text x="855" y="308">[j, k, ignore]</text>
+<text x="855" y="333" class="diagram-label">prompt or padding targets may also be ignored</text>
+</g>
+<path d="M777 155 V205 H345 V245" fill="none" stroke="#245880" stroke-width="3" marker-end="url(#detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-arr)"/>
+<path d="M777 155 V205 H855 V245" fill="none" stroke="#245880" stroke-width="3" marker-end="url(#detail-text-tokens-token-ids-embeddings-and-shifted-labels-token-pipe-arr)"/>
+<text x="600" y="405" text-anchor="middle" font-weight="700">loss is averaged over selected target positions</text>
+<text x="600" y="438" text-anchor="middle" class="diagram-label">token identity, position, attention visibility, and loss visibility are separate contracts</text>
+<text x="600" y="485" text-anchor="middle" fill="#52626b">The numeric IDs are identifiers; learned meaning begins with embedding vectors and later context.</text>
+</svg>

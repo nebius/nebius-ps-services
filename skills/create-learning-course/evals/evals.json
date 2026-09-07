@@ -1,0 +1,60 @@
+{
+  "skill_name": "create-learning-course",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use $create-learning-course to create a self-contained introductory Python data-validation course for analysts. Assume basic Python but no validation terminology. Include two lessons, one runnable standard-library lab, a process diagram and official references. Work only in a new local course folder; do not install or publish.",
+      "expected_output": "A complete light HTML textbook and canonical sources teaching validation before its applications, with a reproducible lab and honest evidence gates.",
+      "files": [],
+      "assertions": [
+        "The opening explains validation, input/output and failure handling before APIs or applications.",
+        "The syllabus and TOC follow the same two-lesson prerequisite sequence.",
+        "The lab has a purpose introduction and seven substantive sections whose commands and results match source.",
+        "The page embeds full prose, CSS, contextual accessible SVG and complete escaped lab source; the course builder has a stale/parity check.",
+        "No GPU, Slurm, cloud, private identifiers or unrequested installation is introduced."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use $create-learning-course to create a short course on evaluating evidence in workplace decisions for complete beginners. Use a synthetic case, a worked example, guided comparison and a new transfer problem. Deliver the standard self-contained HTML course; no coding, external publishing or learner tracking.",
+      "expected_output": "A subject-neutral digital textbook with explanatory depth and authentic non-code practice.",
+      "files": [],
+      "assertions": [
+        "Evidence and competing explanations are defined before decision scenarios.",
+        "A worked example prepares learners for guided comparison and independent transfer, with reasoned feedback.",
+        "The practical guide follows the seven roles without pretending code or a runtime exists.",
+        "The light layout, side TOC and contextual diagram pattern are preserved.",
+        "Runtime lanes are marked not applicable with reasons; semantic/browser gates are not automatically approved."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use $create-learning-course to redesign the supplied course. It has the same caching definition twice, a useful later refresher on invalidation, and a lab claiming size sweeps although its code accepts only a fixed size. Preserve useful explanations, correct the lab claim and use the standard HTML format.",
+      "expected_output": "A preservation-aware revision that removes only exact redundancy, keeps the purposeful refresher and aligns the lab with its actual implementation.",
+      "files": [
+        "fixtures/revision-case.md"
+      ],
+      "assertions": [
+        "One primary caching explanation remains and the useful invalidation refresher is retained with an explicit purpose.",
+        "The fixed-size runnable baseline is distinguished from a learner-implemented size-sweep extension.",
+        "No useful worked assumptions, invalidation warning or correctness check disappears.",
+        "No learner-facing history, source-coverage table, time formula or research-reviewed date appears.",
+        "A change in source is reflected in rebuilt HTML and a stale/parity test."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use $create-learning-course to review the supplied caching lesson for teaching clarity and whether its practical claims match the supplied code. Report findings only; do not edit files, generate an HTML textbook or run the example.",
+      "expected_output": "A read-only teaching review that identifies actual duplication and unsupported lab claims while preserving the purposeful refresher.",
+      "files": [
+        "fixtures/revision-case.md"
+      ],
+      "assertions": [
+        "The report distinguishes the duplicated caching definition from the useful invalidation refresher.",
+        "The fixed-size code is identified as insufficient evidence for a supported size-sweep capability.",
+        "The response proposes focused improvements without claiming an executed lab or validated course outcome.",
+        "No course files, HTML publication, skill sources or learner-code execution are produced by the review."
+      ]
+    }
+  ]
+}

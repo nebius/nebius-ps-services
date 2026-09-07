@@ -1,0 +1,186 @@
+{
+  "title": "LLM Training",
+  "estimated_guided_hours": 48,
+  "labs": [
+    {
+      "path": "labs/32_learning_basics.py",
+      "optional": false,
+      "lessons": [
+        1
+      ]
+    },
+    {
+      "path": "labs/00_cluster_preflight.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/01_tiny_transformer_train.py",
+      "optional": false,
+      "lessons": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "path": "labs/02_gradient_accumulation.py",
+      "optional": false,
+      "lessons": [
+        4,
+        8
+      ]
+    },
+    {
+      "path": "labs/03_ddp_train.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/04_fsdp2_train.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/05_lora_sft.py",
+      "optional": false,
+      "lessons": [
+        1,
+        14
+      ]
+    },
+    {
+      "path": "labs/06_grpo_objective.py",
+      "optional": false,
+      "lessons": [
+        1,
+        15
+      ]
+    },
+    {
+      "path": "labs/07_grpo_trainer.py",
+      "optional": false,
+      "lessons": [
+        1,
+        15
+      ]
+    },
+    {
+      "path": "labs/12_moe_expert_parallel.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/13_loss_masking.py",
+      "optional": false,
+      "lessons": [
+        2,
+        4,
+        14
+      ]
+    },
+    {
+      "path": "labs/14_activation_checkpointing.py",
+      "optional": false,
+      "lessons": [
+        8
+      ]
+    },
+    {
+      "path": "labs/19_tensor_parallel_linear.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/21_mixed_precision_training.py",
+      "optional": false,
+      "lessons": [
+        6,
+        7
+      ]
+    },
+    {
+      "path": "labs/22_transformer_engine_fp8.py",
+      "optional": true,
+      "lessons": [
+        7
+      ]
+    },
+    {
+      "path": "labs/24_checkpoint_resume.py",
+      "optional": false,
+      "lessons": [
+        5
+      ]
+    },
+    {
+      "path": "labs/25_sequence_packing.py",
+      "optional": false,
+      "lessons": [
+        2,
+        4
+      ]
+    },
+    {
+      "path": "labs/26_input_pipeline.py",
+      "optional": false,
+      "lessons": [
+        9
+      ]
+    },
+    {
+      "path": "labs/27_fused_graph_trace.py",
+      "optional": false,
+      "lessons": [
+        10
+      ]
+    },
+    {
+      "path": "labs/28_communication_overlap.py",
+      "optional": false,
+      "lessons": [
+        13
+      ]
+    },
+    {
+      "path": "labs/29_parallelism_mechanics.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/30_training_profiler.py",
+      "optional": false,
+      "lessons": [
+        10,
+        16
+      ]
+    },
+    {
+      "path": "labs/31_training_capstone.py",
+      "optional": false,
+      "lessons": [
+        16
+      ]
+    },
+    {
+      "path": "labs/33_ddp_buckets.py",
+      "optional": false,
+      "lessons": [
+        13
+      ]
+    }
+  ],
+  "extensions": []
+}

@@ -1,0 +1,33 @@
+<svg viewBox="0 0 1000 390" role="img" aria-labelledby="detail-evidence-driven-optimization-loop-loop-title detail-evidence-driven-optimization-loop-loop-desc">
+<title id="detail-evidence-driven-optimization-loop-loop-title">Evidence-driven optimization loop</title>
+<desc id="detail-evidence-driven-optimization-loop-loop-desc">Six boxes form a loop from baseline through correctness, timing, classification, one change, and remeasurement.</desc>
+<defs>
+<marker id="detail-evidence-driven-optimization-loop-loop-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g fill="#fff" stroke="#245880" stroke-width="2">
+<rect x="360" y="25" width="280" height="62" rx="12"/>
+<rect x="690" y="105" width="250" height="62" rx="12"/>
+<rect x="690" y="230" width="250" height="62" rx="12"/>
+<rect x="360" y="305" width="280" height="62" rx="12"/>
+<rect x="60" y="230" width="250" height="62" rx="12"/>
+<rect x="60" y="105" width="250" height="62" rx="12"/>
+</g>
+<g text-anchor="middle" font-weight="700">
+<text x="500" y="50"><tspan x="500">1. Freeze workload</tspan><tspan x="500" dy="24">+ metric</tspan></text>
+<text x="815" y="143">2. Prove correctness</text>
+<text x="815" y="268">3. Measure + profile</text>
+<text x="500" y="343">4. Classify the limiter</text>
+<text x="185" y="268">5. Change one thing</text>
+<text x="185" y="131"><tspan x="185">6. Remeasure</tspan><tspan x="185" dy="24">and decide</tspan></text>
+</g>
+<g fill="none" stroke="#245880" stroke-width="4" marker-end="url(#detail-evidence-driven-optimization-loop-loop-arr)">
+<path d="M640 57 C720 60 750 80 780 105"/>
+<path d="M815 167 L815 230"/>
+<path d="M690 275 C650 320 630 330 640 335"/>
+<path d="M360 335 C300 330 260 315 230 292"/>
+<path d="M185 230 L185 167"/>
+<path d="M230 105 C280 55 320 55 360 55"/>
+</g>
+</svg>

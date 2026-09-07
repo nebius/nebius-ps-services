@@ -1,0 +1,37 @@
+# Official resources
+
+- [NVIDIA explanation of LLM inference, prefill and decode](https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/)
+- [SGLang authors: RadixAttention and prefix-tree KV reuse](https://www.lmsys.org/blog/2024-01-17-sglang/)
+- [TensorRT-LLM speculative decoding families and support boundaries](https://nvidia.github.io/TensorRT-LLM/features/speculative-decoding.html)
+- [NVIDIA Model Optimizer: Medusa heads and EAGLE feature drafting](https://nvidia.github.io/Model-Optimizer/guides/5_speculative_decoding.html)
+- [NVIDIA AIPerf and GenAI-Perf feature comparison](https://docs.nvidia.com/aiperf/getting-started/gen-ai-perf-vs-ai-perf-cli-feature-comparison-matrix)
+
+- [PyTorch scaled dot product attention](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html)
+- [PyTorch vector norms for aggregate tensor-error calculations](https://docs.pytorch.org/docs/2.14/generated/torch.linalg.vector_norm.html)
+- [PyTorch distributed tensor collectives: broadcast, all-gather and all-reduce](https://docs.pytorch.org/docs/2.14/distributed.html)
+- [Hugging Face generation strategies](https://huggingface.co/docs/transformers/main/en/generation_strategies)
+- [vLLM documentation](https://docs.vllm.ai/en/v0.28.0/)
+- [vLLM 0.28 serve options](https://docs.vllm.ai/en/v0.28.0/cli/serve/)
+- [vLLM 0.28 speculative decoding configuration](https://docs.vllm.ai/en/v0.28.0/api/vllm/config/speculative/)
+- [TensorRT-LLM documentation](https://nvidia.github.io/TensorRT-LLM/latest/index.html)
+- [NVIDIA TensorRT-LLM Triton backend](https://github.com/triton-inference-server/tensorrtllm_backend)
+- [TensorRT-LLM performance tuning](https://nvidia.github.io/TensorRT-LLM/performance/performance-tuning-guide/index.html)
+- [TensorRT-LLM quantization and NVIDIA Model Optimizer](https://nvidia.github.io/TensorRT-LLM/latest/features/quantization.html)
+- [TensorRT-LLM MHA, MQA, GQA, and XQA](https://nvidia.github.io/TensorRT-LLM/features/attention.html)
+- [Triton TensorRT-LLM backend](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/tensorrtllm_backend/README.html)
+- [NVIDIA AIPerf overview](https://docs.nvidia.com/nim/benchmarking/llm/latest/overview.html)
+- [NVIDIA AIPerf metrics](https://docs.nvidia.com/nim/benchmarking/llm/latest/metrics.html)
+- [AIPerf token, chunk, and completion metric definitions](https://docs.nvidia.com/aiperf/dev/reference/ai-perf-metrics-reference)
+- [NVIDIA AIPerf command-line options](https://docs.nvidia.com/aiperf/reference/command-line-options)
+- [vLLM parallel configuration](https://docs.vllm.ai/en/v0.28.0/api/vllm/config/parallel/)
+- [NVIDIA Dynamo disaggregated serving](https://docs.nvidia.com/dynamo/components/router/disaggregated-serving)
+- [NVIDIA explanation of prefill, first-token generation, and subsequent decode](https://developer.nvidia.com/blog/?p=95274)
+- [NVIDIA Dynamo KV-aware routing](https://docs.nvidia.com/dynamo/dev/knowledge-base/concepts/system-architecture/kv-aware-routing)
+- [NVIDIA Dynamo RDMA overview and required platform support](https://docs.nvidia.com/dynamo/dev/kubernetes/installation/rdma-setup/overview)
+- [Slurm sbatch](https://slurm.schedmd.com/sbatch.html)
+
+## Transfer and retention mechanisms
+
+- [GPUDirect Storage design and control/data paths](https://docs.nvidia.com/gpudirect-storage/design-guide/index.html)
+- [GPUDirect Storage direct and compatibility paths](https://docs.nvidia.com/gpudirect-storage/o-direct-guide/)
+- [Dynamo KV-cache offload tiers](https://docs.nvidia.com/dynamo/latest/kubernetes/kv-cache-offloading/overview)

@@ -1,26 +1,63 @@
 # Glossary
 
-- **Arithmetic intensity**: useful arithmetic operations divided by estimated bytes moved for a declared operation boundary.
-- **Block**: a group of CUDA threads scheduled together on one streaming multiprocessor; a block does not split across SMs.
-- **CTA**: cooperative thread array, CUDA's architectural term for a thread block.
-- **CUDA Core**: a general arithmetic execution resource used by CUDA workloads; it is not a synonym for a thread.
-- **CUDA event**: a device-timeline marker used to order work or measure elapsed device time.
-- **Divergence**: a warp executing different control-flow paths for different active lanes, usually serializing the paths.
-- **Eligible warp**: a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
-- **Grid**: all thread blocks launched for one kernel invocation.
-- **GPC**: graphics processing cluster, a replicated top-level on-chip processing group that contains TPCs; the enabled count varies by H100 product.
-- **HBM**: the GPU's high-bandwidth device memory.
-- **Issued warp**: an eligible warp selected by a scheduler to issue an instruction in the current scheduling opportunity.
-- **Kernel**: a function launched for parallel execution on the GPU.
-- **Latency hiding**: issuing eligible work from another resident warp while a warp waits for a dependency.
-- **Occupancy**: resident warps relative to the hardware limit; a resource constraint indicator, not a performance score.
-- **Pinned memory**: page-locked host memory that enables efficient DMA and is required for truly asynchronous host-to-device copies in common CUDA paths.
-- **Roofline model**: a model that relates attainable work rate to arithmetic intensity, a bandwidth ceiling, and a compute ceiling.
-- **SIMT**: single-instruction, multiple-thread execution in which a warp issues an instruction for active lanes.
-- **SM**: streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
-- **SMSP**: an SM subpartition with its own warp scheduler, dispatch resources, register-file implementation partition, and associated execution resources.
-- **Tensor Core**: specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
-- **Thread-block cluster**: a Hopper scheduling hierarchy that co-schedules a bounded group of thread blocks so they can synchronize and use distributed shared memory.
-- **TPC**: texture/processing cluster; in Hopper, a TPC contains two SMs within a GPC.
-- **Triton program**: one instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.
-- **Warp**: 32 CUDA threads scheduled as an execution group on current NVIDIA GPUs covered by this course.
+- **CPU / host:** the general-purpose processor and its execution environment, responsible for program control and for submitting GPU work.
+- **GPU / device:** a parallel processor that executes supported kernels; it accelerates suitable workloads, not arbitrary CPU instructions automatically.
+- **Global memory:** CUDA device-wide address space for data accessible to threads across blocks, normally backed by HBM and serviced through caches.
+- **L1 / L2 cache:** hardware-managed storage that can serve repeated accesses with less traffic to lower memory levels; L1 is local to an SM and L2 is shared across SMs.
+- **Shared memory:** explicitly managed, block-scoped on-chip storage; on H100 its capacity shares a physical resource with L1, so it is not an extra serial cache level.
+- **Tensor:** an array of numbers with a shape, data type and device placement.
+
+- **Arithmetic intensity:** useful arithmetic operations divided by estimated bytes moved for a declared operation boundary.
+- **Block:** a group of CUDA threads scheduled together on one streaming multiprocessor; a block does not split across SMs.
+- **Compute capability 9.0:** the baseline H100 CUDA architecture contract used by these courses.
+- **CTA:** cooperative thread array, CUDA's architectural term for a thread block.
+- **CUDA Core:** a general arithmetic execution resource used by CUDA workloads; it is not a synonym for a thread.
+- **CUDA event:** a device-timeline marker used to order work or measure elapsed device time.
+- **Divergence:** a warp executing different control-flow paths for different active lanes, usually serializing the paths.
+- **Eligible warp:** a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
+- **GPC:** graphics processing cluster, a replicated top-level on-chip processing group that contains TPCs; the enabled count varies by H100 product.
+- **Grid:** all thread blocks launched for one kernel invocation.
+- **HBM:** high-bandwidth device memory that stores tensors, temporary buffers and other device allocations.
+- **Issued warp:** an eligible warp selected by a scheduler to issue an instruction in the current scheduling opportunity.
+- **Kernel:** a function launched for parallel execution on the GPU.
+- **Latency hiding:** issuing eligible work from another resident warp while a warp waits for a dependency.
+- **Local memory:** thread-private CUDA address space normally backed by device memory; register spills can create local-memory traffic.
+- **MIG:** hardware partitioning that exposes isolated GPU instances.
+- **MPS:** NVIDIA service that coordinates work from multiple CUDA processes.
+- **Occupancy:** resident warps relative to the hardware limit; a resource constraint indicator, not a performance score.
+- **Pinned memory:** page-locked host memory that enables efficient DMA and is required for truly asynchronous host-to-device copies in common CUDA paths.
+- **PTX:** virtual NVIDIA GPU instruction representation that a compatible driver can translate.
+- **Roofline model:** a model that relates attainable work rate to arithmetic intensity, a bandwidth ceiling, and a compute ceiling.
+- **SASS:** machine instructions executed by a specific NVIDIA GPU architecture.
+- **SIMT:** single-instruction, multiple-thread execution in which a warp issues an instruction for active lanes.
+- **SM:** streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
+- **SMSP:** an SM subpartition with its own warp scheduler, dispatch resources, register-file implementation partition, and associated execution resources.
+- **Tail wave:** a final partially filled scheduling wave that leaves resources idle.
+- **Tensor Core:** specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
+- **TF32:** a Tensor Core compute mode for selected FP32 matrix operations, not a tensor storage dtype.
+- **Thread-block cluster:** a Hopper scheduling hierarchy that co-schedules a bounded group of thread blocks so they can synchronize and use distributed shared memory.
+- **TPC:** texture/processing cluster; in Hopper, a TPC contains two SMs within a GPC.
+- **Triton program:** one instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.
+- **Warp:** 32 CUDA threads scheduled as an execution group on current NVIDIA GPUs covered by this course.
+- **DMA:** direct memory access; transfer hardware moves data without CPU instructions copying each byte.
+- **ECC:** error-correcting code; distinguishes corrected memory errors from errors that could not be corrected.
+- **GEMM:** general matrix multiplication, often expressed as C = alpha × A × B + beta × C.
+- **JIT:** just-in-time compilation, such as translating compatible PTX when loading GPU code.
+- **NIC:** network interface controller connecting a host to a network.
+- **NUMA:** non-uniform memory access; host-memory cost depends on CPU/socket locality.
+- **RDMA:** remote direct memory access using supported network hardware and registered memory; not assumed by this course.
+- **Row remapping / page retirement:** GPU memory reliability mechanisms and associated status; supported fields depend on hardware and driver. Record the status through read-only checks; do not attempt repairs in a lab.
+- **Xid:** an NVIDIA driver error classification that guides investigation; the code alone is not a diagnosis.
+
+- **NVLink:** a high-bandwidth interconnect between supported GPU endpoints; not a generic server-network configuration switch.
+- **NVSwitch:** switching hardware connecting endpoints within a supported NVLink fabric; different from an InfiniBand switch.
+- **NCCL:** NVIDIA Collective Communications Library, software implementing GPU collectives and point-to-point communication using available topology-aware paths.
+- **InfiniBand:** a switched network architecture supporting RDMA with compatible adapters, links and a subnet manager.
+- **RoCE:** RDMA over Converged Ethernet; RoCEv2 carries its transport over UDP/IP on a qualified Ethernet fabric.
+- **GPUDirect RDMA:** supported direct access between a network adapter and GPU memory, avoiding a host payload-staging buffer.
+- **HCA:** host channel adapter, an RDMA endpoint adapter term; its device name is distinct from an IP-interface name.
+- **Queue pair (QP):** associated send and receive work queues used by an RDMA adapter.
+- **Registration:** establishing the memory region, permissions and mapping that an adapter may use for data transfer.
+- **Fabric:** the connected links and switches carrying traffic among endpoints.
+- **Subnet manager:** the operator-owned InfiniBand service responsible for discovering and configuring subnet paths.
+- **ECN / CNP / PFC:** congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.

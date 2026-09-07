@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 350" role="img" aria-labelledby="workflow-title workflow-desc">
+  <title id="workflow-title">A simple transformation workflow</title>
+  <desc id="workflow-desc">Inputs enter a transformation. The transformation produces a result that must be checked. Arrows show processing order, not a network connection.</desc>
+  <defs>
+    <marker id="workflow-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0 0 L6 3 L0 6" fill="none" stroke="#206757" stroke-width="2"/>
+    </marker>
+  </defs>
+  <g fill="#eef5fc" stroke="#245880" stroke-width="2">
+    <rect x="30" y="15" width="280" height="70" rx="12"/>
+    <rect x="30" y="135" width="280" height="70" rx="12"/>
+    <rect x="30" y="255" width="280" height="70" rx="12"/>
+  </g>
+  <g fill="none" stroke="#206757" stroke-width="2" marker-end="url(#workflow-arrow)">
+    <path d="M170 89 V125"/>
+    <path d="M170 209 V245"/>
+  </g>
+  <g fill="#24343d" font-family="Arial, sans-serif" font-size="20" text-anchor="middle">
+    <text x="170" y="57">Inputs</text>
+    <text x="170" y="177">Transformation</text>
+    <text x="170" y="297">Result and check</text>
+  </g>
+</svg>

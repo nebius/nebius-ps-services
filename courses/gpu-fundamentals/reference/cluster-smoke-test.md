@@ -6,6 +6,12 @@ Before submitting jobs, run `umask 077` in the submitting shell. The launchers
 repeat this setting for child-process artifacts, but the scheduler can create
 its output file before the script begins.
 
+This runbook is a complete platform-qualification checklist, not the teaching
+order. Learners follow the [syllabus](../SYLLABUS.md): Lab 10 checks the local
+environment before the first single-GPU experiment, and the two-node gate
+below is required before the final collective lesson. A full qualification
+campaign may run these gates together after the concepts have been studied.
+
 ## Gate 1: prove the two-node allocation
 
 ```bash
@@ -31,8 +37,8 @@ sbatch slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile smoke
 
 For each job, write the prediction first, require the lab's correctness result,
 and compare distributions rather than one sample. For Lab 04, preserve the
-logical layouts and strides, raw operation distributions, useful-bandwidth
-lower bounds, repack-copy cost, and computed reuse break-even. A result where
+logical layouts and strides, raw operation distributions, bandwidth estimates
+based on logical input/output bytes, repack-copy cost, and computed reuse break-even. A result where
 the packed operation is not faster is valid evidence and must report that no
 finite break-even exists.
 
@@ -50,4 +56,20 @@ site-topology evidence; do not publish those infrastructure identifiers.
 
 ## Gate 4: broaden only after smoke passes
 
-Repeat selected labs with their default or teaching profiles. Change one factor at a time. A changed dtype, shape, rank count, power state, process placement, or software version starts a new comparison series.
+Repeat selected labs with their supported `smoke` or `h100` profiles. Change one factor at a time. A changed dtype, shape, rank count, power state, process placement, or software version starts a new comparison series.
+
+## Gate 5: compatibility, scheduling, and read-only health
+
+```bash
+sbatch slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile smoke
+sbatch slurm/single_gpu.sbatch labs/11_scheduler_tail.py --profile smoke
+sbatch slurm/single_gpu.sbatch labs/12_read_only_health.py --profile smoke
+```
+
+Record the wheel/runtime/driver/toolkit roles separately. The lane-work model
+preserves total useful work; the grid-tail probe preserves work per program
+but varies total program count. Keep that distinction and the stated SM count
+with the result. Read-only health evidence must not
+change clocks, sharing modes, or error state. Missing operational fields mean
+unavailable evidence. Review health changes alongside timing rather than
+attributing a slow run to one isolated counter.

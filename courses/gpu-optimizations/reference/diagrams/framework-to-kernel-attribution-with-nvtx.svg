@@ -1,0 +1,36 @@
+<svg viewBox="0 0 1100 430" role="img" aria-labelledby="detail-framework-to-kernel-attribution-with-nvtx-pt-prof-title detail-framework-to-kernel-attribution-with-nvtx-pt-prof-desc">
+<title id="detail-framework-to-kernel-attribution-with-nvtx-pt-prof-title">Framework-to-kernel attribution with NVTX</title>
+<desc id="detail-framework-to-kernel-attribution-with-nvtx-pt-prof-desc">A train-step NVTX range contains forward, backward, and optimizer phases. PyTorch operators inside a phase lead to CUDA kernels, copies, and allocations in the profiler trace.</desc>
+<defs>
+<marker id="detail-framework-to-kernel-attribution-with-nvtx-pt-prof-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<rect x="45" y="40" width="1010" height="320" rx="14" fill="#fff" stroke="#dbe5e1"/>
+<text x="70" y="78" font-weight="700">NVTX: train_step</text>
+<g text-anchor="middle">
+<rect x="80" y="105" width="270" height="70" rx="10" fill="#e0edfa" stroke="#245880"/>
+<text x="215" y="136" font-weight="700">forward</text>
+<text x="215" y="160" class="diagram-label">projection · attention · loss</text>
+<rect x="415" y="105" width="270" height="70" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<text x="550" y="136" font-weight="700">backward</text>
+<text x="550" y="160" class="diagram-label">autograd operators</text>
+<rect x="750" y="105" width="270" height="70" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<text x="885" y="136" font-weight="700">optimizer</text>
+<text x="885" y="160" class="diagram-label">updates · zero grad</text>
+<rect x="105" y="245" width="230" height="75" rx="10" fill="#eef5fc" stroke="#52626b"/>
+<text x="220" y="275" font-weight="700">PyTorch operator</text>
+<text x="220" y="301" class="diagram-label">shape · calls · allocation</text>
+<rect x="435" y="245" width="230" height="75" rx="10" fill="#eef5fc" stroke="#52626b"/>
+<text x="550" y="275" font-weight="700">CUDA activity</text>
+<text x="550" y="301" class="diagram-label">kernel · memcpy · sync</text>
+<rect x="765" y="245" width="230" height="75" rx="10" fill="#eef5fc" stroke="#52626b"/>
+<text x="880" y="275" font-weight="700">trace question</text>
+<text x="880" y="301" class="diagram-label">what dominates and why?</text>
+</g>
+<g stroke="#245880" stroke-width="3" marker-end="url(#detail-framework-to-kernel-attribution-with-nvtx-pt-prof-arr)">
+<line x1="300" y1="175" x2="260" y2="245"/>
+<line x1="335" y1="283" x2="435" y2="283"/>
+<line x1="665" y1="283" x2="765" y2="283"/>
+</g>
+</svg>

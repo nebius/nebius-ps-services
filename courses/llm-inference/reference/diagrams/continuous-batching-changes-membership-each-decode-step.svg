@@ -1,0 +1,43 @@
+<svg viewBox="0 0 1000 420" role="img" aria-labelledby="detail-continuous-batching-changes-membership-each-decode-step-batch-title detail-continuous-batching-changes-membership-each-decode-step-batch-desc">
+<title id="detail-continuous-batching-changes-membership-each-decode-step-batch-title">Continuous batching changes membership at scheduler iterations</title>
+<desc id="detail-continuous-batching-changes-membership-each-decode-step-batch-desc">Three requests enter at different times. The scheduled mixed batch can include A and B decoding while C is prefilling. In this schematic A and B finish together, then C continues; completed requests release KV blocks. Intervals are illustrative, not measured.</desc>
+<g font-weight="700">
+<text x="30" y="95">request A</text>
+<text x="30" y="175">request B</text>
+<text x="30" y="255">request C</text>
+<text x="30" y="331" font-size="15"><tspan x="30">scheduled</tspan><tspan x="30" dy="21">mixed batch</tspan></text>
+</g>
+<g fill="#e0edfa">
+<rect x="150" y="65" width="170" height="45" rx="7"/>
+<rect x="300" y="145" width="110" height="45" rx="7"/>
+<rect x="520" y="225" width="210" height="45" rx="7"/>
+</g>
+<g text-anchor="middle">
+<text x="235" y="93">prefill A</text>
+<text x="355" y="173">prefill B</text>
+<text x="625" y="253">prefill C</text>
+</g>
+<g fill="#e0f0e6">
+<rect x="320" y="65" width="410" height="45" rx="7"/>
+<rect x="410" y="145" width="320" height="45" rx="7"/>
+<rect x="730" y="225" width="180" height="45" rx="7"/>
+</g>
+<g text-anchor="middle">
+<text x="525" y="93">decode A</text>
+<text x="570" y="173">decode B</text>
+<text x="820" y="253">decode C</text>
+</g>
+<g fill="#eee5f5">
+<rect x="320" y="315" width="90" height="45" rx="7"/>
+<rect x="410" y="315" width="110" height="45" rx="7"/>
+<rect x="520" y="315" width="210" height="45" rx="7"/>
+<rect x="730" y="315" width="180" height="45" rx="7"/>
+</g>
+<g text-anchor="middle">
+<text x="365" y="332" font-size="13"><tspan x="365">A decode</tspan><tspan x="365" dy="18">B prefill</tspan></text>
+<text x="465" y="342" font-size="13">A+B decode</text>
+<text x="625" y="332" font-size="14"><tspan x="625">A decode + B decode</tspan><tspan x="625" dy="20">+ C prefill</tspan></text>
+<text x="820" y="343">C</text>
+</g>
+<text x="500" y="400" text-anchor="middle" fill="#52626b">Scheduler decisions trade throughput, queue time, tail latency, and KV-cache pressure.</text>
+</svg>

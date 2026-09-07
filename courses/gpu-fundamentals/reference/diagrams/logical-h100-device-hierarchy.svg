@@ -1,0 +1,54 @@
+<svg viewBox="0 0 1200 650" role="img" aria-labelledby="detail-logical-h100-device-hierarchy-h100-device-title detail-logical-h100-device-hierarchy-h100-device-desc">
+<title id="detail-logical-h100-device-hierarchy-h100-device-title">Logical H100 device hierarchy</title>
+<desc id="detail-logical-h100-device-hierarchy-h100-device-desc">A logical, not-to-scale hierarchy shows host and PCI Express, HBM and memory controllers, shared L2 and on-chip fabric, replicated GPCs, TPCs, and two SMs per TPC.</desc>
+<defs>
+<marker id="detail-logical-h100-device-hierarchy-h100-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g text-anchor="middle">
+<rect x="30" y="55" width="180" height="90" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="120" y="91" font-weight="700">CPU + host RAM</text>
+<text x="120" y="115" class="diagram-label"><tspan x="120">launches and</tspan><tspan x="120" dy="20">input data</tspan></text>
+<rect x="280" y="35" width="250" height="130" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2"/>
+<text x="405" y="75" font-weight="700">HBM stacks</text>
+<text x="405" y="103" class="diagram-label">device memory</text>
+<text x="405" y="130" class="diagram-label">capacity depends on SKU</text>
+<rect x="600" y="35" width="250" height="130" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+<text x="725" y="72" font-weight="700">memory controllers</text>
+<text x="725" y="100" font-weight="700">+ L2 partitions</text>
+<text x="725" y="130" class="diagram-label">device-wide cache path</text>
+<rect x="920" y="55" width="240" height="90" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+<text x="1040" y="91" font-weight="700">on-chip fabric</text>
+<text x="1040" y="118" class="diagram-label">connects memory and GPCs</text>
+</g>
+<g fill="none" stroke="#245880" stroke-width="3" marker-start="url(#detail-logical-h100-device-hierarchy-h100-arr)" marker-end="url(#detail-logical-h100-device-hierarchy-h100-arr)">
+<line x1="210" y1="100" x2="280" y2="100"/>
+<line x1="530" y1="100" x2="600" y2="100"/>
+<line x1="850" y1="100" x2="920" y2="100"/>
+</g>
+<text x="245" y="24" text-anchor="middle" class="diagram-small">PCIe copy path</text>
+<rect x="90" y="225" width="1020" height="350" rx="18" fill="#f7f9f7" stroke="#245880" stroke-width="2"/>
+<text x="120" y="260" font-weight="700">Replicated GPCs</text>
+<text x="1080" y="260" text-anchor="end" class="diagram-label">counts vary by H100 product</text>
+<g text-anchor="middle">
+<rect x="145" y="290" width="420" height="230" rx="14" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="355" y="326" font-weight="700">GPC example</text>
+<rect x="190" y="350" width="330" height="125" rx="12" fill="#fff" stroke="#206757" stroke-width="2"/>
+<text x="355" y="382" font-weight="700">TPC</text>
+<rect x="220" y="405" width="120" height="45" rx="8" fill="#e0f0e6"/>
+<rect x="370" y="405" width="120" height="45" rx="8" fill="#e0f0e6"/>
+<text x="280" y="433">SM</text>
+<text x="430" y="433">SM</text>
+<rect x="635" y="290" width="420" height="230" rx="14" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="845" y="326" font-weight="700">other GPCs</text>
+<rect x="680" y="350" width="150" height="125" rx="12" fill="#fff" stroke="#206757"/>
+<rect x="860" y="350" width="150" height="125" rx="12" fill="#fff" stroke="#206757"/>
+<text x="755" y="402">TPCs</text>
+<text x="755" y="430" class="diagram-small">two SMs each</text>
+<text x="935" y="402">TPCs</text>
+<text x="935" y="430" class="diagram-small">two SMs each</text>
+</g>
+<path d="M1040 145 V205 H600 V225" fill="none" stroke="#245880" stroke-width="3" marker-end="url(#detail-logical-h100-device-hierarchy-h100-arr)"/>
+<text x="600" y="620" text-anchor="middle" fill="#52626b">Logical containment and data paths; not a physical floorplan and not to scale.</text>
+</svg>

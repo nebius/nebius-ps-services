@@ -1,0 +1,143 @@
+{
+  "title": "GPU Performance Optimization",
+  "estimated_guided_hours": 36,
+  "labs": [
+    {
+      "path": "labs/00_cluster_preflight.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/01_timing_basics.py",
+      "optional": false,
+      "lessons": [
+        1,
+        2
+      ]
+    },
+    {
+      "path": "labs/02_sync_trap.py",
+      "optional": false,
+      "lessons": [
+        2
+      ]
+    },
+    {
+      "path": "labs/03_compile_fusion.py",
+      "optional": false,
+      "lessons": [
+        4,
+        7
+      ]
+    },
+    {
+      "path": "labs/04_cuda_graphs.py",
+      "optional": false,
+      "lessons": [
+        5
+      ]
+    },
+    {
+      "path": "labs/05_input_pipeline.py",
+      "optional": false,
+      "lessons": [
+        6
+      ]
+    },
+    {
+      "path": "labs/07_profile_workload.py",
+      "optional": false,
+      "lessons": [
+        3
+      ]
+    },
+    {
+      "path": "labs/08_distributed_scaling.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/09_capstone.py",
+      "optional": false,
+      "lessons": [
+        13
+      ]
+    },
+    {
+      "path": "labs/10_shape_precision.py",
+      "optional": false,
+      "lessons": [
+        7,
+        9
+      ]
+    },
+    {
+      "path": "labs/12_allocator_lifetime.py",
+      "optional": false,
+      "lessons": [
+        8
+      ]
+    },
+    {
+      "path": "labs/13_collective_overlap.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/14_profiler_bottlenecks.py",
+      "optional": false,
+      "lessons": [
+        3
+      ]
+    },
+    {
+      "path": "labs/15_tail_load_balance.py",
+      "optional": false,
+      "lessons": [
+        10
+      ]
+    },
+    {
+      "path": "labs/16_library_first_decision.py",
+      "optional": false,
+      "lessons": [
+        13
+      ]
+    },
+    {
+      "path": "labs/17_nccl_transport_sweep.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/18_nccl_tests_report.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/19_h2d_pipeline.py",
+      "optional": false,
+      "lessons": [
+        6
+      ]
+    },
+    {
+      "path": "labs/20_d2h_pipeline.py",
+      "optional": false,
+      "lessons": [
+        8
+      ]
+    }
+  ],
+  "extensions": []
+}

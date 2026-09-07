@@ -4585,5 +4585,260 @@ install, and activation evidence is reported independently.
   current session may continue to emit its already-loaded older hook message.
 
 <!-- /FEATURE: FEAT-024 -->
+
+<!-- FEATURE: FEAT-025 reqs=REQ-026 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-025: Branch-aware lane-removal guidance in Task Implementer help
+
+#### Requirements Covered
+
+- REQ-026: Explain branch-aware Task Implementer lane removal in help.
+
+#### Context Evidence
+
+Task Implementer workspace identity binds the Git common directory, primary
+checkout, recorded source ref, and selected project scope. A no-argument lookup
+from the primary checkout therefore follows its current branch; after that
+checkout moves to another branch, it can identify a different workspace. The
+owning lane retains its recorded source-ref metadata, so an absolute
+`[project-folder]` inside that lane resolves the intended workspace. Current
+help documents removal safety but not this selection fallback.
+
+#### Design Details
+
+Keep the canonical `## Help` short-circuit text unchanged. Extend the portable
+`SKILL.md` public-interface description with one concise conditional note that
+the report-only help renderer must include for `workspace remove`. State that a
+primary checkout on a different branch may resolve another workspace when
+`[project-folder]` is omitted, then show this illustrative public-interface
+example:
+
+```text
+$task-implementer workspace remove "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>"
+```
+
+Label every angle-bracketed path component as a placeholder and prohibit
+substitution from observed local state. Keep the example inside the existing public
+`[project-folder]` positional argument; do not add a flag, action, alias,
+internal identifier, resolver fallback, or branch-switching instruction.
+
+Align the skill README and supplemental workflow cases with the Help contract.
+Extend the deterministic contract smoke test to require the branch-resolution
+note and placeholder command across those surfaces. Record the user-facing
+clarification in the skills changelog and the parent skill catalog without
+changing runtime workspace resolution or removal gates.
+
+#### Selected Option
+
+Document the existing explicit project-folder fallback with public-safe
+placeholders instead of changing the branch-bound workspace identity model.
+
+#### Alternatives Considered
+
+Cross-branch workspace scanning was rejected because it could guess among
+multiple durable workspaces. Advising the user to switch the managed lane was
+rejected because lane branch identity is immutable. Showing an observed local
+path was rejected because reusable skill sources must remain public and
+environment-neutral.
+
+#### Implementation Boundaries
+
+`task-implementer/SKILL.md` owns the report-only help response contract. The
+skill README and workflow cases own human and evaluation guidance, while the
+contract smoke test owns deterministic cross-surface assertions. Workspace
+resolution, Worktree lane removal, metadata, public actions, and private state
+schemas remain unchanged.
+
+#### Test-First Success Criteria
+
+- TDD-001: Help guidance states the different-primary-branch condition and the
+  risk of resolving another workspace when the project folder is omitted.
+- TDD-002: The example targets a project directory inside an existing lane and
+  contains generic placeholder components rather than a real local identity.
+- TDD-003: Contract validation still exposes exactly five public actions, no
+  additional public flags, and no private helper transition.
+- TDD-004: Existing lane-removal tests and source skill validation continue to
+  pass without any runtime resolver or removal implementation change.
+
+#### Validation Plan
+
+Run the Task Implementer contract smoke test, strict stateful skill validation,
+Markdown lint, project-spec validation, changed-scope code and security review,
+final alignment, and `git diff --check`.
+
+#### Test Plan
+
+Add deterministic required phrases for the conditional warning, project-folder
+fallback, and placeholder command to the existing cross-file contract test.
+Keep trigger CSV cases unchanged because explicit invocation and routing do not
+change.
+
+#### Evaluation Plan
+
+Treat source checks as static evidence only. Installed parity and a fresh
+session help response remain separate evidence lanes unless the source bundle
+is explicitly installed and reloaded.
+
+#### Rollout And Rollback
+
+Land the source help contract, docs, deterministic assertions, canonical specs,
+and changelog together. Rollback removes only that guidance and its assertions;
+it does not alter persistent lanes or private history.
+
+#### Done Definition
+
+Task Implementer help concisely explains how to target the project inside an
+existing lane when primary-branch lookup would select another workspace, using
+only the existing public syntax and public-safe placeholders.
+
+#### Implementation Evidence
+
+- `task-implementer/SKILL.md` directs the report-only help renderer to explain
+  the different-primary-branch lookup risk and show the existing public
+  `[project-folder]` fallback with generic angle-bracketed placeholders.
+- The skill README, workflow cases, deterministic contract test, parent skill
+  catalog, and changelog carry the same contract. Workspace resolution,
+  removal behavior, public actions, metadata, and trigger routing are unchanged.
+
+#### Verification Evidence
+
+- The Task Implementer contract smoke test and strict stateful-skill validator
+  passed. Markdownlint, Ruff, Python source compilation, canonical project-spec
+  validation, and `git diff --check` also passed for the changed scope.
+- Changed-scope code and security review found no blocking issues, real local
+  identity, secret, or private endpoint in the reusable source.
+- Installed parity and fresh-session help output were not run and are not
+  inferred from source verification; the installed skill remains unchanged.
+
+<!-- /FEATURE: FEAT-025 -->
+<!-- FEATURE: FEAT-026 reqs=REQ-027 status=ready delivery=implemented priority=P1 version=4 -->
+### FEAT-026: Portable digital-textbook authoring kit
+
+#### Requirements Covered
+
+- REQ-027: Reuse the complete, accessible course standard across subjects.
+
+#### Context Evidence
+
+The current course requirements and design define substantive concept primers,
+prerequisite sequencing, seven-part lab guides, inline SVGs, source parity and
+separate proof lanes. The skill's existing split-page, narrow lesson template
+and learning-record defaults do not express that contract.
+
+#### Design Details
+
+Keep explicit-only invocation and a lean instruction core. Put instructional
+design, exact course format, practical-work verification and publication safety
+in focused references. Provide a subject-neutral starter, the existing light
+style, accessible HTML/SVG patterns and deterministic local checks. A course's
+own builder owns canonical Markdown-to-HTML generation and atomic publication;
+the skill specifies and validates that boundary rather than adding an LMS.
+Research-backed teaching guidance and project visual conventions are labeled
+separately. Technical execution requirements are selected in a course profile.
+
+#### Selected Option
+
+Ship a reusable authoring kit and review contract, not a framework that requires
+all subjects to share a programming language, cloud or assessment type.
+
+#### Alternatives Considered
+
+Copying all GPU-course tooling would hard-code one domain. Prose-only guidance
+would leave the desired presentation and practical-work structure underspecified.
+A new LMS or remote renderer adds unnecessary runtime and publication scope.
+
+#### Implementation Boundaries
+
+Change only `create-learning-course`, its source catalog entry, changelog and
+this canonical spec pair. Preserve unrelated work and leave current courses
+and the installed skill untouched. Use original explanations, public sources
+and generic paths; no external publishing, dependency installation or live labs.
+
+#### Test-First Success Criteria
+
+- TDD-001: The former starter fails checks for the required textbook layout,
+  lab structure and accessible diagram pattern; revised assets pass.
+- TDD-002: Mutated navigation, unsafe HTML and mismatched embedded code fail
+  focused checks without executing learner code or fetching resources.
+
+#### Validation Plan
+
+Run strict skill structure/eval validation, deterministic asset checks, Python
+and Markdown lint, changed-scope code/security review and spec-pair validation.
+
+#### Test Plan
+
+Exercise compliant and malformed HTML fixtures, all seven guide sections,
+source inclusion, fragment targets and SVG accessible names. Validate the
+starter as a template, not as a completed or expert-reviewed course.
+
+#### Evaluation Plan
+
+Define technical and nontechnical creation plus preservation-focused revision
+cases. Capture working bytes before edits; compare fresh output only when a
+clean authorized runner exists. Report missing routing, quality, token and
+browser evidence explicitly.
+
+#### Rollout And Rollback
+
+Review repository source first. Installation and fresh-session activation are
+separate future actions. Revert only this task's patch if needed; preserve all
+other working-tree changes.
+
+#### Done Definition
+
+Core instructions, references, templates, checks and evaluations describe one
+course standard; required local checks pass and unexecuted gates remain visible.
+
+#### Implementation Evidence
+
+The source skill now uses a 190-line core with focused teaching, format,
+practical-work, research and safety references. Templates cover complete
+canonical prose, a light responsive HTML shell, contextual SVGs, seven-part
+guides, course/source metadata and explicit publication gates. A dependency-free
+read-only checker verifies bounded HTML structure and exact embedded UTF-8
+source bytes against an allowlist. The old split-page and learner-record
+starter defaults were removed; the catalog and changelog describe the new kit.
+Explicit-only invocation is retained. No course, installed skill or external
+system was changed by this work.
+
+#### Verification Evidence
+
+Strict skill validation passed with no failures or warnings. Twenty-five focused
+tests, Python lint/format, configured Markdown lint, CLI help and whitespace
+checks passed. Seven review-specific negative assertions failed before their
+repairs and passed afterward. Independent read-only review rechecked the fixes
+and found no remaining blocking issue in the changed checker scope. The original
+working-byte starter lacked the side TOC, embedded CSS and seven-part guide;
+the revised template satisfies the corresponding static fixture checks.
+The diagram example was rendered and visually inspected at two widths.
+
+The follow-up alignment pass verified template/reference/catalog wiring and
+repaired missing-value HTML attributes at the parser boundary. Three malformed
+attribute cases and the CLI error-reporting check reproduced the failure before
+repair; the final suite passed. Actual CLI checks also cover successful input,
+strict flag handling and help without course inputs or file creation. README
+exit-status guidance and publication-safety review instructions match the code.
+
+The source-only skill alignment also repaired literal-source handling for
+comments, declarations, processing instructions and marked sections, and kept
+malformed reference URLs within the HTML error path (exit 1). Four markup
+negative controls and one CLI classification control failed before repair and
+passed afterward; escaped-markup and valid-HTTPS controls remain accepted.
+Independent code and security review confirmed both findings fixed with no
+remaining blocking issue. Trigger definitions now cover 16 cases (8 positive,
+8 negative), including both help spellings and partial authoring/review scope;
+four quality definitions include a read-only lesson review. These definitions
+are not model-run evidence. The starter's lesson fields and HTML concept
+introduction use semantic headings; Markdown lint now passes without a
+template-specific rule exception.
+
+STATIC_PASS applies to these bounded source checks, not teaching outcomes or
+publication readiness. Fresh routing, installed parity and comparative generated
+course quality were not run; no clean authorized evaluation context was used.
+Full-page browser evidence and comparable token measurements remain unavailable.
+The course-owned Markdown renderer/full-prose parity gate is a required future
+course artifact, not functionality claimed for this source checker.
+
+<!-- /FEATURE: FEAT-026 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

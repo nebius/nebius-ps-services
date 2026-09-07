@@ -1,0 +1,58 @@
+<svg viewBox="0 0 1200 680" role="img" aria-labelledby="detail-simplified-hopper-sm-resource-model-hopper-sm-title detail-simplified-hopper-sm-resource-model-hopper-sm-desc">
+<title id="detail-simplified-hopper-sm-resource-model-hopper-sm-title">Simplified Hopper SM resource model</title>
+<desc id="detail-simplified-hopper-sm-resource-model-hopper-sm-desc">Four scheduler and execution subpartitions each contain a warp scheduler, a register-file partition, and execution pipelines. A unified L1, texture, and shared-memory resource spans the SM, while L2 and HBM are outside it.</desc>
+<defs>
+<marker id="detail-simplified-hopper-sm-resource-model-sm-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<rect x="35" y="35" width="1130" height="565" rx="18" fill="#f7f9f7" stroke="#245880" stroke-width="3"/>
+<text x="65" y="75" font-size="20" font-weight="700">One Hopper SM: logical resource ownership</text>
+<g text-anchor="middle">
+<rect x="80" y="110" width="250" height="270" rx="12" fill="#eef5fc" stroke="#245880"/>
+<rect x="350" y="110" width="250" height="270" rx="12" fill="#eef5fc" stroke="#245880"/>
+<rect x="620" y="110" width="250" height="270" rx="12" fill="#eef5fc" stroke="#245880"/>
+<rect x="890" y="110" width="230" height="270" rx="12" fill="#eef5fc" stroke="#245880"/>
+<g font-weight="700">
+<text x="205" y="142">SMSP 0</text>
+<text x="475" y="142">SMSP 1</text>
+<text x="745" y="142">SMSP 2</text>
+<text x="1005" y="142">SMSP 3</text>
+</g>
+<g class="diagram-label">
+<text x="205" y="180">warp scheduler</text>
+<text x="205" y="215">register-file partition</text>
+<text x="205" y="250">FP / INT pipelines</text>
+<text x="205" y="285">load/store + SFU</text>
+<text x="205" y="320">Tensor Core resources</text>
+<text x="475" y="180">warp scheduler</text>
+<text x="475" y="215">register-file partition</text>
+<text x="475" y="250">FP / INT pipelines</text>
+<text x="475" y="285">load/store + SFU</text>
+<text x="475" y="320">Tensor Core resources</text>
+<text x="745" y="180">warp scheduler</text>
+<text x="745" y="215">register-file partition</text>
+<text x="745" y="250">FP / INT pipelines</text>
+<text x="745" y="285">load/store + SFU</text>
+<text x="745" y="320">Tensor Core resources</text>
+<text x="1005" y="180">warp scheduler</text>
+<text x="1005" y="215">register-file partition</text>
+<text x="1005" y="250">FP / INT pipelines</text>
+<text x="1005" y="285">load/store + SFU</text>
+<text x="1005" y="320">Tensor Core resources</text>
+</g>
+<rect x="110" y="410" width="980" height="105" rx="12" fill="#e0f0e6" stroke="#206757" stroke-width="2"/>
+<text x="600" y="445" font-weight="700">SM-wide unified L1 / texture / shared-memory physical resource</text>
+<text x="600" y="476" class="diagram-label">shared-memory allocations belong to blocks; cache capacity serves SM memory traffic</text>
+<rect x="330" y="540" width="540" height="42" rx="8" fill="#fff7e7" stroke="#86500e"/>
+<text x="600" y="567" class="diagram-label">TMA and load/store paths connect the SM to device-wide L2 and HBM</text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-simplified-hopper-sm-resource-model-sm-arr)">
+<line x1="205" y1="380" x2="205" y2="410"/>
+<line x1="475" y1="380" x2="475" y2="410"/>
+<line x1="745" y1="380" x2="745" y2="410"/>
+<line x1="1005" y1="380" x2="1005" y2="410"/>
+<line x1="600" y1="515" x2="600" y2="540"/>
+</g>
+<text x="600" y="635" text-anchor="middle" fill="#52626b">Schematic teaching view: resource totals and ownership matter more than a literal silicon floorplan.</text>
+</svg>

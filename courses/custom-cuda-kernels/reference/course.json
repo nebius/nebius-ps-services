@@ -1,0 +1,103 @@
+{
+  "title": "Custom CUDA Kernels for GPU Optimization",
+  "estimated_guided_hours": 36,
+  "labs": [
+    {
+      "path": "labs/00_h100_preflight.cu",
+      "optional": false,
+      "lessons": [
+        2
+      ]
+    },
+    {
+      "path": "labs/01_vector_add.cu",
+      "optional": false,
+      "lessons": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "path": "labs/02_fused_elementwise.cu",
+      "optional": false,
+      "lessons": [
+        5
+      ]
+    },
+    {
+      "path": "labs/03_tiled_transpose.cu",
+      "optional": false,
+      "lessons": [
+        6,
+        16
+      ]
+    },
+    {
+      "path": "labs/04_reduction.cu",
+      "optional": false,
+      "lessons": [
+        7
+      ]
+    },
+    {
+      "path": "labs/05_tiled_stencil.cu",
+      "optional": false,
+      "lessons": [
+        8
+      ]
+    },
+    {
+      "path": "labs/06_divergence_tail.cu",
+      "optional": false,
+      "lessons": [
+        10
+      ]
+    },
+    {
+      "path": "labs/07_resource_sweep.cu",
+      "optional": false,
+      "lessons": [
+        9
+      ]
+    },
+    {
+      "path": "labs/08_async_pipeline.cu",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    },
+    {
+      "path": "labs/09_library_epilogue.cu",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/10_hopper_cluster.cu",
+      "optional": true,
+      "lessons": [
+        15
+      ]
+    },
+    {
+      "path": "labs/11_residual_rmsnorm.cu",
+      "optional": false,
+      "lessons": [
+        13
+      ]
+    },
+    {
+      "path": "labs/12_capstone.cu",
+      "optional": false,
+      "lessons": [
+        14
+      ]
+    }
+  ],
+  "extensions": [
+    "CUDA Tile C++ appendix"
+  ]
+}

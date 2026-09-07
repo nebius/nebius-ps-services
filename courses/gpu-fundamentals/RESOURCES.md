@@ -1,16 +1,30 @@
 # Official resources
 
-These public official sources supplement the reference list in the portable HTML.
+- [NVIDIA H100 architecture and SM organization](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/)
+- [CUDA programming model: host, device, grids, blocks and threads](https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/programming-model.html)
+- [Nsight Compute: SM subpartitions, schedulers and execution resources](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html)
 
-- [NVIDIA CUDA Programming Guide](https://docs.nvidia.com/cuda/cuda-programming-guide/) — execution hierarchy, SIMT behavior, memory spaces, synchronization, and asynchronous execution.
-- [NVIDIA Hopper Tuning Guide](https://docs.nvidia.com/cuda/hopper-tuning-guide/) — H100-relevant SM resources, Tensor Memory Accelerator, occupancy constraints, and Hopper tuning guidance.
-- [NVIDIA Hopper Architecture In-Depth](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) — public GH100/H100 hierarchy, SM, Tensor Core, memory, and product-configuration context.
-- [NVIDIA H100 Tensor Core GPU](https://www.nvidia.com/en-us/data-center/h100/) — vendor product overview; do not substitute peak specifications for measured application performance.
-- [PyTorch CUDA semantics](https://docs.pytorch.org/docs/stable/notes/cuda.html) — asynchronous execution, streams, events, TF32, memory management, and CUDA Graph notes.
-- [PyTorch Profiler](https://docs.pytorch.org/docs/stable/profiler.html) — operator and device activity collection.
-- [PyTorch distributed](https://docs.pytorch.org/docs/stable/distributed.html) — process groups and collective APIs.
-- [PyTorch torchrun](https://docs.pytorch.org/docs/stable/elastic/run.html) — distributed worker launch contract.
-- [PyTorch user-defined Triton kernel tutorial](https://docs.pytorch.org/tutorials/recipes/torch_compile_user_defined_triton_kernel_tutorial.html) — Python kernel definitions, launch grids, and compiler integration.
-- [Slurm sbatch](https://slurm.schedmd.com/sbatch.html) and [Slurm srun](https://slurm.schedmd.com/srun.html) — allocation and job-step behavior.
-
-Version-sensitive claims must be rechecked when [VERSIONS.md](VERSIONS.md) changes.
+- [NVIDIA Hopper Tuning Guide](https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html)
+- [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/)
+- [CUDA Compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/index.html)
+- [CUDA Programming Guide](https://docs.nvidia.com/cuda/cuda-programming-guide/)
+- [NVIDIA DCGM health monitoring](https://docs.nvidia.com/datacenter/dcgm/latest/learn/modules/health-monitoring.html)
+- [NVIDIA System Management Interface](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
+- [NVIDIA MPS architecture and client isolation](https://docs.nvidia.com/deploy/mps/architecture.html)
+- [NVIDIA Xid error catalog](https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html)
+- [NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/)
+- [GPUDirect RDMA](https://docs.nvidia.com/cuda/gpudirect-rdma/)
+- [GPUDirect Storage overview](https://docs.nvidia.com/gpudirect-storage/overview-guide/index.html)
+- [PyTorch CUDA semantics](https://docs.pytorch.org/docs/stable/notes/cuda.html)
+- [PyTorch elementwise numerical tolerance](https://docs.pytorch.org/docs/2.14/generated/torch.allclose.html)
+- [PyTorch vector norms and flattened tensor interpretation](https://docs.pytorch.org/docs/2.14/generated/torch.linalg.vector_norm.html)
+- [CUDA event recording and elapsed time](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__EVENT.html)
+- [Slurm sbatch](https://slurm.schedmd.com/sbatch.html)
+- [NCCL overview and supported communication paths](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/overview.html)
+- [NVIDIA DGX H100 system and network topology](https://docs.nvidia.com/dgx/dgxh100-user-guide/introduction-to-dgxh100.html)
+- [NVIDIA RDMA architecture, registration and work queues](https://docs.nvidia.com/rdma-aware-networks-programming-user-manual-1-7.pdf)
+- [NVIDIA DGX SuperPOD H100 compute and management fabrics](https://docs.nvidia.com/dgx-superpod/reference-architecture-scalable-infrastructure-h100/latest/network-fabrics.html)
+- [NCCL GPU-to-NIC registration and topology troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html)
+- [NCCL network diagnostics and RoCE GID guidance](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html)
+- [NVIDIA Ethernet/RoCE packet format and transport guidance](https://docs.nvidia.com/networking/display/mlnxenv23102131201lts/ethernet-network.pdf)
+- [NVIDIA Quantum InfiniBand and Spectrum Ethernet platform roles](https://developer.nvidia.com/networking)

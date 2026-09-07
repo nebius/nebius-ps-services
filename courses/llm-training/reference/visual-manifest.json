@@ -1,0 +1,76 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/llm-training-lifecycle.svg",
+      "title": "LLM training lifecycle",
+      "lessons": [
+        1
+      ],
+      "after": "Start here",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/text-tokens-token-ids-embeddings-and-shifted-labels.svg",
+      "title": "Text, tokens, token IDs, embeddings, and shifted labels",
+      "lessons": [
+        2
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/decoder-only-language-model-from-token-ids-to-logits.svg",
+      "title": "Decoder-only language model from token IDs to logits",
+      "lessons": [
+        3
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/causal-self-attention-and-mlp-data-flow.svg",
+      "title": "Causal self-attention and MLP data flow",
+      "lessons": [
+        3
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/forward-backward-optimizer-and-next-training-step.svg",
+      "title": "Forward, backward, optimizer, and next training step",
+      "lessons": [
+        4
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/post-training-rollout-and-update-loop.svg",
+      "title": "Post-training rollout and update loop",
+      "lessons": [
+        15
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/training-memory-ledger-across-one-optimizer-step.svg",
+      "title": "Training memory ledger across one optimizer step",
+      "lessons": [
+        6
+      ],
+      "after": "Practice",
+      "home": "lab:21_mixed_precision_training"
+    },
+    {
+      "path": "reference/diagrams/ddp-bucket-decision.svg",
+      "title": "Observe DDP before choosing a hook",
+      "lessons": [
+        13
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    }
+  ]
+}

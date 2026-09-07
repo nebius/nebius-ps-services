@@ -1,0 +1,27 @@
+<svg viewBox="0 0 1000 360" role="img" aria-labelledby="detail-host-enqueue-and-device-execution-timeline-async-title detail-host-enqueue-and-device-execution-timeline-async-desc">
+<title id="detail-host-enqueue-and-device-execution-timeline-async-title">Host enqueue and device execution timeline</title>
+<desc id="detail-host-enqueue-and-device-execution-timeline-async-desc">The CPU enqueues operations quickly while the GPU executes them later on CUDA streams; an explicit event marks completion.</desc>
+<defs>
+<marker id="detail-host-enqueue-and-device-execution-timeline-async-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<text x="35" y="62" font-weight="700">CPU thread</text>
+<line x1="160" y1="55" x2="930" y2="55" stroke="#24343d" stroke-width="2"/>
+<rect x="190" y="30" width="120" height="48" rx="8" fill="#e0edfa"/>
+<text x="250" y="59" text-anchor="middle">enqueue A</text>
+<rect x="330" y="30" width="120" height="48" rx="8" fill="#e0edfa"/>
+<text x="390" y="59" text-anchor="middle">enqueue B</text>
+<text x="35" y="162" font-weight="700">CUDA stream</text>
+<line x1="160" y1="155" x2="930" y2="155" stroke="#24343d" stroke-width="2"/>
+<rect x="260" y="130" width="250" height="48" rx="8" fill="#e0f0e6"/>
+<text x="385" y="159" text-anchor="middle">kernel A executes</text>
+<rect x="510" y="130" width="270" height="48" rx="8" fill="#e0f0e6"/>
+<text x="645" y="159" text-anchor="middle">kernel B executes</text>
+<line x1="250" y1="78" x2="285" y2="127" stroke="#245880" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-async-arrow)"/>
+<line x1="390" y1="78" x2="540" y2="127" stroke="#245880" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-async-arrow)"/>
+<line x1="780" y1="155" x2="860" y2="245" stroke="#245880" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-async-arrow)"/>
+<rect x="750" y="245" width="210" height="55" rx="8" fill="#fff7e7" stroke="#86500e"/>
+<text x="855" y="278" text-anchor="middle">event / synchronize</text>
+<text x="500" y="335" text-anchor="middle" fill="#52626b">Host wall time without synchronization measures enqueue work, not completed device work.</text>
+</svg>

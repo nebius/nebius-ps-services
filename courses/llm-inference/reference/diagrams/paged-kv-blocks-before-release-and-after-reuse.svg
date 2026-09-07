@@ -1,0 +1,86 @@
+<svg viewBox="0 0 1150 650" role="img" aria-labelledby="detail-paged-kv-blocks-before-release-and-after-reuse-paged-title detail-paged-kv-blocks-before-release-and-after-reuse-paged-desc">
+<title id="detail-paged-kv-blocks-before-release-and-after-reuse-paged-title">Paged KV blocks before release and after reuse</title>
+<desc id="detail-paged-kv-blocks-before-release-and-after-reuse-paged-desc">Request B's logical blocks 0 and 1 map to stable physical blocks P2 and P5. When B completes, P2 and P5 return to the free list. Request D then maps its logical blocks 0 and 1 to those same physical IDs. The mappings for A and C do not change; physical identity and logical ownership are distinct.</desc>
+<defs>
+<marker id="detail-paged-kv-blocks-before-release-and-after-reuse-paged-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g font-weight="700">
+<text x="35" y="55">logical owners</text>
+<text x="35" y="225">before B finishes</text>
+<text x="35" y="440"><tspan x="35">after release</tspan><tspan x="35" dy="25"> and reuse</tspan></text>
+</g>
+<g text-anchor="middle">
+<rect x="210" y="25" width="250" height="65" rx="8" fill="#e0edfa" stroke="#245880"/>
+<text x="335" y="65">request A owns A0, A1</text>
+<rect x="485" y="25" width="250" height="65" rx="8" fill="#e0f0e6" stroke="#206757"/>
+<text x="610" y="65">request B owns B0, B1</text>
+<rect x="760" y="25" width="250" height="65" rx="8" fill="#fff7e7" stroke="#86500e"/>
+<text x="885" y="65">request C owns C0, C1</text>
+</g>
+<text x="600" y="140" text-anchor="middle" fill="#52626b">Logical sequences refer to block-table entries; their physical blocks need not be adjacent.</text>
+<g stroke="#fff" stroke-width="3">
+<rect x="205" y="185" width="110" height="75" fill="#e0edfa"/>
+<rect x="320" y="185" width="110" height="75" fill="#fff7e7"/>
+<rect x="435" y="185" width="110" height="75" fill="#e0f0e6"/>
+<rect x="550" y="185" width="110" height="75" fill="#e0edfa"/>
+<rect x="665" y="185" width="110" height="75" fill="#fff7e7"/>
+<rect x="780" y="185" width="110" height="75" fill="#e0f0e6"/>
+<rect x="895" y="185" width="110" height="75" fill="#f4f7f9"/>
+</g>
+<g text-anchor="middle">
+<text x="260" y="230">A0</text>
+<text x="375" y="230">C0</text>
+<text x="490" y="230">B0</text>
+<text x="605" y="230">A1</text>
+<text x="720" y="230">C1</text>
+<text x="835" y="230">B1</text>
+<text x="950" y="230">free</text>
+</g>
+<g fill="none" stroke="#206757" stroke-width="4" marker-end="url(#detail-paged-kv-blocks-before-release-and-after-reuse-paged-arr)">
+<path d="M490 270 V305"/>
+<path d="M835 270 V305"/>
+<path d="M490 370 V405"/>
+<path d="M835 370 V405"/>
+</g>
+<rect x="390" y="305" width="555" height="65" rx="10" fill="#fff" stroke="#206757"/>
+<text x="667" y="332" text-anchor="middle" font-weight="700">B completes: release physical blocks P2 and P5</text>
+<text x="667" y="355" text-anchor="middle" class="diagram-label">the free-list operation changes ownership; it does not compact A or C</text>
+<g stroke="#fff" stroke-width="3">
+<rect x="205" y="415" width="110" height="75" fill="#e0edfa"/>
+<rect x="320" y="415" width="110" height="75" fill="#fff7e7"/>
+<rect x="435" y="415" width="110" height="75" fill="#eee5f5"/>
+<rect x="550" y="415" width="110" height="75" fill="#e0edfa"/>
+<rect x="665" y="415" width="110" height="75" fill="#fff7e7"/>
+<rect x="780" y="415" width="110" height="75" fill="#eee5f5"/>
+<rect x="895" y="415" width="110" height="75" fill="#f4f7f9"/>
+</g>
+<g text-anchor="middle">
+<text x="260" y="460">A0</text>
+<text x="375" y="460">C0</text>
+<text x="490" y="460">D0</text>
+<text x="605" y="460">A1</text>
+<text x="720" y="460">C1</text>
+<text x="835" y="460">D1</text>
+<text x="950" y="460">free</text>
+</g>
+<rect x="385" y="545" width="565" height="65" rx="10" fill="#eee5f5" stroke="#654886"/>
+<text x="667" y="572" text-anchor="middle" font-weight="700">new request D reuses the two released blocks</text>
+<text x="667" y="596" text-anchor="middle" class="diagram-label">reuse avoids a contiguous-per-sequence allocation requirement</text>
+<text x="260" y="174" text-anchor="middle" font-size="13" fill="#52626b">physical P0</text>
+<text x="260" y="515" text-anchor="middle" font-size="13" fill="#52626b">physical P0</text>
+<text x="375" y="174" text-anchor="middle" font-size="13" fill="#52626b">physical P1</text>
+<text x="375" y="515" text-anchor="middle" font-size="13" fill="#52626b">physical P1</text>
+<text x="490" y="174" text-anchor="middle" font-size="13" fill="#52626b">physical P2</text>
+<text x="490" y="515" text-anchor="middle" font-size="13" fill="#52626b">physical P2</text>
+<text x="605" y="174" text-anchor="middle" font-size="13" fill="#52626b">physical P3</text>
+<text x="605" y="515" text-anchor="middle" font-size="13" fill="#52626b">physical P3</text>
+<text x="720" y="174" text-anchor="middle" font-size="13" fill="#52626b">physical P4</text>
+<text x="720" y="515" text-anchor="middle" font-size="13" fill="#52626b">physical P4</text>
+<text x="835" y="174" text-anchor="middle" font-size="13" fill="#52626b">physical P5</text>
+<text x="835" y="515" text-anchor="middle" font-size="13" fill="#52626b">physical P5</text>
+<text x="950" y="174" text-anchor="middle" font-size="13" fill="#52626b">physical P6</text>
+<text x="950" y="515" text-anchor="middle" font-size="13" fill="#52626b">physical P6</text>
+<text x="575" y="637" text-anchor="middle" font-size="14" fill="#52626b">A0 means request A, logical block 0. Physical IDs remain fixed while block-table ownership changes.</text>
+</svg>

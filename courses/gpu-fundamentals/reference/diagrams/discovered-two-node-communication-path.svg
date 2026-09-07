@@ -1,0 +1,48 @@
+<svg viewBox="0 0 1200 590" role="img" aria-labelledby="detail-discovered-two-node-communication-path-topology-title detail-discovered-two-node-communication-path-topology-desc">
+<title id="detail-discovered-two-node-communication-path-topology-title">Discovered two-node communication path</title>
+<desc id="detail-discovered-two-node-communication-path-topology-desc">Rank zero owns one H100 on node zero and rank one owns one H100 on node one. Data traverses each node's GPU-to-host or network path and the inter-node fabric. The diagram deliberately does not assume NVLink, InfiniBand, RoCE, or GPUDirect RDMA; those capabilities must be discovered and preserved as run evidence.</desc>
+<defs>
+<marker id="detail-discovered-two-node-communication-path-topology-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<rect x="30" y="55" width="470" height="350" rx="18" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<rect x="700" y="55" width="470" height="350" rx="18" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<g text-anchor="middle">
+<text x="265" y="92" font-size="21" font-weight="700">Slurm node 0 · rank 0</text>
+<text x="935" y="92" font-size="21" font-weight="700">Slurm node 1 · rank 1</text>
+<rect x="80" y="135" width="190" height="100" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<text x="175" y="171" font-weight="700">one full H100</text>
+<text x="175" y="199" class="diagram-label">CUDA device 0</text>
+<rect x="315" y="135" width="140" height="100" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<text x="385" y="171" font-weight="700">NIC path</text>
+<text x="385" y="199" class="diagram-label">site discovered</text>
+<rect x="745" y="135" width="140" height="100" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<text x="815" y="171" font-weight="700">NIC path</text>
+<text x="815" y="199" class="diagram-label">site discovered</text>
+<rect x="930" y="135" width="190" height="100" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<text x="1025" y="171" font-weight="700">one full H100</text>
+<text x="1025" y="199" class="diagram-label">CUDA device 0</text>
+<rect x="520" y="135" width="160" height="100" rx="12" fill="#eee5f5" stroke="#654886" stroke-width="2"/>
+<text x="600" y="171" font-weight="700">inter-node</text>
+<text x="600" y="199" class="diagram-label">fabric</text>
+</g>
+<g fill="none" stroke="#245880" stroke-width="4" marker-start="url(#detail-discovered-two-node-communication-path-topology-arr)" marker-end="url(#detail-discovered-two-node-communication-path-topology-arr)">
+<line x1="270" y1="185" x2="315" y2="185"/>
+<line x1="455" y1="185" x2="520" y2="185"/>
+<line x1="680" y1="185" x2="745" y2="185"/>
+<line x1="885" y1="185" x2="930" y2="185"/>
+</g>
+<g text-anchor="middle">
+<rect x="90" y="285" width="350" height="88" rx="10" fill="#fff" stroke="#dbe5e1"/>
+<text x="265" y="314" font-weight="700">local facts to record</text>
+<text x="265" y="337" class="diagram-label"><tspan x="265">anonymous node · rank · GPU model</tspan><tspan x="265" dy="20">· sanitized topology</tspan></text>
+<rect x="760" y="285" width="350" height="88" rx="10" fill="#fff" stroke="#dbe5e1"/>
+<text x="935" y="314" font-weight="700">local facts to record</text>
+<text x="935" y="337" class="diagram-label"><tspan x="935">anonymous node · rank · GPU model</tspan><tspan x="935" dy="20">· sanitized topology</tspan></text>
+<rect x="280" y="455" width="640" height="80" rx="12" fill="#fff" stroke="#dbe5e1"/>
+<text x="600" y="485" font-weight="700">Distributed conclusion requires end-to-end evidence</text>
+<text x="600" y="508" class="diagram-label"><tspan x="600">NCCL path + message size curve + correctness</tspan><tspan x="600" dy="20">+ slowest-rank time + overlap trace</tspan></text>
+</g>
+<text x="600" y="425" text-anchor="middle" fill="#52626b">Do not label the transport from the GPU model alone; discover the installed node and network topology.</text>
+</svg>

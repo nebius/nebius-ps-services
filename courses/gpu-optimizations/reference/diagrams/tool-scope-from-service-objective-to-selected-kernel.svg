@@ -1,0 +1,33 @@
+<svg viewBox="0 0 1150 560" role="img" aria-labelledby="detail-tool-scope-from-service-objective-to-selected-kernel-tool-map-title detail-tool-scope-from-service-objective-to-selected-kernel-tool-map-desc">
+<title id="detail-tool-scope-from-service-objective-to-selected-kernel-tool-map-title">Tool scope from service objective to selected kernel</title>
+<desc id="detail-tool-scope-from-service-objective-to-selected-kernel-tool-map-desc">A vertical diagnostic ladder moves from inference load and end-to-end metrics through device telemetry, framework operators, system timeline, and one selected kernel. Side labels show the artifact produced at each level.</desc>
+<defs>
+<marker id="detail-tool-scope-from-service-objective-to-selected-kernel-tool-map-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g text-anchor="middle">
+<rect x="250" y="35" width="650" height="70" rx="12" fill="#eef5fc" stroke="#52626b"/>
+<text x="575" y="66" font-weight="700">AIPerf or application benchmark</text>
+<text x="575" y="91" class="diagram-label">TTFT · ITL · end-to-end latency · request/token throughput</text>
+<rect x="300" y="130" width="550" height="70" rx="12" fill="#f9e8eb" stroke="#923c49"/>
+<text x="575" y="160" font-weight="700">nvidia-smi and DCGM</text>
+<text x="575" y="185" class="diagram-label">health · power · clocks · memory · interval SM/DRAM/fabric activity</text>
+<rect x="350" y="225" width="450" height="70" rx="12" fill="#e0f0e6" stroke="#206757"/>
+<text x="575" y="255" font-weight="700">PyTorch Profiler + NVTX</text>
+<text x="575" y="280" class="diagram-label">operators · shapes · calls · allocations · semantic phases</text>
+<rect x="380" y="320" width="390" height="70" rx="12" fill="#e0edfa" stroke="#245880"/>
+<text x="575" y="350" font-weight="700">Nsight Systems</text>
+<text x="575" y="375" class="diagram-label">CPU/GPU timeline · gaps · copies · sync · NCCL</text>
+<rect x="450" y="415" width="250" height="70" rx="12" fill="#eee5f5" stroke="#654886"/>
+<text x="575" y="445" font-weight="700">Nsight Compute</text>
+<text x="575" y="470" class="diagram-label">one kernel · counters · roofline</text>
+</g>
+<g stroke="#245880" stroke-width="3" marker-end="url(#detail-tool-scope-from-service-objective-to-selected-kernel-tool-map-arr)">
+<line x1="575" y1="105" x2="575" y2="130"/>
+<line x1="575" y1="200" x2="575" y2="225"/>
+<line x1="575" y1="295" x2="575" y2="320"/>
+<line x1="575" y1="390" x2="575" y2="415"/>
+</g>
+<text x="575" y="530" text-anchor="middle" fill="#52626b">Descend only when the broader artifact identifies a stable, material question for the next layer.</text>
+</svg>

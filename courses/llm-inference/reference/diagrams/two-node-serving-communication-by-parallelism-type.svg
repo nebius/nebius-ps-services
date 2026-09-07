@@ -1,0 +1,55 @@
+<svg viewBox="0 0 1120 590" role="img" aria-labelledby="detail-two-node-serving-communication-by-parallelism-type-parallel-detail-title detail-two-node-serving-communication-by-parallelism-type-parallel-detail-desc">
+<title id="detail-two-node-serving-communication-by-parallelism-type-parallel-detail-title">Two-node serving communication by parallelism type</title>
+<desc id="detail-two-node-serving-communication-by-parallelism-type-parallel-detail-desc">Serving data parallel has two full-model replicas handling independent requests and no mandatory edge between ranks. Tensor parallel uses bidirectional collectives inside layers. Pipeline parallel sends activations forward from early to later layers. Expert parallel dispatches tokens to expert owners and combines results through bidirectional all-to-all traffic.</desc>
+<defs>
+<marker id="detail-two-node-serving-communication-by-parallelism-type-parallel-detail-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+<path d="M0,0 L0,8 L8,4 z" fill="#86500e"/>
+</marker>
+</defs>
+<g font-weight="700">
+<text x="30" y="65">DP</text>
+<text x="30" y="195">TP</text>
+<text x="30" y="325">PP</text>
+<text x="30" y="455">EP</text>
+</g>
+<g fill="#fff" stroke="#245880" stroke-width="2">
+<rect x="120" y="25" width="300" height="82" rx="9"/>
+<rect x="700" y="25" width="300" height="82" rx="9"/>
+<rect x="120" y="155" width="300" height="82" rx="9"/>
+<rect x="700" y="155" width="300" height="82" rx="9"/>
+<rect x="120" y="285" width="300" height="82" rx="9"/>
+<rect x="700" y="285" width="300" height="82" rx="9"/>
+<rect x="120" y="415" width="300" height="82" rx="9"/>
+<rect x="700" y="415" width="300" height="82" rx="9"/>
+</g>
+<g text-anchor="middle">
+<text x="270" y="58">rank 0: full model</text>
+<text x="270" y="84" class="diagram-label">independent requests</text>
+<text x="850" y="58">rank 1: full model</text>
+<text x="850" y="84" class="diagram-label">independent requests</text>
+<text x="270" y="188">rank 0: matrix/head shard</text>
+<text x="270" y="214" class="diagram-label">inside each layer</text>
+<text x="850" y="188">rank 1: matrix/head shard</text>
+<text x="850" y="214" class="diagram-label">inside each layer</text>
+<text x="270" y="318">rank 0: early layers</text>
+<text x="270" y="344" class="diagram-label">pipeline stage 0</text>
+<text x="850" y="318">rank 1: later layers</text>
+<text x="850" y="344" class="diagram-label">pipeline stage 1</text>
+<text x="270" y="448">rank 0: experts 0 … k</text>
+<text x="270" y="474" class="diagram-label">local grouped work</text>
+<text x="850" y="448">rank 1: experts k+1 … n</text>
+<text x="850" y="474" class="diagram-label">local grouped work</text>
+</g>
+<text x="560" y="68" text-anchor="middle" class="diagram-label">no mandatory per-request rank edge</text>
+<g stroke="#86500e" stroke-width="4" fill="none">
+<path d="M420 196 H700" marker-start="url(#detail-two-node-serving-communication-by-parallelism-type-parallel-detail-arr)" marker-end="url(#detail-two-node-serving-communication-by-parallelism-type-parallel-detail-arr)" stroke-dasharray="14 8"/>
+<path d="M420 326 H700" marker-end="url(#detail-two-node-serving-communication-by-parallelism-type-parallel-detail-arr)"/>
+<path d="M420 450 H700" marker-start="url(#detail-two-node-serving-communication-by-parallelism-type-parallel-detail-arr)" marker-end="url(#detail-two-node-serving-communication-by-parallelism-type-parallel-detail-arr)"/>
+</g>
+<g text-anchor="middle" fill="#86500e" font-weight="700">
+<text x="560" y="185">frequent collectives</text>
+<text x="560" y="315">forward activation send</text>
+<text x="560" y="439">dispatch + combine all-to-all</text>
+</g>
+<text x="560" y="555" text-anchor="middle">With one H100 per node, every drawn cross-rank edge uses the inter-node fabric.</text>
+</svg>

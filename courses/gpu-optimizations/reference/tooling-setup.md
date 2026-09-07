@@ -1,5 +1,18 @@
 # Diagnostic tooling setup
 
+A diagnostic tool collects evidence about execution. A monitor samples device
+state over time; a profiler connects activity to operations or a timeline; a
+benchmark runs a declared workload and measures its result. These roles answer
+different questions, even when one product offers more than one role.
+
+NVIDIA Data Center GPU Manager (DCGM) supplies GPU monitoring and management
+interfaces. DCGM Exporter turns selected DCGM fields into metrics that
+Prometheus, a time-series monitoring system, can collect. NVIDIA's CUDA
+Profiling Tools Interface (CUPTI) supplies activity and performance data to
+profiling tools. Installing one of these components does not create a complete
+monitoring or profiling service; the collection path and permissions still
+have to exist in the environment where the workload runs.
+
 Use this checklist from the allocated compute-node environment. A command that
 exists on the login node but disappears inside a Slurm job is not available to
 the lab. The official installation and user guides are collected in
@@ -39,15 +52,12 @@ allocation used by the labs.
 | `nvbandwidth` | Build or install NVIDIA's versioned utility in a cluster-approved tools image; retain its commit or release identity | `nvbandwidth --help` | Cluster administrator / performance tools owner |
 | NCCL Tests | Build the NVIDIA test executables against the same NCCL and MPI/runtime family used by the cluster | `all_reduce_perf --help`, `all_gather_perf --help`, `reduce_scatter_perf --help`, `alltoall_perf --help` | Cluster administrator / communication owner |
 | vLLM Bench | Included with a compatible, pinned vLLM environment; keep it separate from the training environment | `vllm bench --help` | Serving environment owner |
-| GenAI-Perf | Use an exact cluster-approved version or a hash-locked requirements file in an isolated client environment; the endpoint must already be running | `genai-perf --help` | Benchmark client owner |
 | AIPerf | For new NVIDIA generative-AI benchmarks, use an exact approved version or a hash-locked requirements file in an isolated client environment | `aiperf --help` | Benchmark client owner |
 | MLPerf | Reproduce only with the official benchmark rules, approved implementation, dataset, quality target, and submission scenario | Verify the selected suite's official checker and result format | Benchmark program owner |
 
-GenAI-Perf is being phased out by its official project in favor of AIPerf.
-This course explains GenAI-Perf so that existing workflows remain readable,
-but new benchmark automation should begin with AIPerf. Pin whichever client is
-used, preserve its configuration and artifact schema, and never compare runs
-whose metric definitions differ silently.
+Serving benchmarks use AIPerf in the LLM Inference course's isolated client
+and engine environments. Pin the client, preserve its configuration and
+artifact schema, and compare only equivalent metric definitions.
 
 Use only an official package index or a cluster-approved mirror. Do not use an
 unqualified `pip install` on a managed cluster. Record the exact resolved
@@ -91,7 +101,7 @@ commands on a managed cluster.
 | `nvbandwidth` | Bandwidth or latency for a declared host/device or device/device copy path, size, direction, and concurrency | NCCL collective performance or application throughput |
 | NCCL Tests | Correctness and algorithm/bus-bandwidth curves for a named collective and message-size sweep | Framework scheduling, overlap, useful model progress, or an application speedup |
 | vLLM Bench | Startup, latency, throughput, or online-serving behavior for one versioned vLLM engine workload | A cross-engine standard or a kernel-level explanation |
-| GenAI-Perf or AIPerf | Request distribution, TTFT, ITL, end-to-end latency, request rate, and token throughput | Kernel root cause without server and profiler evidence |
+| AIPerf | Request distribution, TTFT, ITL, end-to-end latency, request rate, and token throughput | Kernel root cause without server and profiler evidence |
 | MLPerf | A comparable full-system result only when the official rules, scenario, dataset, quality target, audit, and checker are followed | That an informal course experiment is an MLPerf result |
 
 For NCCL Tests, select the operation from the training or serving design rather
@@ -125,3 +135,14 @@ Profiler reports, exporter series, benchmark reports, and telemetry can contain 
 identifiers, model metadata, or request content. Treat every raw artifact as
 private even when the lab uses synthetic data. Follow
 [evidence-security.md](evidence-security.md) before sharing any result.
+
+## Apply the networking tools in lesson order
+
+Lesson 11 and Labs 17/18 turn the tool-selection preview into a bounded
+experiment. First map topology and selected transport, then read the message-size
+curve, then change one job-local setting in a new process. Lesson 12 owns the
+follow-up application scaling and overlap check. NCCL Tests uses its own
+MPI-enabled binary and launcher; the PyTorch labs use torchrun. The two runtimes
+must record their loaded NCCL versions independently. Optional upstream tuning
+reports and per-iteration columns are diagnostic extensions, not the standard
+table accepted by the course parser.

@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_DIR: services/github-report
+  APP_DIR: misc/github-report
   TAG_PREFIX: github-report
   MAIN_BRANCH: main
   ASSET_GLOB: "dist/*.whl"

@@ -1,0 +1,9 @@
+build*/
+results/
+logs/
+*.out
+*.log
+*.qdrep
+*.ncu-rep
+*.nsys-rep
+*.sqlite

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{COURSE_TITLE}}</title>
+  <style>
+{{INLINE_CSS}}
+  </style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to course</a>
+<header>
+  <h1>{{COURSE_TITLE}}</h1>
+  <p class="guided-hours">{{GUIDED_HOURS}} estimated guided hours</p>
+</header>
+<div class="course-layout">
+  <aside>
+    <nav aria-label="Course contents">
+      <details open>
+        <summary>Contents</summary>
+        <ul class="section-links">
+          <li><a href="#orientation">Start here</a></li>
+          <li><a href="#syllabus">Syllabus</a></li>
+        </ul>
+        <h2>Lessons</h2>
+        <ol>
+{{LESSON_TOC}}
+        </ol>
+        <h2>Practical work</h2>
+        <ul>
+{{LAB_TOC}}
+        </ul>
+        <ul class="section-links">
+          <li><a href="#glossary">Glossary</a></li>
+          <li><a href="#next-steps">Where to Go Next</a></li>
+          <li><a href="#references">Official references</a></li>
+        </ul>
+      </details>
+    </nav>
+  </aside>
+  <main id="main" tabindex="-1">
+    <section id="orientation"><h2>Start here</h2>
+{{MISSION_HTML}}
+    </section>
+    <section id="syllabus"><h2>Syllabus</h2>
+{{SYLLABUS_HTML}}
+    </section>
+{{LESSONS_HTML}}
+    <section id="practical-work"><h2>Practical work</h2>
+{{LABS_HTML}}
+    </section>
+    <section id="glossary"><h2>Glossary</h2>
+{{GLOSSARY_HTML}}
+    </section>
+    <section id="next-steps"><h2>Where to Go Next</h2>
+{{NEXT_STEPS_HTML}}
+    </section>
+    <section id="references"><h2>Official references</h2>
+{{RESOURCES_HTML}}
+    </section>
+  </main>
+</div>
+</body>
+</html>

@@ -1,63 +1,86 @@
-# GPU Fundamentals for Performance Engineering
+# GPU Fundamentals
 
-A self-contained, evidence-first course that teaches the GPU mental models needed for responsible performance work on NVIDIA H100 systems.
+## Course guide
 
-## Start here
+[Read the complete course](index.html) ·
+[Syllabus](SYLLABUS.md) ·
+[Glossary](GLOSSARY.md) ·
+[Versions and environment](VERSIONS.md) ·
+[Cluster smoke runbook](reference/cluster-smoke-test.md) ·
+[Benchmark worksheet](reference/benchmark-record.md) ·
+[Lab mechanisms and evidence](reference/lab-mechanisms.md)
 
-1. Read [MISSION.md](MISSION.md) for the learner contract and outcomes.
-2. Open [index.html](index.html) in a browser; it is the complete portable course.
-3. Follow [COURSE.md](COURSE.md) and [SYLLABUS.md](SYLLABUS.md) in order.
-4. Prepare a cluster-approved environment that satisfies the declared version baseline in [VERSIONS.md](VERSIONS.md).
-5. Read [evidence security and safe sharing](reference/evidence-security.md), review the [source-coverage map](reference/source-coverage.md), then run the [cluster smoke-test](reference/cluster-smoke-test.md) before broader experiments.
+Estimated guided time: **21 hours**.
 
-## Course environment
+## Learning order
 
-The lab contract is a Slurm cluster with two worker nodes and one full non-MIG H100 per node. All GPU code runs inside a Slurm allocation. Local-effect labs reserve one node; distributed labs request both nodes and use `torchrun` with one process per node.
+Start with CPU/GPU boundaries and trustworthy timing, then identify the software stack and H100 execution hierarchy. Define memory resources before SIMT and occupancy, connect access patterns and precision to roofline, and finish with read-only health, networking layers and bounded two-node communication. Learn GPU/NIC attachment, NVLink/NVSwitch, InfiniBand/RoCE, RDMA and GPUDirect RDMA before interpreting NCCL collectives.
 
-The course does not assume the cluster has already been created. Static validation is included in the repository; live H100, NCCL, and timing acceptance must be completed on the future cluster.
+Use the [lesson-by-lesson syllabus](SYLLABUS.md) for the current activity and
+readiness checkpoints. Lab numbers identify files; follow lesson order rather
+than running every lab numerically. Previews and optional branches are labeled.
 
-For isolated local validation, create the course environment from this
-directory and install its declared dependencies:
+## Getting started
 
-```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m pip check
-```
+The HTML course keeps diagrams beside the relevant explanation in a wide,
+responsive layout. Each diagram fits the page and retains a caption and
+accessible SVG description. Each lab explains setup, concepts, code structure,
+supported experiments, result checks, investigation, troubleshooting, and
+takeaways, with links to its related lessons. Use the side-panel contents to
+jump between topics.
 
-This local environment supports offline validation; it does not prove the
-cluster's CUDA, H100, NCCL, Slurm, or Triton runtime.
+Start here. The course builds the mental model used by every later performance
+course. Read `COURSE.md`, use `index.html` for the self-contained visual
+version, and run labs only through the supplied Slurm launchers.
 
-## What is included
+The course explains architecture, execution, timing, memory, precision, and
+two-node communication through worked examples and practical labs.
 
-- 15 numbered modules, each delivered as one lesson, that build from CPU/GPU foundations through H100 device and SM architecture, measurement, data movement, arithmetic, and two-node scale.
-- Embedded, accessible SVG diagrams for the H100 hierarchy, one Hopper SM, execution and scheduling, memory and coalescing, overlap, Tensor Core eligibility, roofline reasoning, topology, and diagnosis.
-- Ten runnable Python/PyTorch labs, including a Triton launch-geometry exercise, two-node preflight, and NCCL collectives.
-- Slurm launchers for isolated one-GPU and two-node runs.
-- A benchmark-record template and ordered smoke-test runbook.
-- Official NVIDIA, PyTorch, and Slurm references collected only at the end of the course.
-
-## Validate the artifact
-
-```bash
-.venv/bin/python tools/validate_course.py
-```
-
-This validates structure, embedded-source parity, Python syntax, dependency-free help, and launcher contracts. It does not execute CUDA work.
-
-From the parent `courses` directory, run the offline behavioral contracts with:
+## Environment
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 gpu-fundamentals/.venv/bin/python -m pytest
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python tools/validate_course.py
 ```
 
-## Result discipline
+PyTorch 2.14 is the manifest target. Clean Linux installation and H100
+qualification remain pending; no fallback version is approved. Complete the
+documented environment checks and H100 smoke path before publication.
 
-Labs fail when a declared correctness gate is false. Every JSON artifact uses
-the canonical `gpu-course-result/v1` schema and a random course run ID; portable
-results never contain scheduler job IDs. Result directories and files are
-created private and exclusively, so an existing artifact is never overwritten.
-Keep the private Slurm output, result JSON, prediction, correctness result, and
-environment metadata together. Share only a separately reviewed summary that
-follows [the evidence-security guide](reference/evidence-security.md). Never
-report an optimization from a timing change alone.
+## First single-GPU run
+
+After environment setup, run the compatibility check before the CPU/GPU
+comparison. Confirm that each job succeeds before continuing.
+
+```bash
+umask 077
+sbatch slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile smoke
+sbatch slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile smoke
+```
+
+## At Lesson 12
+
+Run the two-node preflight before the collective experiment. These jobs belong
+to the later communication lesson, not the first single-GPU session.
+
+```bash
+umask 077
+sbatch slurm/two_node.sbatch labs/00_cluster_preflight.py --profile smoke
+sbatch slurm/two_node.sbatch labs/06_distributed_collectives.py --profile smoke
+```
+
+Cluster creation, credentials, drivers, scheduler administration, and GPU
+configuration are outside the course.
+
+## Begin with the concepts
+
+Start with the first lesson's **Start here** section and its inline workflow diagram. It defines the subject and essential vocabulary, explains why it is useful, and walks through a small example before advanced engineering details. Follow the syllabus checkpoints for the beginner route; experienced readers can use those checkpoints to identify what they already understand.
+
+## Continue learning
+
+After the core course, use [Where to Go Next](NEXT-STEPS.md) for optional
+reading on current technologies and advanced concepts. Each entry
+includes a study question, official sources and hardware or maturity limits;
+these directions do not change the required labs or environment.

@@ -1,0 +1,15 @@
+<svg viewBox="0 0 1000 420" role="img" aria-labelledby="detail-roofline-reasoning-for-two-workloads-roof-title detail-roofline-reasoning-for-two-workloads-roof-desc">
+<title id="detail-roofline-reasoning-for-two-workloads-roof-title">Roofline reasoning for two workloads</title>
+<desc id="detail-roofline-reasoning-for-two-workloads-roof-desc">A rising bandwidth ceiling meets a flat compute ceiling; a vector workload lies on the rising side and matrix multiplication lies farther right.</desc>
+<line x1="120" y1="340" x2="930" y2="340" stroke="#24343d" stroke-width="3"/>
+<line x1="120" y1="340" x2="120" y2="50" stroke="#24343d" stroke-width="3"/>
+<path d="M145 320L590 95H900" fill="none" stroke="#245880" stroke-width="6"/>
+<circle cx="285" cy="248" r="14" fill="#86500e"/>
+<text x="285" y="285" text-anchor="middle">vector path</text>
+<circle cx="735" cy="95" r="14" fill="#206757"/>
+<text x="735" y="135" text-anchor="middle">reuse-heavy GEMM</text>
+<text x="520" y="397" text-anchor="middle">arithmetic intensity: useful operations per estimated byte</text>
+<text x="30" y="205" transform="rotate(-90 30 205)" text-anchor="middle">attainable useful work rate</text>
+<text x="365" y="150" transform="rotate(-27 365 150)" fill="#245880">bandwidth ceiling</text>
+<text x="745" y="78" fill="#245880">compute ceiling</text>
+</svg>

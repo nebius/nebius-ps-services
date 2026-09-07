@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 
 from common import (
@@ -119,7 +120,11 @@ def main() -> None:
 
     serial, serial_sum = run_loader(0)
     worker, worker_sum = run_loader(4)
-    correct = abs(serial_sum - worker_sum) <= max(1e-4, abs(serial_sum) * 1e-5)
+    correct = (
+        math.isfinite(serial_sum)
+        and math.isfinite(worker_sum)
+        and abs(serial_sum - worker_sum) <= 1e-6 + abs(serial_sum) * 1e-5
+    )
     if not correct:
         raise SystemExit("Pipeline variants produced different checksums.")
     if not serial["all_batches_pinned"] or not worker["all_batches_pinned"]:

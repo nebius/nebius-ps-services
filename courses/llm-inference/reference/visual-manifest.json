@@ -1,0 +1,123 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/verify-every-model-artifact-before-loading.svg",
+      "title": "Verify every model artifact before loading",
+      "lessons": [
+        1
+      ],
+      "after": "Practice",
+      "home": "lab:16_model_artifact_audit"
+    },
+    {
+      "path": "reference/diagrams/autoregressive-inference-lifecycle.svg",
+      "title": "Autoregressive inference lifecycle",
+      "lessons": [
+        1,
+        2
+      ],
+      "after": "Start here",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/prefill-writes-the-kv-cache-decode-reads-and-appends-it.svg",
+      "title": "Prefill writes the KV cache; decode reads and appends it",
+      "lessons": [
+        2,
+        4
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/inference-memory-by-lifecycle-phase.svg",
+      "title": "Inference memory by lifecycle phase",
+      "lessons": [
+        4
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/llm-request-latency-decomposition.svg",
+      "title": "LLM request latency decomposition",
+      "lessons": [
+        7
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/continuous-batching-changes-membership-each-decode-step.svg",
+      "title": "Continuous batching changes membership at scheduler iterations",
+      "lessons": [
+        9
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/paged-kv-blocks-before-release-and-after-reuse.svg",
+      "title": "Paged KV blocks before release and after reuse",
+      "lessons": [
+        8
+      ],
+      "after": "Practice",
+      "home": "lab:27_paged_kv"
+    },
+    {
+      "path": "reference/diagrams/phase-specific-attention-and-cuda-graph-routing.svg",
+      "title": "Phase-specific attention and CUDA Graph routing",
+      "lessons": [
+        11
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/speculative-decoding-proposal-verification-recovery-and-bonus-paths.svg",
+      "title": "Speculative decoding proposal, verification, recovery, and bonus paths",
+      "lessons": [
+        13
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/serving-replicas-versus-model-parallelism.svg",
+      "title": "Serving replicas versus model parallelism",
+      "lessons": [
+        14
+      ],
+      "after": "Mental model",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/two-node-serving-communication-by-parallelism-type.svg",
+      "title": "Two-node serving communication by parallelism type",
+      "lessons": [
+        14
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/disaggregated-prefill-decode-and-agentic-queues.svg",
+      "title": "Disaggregated prefill, decode, and agentic queues",
+      "lessons": [
+        15
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/kv-tier-retention.svg",
+      "title": "Retain only compatible reusable state",
+      "lessons": [
+        10
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    }
+  ]
+}
