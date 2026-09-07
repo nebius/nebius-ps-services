@@ -3,13 +3,13 @@ name: github-report-ci
 on:
   pull_request:
     paths:
-      - "services/github-report/**"
+      - "misc/github-report/**"
       - ".github/workflows/github-report-ci.yml"
       - ".github/workflows/github-report-release.yml"
   push:
     branches: ["main"]
     paths:
-      - "services/github-report/**"
+      - "misc/github-report/**"
       - ".github/workflows/github-report-ci.yml"
       - ".github/workflows/github-report-release.yml"
   workflow_dispatch:
@@ -24,7 +24,7 @@ concurrency:
 defaults:
   run:
     shell: bash
-    working-directory: services/github-report
+    working-directory: misc/github-report
 
 jobs:
   lint:

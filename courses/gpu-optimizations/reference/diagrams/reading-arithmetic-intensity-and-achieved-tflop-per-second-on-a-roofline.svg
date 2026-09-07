@@ -1,0 +1,21 @@
+<svg viewBox="0 0 1100 560" role="img" aria-labelledby="detail-reading-arithmetic-intensity-and-achieved-tflop-per-second-on-a-roofline-roofline-tools-title detail-reading-arithmetic-intensity-and-achieved-tflop-per-second-on-a-roofline-roofline-tools-desc">
+<title id="detail-reading-arithmetic-intensity-and-achieved-tflop-per-second-on-a-roofline-roofline-tools-title">Reading arithmetic intensity and achieved TFLOP per second on a roofline</title>
+<desc id="detail-reading-arithmetic-intensity-and-achieved-tflop-per-second-on-a-roofline-roofline-tools-desc">A log-scale conceptual roofline has arithmetic intensity on the horizontal axis and achieved FLOP per second on the vertical axis. A low-intensity pointwise kernel lies on the memory side; a reused matrix multiply lies on the compute side. A point below both ceilings requires investigation of other inefficiencies.</desc>
+<line x1="140" y1="475" x2="1030" y2="475" stroke="#24343d" stroke-width="3"/>
+<line x1="140" y1="475" x2="140" y2="75" stroke="#24343d" stroke-width="3"/>
+<path d="M175 445 L650 155 H1000" fill="none" stroke="#245880" stroke-width="6"/>
+<line x1="650" y1="155" x2="650" y2="475" stroke="#52626b" stroke-dasharray="8 8"/>
+<text x="650" y="510" text-anchor="middle" class="diagram-label">ridge: bandwidth ceiling meets compute ceiling</text>
+<circle cx="325" cy="355" r="13" fill="#86500e"/>
+<text x="325" y="390" text-anchor="middle" font-weight="700">pointwise</text>
+<text x="325" y="415" text-anchor="middle" class="diagram-label">low AI · memory-side candidate</text>
+<circle cx="815" cy="155" r="13" fill="#206757"/>
+<text x="815" y="195" text-anchor="middle" font-weight="700">BF16 GEMM</text>
+<text x="815" y="220" text-anchor="middle" class="diagram-label">high reuse · compute-side candidate</text>
+<circle cx="550" cy="395" r="13" fill="#923c49"/>
+<text x="550" y="430" text-anchor="middle" class="diagram-label">below both ceilings: inspect stalls, waves, divergence, dependencies</text>
+<text x="590" y="550" text-anchor="middle">arithmetic intensity = useful FLOP ÷ measured bytes [FLOP/byte]</text>
+<text x="55" y="285" transform="rotate(-90 55 285)" text-anchor="middle">achieved performance [FLOP/s]</text>
+<text x="370" y="225" transform="rotate(-31 370 225)" fill="#245880">memory-bandwidth boundary</text>
+<text x="825" y="135" fill="#245880">compute boundary</text>
+</svg>

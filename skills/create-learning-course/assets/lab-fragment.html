@@ -1,0 +1,11 @@
+<article class="lab" id="{{LAB_ID}}">
+  <h3>Lab {{LAB_NUMBER}}: {{LAB_TITLE}}</h3>
+  {{DETAILED_PURPOSE_HTML}}
+  {{SEVEN_ORDERED_GUIDE_SECTIONS_HTML}}
+  <!-- Repeat this details block for every allowlisted source file, including
+       relevant helpers. Non-code activities need no source listing. -->
+  <details class="lab-source">
+    <summary>Source: {{RELATIVE_SOURCE_PATH}}</summary>
+    <pre tabindex="0"><code data-source="{{RELATIVE_SOURCE_PATH}}">{{COMPLETE_ESCAPED_SOURCE}}</code></pre>
+  </details>
+</article>

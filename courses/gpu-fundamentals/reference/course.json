@@ -1,0 +1,105 @@
+{
+  "title": "GPU Fundamentals",
+  "estimated_guided_hours": 21,
+  "labs": [
+    {
+      "path": "labs/00_cluster_preflight.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/01_cpu_gpu_crossover.py",
+      "optional": false,
+      "lessons": [
+        1
+      ]
+    },
+    {
+      "path": "labs/02_tensor_core_precision.py",
+      "optional": false,
+      "lessons": [
+        9
+      ]
+    },
+    {
+      "path": "labs/03_transfer_and_pinning.py",
+      "optional": false,
+      "lessons": [
+        8
+      ]
+    },
+    {
+      "path": "labs/04_layout_and_coalescing.py",
+      "optional": false,
+      "lessons": [
+        4,
+        7
+      ]
+    },
+    {
+      "path": "labs/05_roofline_microbench.py",
+      "optional": false,
+      "lessons": [
+        4,
+        10
+      ]
+    },
+    {
+      "path": "labs/06_distributed_collectives.py",
+      "optional": false,
+      "lessons": [
+        12
+      ]
+    },
+    {
+      "path": "labs/07_async_streams.py",
+      "optional": false,
+      "lessons": [
+        8
+      ]
+    },
+    {
+      "path": "labs/08_operator_to_kernels.py",
+      "optional": false,
+      "lessons": [
+        2,
+        3
+      ]
+    },
+    {
+      "path": "labs/09_triton_launch_geometry.py",
+      "optional": false,
+      "lessons": [
+        3,
+        6
+      ]
+    },
+    {
+      "path": "labs/10_compatibility_stack.py",
+      "optional": false,
+      "lessons": [
+        1,
+        2
+      ]
+    },
+    {
+      "path": "labs/11_scheduler_tail.py",
+      "optional": false,
+      "lessons": [
+        3,
+        5,
+        6
+      ]
+    },
+    {
+      "path": "labs/12_read_only_health.py",
+      "optional": false,
+      "lessons": [
+        11
+      ]
+    }
+  ],
+  "extensions": []
+}

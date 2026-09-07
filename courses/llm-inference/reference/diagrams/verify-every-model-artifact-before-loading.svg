@@ -1,0 +1,62 @@
+<svg viewBox="0 0 1200 580" role="img" aria-labelledby="detail-verify-every-model-artifact-before-loading-artifact-flow-title detail-verify-every-model-artifact-before-loading-artifact-flow-desc">
+<title id="detail-verify-every-model-artifact-before-loading-artifact-flow-title">Verify every model artifact before loading</title>
+<desc id="detail-verify-every-model-artifact-before-loading-artifact-flow-desc">Model card and license, configuration and generation defaults, tokenizer and template, weights and index, and optional adapters or quantization metadata all enter one verify-and-pin gate before CPU staging, GPU materialization, warm-up, readiness, and request serving.</desc>
+<defs>
+<marker id="detail-verify-every-model-artifact-before-loading-artifact-flow-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g text-anchor="middle">
+<rect x="25" y="40" width="200" height="130" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="260" y="40" width="200" height="130" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="495" y="40" width="200" height="130" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="730" y="40" width="200" height="130" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="965" y="40" width="200" height="130" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="125" y="74" font-weight="700"><tspan x="125">model card</tspan><tspan x="125" dy="24">+ license</tspan></text>
+<text x="125" y="126" class="diagram-label">use, limits, provenance</text>
+<text x="360" y="74" font-weight="700"><tspan x="360">config +</tspan><tspan x="360" dy="24">generation</tspan></text>
+<text x="360" y="126" class="diagram-label">architecture and policy</text>
+<text x="595" y="74" font-weight="700"><tspan x="595">tokenizer +</tspan><tspan x="595" dy="24">template</tspan></text>
+<text x="595" y="126" class="diagram-label">IDs and formatting</text>
+<text x="830" y="74" font-weight="700"><tspan x="830">weights +</tspan><tspan x="830" dy="24">index</tspan></text>
+<text x="830" y="126" class="diagram-label"><tspan x="830">shards and</tspan><tspan x="830" dy="20">tensor shapes</tspan></text>
+<text x="1065" y="74" font-weight="700"><tspan x="1065">adapter /</tspan><tspan x="1065" dy="24">quantization</tspan></text>
+<text x="1065" y="126" class="diagram-label"><tspan x="1065">base and</tspan><tspan x="1065" dy="20">runtime contract</tspan></text>
+<rect x="400" y="235" width="400" height="105" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2"/>
+<text x="600" y="268" font-weight="700">verify + pin one immutable bundle</text>
+<text x="600" y="296" class="diagram-label">resolved revision · expected files · compatibility</text>
+<text x="600" y="319" class="diagram-label">license review · remote-code decision</text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-verify-every-model-artifact-before-loading-artifact-flow-arr)">
+<path d="M125 170 V195 H460 V235"/>
+<path d="M360 170 V195 H520 V235"/>
+<line x1="595" y1="170" x2="595" y2="235"/>
+<path d="M830 170 V195 H680 V235"/>
+<path d="M1065 170 V195 H740 V235"/>
+</g>
+<g text-anchor="middle">
+<rect x="50" y="425" width="180" height="78" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<rect x="280" y="425" width="180" height="78" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<rect x="510" y="425" width="180" height="78" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<rect x="740" y="425" width="180" height="78" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<rect x="970" y="425" width="180" height="78" rx="9" fill="#e0f0e6" stroke="#206757"/>
+<text x="140" y="455" font-weight="700">CPU staging</text>
+<text x="140" y="481" class="diagram-label">read and map files</text>
+<text x="370" y="455" font-weight="700">Load on GPU</text>
+<text x="370" y="481" class="diagram-label">weights + buffers</text>
+<text x="600" y="455" font-weight="700">warm / compile</text>
+<text x="600" y="481" class="diagram-label">separate cold cost</text>
+<text x="830" y="455" font-weight="700">ready</text>
+<text x="830" y="481" class="diagram-label">health + capacity</text>
+<text x="1060" y="455" font-weight="700">serve</text>
+<text x="1060" y="481" class="diagram-label">request lifecycle</text>
+</g>
+<g stroke="#245880" stroke-width="3" marker-end="url(#detail-verify-every-model-artifact-before-loading-artifact-flow-arr)">
+<path d="M600 340 V385 H140 V425" fill="none"/>
+<line x1="230" y1="464" x2="280" y2="464"/>
+<line x1="460" y1="464" x2="510" y2="464"/>
+<line x1="690" y1="464" x2="740" y2="464"/>
+<line x1="920" y1="464" x2="970" y2="464"/>
+</g>
+<text x="600" y="550" text-anchor="middle" fill="#52626b">No artifact bypasses verification; cold load, warm-up, readiness, and request latency remain separate measurements.</text>
+</svg>

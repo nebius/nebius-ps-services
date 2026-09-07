@@ -56,7 +56,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `align-skill` | Implicit allowed | Align existing or scaffolded Codex or Agent Skill folders with lean progressive disclosure, precise trigger boundaries, safety review, target-specific evals, and tiered evidence. |
 | `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, bounded research for unresolved source conflicts, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Neutral findings-first review of local code; direct `$code-review` runs fix safe scoped findings and validate them with focused repository-native proof, while implicit and nested runs remain report-only. |
-| `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
+| `create-learning-course` | Explicit only | Create complete, public-safe HTML textbooks with definition-first lessons, a light side-TOC layout, contextual diagrams and practical guides. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
 | `research` | Implicit allowed | Senior-engineer due diligence on one focal subject or disputed claim, with relevant internal context first, vendor verification, alternatives, and bounded findings for an owning decision. |
 
@@ -244,7 +244,7 @@ $brainstorm Explore this architecture idea, gather the relevant project docs, re
 
 $troubleshoot --attempt-limit=10 --time-limit-minutes=180 Diagnose this persistent failure and repair it only after proving the cause.
 
-$create-learning-course Create a public-safe course workspace for engineers learning Kubernetes networking, with mission, syllabus, sources, HTML lessons, exercises, glossary, and publication review.
+$create-learning-course Create a public-safe course for engineers learning Kubernetes networking, with definition-first lessons, a light self-contained HTML textbook, side TOC, contextual diagrams, practical guides and publication review.
 
 $research Research Kubernetes Gateway API, search internal Slack and Confluence context first if relevant, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
 
@@ -383,16 +383,20 @@ alignment, SDLC, or communication skill.
 `create-learning-course` turns a learner mission, trusted source set, target
 audience, and desired outcomes into a public-safe course workspace. It creates
 or revises artifacts such as `MISSION.md`, `COURSE.md`, `SYLLABUS.md`,
-`RESOURCES.md`, HTML or Markdown lessons, exercises, glossaries, reference
-sheets, learning records, reusable assets, and `PUBLICATION-REVIEW.md`.
+`RESOURCES.md`, complete canonical Markdown, a self-contained HTML textbook,
+seven-part practical guides, contextual SVGs, glossaries, optional next steps
+and `PUBLICATION-REVIEW.md`. Its reusable light palette, wide responsive frame
+and persistent desktop TOC provide the standard reading experience.
 Invoke it explicitly with `$create-learning-course`; implicit invocation is
 disabled because the workflow can create or revise many local files.
-It is our course-authoring workflow: mission-led, source-grounded,
-practice-heavy, and backed by explicit redaction, source-citation,
-high-stakes-topic, and publication-safety checks so generated courses avoid
-secrets, private endpoints, customer data, raw logs, and proprietary internal
-material. Its detailed workflow reference keeps attribution for the public
-teaching-skill pattern that inspired the learning model.
+The workflow aligns outcomes, prerequisite sequencing, complete concept
+explanations, worked examples, guided practice and transfer assessment.
+Source parity, navigation, practical-work accuracy, visual accessibility and
+publication safety are separate checks. Domain-specific languages, hardware
+and runtime requirements remain course-profile choices. The source kit
+includes research references, HTML/CSS/SVG templates, a read-only structural
+and embedded-source checker, and technical/nontechnical evaluation cases.
+Source updates do not install the skill or prove fresh-runtime activation.
 
 ### `research`
 
@@ -775,6 +779,11 @@ releasing its claims. `workspace remove [project-folder]` explicitly removes
 only an idle, clean, fully integrated lane; prompts and run history remain, and
 later initialization creates a new lane incarnation. Public `$worktree`
 lifecycle actions reject Task Implementer lanes.
+
+If the primary checkout is on a different branch from the lane's recorded
+source branch, pass the project directory inside the existing lane to
+`workspace remove`; the skill's report-only help shows a public-safe placeholder
+example for that existing `[project-folder]` argument.
 
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, journals Git mutations, and never prints

@@ -5,6 +5,7 @@ __pycache__/
 results/
 logs/
 *.out
+*.log
 *.ncu-rep
 *.nsys-rep
 *.qdrep

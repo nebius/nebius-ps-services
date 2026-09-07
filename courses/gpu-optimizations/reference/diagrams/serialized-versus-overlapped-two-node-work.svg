@@ -1,0 +1,38 @@
+<svg viewBox="0 0 1100 470" role="img" aria-labelledby="detail-serialized-versus-overlapped-two-node-work-overlap-title detail-serialized-versus-overlapped-two-node-work-overlap-desc">
+<title id="detail-serialized-versus-overlapped-two-node-work-overlap-title">Serialized versus overlapped two-node work</title>
+<desc id="detail-serialized-versus-overlapped-two-node-work-overlap-desc">The serialized case places communication and independent compute one after the other on the critical path. The overlap case starts them together on separate timeline rows and joins after both complete, leaving only communication beyond the compute interval exposed.</desc>
+<defs>
+<marker id="detail-serialized-versus-overlapped-two-node-work-overlap-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g font-weight="700">
+<text x="25" y="70">serialized</text>
+<text x="25" y="255">overlap candidate</text>
+<text x="135" y="318" class="diagram-label">comm</text>
+<text x="135" y="390" class="diagram-label">compute</text>
+</g>
+<g text-anchor="middle">
+<rect x="210" y="35" width="340" height="70" rx="8" fill="#e0edfa" stroke="#245880"/>
+<text x="380" y="65" font-weight="700">all-reduce</text>
+<text x="380" y="91" class="diagram-label">fully exposed</text>
+<rect x="550" y="35" width="360" height="70" rx="8" fill="#e0f0e6" stroke="#206757"/>
+<text x="730" y="65" font-weight="700">independent GEMM</text>
+<text x="730" y="91" class="diagram-label">starts only after collective</text>
+<rect x="210" y="280" width="430" height="70" rx="8" fill="#e0edfa" stroke="#245880"/>
+<text x="425" y="310" font-weight="700">asynchronous all-reduce</text>
+<text x="425" y="336" class="diagram-label">communication path</text>
+<rect x="210" y="352" width="330" height="70" rx="8" fill="#e0f0e6" stroke="#206757"/>
+<text x="375" y="382" font-weight="700">independent GEMM</text>
+<text x="375" y="408" class="diagram-label">compute path</text>
+</g>
+<line x1="640" y1="270" x2="640" y2="430" stroke="#86500e" stroke-width="4"/>
+<path d="M640 350 H760" fill="none" stroke="#245880" stroke-width="3" marker-end="url(#detail-serialized-versus-overlapped-two-node-work-overlap-arr)"/>
+<text x="700" y="335" text-anchor="middle" class="diagram-label">join</text>
+<rect x="760" y="300" width="250" height="100" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<text x="885" y="332" text-anchor="middle" font-weight="700">consume reduced data</text>
+<text x="885" y="361" text-anchor="middle" class="diagram-label">only after both dependencies</text>
+<text x="885" y="384" text-anchor="middle" class="diagram-label">have completed</text>
+<path d="M540 422 V445 H640 V430" fill="none" stroke="#245880" stroke-width="3" marker-end="url(#detail-serialized-versus-overlapped-two-node-work-overlap-arr)"/>
+<text x="695" y="445" class="diagram-label">consumer waits for the collective tail</text>
+</svg>

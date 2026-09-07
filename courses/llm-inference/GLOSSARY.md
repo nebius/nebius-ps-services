@@ -1,0 +1,53 @@
+# Glossary
+
+- **Inference:** using a model's learned parameters to compute outputs for inputs, normally without updating those parameters.
+- **Token:** a model's unit of text representation, mapped to an integer by its tokenizer; a token need not be a whole word.
+- **Autoregressive generation:** selecting a next token conditioned on preceding tokens, appending it and repeating until a stopping condition is met.
+- **Greedy decoding:** choosing the highest-scoring allowed token at each step, rather than randomly sampling from the distribution.
+- **EOS:** end-of-sequence token; one possible stopping signal, distinct from an output-length limit or service cancellation.
+- **Radix tree:** a compressed prefix tree whose edges can represent token sequences, allowing an engine to find reusable shared-prefix state.
+
+- **AIPerf:** NVIDIA's current client workflow for measuring generative-AI endpoint latency and throughput under a declared request distribution.
+- **Closed-loop load:** each client waits for completion before sending again, which can hide overload behind client pacing.
+- **Continuous batching:** admitting and retiring requests as sequences progress instead of waiting for a fixed batch to finish together.
+- **CUDA Graph:** a captured device-work graph replayed with lower CPU launch overhead when shapes, addresses, control flow, and operations satisfy capture constraints.
+- **Decode:** autoregressive generation after prefill, usually producing one new token position per sequence per iteration.
+- **Disaggregated serving:** separate prefill and decode worker pools connected by request and KV-state handoff.
+- **DP:** Data parallel serving: independent model replicas process different requests; a request does not require gradient synchronization across replicas.
+- **E2E latency:** end-to-end latency from the declared request or workload start to completion at the declared observation boundary.
+- **EP:** expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
+- **Goodput:** completed work that meets declared service objectives.
+- **GQA/MQA:** attention layouts with fewer KV heads than query heads.
+- **HBM:** high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
+- **ISL/OSL:** input and output sequence lengths used to describe request work.
+- **ITL:** inter-token latency; the distribution of time gaps between successive generated tokens at an explicitly defined observation boundary.
+- **KV cache:** cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
+- **KV-aware routing:** worker selection that combines reusable-prefix state with projected active load.
+- **Length bucketing:** grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
+- **Model artifact bundle:** the pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
+- **MoE:** mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
+- **Open-loop load:** arrivals generated independently of response completion, exposing queue growth beyond service capacity.
+- **Paged KV cache:** managing KV storage in blocks/pages to reduce fragmentation and support dynamic request scheduling.
+- **PP:** pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
+- **Preemption:** removal or suspension of active request state under pressure, followed by rejection, swap, or recomputation according to engine policy.
+- **Prefill:** processing prompt tokens, usually as a parallel sequence computation, to initialize model state and KV cache.
+- **Prefix caching:** reusing KV state for an exactly matching reusable prefix under the serving engine's cache rules.
+- **Remote model code:** Python supplied by a model repository and executed when an operator explicitly enables a trust option; it requires an exact-revision review and is disabled in these labs.
+- **SDPA:** scaled dot-product attention, the query/key/value attention operation. PyTorch's SDPA API selects among supported implementations for the actual inputs and configuration.
+- **Service correctness:** correct tokenization, sampling, stopping, streaming, errors, and protocol behavior around a valid model computation.
+- **SLO:** service-level objective; a declared target such as a latency percentile, throughput, error rate, or goodput threshold.
+- **Speculative decoding:** proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
+- **Throughput:** completed requests or tokens per second for a declared workload and boundary.
+- **TP (tensor parallelism):** splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
+- **TPOT:** time per output token; an aggregate decode measure, commonly decode duration divided by the number of output-token intervals, and not a substitute for the ITL distribution.
+- **TTFT:** time from the declared request boundary to the first observed output token. First-nonempty-content timing is a proxy unless its correspondence to token arrival is established. TTFT is distinct from steady-state inter-token latency and end-to-end latency.
+- **Temperature:** positive divisor applied to logits before softmax; lower values sharpen the distribution.
+- **Top-k:** sampling filter retaining the k highest-scoring candidates, followed by renormalization.
+- **Top-p:** sampling filter retaining the smallest ranked prefix reaching a declared cumulative probability threshold.
+- **Logit:** an unnormalized model score; softmax converts logits to probabilities.
+- **Response completion:** the final protocol event, which can occur after the last generated content token.
+
+- **Idle TTL:** an expiry interval renewed on access in the supplied cache model; capacity can evict an entry sooner.
+- **LRU eviction:** discarding or demoting the least recently used eligible cache entry under capacity pressure.
+- **GDS:** GPUDirect Storage; supported direct DMA paths between storage and GPU memory, with CPU-coordinated control work.
+- **Cache restoration:** making compatible retained KV state available again before attention uses it; this has transfer and reconstruction costs.

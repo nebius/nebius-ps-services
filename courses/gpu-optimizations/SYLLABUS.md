@@ -1,52 +1,55 @@
 # Syllabus
 
-## Part I: Performance foundations and evidence
+Estimated guided time: **36 hours**.
 
-| Module | Topic | Required output | Lab |
+## Learning progression
+
+Begin with the first lesson's **Start here** explanation and workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
+
+Each later lesson begins with **What it is** before objectives or applications. Read the definition and mechanism, open a **Practice labs** link, then follow the lab's **Theory preparation** in **Before you start**. Its named lessons explain the techniques before full execution; **Concepts and code path** connects them to the implementation. Before running, explain what each technique does, why it is used, how its inputs and dependencies work, and what timing and numerical checks establish. A preview is reading only; a later revisit adds a new interpretation without making an untaught technique a hidden prerequisite for the first run.
+
+Establish a workload contract, correct timing and a profiler hypothesis before making changes. Progress through local launch, graph, input, memory and library optimizations; diagnose local imbalance before network qualification and tuning in Lesson 11, application scaling/overlap in Lesson 12, and the capstone in Lesson 13. Finish with an evidence-backed library-first decision.
+
+Follow the lesson order below. Lab numbers are identifiers, not the execution order;
+use each lesson's assigned activity and the lab guide's prerequisites. A preview
+means inspecting the explanation or code without running an advanced experiment.
+Return to a repeated lab when the later lesson adds a new interpretation or check.
+
+| Part | Lessons | Practical outcome |
+| --- | --- | --- |
+| Experimental contract | 1–3 | Freeze equivalent work, measure correctly and select focused evidence |
+| Local optimization | 4–10 | Tune execution/data paths and diagnose local imbalance |
+| Distributed integration and decision | 11–13 | Measure exposed communication and choose the smallest justified intervention |
+
+## Lesson-by-lesson route
+
+| Lesson | Topic | Competency to build | Practice at this stage |
 | --- | --- | --- | --- |
-| 1 | End-to-end performance system | Critical-path decomposition with a named objective and boundary | 00 preflight and guided worksheet |
-| 2 | Five primary bottleneck classes | Compute, memory-bandwidth, launch/CPU, communication, and input/storage hypotheses with disconfirming controls | 14 profiler workshop and guided diagnosis |
+| 1 | Freeze the workload and correctness contract | Freeze workload, correctness tolerance and the outcome that matters | Baseline worksheet; two-node preflight belongs to Lesson 11 |
+| 2 | Measure asynchronous GPU work correctly | Separate elapsed device intervals from synchronized application timing | Labs 01, 02 |
+| 3 | Select Nsight Systems, PyTorch Profiler, or Nsight Compute | Choose a timeline or counter tool to test one hypothesis | Lab 07, then Lab 14 synchronization case; other cases are previews |
+| 4 | Reduce launch and Python overhead | Reduce dispatch and intermediate work without changing the operation | Lab 03 |
+| 5 | Use CUDA Graphs only for stable execution | Identify stable addresses and execution needed for graph replay | Lab 04 |
+| 6 | Keep the input pipeline ahead of the GPU | Keep valid input batches ready while preserving sample ownership | Lab 05, then Lab 19 input overlap |
+| 7 | Optimize memory layout and intermediate traffic | Reduce unnecessary copies and improve physical access patterns | Reuse Lab 03 for a traffic ledger; preview Lab 10; pipeline-layout extension |
+| 8 | Manage allocator lifetime and peak memory | Separate live tensor memory from allocator reserve and lifetime | Lab 12, then Lab 20 output ownership |
+| 9 | Select shapes and precision for efficient libraries | Compare library-friendly shapes and precision with explicit correctness gates | Lab 10 |
+| 10 | Find load imbalance and tail waves | Locate whether completion is limited by lanes, blocks or tail waves | Lab 15 |
+| 11 | Qualify GPU networking and tune NCCL with evidence | Verify the transport, read message-size curves and test one job-local change | Preflight, Labs 17, 18 |
+| 12 | Diagnose distributed scaling and collective overlap | Hold global work fixed and identify exposed collective time | Labs 00, 08, 13 |
+| 13 | Decide between framework, library, compiler, and custom kernel paths | Select a maintained optimization layer and justify a keep/reject decision | Labs 09, 16 |
 
-## Part II: Diagnostic tools and practical profiling
+## Readiness checkpoints
 
-| Module | Topic | Required output | Lab |
-| --- | --- | --- | --- |
-| 3 | Tool installation, ownership, and preflight | Compute-node inventory with versions, permissions, and unavailable evidence recorded | Tooling preflight |
-| 4 | PyTorch Profiler and NVTX | Operator-to-kernel attribution with semantic phase ranges | 07 profiler workload |
-| 5 | Nsight Systems | Timeline diagnosis of host gaps, synchronization, copies, and overlap | 14 synchronization and launch cases |
-| 6 | Nsight Compute and roofline | Selected-kernel report with arithmetic intensity, effective TFLOP/s, traffic, and scheduler evidence | 14 memory and compute cases |
-| 7 | Telemetry, transport, collective, and serving tools | Tool-selection plan separating DCGM/DCGM Exporter, `nvbandwidth`, NCCL Tests, vLLM Bench, AIPerf, and MLPerf evidence | Tooling preflight and guided serving exercise |
+After Lesson 3, describe the bottleneck hypothesis and the evidence that could disprove it. After Lesson 10, explain whether idle time belongs to the local workload or scheduler. In Lesson 11, qualify topology and transport, then interpret the collective size curve before changing one setting. Only then compare one- and two-rank application execution in Lesson 12. Lesson 13 integrates the final decision. The final decision must preserve correctness and include independent repeated runs.
 
-## Part III: Measurement and targeted optimization
+Every lesson retains its definition, prerequisite bridge, mental model and
+mechanism, followed by **Practice labs** links. The linked guides integrate
+examples and commands in **Practice**, with H100 scope, trade-offs, evidence,
+failure analysis and review in their relevant sections. Before moving on,
+explain the new mechanism and its limitation in your own words; a completed
+command alone is not evidence of understanding.
 
-| Module | Topic | Required output | Lab |
-| --- | --- | --- | --- |
-| 8 | Optimization contract and stability controls | Frozen work, metric, boundary, correctness, environment, repeatability, and acceptance rule | 00 preflight |
-| 9 | Warm-up, events, synchronization, and distributions | Timing protocol with an explicit completion boundary | 01 timing basics, 02 sync trap |
-| 10 | Launch and CPU overhead | Synchronization-removal, fusion, or capture hypothesis tied to a host-gap trace | 02 sync trap, 03 compile fusion, 04 CUDA graphs, 14 profiler workshop |
-| 11 | Transfer and overlap | Pageable/pinned/async ownership timeline and resident-input control | 05 input pipeline |
-| 12 | HBM traffic, layout, and intermediates | Named-boundary byte estimate, reuse control, and materialization proposal | 14 memory case; optional companion: GPU Fundamentals Lab 04 |
-| 13 | Kernel efficiency | Grid-wave, geometry, divergence, coalescing, bank-conflict, register, and spill diagnosis | 07 trace plus focused profile; optional companion: GPU Fundamentals Lab 09 |
-| 14 | Compute and shape eligibility | Tensor Core path and numerical acceptance table | 10 shape precision, 11 SDPA attention, 14 compute case |
-| 15 | Compilation, fusion, and CUDA Graphs | Compile/capture boundary with startup and warmed evidence | 03 compile fusion, 04 CUDA graphs |
-| 16 | Input starvation | Ready-data control and loader change | 05 input pipeline |
-| 17 | Capacity, allocator, and recomputation | Live/reserved memory ledger plus checkpoint tradeoff | 06 checkpointing, 12 allocator lifetime |
+## Completion
 
-## Part IV: Distributed performance and causal decisions
-
-| Module | Topic | Required output | Lab |
-| --- | --- | --- | --- |
-| 18 | Two-node communication and overlap | Fixed-work scaling efficiency, exposed collective time, and simultaneous-work evidence | 08 distributed scaling, 13 collective overlap |
-| 19 | Capstone optimization report | Baseline/candidate distributions, correctness, memory, repeatability, and decision | 09 capstone |
-
-## Review and assessment
-
-- Answer the retrieval cues after modules 2, 7, 14, and 18 without notes.
-- For every technique, state the bottleneck class it targets and one condition under which it may fail to improve the declared objective.
-- Distinguish transfer and synchronization mechanisms from the five peer bottleneck classes, and distinguish capacity from a timed bottleneck.
-- Reject at least one tempting optimization for a documented reason.
-- Complete the capstone with observations separated from inferences and unknowns.
-
-## Live completion gate
-
-Static validation is necessary but insufficient. Completion requires the smoke-test sequence on the declared two-node H100 cluster, including profiler reports, an exact collective result, and one equivalent-work scaling comparison.
+Complete the profiler-backed capstone with a baseline, one controlled change, correctness checks, repeated measurements and a scoped keep/reject decision.

@@ -1,25 +1,10 @@
-# {Course Topic} Resources
+# Official References
 
-## Knowledge
+## {Topic}
 
-- [{Source title}]({public-url})
-  Use for: {What this source supports and which lesson needs it.}
+- [{Official documentation, standard or primary research title}]({public-url})
+  — {The claim, mechanism or procedure this source supports.}
 
-## Practice
-
-- [{Exercise, sandbox, dataset, or public lab}]({public-url})
-  Use for: {What learners practice here.}
-
-## Wisdom And Community
-
-- [{Community or expert venue}]({public-url})
-  Use for: {When learners should seek real-world feedback.}
-
-## Gaps
-
-- {Missing high-trust source or expert review need}
-
-## Excluded Sources
-
-- {Source omitted because it is private, shallow, outdated, unsafe, or not
-  licensed for reuse}
+{Use current authoritative sources and original explanations. Keep private
+sources, excluded-source inventories and source-coverage tables out of this
+file. Do not ship this instruction.}

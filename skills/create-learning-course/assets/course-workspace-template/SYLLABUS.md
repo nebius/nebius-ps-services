@@ -1,21 +1,20 @@
 # Syllabus
 
-## Course Sequence
+## Learning Route
 
-| Lesson | Outcome | Practice | Sources |
-| --- | --- | --- | --- |
-| 0001 | {Outcome} | {Retrieval or exercise} | {Public source link or note} |
+{Explain the beginner route, experienced readiness check and core versus
+optional work. Lesson order follows prerequisites, not source filenames.}
 
-## Review Schedule
+| Lesson | Topic and competency | Prerequisites | Practice | Ready to continue when |
+| --- | --- | --- | --- | --- |
+| 1 | {Exact title and observable outcome} | {Capability or none} | {Exact ID/title} | {Check} |
 
-- After lesson 1: {review cue}
-- Mid-course: {mixed practice cue}
-- End: {capstone or assessment cue}
+## Practice And Review
 
-## Assessments
+{Worked examples, guided practice, delayed retrieval, progressively independent
+tasks and feedback. Identify which earlier ideas each review revisits.}
 
-- {Quiz, applied exercise, project, discussion, or checklist}
+## Transfer Assessment
 
-## Open Gaps
-
-- {Missing source, learner input, expert review, or validation need}
+{An authentic changed scenario, required evidence, correctness/quality rubric
+and limitations. Learners must be prepared for each assessed competency.}

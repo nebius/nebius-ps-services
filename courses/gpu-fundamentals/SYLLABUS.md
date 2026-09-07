@@ -1,49 +1,54 @@
 # Syllabus
 
-## Part I: GPU foundations and Hopper architecture
+Estimated guided time: **21 hours**.
 
-| Module | Topic | Learner output | Lab |
+## Learning progression
+
+Begin with the first lesson's **Start here** explanation and workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
+
+Each later lesson begins with **What it is** before objectives or applications. Read the definition and mechanism, open a **Practice labs** link, then follow the lab's **Theory preparation** in **Before you start**. Its named lessons explain the techniques before full execution; **Concepts and code path** connects them to the implementation. Before running, explain what each technique does, why it is used, how its inputs and dependencies work, and what timing and numerical checks establish. A preview is reading only; a later revisit adds a new interpretation without making an untaught technique a hidden prerequisite for the first run.
+
+Start with CPU/GPU boundaries and trustworthy timing, then identify the software stack and H100 execution hierarchy. Define memory resources before SIMT and occupancy, connect access patterns and precision to roofline, and finish with read-only health, networking layers and bounded two-node communication. Learn GPU/NIC attachment, NVLink/NVSwitch, InfiniBand/RoCE, RDMA and GPUDirect RDMA before interpreting NCCL collectives.
+
+Follow the lesson order below. Lab numbers are identifiers, not the execution order;
+use each lesson's assigned activity and the lab guide's prerequisites. A preview
+means inspecting the explanation or code without running an advanced experiment.
+Return to a repeated lab when the later lesson adds a new interpretation or check.
+
+| Part | Lessons | Practical outcome |
+| --- | --- | --- |
+| Entry and execution model | 1–3 | Separate timing boundaries, identify the stack, and map work to hardware |
+| Memory and local efficiency | 4–10 | Explain storage, active lanes, residency, transfers, precision and roofline |
+| System context and integration | 11–12 | Interpret read-only health, verify topology and measure collectives |
+
+## Lesson-by-lesson route
+
+| Lesson | Topic | Competency to build | Practice at this stage |
 | --- | --- | --- | --- |
-| 1 | CPU and GPU execution models | Crossover interpretation separating launch, transfer, and resident execution | 01 CPU/GPU crossover |
-| 2 | Logical H100 device architecture | HBM-to-GPC/TPC/SM hierarchy map with SKU-dependent facts labeled | Guided architecture trace |
-| 3 | Hopper SM architecture | SMSP, scheduler, register, shared/L1, and execution-resource ownership map | Guided SM resource trace |
-| 4 | Grid, block, warp, and SM assignment | Operator-to-kernel execution map plus masked launch-geometry sweep | 08 operator to kernels, 09 Triton launch geometry |
-| 5 | Asynchronous launch journey | Host/device enqueue, completion, stream, and dependency explanation | 07 async streams |
+| 1 | Separate CPU work, GPU work, and orchestration | Choose CPU or GPU using equivalent work and explicit timing boundaries | Lab 10 preflight, then Lab 01 |
+| 2 | Read the driver, runtime, toolkit, PTX, SASS, and framework stack | Assign compilation, loading and compatibility failures to the correct layer | Lab 10, then Lab 08 |
+| 3 | Map H100, GPCs, SMs, warps, and Tensor Cores | Map logical grids, blocks and warps to physical H100 resources | Lab 09 geometry; resource interpretation in Lesson 6 |
+| 4 | Follow data through registers, caches, shared memory, and HBM | Trace value ownership and lifetime through the memory hierarchy | Lab 04 byte ledger; preview Lab 05 |
+| 5 | Reason about SIMT divergence and independent work | Distinguish active-lane divergence from independent useful work | Inspect Lab 11 lane model; full launch after Lesson 6 |
+| 6 | Use occupancy to hide latency rather than chase a maximum | Explain resident-warp limits using registers, shared storage and block size | Labs 09, 11 |
+| 7 | Make global memory accesses coalesced | Map adjacent lanes to addresses and reason about transaction efficiency | Lab 04 |
+| 8 | Time transfers, streams, and synchronization correctly | Order transfers and kernels and measure completion rather than submission | Labs 03, 07 |
+| 9 | Choose precision and Tensor Core paths deliberately | Choose numerical formats and identify actual Tensor Core execution | Lab 02 |
+| 10 | Classify workloads with arithmetic intensity and roofline | Derive arithmetic intensity and an independent roofline performance bound | Lab 05 full roofline experiment |
+| 11 | Read sharing and health state without changing it | Distinguish supported sharing and health observations from configuration changes | Lab 12 |
+| 12 | Understand GPU networking, topology, and collectives | Combine placement, network and collective evidence without scale overclaims | Networking theory, then Lab 00 preflight and existing Lab 06 |
 
-## Part II: Measurement and scheduling
+## Readiness checkpoints
 
-| Module | Topic | Learner output | Lab |
-| --- | --- | --- | --- |
-| 6 | Valid GPU evidence and timing | Written boundary, completion point, correctness gate, and sample policy | 00 cluster preflight and 07 async streams |
-| 7 | Bottleneck taxonomy | Symptom, alternative hypothesis, and disconfirming control | Guided diagnosis |
-| 8 | Scheduling, occupancy, divergence, and wave tails | Resource hypothesis without occupancy folklore | Guided worksheet |
+After Lesson 3, draw the CPU-to-device execution path and explain a trustworthy timer. After Lesson 7, distinguish memory layout, lane utilization and residency. After Lesson 10, derive a roofline bound before comparing measured performance. Finish by attaching health context and the two-node collective evidence to one scoped explanation.
 
-## Part III: Data movement and computation
+Every lesson retains its definition, prerequisite bridge, mental model and
+mechanism, followed by **Practice labs** links. The linked guides integrate
+examples and commands in **Practice**, with H100 scope, trade-offs, evidence,
+failure analysis and review in their relevant sections. Before moving on,
+explain the new mechanism and its limitation in your own words; a completed
+command alone is not evidence of understanding.
 
-| Module | Topic | Learner output | Lab |
-| --- | --- | --- | --- |
-| 9 | HBM, L2, L1/shared memory, registers, and PCIe | Named-boundary data-path and allocator map | 03 transfer and pinning |
-| 10 | Layout and coalescing | Useful-byte reasoning and repack break-even calculation | 04 layout and coalescing |
-| 11 | Pinned copies, streams, and double buffering | Dependency-safe copy/compute timeline with fill and drain | 03 transfer and pinning plus 07 async streams |
-| 12 | Precision and Tensor Core eligibility | Path-selection and performance-plus-accuracy comparison | 02 Tensor Core precision |
-| 13 | Arithmetic intensity and roofline reasoning | Predicted limiter, disconfirming evidence, and next profile | 05 roofline microbench |
+## Completion
 
-## Part IV: Multi-node scale and diagnosis
-
-| Module | Topic | Learner output | Lab |
-| --- | --- | --- | --- |
-| 14 | Processes, ranks, topology, NCCL, and inter-node costs | Two-node collective result with discovered path and fixed-work semantics | 06 distributed collectives |
-| 15 | Bottleneck diagnosis and reporting | Evidence chain plus completed benchmark record | Course capstone |
-
-## Review schedule
-
-- After modules 5, 8, and 13, answer the accumulated review cues without looking back.
-- Re-run only the questions answered incorrectly, then revisit their worked examples.
-- At the end, explain one local and one distributed result to another learner using no unexplained acronyms.
-
-## Completion criteria
-
-- All lesson exercises completed with self-checks.
-- All smoke-profile lab correctness gates pass on the declared cluster.
-- At least one result is repeated and reported as a distribution.
-- The final benchmark record distinguishes observations, inferences, and unknowns.
+Run single-GPU labs through their supplied launchers, then Lab 00 before the two-node collective lab. Keep observation, inference and unverified hypothesis separate.

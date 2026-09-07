@@ -1,0 +1,52 @@
+<svg viewBox="0 0 1200 650" role="img" aria-labelledby="detail-end-to-end-gpu-performance-system-perf-system-title detail-end-to-end-gpu-performance-system-perf-system-desc">
+<title id="detail-end-to-end-gpu-performance-system-perf-system-title">End-to-end GPU performance system</title>
+<desc id="detail-end-to-end-gpu-performance-system-perf-system-desc">A request or training step moves through input preparation, CPU launch, transfer, GPU kernels, synchronization or communication, and completion. A lower panel maps kernel work to bandwidth and compute ceilings.</desc>
+<defs>
+<marker id="detail-end-to-end-gpu-performance-system-perf-system-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<text x="40" y="45" font-size="20" font-weight="700">Critical-path stages</text>
+<g text-anchor="middle">
+<rect x="35" y="80" width="165" height="76" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="235" y="80" width="165" height="76" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="435" y="80" width="165" height="76" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="635" y="80" width="165" height="76" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<rect x="835" y="80" width="165" height="76" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<rect x="1035" y="80" width="130" height="76" rx="10" fill="#eee5f5" stroke="#654886"/>
+<text x="117" y="111">input</text>
+<text x="117" y="137" class="diagram-label">CPU / storage</text>
+<text x="317" y="111">dispatch</text>
+<text x="317" y="137" class="diagram-label">Python + launch</text>
+<text x="517" y="111">transfer</text>
+<text x="517" y="137" class="diagram-label">PCIe / fabric</text>
+<text x="717" y="111">GPU kernels</text>
+<text x="717" y="137" class="diagram-label">memory + compute</text>
+<text x="917" y="111">sync / collective</text>
+<text x="917" y="137" class="diagram-label">exposed waits</text>
+<text x="1100" y="111">complete</text>
+<text x="1100" y="137" class="diagram-label">user metric</text>
+</g>
+<g stroke="#245880" stroke-width="3" marker-end="url(#detail-end-to-end-gpu-performance-system-perf-system-arr)">
+<line x1="200" y1="118" x2="235" y2="118"/>
+<line x1="400" y1="118" x2="435" y2="118"/>
+<line x1="600" y1="118" x2="635" y2="118"/>
+<line x1="800" y1="118" x2="835" y2="118"/>
+<line x1="1000" y1="118" x2="1035" y2="118"/>
+</g>
+<text x="600" y="205" text-anchor="middle" fill="#52626b">A timeline reveals which stages are exposed, overlapped, serialized, or absent.</text>
+<text x="40" y="275" font-size="20" font-weight="700">Kernel ceiling model</text>
+<line x1="135" y1="565" x2="1110" y2="565" stroke="#24343d" stroke-width="3"/>
+<line x1="135" y1="565" x2="135" y2="320" stroke="#24343d" stroke-width="3"/>
+<path d="M165 535 L670 350 H1080" fill="none" stroke="#245880" stroke-width="6"/>
+<circle cx="365" cy="462" r="12" fill="#86500e"/>
+<circle cx="855" cy="350" r="12" fill="#206757"/>
+<circle cx="530" cy="510" r="12" fill="#923c49"/>
+<text x="365" y="500" text-anchor="middle" class="diagram-label">bandwidth-side candidate</text>
+<text x="855" y="390" text-anchor="middle" class="diagram-label">compute-side candidate</text>
+<text x="530" y="540" text-anchor="middle" class="diagram-label">below both: inspect gaps, dependencies, parallelism</text>
+<text x="650" y="620" text-anchor="middle">arithmetic intensity: useful operations per measured byte</text>
+<text x="45" y="450" transform="rotate(-90 45 450)" text-anchor="middle">useful work rate</text>
+<text x="440" y="380" transform="rotate(-20 440 380)" fill="#245880">memory ceiling</text>
+<text x="900" y="330" fill="#245880">compute ceiling</text>
+</svg>

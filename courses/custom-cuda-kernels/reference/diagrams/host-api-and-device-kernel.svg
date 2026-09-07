@@ -1,0 +1,18 @@
+<svg viewBox="0 0 1200 620" role="img" aria-labelledby="kernel-entry-title kernel-entry-desc">
+<title id="kernel-entry-title">From a CPU application to a reusable GPU kernel</title>
+<desc id="kernel-entry-desc">A CPU application selects a CPU implementation or a CUDA host-facing API. The CUDA API validates its contract and submits a grid using device-accessible inputs. GPU threads execute the kernel, producing device outputs. A completion dependency precedes result use; copying back to the host is needed only when the host consumes the result. Reusable APIs accept pointers and a stream instead of forcing transfers on every call.</desc>
+<defs><marker id="kernel-entry-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L0 8 L8 4Z" fill="#245880"/></marker></defs>
+<rect x="35" y="45" width="1130" height="65" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="600" y="84" text-anchor="middle" font-weight="700">CPU application chooses an implementation for an operation</text>
+<rect x="35" y="160" width="310" height="210" rx="12" fill="#eef5fc" stroke="#245880"/>
+<text x="190" y="200" text-anchor="middle" font-weight="700">CPU path</text><text x="190" y="242" text-anchor="middle">Host function or library</text><text x="190" y="280" text-anchor="middle">Reads host-accessible data</text><text x="190" y="318" text-anchor="middle">Produces a CPU result</text>
+<rect x="420" y="160" width="745" height="210" rx="12" fill="#eef8f2" stroke="#206757"/>
+<text x="790" y="196" text-anchor="middle" font-weight="700">CUDA path: host wrapper + device implementation</text>
+<rect x="440" y="225" width="205" height="105" rx="9" fill="#ffffff" stroke="#206757"/><rect x="690" y="225" width="205" height="105" rx="9" fill="#ffffff" stroke="#206757"/><rect x="940" y="225" width="205" height="105" rx="9" fill="#ffffff" stroke="#206757"/>
+<g text-anchor="middle"><text x="542" y="257">Validate API</text><text x="542" y="285" class="diagram-label">device pointers / shape</text><text x="542" y="309" class="diagram-label">dtype / stream / errors</text><text x="792" y="257">Submit launch</text><text x="792" y="285" class="diagram-label">grid + block geometry</text><text x="792" y="309" class="diagram-label">CPU queues device work</text><text x="1042" y="257">GPU kernel</text><text x="1042" y="285" class="diagram-label">threads compute outputs</text><text x="1042" y="309" class="diagram-label">in device memory</text></g>
+<rect x="420" y="420" width="745" height="90" rx="12" fill="#fff7e7" stroke="#86500e"/>
+<text x="790" y="452" text-anchor="middle">Observe completion before consuming the required result</text><text x="790" y="481" text-anchor="middle" class="diagram-label">Keep data resident for another kernel, or copy to host when the CPU needs it</text>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#kernel-entry-arrow)"><path d="M190 110 V160"/><path d="M790 110 V160"/><path d="M645 277 H690"/><path d="M895 277 H940"/><path d="M1042 330 V420"/></g>
+<text x="600" y="557" text-anchor="middle">Allocation and transfers are application responsibilities unless explicitly included in the API contract.</text>
+<text x="600" y="588" text-anchor="middle" class="diagram-label">A source package or library needs a documented API, build targets, clean consumer test and release evidence.</text>
+</svg>

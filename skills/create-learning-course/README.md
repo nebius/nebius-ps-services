@@ -1,32 +1,59 @@
 # Create Learning Course
 
-`create-learning-course` creates public-safe course workspaces from a learner
-mission, trusted sources, lesson outcomes, exercises, and review checkpoints.
-It is a course-authoring skill: mission-led, source-grounded, practice-heavy,
-and built around explicit publication and security review.
+Explicit-only course authoring for any subject, using a consistent light,
+self-contained HTML textbook with a side TOC, definition-first lessons,
+contextual SVG diagrams and practical guides.
 
-## Files
+```text
+$create-learning-course Create a beginner-to-advanced course on <subject>
+$create-learning-course Revise <course-folder> without losing useful explanations
+$create-learning-course --help
+```
 
-- `SKILL.md`: runtime contract, workflow, guardrails, validation, and output
-  contract.
-- `agents/openai.yaml`: UI metadata and explicit invocation policy.
-- `references/course-design-workflow.md`: course workspace structure, lesson
-  design method, source ranking, and learning-record guidance.
-- `references/publication-safety.md`: public-safe course rules, redaction
-  guidance, HTML safety, high-stakes limitations, and review statuses.
-- `assets/course-workspace-template/`: starter course files and HTML lesson
-  template.
-- `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
-- `evals/process-cases.md`: supplemental explicit-workflow and runtime cases.
+The format preserves complete canonical teaching and source, not summaries.
+Practical guides explain purpose, prerequisites, architecture, steps, result
+checks, investigation, failure diagnosis and transferable lessons. Nontechnical
+courses use appropriate cases or exercises without invented runtime machinery.
 
-## Boundaries
+## Resources
 
-- This skill writes local course artifacts only. Publishing, hosting, emailing,
-  or LMS upload requires a separate explicit request.
-- Invoke it explicitly with `$create-learning-course`; implicit invocation is
-  disabled because the workflow can create or revise many local files.
-- Generated courses are public-safe by default. Private source material should
-  be generalized or redacted; optional non-secret private planning notes belong
-  outside the publishable course root.
-- For high-stakes topics, the course must include expert-review requirements
-  and must not claim certification, compliance, or professional advice.
+- [Instruction core](SKILL.md)
+- [Teaching and preservation](references/course-design-workflow.md)
+- [Course format and generation contract](references/course-format.md)
+- [Practical-work standard](references/practical-work.md)
+- [Publication safety and evidence](references/publication-safety.md)
+- [Research basis](references/research-basis.md)
+- [Course starter](assets/course-workspace-template/README.md)
+- [HTML shell](assets/textbook-shell.html) and [light styles](assets/styles.css)
+
+The shell is not a complete course or Markdown renderer. A future course
+retains or creates its own deterministic builder and full prose-parity tests.
+The bundled checker is deliberately read-only and dependency-light.
+
+## Local Checks
+
+```bash
+python3 scripts/check_course.py /path/to/course/index.html \
+  --course-root /path/to/course \
+  --sources-manifest /path/to/course/reference/sources.json
+python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
+```
+
+The source manifest is a JSON array of every UTF-8 file expected in an embedded
+listing; use an empty array for a course with no source listings. The checker
+verifies a bounded HTML/identity/accessibility/source-byte contract. It does
+not establish prose completeness, diagram geometry, browser behavior, domain
+accuracy, secret freedom or target execution.
+
+Exit status is 0 for passing bounded checks, 1 for course-format violations,
+and 2 for invalid arguments or unreadable/invalid input files. Malformed
+required HTML attributes produce validation failures rather than tracebacks.
+Malformed reference URLs are also course-format failures (exit 1). Source
+listings reject unescaped comments, declarations and processing instructions;
+the same text is accepted when properly escaped as literal source.
+Help requires no course files and performs no course inspection.
+
+Strict skill structure and evaluation definitions are checked separately with
+the repository's skill validator. See [evaluation cases](evals/process-cases.md)
+for runtime and comparative quality lanes. Updating this source does not
+install or activate the skill.

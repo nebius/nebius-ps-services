@@ -6,6 +6,28 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Aligned the `create-learning-course` source checker with its literal-listing
+  and CLI error contracts: unescaped comments/declarations in source now fail,
+  and malformed reference URLs produce HTML validation errors. Added focused
+  regression controls, short-help and partial-scope trigger cases, and a
+  read-only course-review quality case. Starter lesson sections now use
+  semantic headings consistently in Markdown and the HTML fragment.
+- Hardened the `create-learning-course` checker against missing HTML attribute
+  values so malformed navigation, viewport and SVG metadata produce ordinary
+  validation failures. Added command-line success, malformed-input, strict-flag
+  and side-effect-free help tests and documented its exit statuses.
+- Reworked `create-learning-course` around a reusable light, self-contained
+  HTML textbook standard: definition-first competency progression, complete
+  teaching, contextual accessible SVGs and consistent seven-part practical
+  guides. Added research-backed design references, portable templates,
+  bounded read-only HTML/source checks and output-quality cases; removed the
+  split-page and learner-history starter defaults. Hardware, language and
+  runtime qualification remain course-specific, with separate evidence lanes.
+- Clarified `task-implementer --help` for lane retirement after the primary
+  checkout changes branches. Help now warns that default current-directory
+  lookup may resolve another workspace and shows a public-safe placeholder
+  example targeting the project directory inside the existing lane, without
+  changing the five-action interface or removal safety gates.
 - Fixed `publish-release` runtime-version validation for SCM-derived packages.
   Publish now creates the annotated tag locally before importing the package,
   pushes only after the final version matches, and removes that exact unpushed

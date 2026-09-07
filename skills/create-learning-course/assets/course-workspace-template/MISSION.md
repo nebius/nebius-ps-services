@@ -1,27 +1,27 @@
-# Mission: {Course Topic}
+# Mission: {Course title}
 
-## Why
+## Purpose
 
-{Explain the concrete real-world outcome the learner wants. Avoid abstract
-phrasing such as "understand the topic" unless it is tied to what the learner
-will do with that understanding.}
+{What this subject is, the problem it solves and the real-world capability
+learners will gain. Explain why that capability matters.}
 
-## Success Looks Like
+## Audience And Entry Route
 
-- {Observable capability 1}
-- {Observable capability 2}
-- {Observable capability 3}
+{Beginner assumptions; no unstated core vocabulary. Experienced learners can
+use this readiness check. State accessibility and language needs.}
 
-## Audience
+## Observable Outcomes
 
-{Who this course is for, what they already know, and what they do not need to
-know yet.}
+- {Learner can perform or explain a specific task under stated conditions.}
+- {Learner can assess an alternative using explicit criteria.}
+- {Learner can transfer the method to a changed scenario.}
 
-## Constraints
+## Course Profile
 
-- {Time, format, accessibility, budget, tooling, language, or environment
-  constraint}
+{Format, guided effort estimate, available tools/resources, budget and safe
+execution authority. Choose domain/runtime details only when applicable.}
 
-## Out Of Scope
+## Boundaries
 
-- {Adjacent topic intentionally excluded for this course}
+{Prerequisite capabilities, excluded adjacent subjects and what the course
+does not demonstrate. No private context or historical course comparisons.}

@@ -1,0 +1,48 @@
+<svg viewBox="0 0 1200 570" role="img" aria-labelledby="detail-inference-memory-by-lifecycle-phase-infer-memory-title detail-inference-memory-by-lifecycle-phase-infer-memory-desc">
+<title id="detail-inference-memory-by-lifecycle-phase-infer-memory-title">Inference memory by lifecycle phase</title>
+<desc id="detail-inference-memory-by-lifecycle-phase-infer-memory-desc">Fixed model weights remain resident. Loading and warm-up use staging or compilation memory, prefill uses large temporary activations, decode retains growing key-value cache blocks, and the serving engine reserves allocator and scheduler capacity.</desc>
+<text x="35" y="45" font-size="20" font-weight="700">Memory entries</text>
+<g text-anchor="middle">
+<rect x="40" y="80" width="210" height="95" rx="10" fill="#e0edfa" stroke="#245880"/>
+<rect x="275" y="80" width="210" height="95" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="510" y="80" width="210" height="95" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<rect x="745" y="80" width="210" height="95" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<rect x="980" y="80" width="180" height="95" rx="10" fill="#eee5f5" stroke="#654886"/>
+<text x="145" y="113" font-weight="700">model weights</text>
+<text x="145" y="141" class="diagram-label">fixed after load</text>
+<text x="380" y="113" font-weight="700">load / warm-up</text>
+<text x="380" y="141" class="diagram-label">staging + compile</text>
+<text x="615" y="113" font-weight="700">prefill temporaries</text>
+<text x="615" y="141" class="diagram-label">prompt-shape dependent</text>
+<text x="850" y="113" font-weight="700">KV-cache blocks</text>
+<text x="850" y="135" class="diagram-label"><tspan x="850">tokens ×</tspan><tspan x="850" dy="21">active sequences</tspan></text>
+<text x="1070" y="113" font-weight="700">engine reserve</text>
+<text x="1070" y="141" class="diagram-label">pool + metadata</text>
+</g>
+<text x="35" y="240" font-size="20" font-weight="700">Different phases can set the peak</text>
+<g>
+<rect x="75" y="280" width="245" height="180" rx="12" fill="#eef5fc" stroke="#245880"/>
+<rect x="345" y="280" width="245" height="180" rx="12" fill="#e0f0e6" stroke="#206757"/>
+<rect x="615" y="280" width="245" height="180" rx="12" fill="#fff7e7" stroke="#86500e"/>
+<rect x="885" y="280" width="245" height="180" rx="12" fill="#eee5f5" stroke="#654886"/>
+</g>
+<g text-anchor="middle">
+<text x="197" y="315" font-weight="700">cold load</text>
+<text x="197" y="350" class="diagram-label">CPU/GPU staging</text>
+<text x="197" y="377" class="diagram-label">weight materialization</text>
+<text x="197" y="404" class="diagram-label">temporary copies</text>
+<text x="467" y="315" font-weight="700">long prefill</text>
+<text x="467" y="350" class="diagram-label">prompt activations</text>
+<text x="467" y="377" class="diagram-label">attention workspaces</text>
+<text x="467" y="404" class="diagram-label">new KV writes</text>
+<text x="737" y="315" font-weight="700">steady decode</text>
+<text x="737" y="350" class="diagram-label">weights + growing KV</text>
+<text x="737" y="377" class="diagram-label">small step temporaries</text>
+<text x="737" y="404" class="diagram-label">scheduler state</text>
+<text x="1007" y="315" font-weight="700">high concurrency</text>
+<text x="1007" y="350" class="diagram-label">many active sequences</text>
+<text x="1007" y="377" class="diagram-label">fragmentation / block waste</text>
+<text x="1007" y="404" class="diagram-label">preemption or queueing</text>
+</g>
+<text x="600" y="525" text-anchor="middle" fill="#52626b">Report allocated, reserved, cache-pool, and model-weight bytes separately at a named phase.</text>
+</svg>

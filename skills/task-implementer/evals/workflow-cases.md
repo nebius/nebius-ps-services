@@ -24,6 +24,20 @@ exactly five workflow actions (`workspace init`, `workspace reuse`, `run`,
 a workspace, inspect the project, call additional tools, change private state,
 or start any workflow action.
 
+Help also explains that if the primary checkout is on a different branch from
+the lane's recorded source branch, omitting `[project-folder]` from that
+checkout may resolve a different workspace. It shows exactly one public-safe,
+illustrative `workspace remove` example targeting the project directory inside
+the existing lane:
+
+```text
+$task-implementer workspace remove "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>"
+```
+
+Every angle-bracketed path component remains a placeholder. Help never inserts
+an observed username, repository, lane identity, or local path, and it does not
+advise switching the Task Implementer lane itself to another branch.
+
 ```text
 $task-implementer workspace init
 ```

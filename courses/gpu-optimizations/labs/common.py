@@ -11,7 +11,7 @@ import re
 import secrets
 import statistics
 from pathlib import Path
-from typing import Any, Callable
+from typing import IO, Any, Callable
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -151,14 +151,25 @@ def write_result(
         "measurements": measurements,
         "correctness": correctness,
     }
-    document = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    args.output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    write_json_exclusive(target, payload)
+    return target
+
+
+def open_private_exclusive(target: Path, *, binary: bool = False) -> IO[Any]:
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     try:
         descriptor = os.open(target, flags, 0o600)
     except FileExistsError as exc:
         raise SystemExit(f"Refusing to overwrite an existing result: {target}") from exc
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+    if binary:
+        return os.fdopen(descriptor, "wb")
+    return os.fdopen(descriptor, "w", encoding="utf-8")
+
+
+def write_json_exclusive(target: Path, payload: dict[str, Any]) -> Path:
+    document = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    with open_private_exclusive(target) as stream:
         stream.write(document)
     return target
 

@@ -1,0 +1,35 @@
+{
+  "title": "Replace with course title",
+  "estimated_guided_hours": 1,
+  "lessons": [
+    {
+      "id": "lesson-01",
+      "title": "Replace with first lesson title",
+      "prerequisites": [],
+      "labs": [
+        "lab-01"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-01",
+      "title": "Replace with practical-work title",
+      "guide": "reference/labs/lab-01.md",
+      "lessons": [
+        "lesson-01"
+      ],
+      "optional": false,
+      "sources": []
+    }
+  ],
+  "diagrams": [
+    {
+      "id": "figure-workflow",
+      "path": "reference/diagrams/workflow.svg",
+      "lesson": "lesson-01",
+      "after": "Start here",
+      "caption": "Replace with the essential relationship and conclusion"
+    }
+  ]
+}

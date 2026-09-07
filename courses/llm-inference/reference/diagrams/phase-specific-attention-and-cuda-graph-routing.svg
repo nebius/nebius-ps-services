@@ -1,0 +1,54 @@
+<svg viewBox="0 0 1200 570" role="img" aria-labelledby="detail-phase-specific-attention-and-cuda-graph-routing-attention-graph-title detail-phase-specific-attention-and-cuda-graph-routing-attention-graph-desc">
+<title id="detail-phase-specific-attention-and-cuda-graph-routing-attention-graph-title">Phase-specific attention and CUDA Graph routing</title>
+<desc id="detail-phase-specific-attention-and-cuda-graph-routing-attention-graph-desc">Prefill processes many prompt positions through an SDPA or engine API selecting a supported fused or math backend and writes key-value state. Decode processes one new position per active sequence through a selected decode backend; paged KV is an engine example, not a universal requirement. The scheduler sends stable shape and address buckets to a captured CUDA Graph and unmatched work to a fallback path.</desc>
+<defs>
+<marker id="detail-phase-specific-attention-and-cuda-graph-routing-attention-graph-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g text-anchor="middle">
+<rect x="40" y="55" width="500" height="235" rx="14" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<rect x="660" y="55" width="500" height="235" rx="14" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+<text x="290" y="90" font-size="21" font-weight="700">Prefill path</text>
+<text x="910" y="90" font-size="21" font-weight="700">Decode path</text>
+<rect x="65" y="120" width="205" height="110" rx="9" fill="#fff" stroke="#245880"/>
+<rect x="300" y="120" width="225" height="110" rx="9" fill="#fff" stroke="#245880"/>
+<text x="167" y="146" font-weight="700"><tspan x="167">many prompt</tspan><tspan x="167" dy="22"> positions</tspan></text>
+<text x="167" y="189" class="diagram-label">matrix-rich work</text>
+<text x="412" y="154" font-weight="700">SDPA / engine API</text>
+<text x="412" y="187" class="diagram-label"><tspan x="412">select fused or</tspan><tspan x="412" dy="20">math backend</tspan></text>
+<rect x="680" y="120" width="215" height="110" rx="9" fill="#fff" stroke="#206757"/>
+<rect x="920" y="120" width="225" height="110" rx="9" fill="#fff" stroke="#206757"/>
+<text x="787" y="154" font-weight="700">one new position</text>
+<text x="787" y="181" class="diagram-label">per active sequence</text>
+<text x="1032" y="151" font-weight="700"><tspan x="1032">decode backend</tspan><tspan x="1032" dy="22"> (engine example)</tspan></text>
+<text x="1032" y="207" class="diagram-label">may use paged KV blocks</text>
+<text x="290" y="266" class="diagram-label">write prompt K,V and produce first-token logits</text>
+<text x="910" y="266" class="diagram-label">read growing history and produce next-token logits</text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-phase-specific-attention-and-cuda-graph-routing-attention-graph-arr)">
+<line x1="270" y1="175" x2="300" y2="175"/>
+<line x1="895" y1="175" x2="920" y2="175"/>
+</g>
+<rect x="55" y="350" width="225" height="90" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<rect x="360" y="350" width="225" height="90" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<rect x="665" y="350" width="225" height="90" rx="10" fill="#eee5f5" stroke="#654886"/>
+<rect x="970" y="350" width="175" height="90" rx="10" fill="#f9e8eb" stroke="#923c49"/>
+<g text-anchor="middle">
+<text x="167" y="383" font-weight="700">scheduler step</text>
+<text x="167" y="413" class="diagram-label">shape + address bucket</text>
+<text x="472" y="383" font-weight="700">captured bucket</text>
+<text x="472" y="413" class="diagram-label">CUDA Graph replay</text>
+<text x="777" y="383" font-weight="700">fallback path</text>
+<text x="777" y="413" class="diagram-label">unmatched or unsafe work</text>
+<text x="1057" y="383" font-weight="700">measure</text>
+<text x="1057" y="413" class="diagram-label">timeline + memory</text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-phase-specific-attention-and-cuda-graph-routing-attention-graph-arr)">
+<path d="M280 382 H360"/>
+<path d="M280 410 H320 V485 H777 V440"/>
+<path d="M585 395 H620 V325 H1057 V350"/>
+<line x1="890" y1="420" x2="970" y2="420"/>
+</g>
+<text x="600" y="525" text-anchor="middle" fill="#52626b">Backend and graph eligibility are phase-, shape-, dtype-, layout-, and version-dependent.</text>
+</svg>

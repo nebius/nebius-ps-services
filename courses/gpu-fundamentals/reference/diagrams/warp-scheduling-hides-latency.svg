@@ -1,0 +1,47 @@
+<svg viewBox="0 0 1000 390" role="img" aria-labelledby="detail-warp-scheduling-hides-latency-warp-title detail-warp-scheduling-hides-latency-warp-desc">
+<title id="detail-warp-scheduling-hides-latency-warp-title">Warp scheduling hides latency</title>
+<desc id="detail-warp-scheduling-hides-latency-warp-desc">When one warp waits for data, an SM warp scheduler can issue an eligible instruction from another resident warp. Steps are illustrative scheduling opportunities, not measured H100 cycles or memory latencies.</desc>
+<text x="40" y="65" font-weight="700">step</text>
+<g fill="#52626b">
+<text x="210" y="65">1</text>
+<text x="350" y="65">2</text>
+<text x="490" y="65">3</text>
+<text x="630" y="65">4</text>
+<text x="770" y="65">5</text>
+<text x="910" y="65">6</text>
+</g>
+<g font-weight="700">
+<text x="45" y="125">warp 0</text>
+<text x="45" y="195">warp 1</text>
+<text x="45" y="265">warp 2</text>
+<text x="45" y="335">issued</text>
+</g>
+<g stroke="#dbe5e1">
+<path d="M150 85V350M290 85V350M430 85V350M570 85V350M710 85V350M850 85V350M970 85V350" fill="none"/>
+</g>
+<rect x="165" y="95" width="110" height="45" rx="7" fill="#e0edfa"/>
+<text x="220" y="123" text-anchor="middle">load</text>
+<rect x="305" y="95" width="390" height="45" rx="7" fill="#f9e8eb"/>
+<text x="500" y="123" text-anchor="middle">waiting for data</text>
+<rect x="725" y="95" width="110" height="45" rx="7" fill="#e0f0e6"/>
+<text x="780" y="123" text-anchor="middle">math</text>
+<rect x="305" y="165" width="110" height="45" rx="7" fill="#e0edfa"/>
+<text x="360" y="193" text-anchor="middle">load</text>
+<rect x="445" y="165" width="250" height="45" rx="7" fill="#f9e8eb"/>
+<text x="570" y="193" text-anchor="middle">waiting</text>
+<rect x="445" y="235" width="110" height="45" rx="7" fill="#e0f0e6"/>
+<text x="500" y="263" text-anchor="middle">math</text>
+<g fill="#245880">
+<rect x="165" y="305" width="110" height="45" rx="7"/>
+<rect x="305" y="305" width="110" height="45" rx="7"/>
+<rect x="445" y="305" width="110" height="45" rx="7"/>
+<rect x="725" y="305" width="110" height="45" rx="7"/>
+</g>
+<g fill="#fff" text-anchor="middle">
+<text x="220" y="333">warp 0</text>
+<text x="360" y="333">warp 1</text>
+<text x="500" y="333">warp 2</text>
+<text x="780" y="333">warp 0</text>
+</g>
+<text x="500" y="378" text-anchor="middle" font-size="14" fill="#52626b">Illustrative scheduling opportunities — not measured H100 cycles or load latency</text>
+</svg>

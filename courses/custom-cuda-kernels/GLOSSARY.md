@@ -1,0 +1,33 @@
+# Glossary
+
+- **Host / device:** the CPU-side program and the GPU-side execution environment; CUDA applications normally use both.
+- **Kernel:** a device function launched as a grid of thread blocks; a library API may launch several kernels and is not itself necessarily one kernel.
+- **Host-facing API:** the callable interface through which a consumer supplies data, shapes and an execution stream to a GPU implementation.
+- **CUDA stream:** an ordered sequence of device operations; callers must respect dependencies across streams and buffer lifetimes until completion.
+- **Maintained library:** a supported implementation such as cuBLAS, cuDNN, CUB/CCCL or CUTLASS that should be evaluated before owning a custom implementation.
+- **Source package:** source, headers, build instructions, tests and licensing that allow a consumer to build an implementation for a documented toolchain and GPU target.
+
+- **Bank conflict:** serialization when lanes access different words in the same bank; supported same-word broadcasts are not bank conflicts.
+- **Coalescing:** combining warp memory requests into efficient transactions.
+- **CUB:** CUDA C++ library of tuned parallel primitives.
+- **CUTLASS:** CUDA templates for high-performance linear algebra and fused epilogues.
+- **Distributed shared memory:** cluster-scoped access to the shared-memory regions of cooperating thread blocks.
+- **Epilogue:** work applied to matrix-accumulation results before final storage.
+- **Grid-stride loop:** indexing pattern in which each thread processes elements separated by the total grid width.
+- **Occupancy:** active resident warps divided by the SM's maximum resident-warps limit, constrained by block resources; not a speed score.
+- **Pipeline stage:** one shared-memory buffer and synchronization state used while alternating asynchronous production and computation.
+- **Register spill:** compiler placement of thread-local values into local memory.
+- **SM90:** baseline compute capability 9.0 target used for H100; future-device compatibility still depends on the included PTX/cubin and the CUDA compatibility contract.
+- **SM90a:** architecture-accelerated Hopper target with non-forward-compatible features.
+- **Tail wave:** a final partially filled grid wave; its idle fraction depends on the remaining blocks and resource-limited capacity.
+- **TMA:** Tensor Memory Accelerator, which moves tensor regions asynchronously using a descriptor that specifies their layout and dimensions.
+- **Warp shuffle:** direct register exchange among participating lanes in one warp, with valid active masks and source lanes.
+- **GEMM:** general matrix multiplication, commonly including alpha/beta scaling of the product and existing output.
+- **PTX / SASS:** intermediate GPU instruction representation / target-specific machine instructions.
+- **PTXAS:** CUDA assembler component that produces target device code and compiler resource reports.
+- **Aliasing:** two pointers or tensor views referring to overlapping storage; it changes safe read/write ordering.
+- **Leading dimension:** the physical stride used to reach the next matrix row or column under the selected layout.
+- **Epsilon:** small positive stabilizer added before the RMSNorm inverse square root.
+- **RMSNorm:** normalization by root mean square, followed by learned scaling, without subtracting the mean.
+- **FMA:** fused multiply-add, a × b + c with one final rounding; conventionally counted as two FLOPs.
+- **Halo:** neighboring input values outside a tile's output region needed for a stencil's boundary outputs.

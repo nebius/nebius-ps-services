@@ -1,13 +1,35 @@
-# Dependency compatibility window
+# Version qualification
 
-Content was statically reviewed on 2026-09-01 against current NVIDIA, PyTorch, and pytest documentation. Examples target Python 3.12 and directly constrain PyTorch 2.13.0, with pytest 9.1.1 as the offline test runner; they require an NVIDIA H100 (SM90). This is a compatibility window, not a complete transitive lock.
+| Component | Course target | Evidence status |
+| --- | --- | --- |
+| Python | 3.12 | Installed locally; cluster parity pending |
+| PyTorch | 2.14.0 manifest authority | Clean Linux/H100 install and qualification pending; no fallback approved |
+| Nsight Systems and Compute | Site-compatible current tools | Live profiler activation pending |
+| GPU | One full non-MIG H100; two nodes for owned distributed labs | Live validation pending |
 
-Before live labs, the cluster owner must provide either a platform-specific
-hash-locked dependency file installed from an approved source or an immutable
-environment image identified by digest. Record that lock or digest in the
-private run record. Do not resolve `requirements.txt` directly against an
-arbitrary or mutable package index on a managed cluster.
+Exact profiler and framework versions belong in every benchmark record because
+trace schemas, kernel dispatch, and compiler behavior can change.
 
-Nsight tools, DCGM, the CUDA driver, NCCL, fabric libraries, and Slurm integration are cluster-owned. Record their actual versions. Profiler report formats, section sets, and available counters vary by tool version and permissions, so use the documented concepts and revalidate exact commands on the target cluster.
+## Networking workshop qualification
 
-GenAI-Perf is retained only for reproducing an existing benchmark workflow; its official project is phasing it out in favor of AIPerf. Pin and record the exact client version and request configuration. Install benchmark clients from an official package index or cluster-approved mirror using an approved exact version or hash-locked requirements file. Start new NVIDIA inference benchmark automation with a current AIPerf release, and do not compare client results until metric definitions and request distributions are confirmed equivalent.
+NCCL Tests v2.20.0, source commit
+`b4d5beebca8a76cf01335f724d154b9b9d394d96`, is the reviewed external benchmark
+candidate. Its MPI-enabled build, exact per-node binary hashes and loaded
+CUDA/NCCL/MPI libraries still require Linux/H100 qualification. The course
+does not install it or change the PyTorch environment. Current official NCCL
+documentation describes 2.31.2; this is a research context, not a runtime pin.
+Record `torch.cuda.nccl.version()` separately from the external benchmark's
+nccl_headers and nccl_library records.
+
+Core Lab 18 accepts only the v2.20.0 float/sum, two-rank standard table, with
+one full H100 per node. The site supplies a qualified MPI/Slurm integration.
+Optional per-iteration and tuning-report columns are separate diagnostics,
+not accepted by the stable parser. RoCE/GDR/QP trials require a qualified
+fabric and registration path; they are not implicit core platform features.
+
+## Transfer-pipeline qualification
+
+Labs 19 and 20 use the existing PyTorch candidate environment. Their source
+contracts follow the documented transfer and profiling APIs, but CUDA stream
+ordering, buffer lifetimes and overlap still require H100 qualification. CPU
+control tests check loop logic; they do not establish concurrent device execution.

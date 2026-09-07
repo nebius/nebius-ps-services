@@ -1,0 +1,13 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/host-api-and-device-kernel.svg",
+      "title": "From a CPU application to a reusable GPU kernel",
+      "lessons": [
+        1
+      ],
+      "after": "Start here",
+      "home": "lesson"
+    }
+  ]
+}

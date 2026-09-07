@@ -1,0 +1,31 @@
+<svg viewBox="0 0 1200 650" role="img" aria-labelledby="detail-llm-request-latency-decomposition-lat-title detail-llm-request-latency-decomposition-lat-desc">
+<title id="detail-llm-request-latency-decomposition-lat-title">LLM request latency decomposition</title>
+<desc id="detail-llm-request-latency-decomposition-lat-desc">Request start t0, first observed token t1, final content token tN and protocol completion tc are distinct timestamps. TTFT=t1-t0; last-token latency=tN-t0; response completion latency=tc-t0. With N greater than one, TPOT=(tN-t1)/(N-1). Streaming chunks can bundle tokens, so chunk gaps need separately documented accounting.</desc>
+<defs><marker id="detail-llm-request-latency-decomposition-lat-title-flow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#245880"/></marker></defs>
+<rect x="70" y="180" width="190" height="90" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="165" y="219" text-anchor="middle" font-size="18" font-weight="700">Queue and</text>
+<text x="165" y="243" text-anchor="middle" font-size="16">preprocessing</text>
+<rect x="260" y="180" width="250" height="90" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="385" y="219" text-anchor="middle" font-size="18" font-weight="700">Prefill + sampling</text>
+<text x="385" y="243" text-anchor="middle" font-size="16">Then transport</text>
+<rect x="510" y="180" width="390" height="90" rx="10" fill="#eef8f2" stroke="#245880"/>
+<text x="705" y="219" text-anchor="middle" font-size="18" font-weight="700">Token arrivals 1 … N</text>
+<text x="705" y="243" text-anchor="middle" font-size="16">ITL: successive token gaps</text>
+<rect x="900" y="180" width="220" height="90" rx="10" fill="#eee5f5" stroke="#245880"/>
+<text x="1010" y="219" text-anchor="middle" font-size="18" font-weight="700">Finish metadata</text>
+<text x="1010" y="243" text-anchor="middle" font-size="16">Protocol completion</text>
+<line x1="70" y1="155" x2="70" y2="290" stroke="#52626b" stroke-dasharray="4 4"/><text x="70" y="148" text-anchor="middle" font-size="16" fill="#52626b">t0: request</text>
+<line x1="510" y1="155" x2="510" y2="290" stroke="#52626b" stroke-dasharray="4 4"/><text x="510" y="148" text-anchor="middle" font-size="16" fill="#52626b">t1: first token</text>
+<line x1="900" y1="155" x2="900" y2="290" stroke="#52626b" stroke-dasharray="4 4"/><text x="900" y="148" text-anchor="middle" font-size="16" fill="#52626b">tN: last token</text>
+<line x1="1120" y1="155" x2="1120" y2="290" stroke="#52626b" stroke-dasharray="4 4"/><text x="1120" y="128" text-anchor="middle" font-size="16" fill="#52626b">tc: complete</text>
+<path d="M70 85 H510" fill="none" stroke="#86500e" stroke-width="2.5" marker-end="url(#detail-llm-request-latency-decomposition-lat-title-flow)"/>
+<text x="290" y="63" text-anchor="middle" font-size="16" fill="#52626b">TTFT = t1 − t0</text>
+<path d="M70 330 H900" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-llm-request-latency-decomposition-lat-title-flow)"/>
+<text x="485" y="362" text-anchor="middle" font-size="16" fill="#52626b">Last-token latency = tN − t0</text>
+<path d="M70 395 H1120" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-llm-request-latency-decomposition-lat-title-flow)"/>
+<text x="595" y="428" text-anchor="middle" font-size="16" fill="#52626b">Response-completion latency = tc − t0</text>
+<text x="600" y="487" text-anchor="middle" font-size="16" fill="#52626b">For N &gt; 1: mean TPOT = (tN − t1) / (N − 1); N = 1 has no inter-token interval.</text>
+<text x="600" y="525" text-anchor="middle" font-size="16" fill="#52626b">Do not include finish metadata in this token-gap mean.</text>
+<text x="600" y="569" text-anchor="middle" font-size="16" fill="#52626b">Chunk arrivals may bundle tokens; report a chunk-gap proxy or the tool's documented token accounting.</text>
+<text x="600" y="603" text-anchor="middle" font-size="16" fill="#52626b">Schematic durations, not measured H100 latencies.</text>
+</svg>

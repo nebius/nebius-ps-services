@@ -1,0 +1,42 @@
+<svg viewBox="0 0 1100 520" role="img" aria-labelledby="detail-training-memory-ledger-across-one-optimizer-step-training-memory-title detail-training-memory-ledger-across-one-optimizer-step-training-memory-desc">
+<title id="detail-training-memory-ledger-across-one-optimizer-step-training-memory-title">Training memory ledger across one optimizer step</title>
+<desc id="detail-training-memory-ledger-across-one-optimizer-step-training-memory-desc">Persistent parameters and optimizer state remain across the step. Forward creates saved activations, backward creates gradients and consumes or recomputes activations, and the optimizer uses gradients and moment state. Temporary workspaces, allocator reservation, and communication buffers may peak in different phases.</desc>
+<g text-anchor="middle">
+<text x="220" y="42" font-size="19" font-weight="700">persistent state</text>
+<rect x="45" y="70" width="350" height="75" rx="10" fill="#e0edfa" stroke="#245880"/>
+<text x="220" y="101" font-weight="700">parameters</text>
+<text x="220" y="128" class="diagram-label">possibly mixed storage formats</text>
+<rect x="45" y="160" width="350" height="90" rx="10" fill="#eee5f5" stroke="#654886"/>
+<text x="220" y="194" font-weight="700">optimizer state</text>
+<text x="220" y="220" class="diagram-label">moments, master copies, step state</text>
+<text x="750" y="42" font-size="19" font-weight="700">phase-dependent state</text>
+<rect x="465" y="70" width="190" height="75" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<rect x="680" y="70" width="190" height="75" rx="10" fill="#f9e8eb" stroke="#923c49"/>
+<rect x="895" y="70" width="160" height="75" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<text x="560" y="101" font-weight="700">forward</text>
+<text x="560" y="128" class="diagram-label">saved activations grow</text>
+<text x="775" y="101" font-weight="700">backward</text>
+<text x="775" y="128" class="diagram-label">gradients + recompute</text>
+<text x="975" y="101" font-weight="700">optimizer</text>
+<text x="975" y="128" class="diagram-label">update workspace</text>
+<rect x="465" y="175" width="590" height="95" rx="10" fill="#fff" stroke="#dbe5e1"/>
+<text x="760" y="209" font-weight="700">temporary and distributed state</text>
+<text x="760" y="233" class="diagram-label"><tspan x="760">operator workspaces · gradient buckets</tspan><tspan x="760" dy="22">· gather buffers · allocator reservation</tspan></text>
+</g>
+<text x="45" y="315" font-size="19" font-weight="700">Ask which entry each technique changes</text>
+<g text-anchor="middle">
+<rect x="45" y="345" width="235" height="95" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="305" y="345" width="235" height="95" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="565" y="345" width="235" height="95" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="825" y="345" width="230" height="95" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="162" y="378" font-weight="700">smaller microbatch</text>
+<text x="162" y="407" class="diagram-label">activation peak</text>
+<text x="422" y="378" font-weight="700">checkpointing</text>
+<text x="422" y="403" class="diagram-label"><tspan x="422">saved activations</tspan><tspan x="422" dy="22"> → recompute</tspan></text>
+<text x="682" y="378" font-weight="700">lower precision</text>
+<text x="682" y="403" class="diagram-label"><tspan x="682">selected stored/compute</tspan><tspan x="682" dy="22"> tensors</tspan></text>
+<text x="940" y="378" font-weight="700">FSDP2</text>
+<text x="940" y="403" class="diagram-label"><tspan x="940">shard state;</tspan><tspan x="940" dy="22"> gather for compute</tspan></text>
+</g>
+<text x="550" y="495" text-anchor="middle" fill="#52626b">Calculated bytes, allocated bytes, reserved bytes, and peak bytes answer different questions.</text>
+</svg>

@@ -60,6 +60,9 @@ def main() -> int:
             "$task-implementer integrate [project-folder]",
             "$task-implementer workspace remove [project-folder]",
             "$task-implementer --help",
+            "primary checkout is on a different branch",
+            "project directory inside the existing lane",
+            "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>",
             "Expose exactly these actions",
             "two-parent",
             "persistent lane",
@@ -86,6 +89,9 @@ def main() -> int:
             "expected-old",
             "workspace remove",
             "workspace reuse",
+            "primary checkout is on a different branch",
+            "project directory inside the existing lane",
+            "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>",
             "Canonical Project Specs",
             "does not require terminal lifecycle seal evidence",
             "owns its prompt-impact claim/receipt schemas",
@@ -185,6 +191,9 @@ def main() -> int:
             "$task-implementer integrate",
             "$task-implementer workspace remove",
             "call additional tools",
+            "primary checkout is on a different branch",
+            "project directory inside the existing lane",
+            "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>",
             "five completely disjoint tasks",
             "capacity must not change logical waves",
             "STEERING_QUEUED_AFTER_WAVE",
@@ -202,6 +211,7 @@ def main() -> int:
             "persistent full-repository lane",
             "repository-wide exact/prefix",
             "workspace remove",
+            "project directory inside the existing lane",
             "Public `$worktree`",
             "every direct prompt still runs normally in the current agent",
             "without starting or resuming the workflow",
@@ -312,7 +322,10 @@ def main() -> int:
     ):
         if retired in wave_source:
             failures.append(f"wave helper: retained lifecycle gate {retired!r}")
-    for label, source in (("wave helper", wave_source), ("resume helper", resume_source)):
+    for label, source in (
+        ("wave helper", wave_source),
+        ("resume helper", resume_source),
+    ):
         if "prompt_workspace_contract_delta" in source:
             failures.append(f"{label}: retained project-lifecycle overlay dependency")
     if (ROOT / "scripts/validate_project_specs.py").exists():

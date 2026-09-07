@@ -1,29 +1,37 @@
 # Official resources
 
-- [NVIDIA Nsight Systems User Guide](https://docs.nvidia.com/nsight-systems/UserGuide/) — application timelines, CUDA API activity, kernels, transfers, synchronization, and distributed tracing guidance.
-- [NVIDIA Nsight Systems Installation Guide](https://docs.nvidia.com/nsight-systems/InstallationGuide/) — supported installation paths and CLI-only package guidance.
-- [NVIDIA Nsight Compute Profiling Guide](https://docs.nvidia.com/nsight-compute/ProfilingGuide/) — replay overhead, section sets, kernel metrics, and interpretation constraints.
-- [NVIDIA Nsight Compute CLI Guide](https://docs.nvidia.com/nsight-compute/NsightComputeCli/) — command-line collection, NVTX filtering, section sets, and report export.
-- [NVIDIA CUDA Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/) — measurement, memory access, concurrency, and optimization guidance.
-- [NVIDIA Hopper Tuning Guide](https://docs.nvidia.com/cuda/hopper-tuning-guide/) — H100 resource and feature context.
-- [NVIDIA DCGM profiling guide](https://docs.nvidia.com/datacenter/dcgm/latest/learn/modules/profiling.html) — interval telemetry, supported fields, and coordination with developer profilers.
-- [NVIDIA DCGM getting started](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/getting-started.html) — supported package selection, host-engine setup, and command verification.
-- [NVIDIA DCGM Exporter installation](https://docs.nvidia.com/datacenter/dcgm/latest/installation/install-dcgm-exporter.html) — Prometheus exposition, lifecycle ownership, and supported deployment paths.
-- [NVIDIA nvbandwidth](https://github.com/NVIDIA/nvbandwidth) — host/device and device/device bandwidth and latency test cases.
-- [NVIDIA NCCL Tests](https://github.com/NVIDIA/nccl-tests) — collective correctness and message-size performance curves.
-- [NVIDIA LLM Benchmarking Guide](https://docs.nvidia.com/nim/benchmarking/llm/latest/overview.html) — AIPerf workload construction and inference metric definitions.
-- [NVIDIA AIPerf documentation](https://docs.nvidia.com/aiperf/) — current NVIDIA client workflow for generative-AI performance measurement.
-- [NVIDIA GenAI-Perf project](https://github.com/triton-inference-server/perf_analyzer/blob/main/genai-perf/README.md) — legacy client usage and the official transition notice to AIPerf.
-- [vLLM Bench CLI](https://docs.vllm.ai/en/stable/cli/bench/) — engine-native latency, throughput, startup, and online-serving benchmarks.
-- [MLPerf Training](https://mlcommons.org/benchmarks/training/) — standardized time-to-quality methodology and rules.
-- [MLPerf Inference: Datacenter](https://mlcommons.org/benchmarks/inference-datacenter/) — standardized inference scenarios, metrics, quality targets, and rules.
-- [PyTorch CUDA semantics](https://docs.pytorch.org/docs/stable/notes/cuda.html) — timing, streams, TF32, allocator, and CUDA Graph behavior.
-- [PyTorch Profiler](https://docs.pytorch.org/docs/stable/profiler.html) — profiling API and activity selection.
-- [PyTorch NVTX API](https://docs.pytorch.org/docs/stable/generated/torch.cuda.nvtx.range.html) — semantic CUDA timeline ranges from PyTorch code.
-- [PyTorch `torch.compile`](https://docs.pytorch.org/docs/stable/torch.compiler.html) — compiler behavior and troubleshooting entry points.
-- [PyTorch user-defined Triton kernel tutorial](https://docs.pytorch.org/tutorials/recipes/torch_compile_user_defined_triton_kernel_tutorial.html) — custom kernel definitions, launch grids, and compiler integration.
-- [PyTorch scaled dot product attention](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html) — SDPA contract and backend selection controls.
-- [PyTorch distributed](https://docs.pytorch.org/docs/stable/distributed.html) and [torchrun](https://docs.pytorch.org/docs/stable/elastic/run.html) — collectives and distributed launch.
-- [Slurm sbatch](https://slurm.schedmd.com/sbatch.html) and [Slurm srun](https://slurm.schedmd.com/srun.html) — job allocation and task launch.
+- [CUDA programming model and CPU/GPU responsibilities](https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/programming-model.html)
 
-Recheck all version-sensitive behavior when changing [VERSIONS.md](VERSIONS.md).
+- [PyTorch performance tuning guide](https://docs.pytorch.org/tutorials/recipes/recipes/tuning_guide.html)
+- [PyTorch scalar extraction with Tensor.item](https://docs.pytorch.org/docs/2.14/generated/torch.Tensor.item.html)
+- [PyTorch Profiler](https://docs.pytorch.org/docs/stable/profiler.html)
+- [torch.compile](https://docs.pytorch.org/docs/stable/generated/torch.compile.html)
+- [PyTorch CUDA Graphs](https://docs.pytorch.org/docs/stable/notes/cuda.html#cuda-graphs)
+- [NVIDIA CUDA Graphs: nodes, dependencies, capture, instantiation and updates](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html)
+- [NVIDIA Nsight Systems](https://docs.nvidia.com/nsight-systems/UserGuide/index.html)
+- [NVIDIA Nsight Compute Profiling Guide](https://docs.nvidia.com/nsight-compute/ProfilingGuide/)
+- [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/)
+- [CUDA Runtime event timing](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__EVENT.html)
+- [NVIDIA DALI user guide](https://docs.nvidia.com/deeplearning/dali/user-guide/docs/)
+- [CUDA Runtime memory-pool API](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__MEMORY__POOLS.html)
+- [NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/)
+- [Slurm sbatch](https://slurm.schedmd.com/sbatch.html)
+- [NCCL overview and supported communication paths](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/overview.html)
+- [NVIDIA DGX H100 system and network topology](https://docs.nvidia.com/dgx/dgxh100-user-guide/introduction-to-dgxh100.html)
+- [NVIDIA RDMA architecture, registration and work queues](https://docs.nvidia.com/rdma-aware-networks-programming-user-manual-1-7.pdf)
+- [NVIDIA DGX SuperPOD H100 compute and management fabrics](https://docs.nvidia.com/dgx-superpod/reference-architecture-scalable-infrastructure-h100/latest/network-fabrics.html)
+- [NCCL GPU-to-NIC registration and topology troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html)
+- [NCCL network diagnostics and RoCE GID guidance](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html)
+- [NCCL environment-variable definitions and warnings](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html)
+- [NCCL performance triage and tuning](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/performance_and_tuning.html)
+- [NVIDIA NCCL Tests v2.20.0 build and CLI](https://github.com/NVIDIA/nccl-tests/blob/v2.20.0/README.md)
+- [NCCL Tests collective bandwidth formulas](https://github.com/NVIDIA/nccl-tests/blob/v2.20.0/doc/PERFORMANCE.md)
+- [NCCL Tests v2.20.0 table writer and environment-export behavior](https://github.com/NVIDIA/nccl-tests/blob/v2.20.0/src/util.cu)
+- [NCCL Tests timing and device mapping implementation](https://github.com/NVIDIA/nccl-tests/blob/v2.20.0/src/common.cu)
+- [Slurm MPI integration guide](https://slurm.schedmd.com/mpi_guide.html)
+
+## Transfer and retention mechanisms
+
+- [CUDA asynchronous execution](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html)
+- [CUDA pinned memory and overlapping transfers](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html)
+- [PyTorch pinned and nonblocking transfer safety](https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html)

@@ -1,0 +1,55 @@
+<svg viewBox="0 0 1160 590" role="img" aria-labelledby="detail-disaggregated-prefill-decode-and-agentic-queues-queue-title detail-disaggregated-prefill-decode-and-agentic-queues-queue-desc">
+<title id="detail-disaggregated-prefill-decode-and-agentic-queues-queue-title">Disaggregated prefill, decode, and agentic queues</title>
+<desc id="detail-disaggregated-prefill-decode-and-agentic-queues-queue-desc">A request moves through admission, tokenization and prefill, optional KV transfer, decode, and streaming or completion. A validated tool call moves to an authority-controlled tool, and the untrusted result is formatted and tokenized before it re-enters prefill. No tool result bypasses tokenization or prefill to enter decode directly.</desc>
+<defs>
+<marker id="detail-disaggregated-prefill-decode-and-agentic-queues-queue-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g fill="#fff" stroke="#245880" stroke-width="2">
+<rect x="20" y="70" width="180" height="110" rx="9"/>
+<rect x="230" y="70" width="200" height="110" rx="9"/>
+<rect x="460" y="70" width="200" height="110" rx="9"/>
+<rect x="690" y="70" width="180" height="110" rx="9"/>
+<rect x="900" y="70" width="230" height="110" rx="9"/>
+<rect x="690" y="285" width="180" height="110" rx="9"/>
+<rect x="450" y="285" width="220" height="110" rx="9"/>
+<rect x="230" y="285" width="200" height="110" rx="9"/>
+</g>
+<g text-anchor="middle">
+<text x="110" y="100" font-weight="700"><tspan x="110">admission</tspan><tspan x="110" dy="24">queue</tspan></text>
+<text x="110" y="154" class="diagram-label">request policy</text>
+<text x="330" y="100" font-weight="700"><tspan x="330">tokenize</tspan><tspan x="330" dy="24">+ prefill</tspan></text>
+<text x="330" y="154" class="diagram-label">prompt tokens/s</text>
+<text x="560" y="100" font-weight="700"><tspan x="560">KV handoff</tspan><tspan x="560" dy="24">queue</tspan></text>
+<text x="560" y="154" class="diagram-label">bytes/s + failures</text>
+<text x="780" y="112" font-weight="700">decode pool</text>
+<text x="780" y="146" class="diagram-label">output tokens/s</text>
+<text x="1015" y="112" font-weight="700">stream / finish</text>
+<text x="1015" y="146" class="diagram-label">user-visible result</text>
+<text x="780" y="323" font-weight="700">tool execution</text>
+<text x="780" y="357" class="diagram-label">schema · authority</text>
+<text x="560" y="313" font-weight="700"><tspan x="560">untrusted tool</tspan><tspan x="560" dy="24">result</tspan></text>
+<text x="560" y="362" class="diagram-label"><tspan x="560">validate output</tspan><tspan x="560" dy="20">boundary</tspan></text>
+<text x="330" y="313" font-weight="700"><tspan x="330">format</tspan><tspan x="330" dy="24">+ tokenize</tspan></text>
+<text x="330" y="367" class="diagram-label">append context IDs</text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-disaggregated-prefill-decode-and-agentic-queues-queue-arr)">
+<line x1="200" y1="125" x2="230" y2="125"/>
+<line x1="430" y1="125" x2="460" y2="125"/>
+<line x1="660" y1="125" x2="690" y2="125"/>
+<line x1="870" y1="125" x2="900" y2="125"/>
+<path d="M780 180 V285"/>
+<line x1="690" y1="340" x2="670" y2="340"/>
+<line x1="450" y1="340" x2="430" y2="340"/>
+<path d="M330 285 V245 C330 215 280 215 280 180"/>
+</g>
+<g class="diagram-small" fill="#52626b">
+<text x="810" y="235">validated tool call</text>
+<text x="255" y="226" text-anchor="end"><tspan x="255">new model round</tspan><tspan x="255" dy="20">begins at prefill</tspan></text>
+</g>
+<rect x="145" y="435" width="870" height="92" rx="12" fill="#fff" stroke="#dbe5e1"/>
+<text x="580" y="468" text-anchor="middle" font-weight="700">Every stage has its own arrival rate, service rate, queue, and failure boundary</text>
+<text x="580" y="498" text-anchor="middle" class="diagram-label">stability needs sustainable service rate above arrival rate, with headroom for length and tool variance</text>
+<text x="580" y="565" text-anchor="middle" fill="#52626b">Tool output becomes model input only after application validation, formatting, tokenization, and a new prefill.</text>
+</svg>

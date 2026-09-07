@@ -63,11 +63,10 @@ if command -v nvidia-smi >/dev/null 2>&1; then
 else
   printf 'MISSING nvidia-smi: the H100 allocation cannot be verified.\n' >&2
 fi
-"${course_python}" -c 'import torch; print(f"PyTorch {torch.__version__}; CUDA {torch.version.cuda}; profiler={hasattr(torch, \"profiler\")}; nvtx={hasattr(torch.cuda, \"nvtx\")}")'
+"${course_python}" -c 'import torch; print("PyTorch {}; CUDA {}; profiler={}; nvtx={}".format(torch.__version__, torch.version.cuda, hasattr(torch, "profiler"), hasattr(torch.cuda, "nvtx")))'
 for command_name in \
   nvidia-smi nsys ncu dcgmi dcgm-exporter nvbandwidth \
-  all_reduce_perf all_gather_perf reduce_scatter_perf alltoall_perf \
-  genai-perf aiperf; do
+  all_reduce_perf all_gather_perf reduce_scatter_perf alltoall_perf; do
   report_command "${command_name}"
 done
 
@@ -93,10 +92,4 @@ if command -v dcgmi >/dev/null 2>&1; then
   run_capability_check \
     "DCGM profiling fields for GPU 0" \
     dcgmi profile --list --entity-id gpu:0
-fi
-if command -v genai-perf >/dev/null 2>&1; then
-  run_capability_check "GenAI-Perf version" genai-perf --version
-fi
-if command -v aiperf >/dev/null 2>&1; then
-  run_capability_check "AIPerf version" aiperf --version
 fi

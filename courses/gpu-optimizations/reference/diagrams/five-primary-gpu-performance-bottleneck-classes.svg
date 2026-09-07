@@ -1,0 +1,32 @@
+<svg viewBox="0 0 1150 520" role="img" aria-labelledby="detail-five-primary-gpu-performance-bottleneck-classes-limit-title detail-five-primary-gpu-performance-bottleneck-classes-limit-desc">
+<title id="detail-five-primary-gpu-performance-bottleneck-classes-limit-title">Five primary GPU performance bottleneck classes</title>
+<desc id="detail-five-primary-gpu-performance-bottleneck-classes-limit-desc">Five top-level boxes represent compute, memory/data movement, launch or CPU, communication, and input or storage bottlenecks. A lower band lists cross-cutting mechanisms, while memory capacity is separated as a feasibility constraint.</desc>
+<g text-anchor="middle">
+<rect x="25" y="70" width="205" height="105" rx="12" fill="#e0f0e6" stroke="#206757"/>
+<rect x="250" y="70" width="205" height="105" rx="12" fill="#e0edfa" stroke="#245880"/>
+<rect x="475" y="70" width="205" height="105" rx="12" fill="#fff7e7" stroke="#86500e"/>
+<rect x="700" y="70" width="205" height="105" rx="12" fill="#eee5f5" stroke="#654886"/>
+<rect x="925" y="70" width="200" height="105" rx="12" fill="#f9e8eb" stroke="#923c49"/>
+<g font-weight="700">
+<text x="127" y="112">compute</text>
+<text x="352" y="98"><tspan x="352">memory /</tspan><tspan x="352" dy="20">data movement</tspan></text>
+<text x="577" y="112">launch / CPU</text>
+<text x="802" y="112">communication</text>
+<text x="1025" y="105">input / storage</text>
+</g>
+<g class="diagram-small">
+<text x="127" y="143">math throughput ceiling</text>
+<text x="352" y="142"><tspan x="352">bandwidth · latency</tspan><tspan x="352" dy="19">· useful bytes</tspan></text>
+<text x="577" y="143">submission gaps + sync</text>
+<text x="802" y="143">exposed rank-to-rank work</text>
+<text x="1025" y="137">data, preprocessing,</text>
+<text x="1025" y="157">weights, checkpoints</text>
+</g>
+<rect x="55" y="235" width="1040" height="105" rx="12" fill="#eef5fc" stroke="#52626b"/>
+<text x="575" y="270" font-weight="700">Cross-cutting mechanisms that refine the diagnosis</text>
+<text x="575" y="305" class="diagram-label">transfers · layout and coalescing · insufficient waves · divergence · synchronization · imbalance · throttling</text>
+<rect x="250" y="390" width="650" height="80" rx="12" fill="#fff" stroke="#86500e" stroke-width="2"/>
+<text x="575" y="422" font-weight="700">Separate feasibility question: does the workload fit?</text>
+<text x="575" y="451" class="diagram-label">capacity changes can enable a run, but do not diagnose its post-fit time bottleneck</text>
+</g>
+</svg>

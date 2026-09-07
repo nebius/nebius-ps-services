@@ -54,6 +54,23 @@ $task-implementer workspace remove [project-folder]
   branch after exact validation.
 - `workspace remove` removes only an idle, clean, fully integrated lane and
   preserves private prompt/run history.
+
+When rendering report-only help, add this note after the `workspace remove`
+description:
+
+```text
+If the primary checkout is on a different branch from the lane's recorded
+source branch, omitting [project-folder] from that checkout may resolve a
+different workspace. Target the project directory inside the existing lane:
+
+$task-implementer workspace remove "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>"
+```
+
+State that each angle-bracketed path component is an illustrative placeholder
+that the user must replace. Never insert an observed username, repository, lane
+identity, or local path into help. This example uses only the public
+`[project-folder]` selector; it is not an internal worktree identifier.
+
 - Never require a user to provide run, wave, task, branch, worktree, lifecycle,
   or private-state identifiers.
 - Do not add compatibility aliases or public internal transitions.

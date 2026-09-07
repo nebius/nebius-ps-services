@@ -16,8 +16,8 @@ or environment details even when the labs use synthetic data.
    approved course reviewers can read.
 4. Do not pass credentials on command lines or enable shell tracing. Remove
    unrelated secret-bearing environment variables according to site policy.
-5. Never commit generated evidence. The course `.gitignore` is not an access-
-   control or redaction boundary.
+5. Never commit generated evidence. The course `.gitignore` is not an access-control
+   or redaction boundary.
 
 ## Share summaries, not raw artifacts
 

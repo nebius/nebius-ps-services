@@ -2427,5 +2427,119 @@ activation, and representative end-to-end workflow completion as independent
 evidence lanes without inferring one from another.
 
 <!-- /REQUIREMENT: REQ-025 -->
+
+<!-- REQUIREMENT: REQ-026 status=satisfied priority=P1 type=feature -->
+### REQ-026: Explain branch-aware Task Implementer lane removal in help
+
+#### User Story
+
+Task Implementer users need report-only help to explain how to select an old
+persistent lane for removal after the primary checkout has moved to another
+branch, without exposing a real user's local paths or adding another public
+workflow control.
+
+#### Acceptance Criteria
+
+- AC-001: `$task-implementer --help` and `$task-implementer -h` remain concise,
+  report-only, and limited to the existing five public actions and documented
+  positional arguments.
+- AC-002: Help explains that when the primary checkout is on a different branch
+  from the lane's recorded source branch, omitting `[project-folder]` from that
+  primary checkout can resolve a different workspace.
+- AC-003: Help shows one public-safe illustrative command that passes the
+  project directory inside the existing lane to `workspace remove`, using only
+  generic angle-bracketed placeholders for the username, repository, lane, and
+  project.
+- AC-004: `[project-folder]` remains the only public selector. The guidance adds
+  no action, flag, alias, internal transition, or requirement to expose a real
+  branch, worktree ID, private-state path, or environment-specific identity.
+- AC-005: The example does not weaken removal safety: the command still removes
+  only an idle, clean, fully integrated lane after exact reachability and
+  identity validation.
+
+#### Negative Criteria
+
+- NC-001: Help must not advise switching the Task Implementer lane itself to
+  another branch or imply that arbitrary worktrees can be removed.
+- NC-002: Help must not contain an observed username, repository path, lane
+  identity, prompt content, or private workflow state.
+- NC-003: A help request must not inspect project state, invoke removal, or
+  authorize any other workflow mutation.
+
+#### Validation Method
+
+Run the Task Implementer contract smoke test, strict stateful skill validation,
+Markdown checks, changed-scope review and security lanes, canonical spec
+validation, and final alignment.
+
+#### Test Method
+
+Assert that the skill, README, and workflow cases describe the branch-aware
+fallback, retain exactly five public actions, use the public `[project-folder]`
+argument, include the generic placeholder example, and keep help side-effect
+free.
+
+#### Evaluation Method
+
+In a separately installed fresh session, request Task Implementer help and
+verify that it explains the fallback without inspecting the repository or
+revealing environment-specific paths. Keep that runtime observation separate
+from source validation.
+
+<!-- /REQUIREMENT: REQ-026 -->
+<!-- REQUIREMENT: REQ-027 status=active priority=P1 type=feature -->
+### REQ-027: Reuse a complete, accessible digital-textbook course standard
+
+#### User Story
+
+Course authors need the source-owned `create-learning-course` skill to combine
+the established course conventions with authoritative instructional-design
+guidance and apply them to new subjects without inheriting one domain's stack.
+
+#### Acceptance Criteria
+
+- AC-001: Explicit invocation produces definition-first, prerequisite-ordered
+  lessons with observable outcomes, worked examples, scaffolded practice,
+  feedback, review and a transfer assessment; revisions preserve useful depth.
+- AC-002: The default publication is complete, self-contained HTML with the
+  established light palette, wide responsive layout, persistent desktop TOC,
+  contextual accessible SVGs and a title-and-guided-hours-only banner.
+- AC-003: Practical guides use one seven-section structure, explain purpose
+  and architecture, and agree with lab identity, actual commands and outputs.
+- AC-004: Reusable templates, format rules and checks cover prose/source
+  parity, links, accessible figures, safety and separate evidence lanes.
+- AC-005: Subject, programming language, toolchain, target infrastructure and
+  numerical/performance acceptance are explicit course-profile choices.
+- AC-006: Research informs the skill through public authoritative references;
+  source, installed skill, fresh routing and output-quality evidence remain
+  distinct. The source update does not install or publish the skill.
+
+#### Negative Criteria
+
+- NC-001: Do not ship learning histories, source-coverage tables, removed
+  navigation clutter, displayed time formulas or research-review datelines.
+- NC-002: Do not compress complete teaching into summaries, remove unique
+  material during consolidation, or claim target execution from static checks.
+- NC-003: Do not copy private material or force GPU/runtime machinery into
+  unrelated courses; no backward-compatibility wrappers are required.
+
+#### Validation Method
+
+Run strict skill validation, focused template tests, lint, link and privacy
+review, and inspect alignment of prose, assets, metadata and evaluations.
+
+#### Test Method
+
+Use a portable starter and negative fixtures for navigation, source parity,
+unsafe embeds and diagram accessibility; define technical, nontechnical and
+revision output cases, including a read-only review boundary.
+
+#### Evaluation Method
+
+Compare the working-byte baseline and revised output in clean contexts when
+available. Otherwise label runtime routing and comparative quality unavailable
+without inferring them from static validation.
+
+<!-- /REQUIREMENT: REQ-027 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

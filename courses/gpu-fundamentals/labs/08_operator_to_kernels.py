@@ -53,15 +53,15 @@ def main() -> None:
             profiler.step()
     assert loss is not None
     events = profiler.key_averages()
-    cuda_events = [event for event in events if event.self_cuda_time_total > 0]
+    cuda_events = [event for event in events if event.self_device_time_total > 0]
     top_cuda = sorted(
-        cuda_events, key=lambda event: event.self_cuda_time_total, reverse=True
+        cuda_events, key=lambda event: event.self_device_time_total, reverse=True
     )[:10]
     rows = [
         {
             "event": event.key,
             "calls": int(event.count),
-            "self_cuda_time_us": round(float(event.self_cuda_time_total), 3),
+            "self_cuda_time_us": round(float(event.self_device_time_total), 3),
         }
         for event in top_cuda
     ]

@@ -1,0 +1,22 @@
+<svg viewBox="0 0 360 560" style="max-width: 420px; margin-inline: auto" role="img" aria-labelledby="kv-tier-retention-title kv-tier-retention-desc">
+<title id="kv-tier-retention-title">Retain only compatible reusable state</title>
+<desc id="kv-tier-retention-desc">Each request checks identity and expiry, then compares restore with prefill. Capacity pressure demotes LRU entries and may discard them. Arrows show decision order, not a physical storage link.</desc>
+<defs><marker id="kv-tier-retention-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#206757"/></marker></defs>
+<g font-family="Arial, Helvetica, sans-serif" font-size="21" fill="#24343d">
+<rect x="14" y="12" width="332" height="103" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="180" y="56" text-anchor="middle">Exact identity</text>
+<text x="180" y="85" text-anchor="middle">and live TTL?</text>
+<path d="M180 116 V148" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#kv-tier-retention-arrow)"/>
+<rect x="14" y="151" width="332" height="103" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="180" y="195" text-anchor="middle">Device, host or</text>
+<text x="180" y="224" text-anchor="middle">storage entry found</text>
+<path d="M180 255 V287" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#kv-tier-retention-arrow)"/>
+<rect x="14" y="290" width="332" height="103" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="180" y="334" text-anchor="middle">Restore cheaper</text>
+<text x="180" y="363" text-anchor="middle">than prefill?</text>
+<path d="M180 394 V426" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#kv-tier-retention-arrow)"/>
+<rect x="14" y="429" width="332" height="103" rx="12" fill="#eef8f2" stroke="#245880" stroke-width="2"/>
+<text x="180" y="473" text-anchor="middle">Reuse or recompute;</text>
+<text x="180" y="502" text-anchor="middle">record writes and cost</text>
+</g>
+</svg>

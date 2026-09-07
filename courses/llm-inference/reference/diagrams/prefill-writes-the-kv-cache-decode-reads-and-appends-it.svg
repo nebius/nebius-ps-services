@@ -1,0 +1,45 @@
+<svg viewBox="0 0 1200 650" role="img" aria-labelledby="detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-desc">
+<title id="detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title">Prefill writes the KV cache; decode reads and appends it</title>
+<desc id="detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-desc">Prefill processes prompt positions, creates per-layer K/V, and produces first-token logits. During subsequent decode steps, the model processes a generated token to create its current Q/K/V. Current Q attends to past and current K/V; output projection, residual/MLP paths, remaining layers, final normalization and LM head produce next-token logits. Appending K/V is a storage side effect, never the producer of logits.</desc>
+<defs><marker id="detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" orient="auto"><path d="M0,0 L0,8 L8,4 z" fill="#245880"/></marker></defs>
+<rect x="35" y="35" width="270" height="100" rx="10" fill="#eef5fc" stroke="#245880"/>
+<text x="170" y="67" text-anchor="middle" font-size="18" font-weight="700">Prompt prefill</text>
+<text x="170" y="91" text-anchor="middle" font-size="16">All prompt positions</text>
+<text x="170" y="115" text-anchor="middle" font-size="16">Per-layer attention and MLP</text>
+<rect x="35" y="210" width="270" height="100" rx="10" fill="#eee5f5" stroke="#245880"/>
+<text x="170" y="242" text-anchor="middle" font-size="18" font-weight="700">Per-layer KV storage</text>
+<text x="170" y="266" text-anchor="middle" font-size="16">Past keys and values</text>
+<text x="170" y="282" text-anchor="middle" font-size="16"><tspan x="170">Prompt + processed</tspan><tspan x="170" dy="20">output tokens</tspan></text>
+<rect x="420" y="35" width="310" height="100" rx="10" fill="#eef8f2" stroke="#245880"/>
+<text x="575" y="67" text-anchor="middle" font-size="18" font-weight="700">Continuing decode</text>
+<text x="575" y="91" text-anchor="middle" font-size="16">Input: last generated token</text>
+<text x="575" y="115" text-anchor="middle" font-size="16">Project current Q, K, V</text>
+<rect x="420" y="210" width="310" height="100" rx="10" fill="#eef8f2" stroke="#245880"/>
+<text x="575" y="242" text-anchor="middle" font-size="18" font-weight="700">Query-conditioned attention</text>
+<text x="575" y="266" text-anchor="middle" font-size="16">Current Q attends to</text>
+<text x="575" y="290" text-anchor="middle" font-size="16">Past + current K/V</text>
+<rect x="835" y="210" width="330" height="100" rx="10" fill="#eef8f2" stroke="#245880"/>
+<text x="1000" y="242" text-anchor="middle" font-size="18" font-weight="700">Complete decoder computation</text>
+<text x="1000" y="266" text-anchor="middle" font-size="16">Output projection, residuals, MLP</text>
+<text x="1000" y="290" text-anchor="middle" font-size="16">Repeat for remaining layers</text>
+<rect x="835" y="425" width="330" height="95" rx="10" fill="#fff7e7" stroke="#245880"/>
+<text x="1000" y="466.5" text-anchor="middle" font-size="18" font-weight="700">Final norm + LM head</text>
+<text x="1000" y="490.5" text-anchor="middle" font-size="16">Next-token vocabulary logits</text>
+<rect x="35" y="425" width="270" height="95" rx="10" fill="#fff7e7" stroke="#245880"/>
+<text x="170" y="454.5" text-anchor="middle" font-size="18" font-weight="700">First-token logits</text>
+<text x="170" y="478.5" text-anchor="middle" font-size="16">From final prompt position</text>
+<text x="170" y="502.5" text-anchor="middle" font-size="16">No extra decode forward</text>
+<path d="M165 135 V210" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow)"/>
+<path d="M35 85 H15 V473 H35" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow)"/>
+
+<path d="M575 135 V210" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow)"/>
+<text x="595" y="181" text-anchor="start" font-size="16" fill="#52626b">Current Q, K, V</text>
+<path d="M305 260 H420" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow)"/>
+<text x="361" y="248" text-anchor="middle" font-size="16" fill="#52626b">Read</text>
+<path d="M420 105 H365 V190 H200 V210" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow)"/>
+<text x="344" y="181" text-anchor="end" font-size="16" fill="#52626b">Append K,V</text>
+<path d="M730 260 H835" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow)"/>
+<path d="M1000 310 V425" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-prefill-writes-the-kv-cache-decode-reads-and-appends-it-prefill-decode-title-flow)"/>
+<text x="600" y="585" text-anchor="middle" font-size="16" fill="#52626b">Storage arrows are separate from compute flow. Attention reads history; cache writes do not produce logits.</text>
+<text x="600" y="615" text-anchor="middle" font-size="16" fill="#52626b">A sampled token enters KV only when a subsequent forward pass processes that token.</text>
+</svg>

@@ -1,0 +1,22 @@
+<svg viewBox="0 0 1100 440" role="img" aria-labelledby="net-host-staging-versus-gpudirect-rdma-title net-host-staging-versus-gpudirect-rdma-desc">
+<title id="net-host-staging-versus-gpudirect-rdma-title">Host staging versus qualified GPUDirect RDMA</title>
+<desc id="net-host-staging-versus-gpudirect-rdma-desc">The top path stages GPU payloads through host RAM on each side of an RDMA network. The bottom path allows supported NICs to access GPU memory without those host staging buffers. Both still require adapter setup, interconnects, registration and correct completion ordering.</desc>
+<defs><marker id="net-host-staging-versus-gpudirect-rdma-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#245880"/></marker></defs>
+<g font-family="sans-serif" font-size="19" fill="#17324d">
+<text x="25" y="35" font-weight="700">RDMA can transfer host buffers without direct GPU-memory access</text><rect x="25" y="70" width="120" height="100" rx="10" fill="#e0edfa" stroke="#245880"/>
+<text x="85" y="126" text-anchor="middle">GPU A</text><path d="M145 120 H178" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="180" y="70" width="120" height="100" rx="10" fill="#fff7e7" stroke="#245880"/>
+<text x="240" y="113" text-anchor="middle">Host RAM</text>
+<text x="240" y="139" text-anchor="middle">A</text><path d="M300 120 H333" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="335" y="70" width="120" height="100" rx="10" fill="#e0edfa" stroke="#245880"/>
+<text x="395" y="126" text-anchor="middle">NIC A</text><path d="M455 120 H488" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="490" y="70" width="120" height="100" rx="10" fill="#e0edfa" stroke="#245880"/>
+<text x="550" y="126" text-anchor="middle">Network</text><path d="M610 120 H643" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="645" y="70" width="120" height="100" rx="10" fill="#e0edfa" stroke="#245880"/>
+<text x="705" y="126" text-anchor="middle">NIC B</text><path d="M765 120 H798" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="800" y="70" width="120" height="100" rx="10" fill="#fff7e7" stroke="#245880"/>
+<text x="860" y="113" text-anchor="middle">Host RAM</text>
+<text x="860" y="139" text-anchor="middle">B</text><path d="M920 120 H953" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="955" y="70" width="120" height="100" rx="10" fill="#e0edfa" stroke="#245880"/>
+<text x="1015" y="126" text-anchor="middle">GPU B</text><text x="25" y="230" font-weight="700">Qualified GPUDirect RDMA removes these payload staging copies</text><rect x="25" y="265" width="175" height="80" rx="10" fill="#e0f0e6" stroke="#245880"/>
+<text x="112.5" y="311" text-anchor="middle">GPU A</text><path d="M200 305 H241" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="243" y="265" width="175" height="80" rx="10" fill="#e0f0e6" stroke="#245880"/>
+<text x="330.5" y="311" text-anchor="middle">NIC A</text><path d="M418 305 H459" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="461" y="265" width="175" height="80" rx="10" fill="#e0f0e6" stroke="#245880"/>
+<text x="548.5" y="311" text-anchor="middle">Network</text><path d="M636 305 H677" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="679" y="265" width="175" height="80" rx="10" fill="#e0f0e6" stroke="#245880"/>
+<text x="766.5" y="311" text-anchor="middle">NIC B</text><path d="M854 305 H895" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#net-host-staging-versus-gpudirect-rdma-arrow)"/><rect x="897" y="265" width="175" height="80" rx="10" fill="#e0f0e6" stroke="#245880"/>
+<text x="984.5" y="311" text-anchor="middle">GPU B</text><text x="25" y="400">CPU/driver setup, PCIe topology and synchronization still matter; direct does not mean zero overhead.</text>
+</g>
+</svg>

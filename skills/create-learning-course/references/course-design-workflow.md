@@ -1,174 +1,113 @@
 # Course Design Workflow
 
-Use this reference when creating a new course workspace or substantially
-revising an existing one.
+## Design From What Learners Must Be Able To Do
 
-## Source Inspiration And Attribution
+Start with a real task, decision or explanation the learner should produce.
+Use observable verbs: explain a mechanism, diagnose a cause, implement a
+solution, compare alternatives or defend a choice. "Understand networking" is
+not an assessable outcome; "trace a request and identify which link limits it"
+is. Match the assessment to that verb: recall questions alone do not assess
+diagnosis or design. The research basis is in `research-basis.md`.
 
-This skill is our course-authoring workflow. Its mission-led learning model was
-inspired by Matt Pocock's public `teach` skill pattern:
+Map each outcome to teaching, a worked example, practice and a success rubric.
+Use this mapping for author review, not a published source-coverage table.
+Estimate guided effort from setup, teaching, core practice and feedback, with
+reasonable learner uncertainty. Show only the concise estimate in the banner;
+do not publish the arithmetic or count optional reading as required time.
 
-- <https://github.com/mattpocock/skills/tree/main/skills/productivity/teach>
+## Entry And Competency Progression
 
-The upstream repository is MIT-licensed. If this skill ever copies substantial
-upstream text or implementation structure beyond the current high-level
-learning model, keep the upstream copyright and permission notice with the
-copied material.
+A mixed-audience course is not an advanced course with a glossary attached.
 
-Keep the attribution here rather than making the runtime identity sound like a
-fork. This skill now owns different behavior: explicit invocation, course
-workspace creation, publication safety, redaction, citations, reusable course
-templates, and review checkpoints.
+1. State the subject, problem it solves, inputs, outputs and whole workflow.
+2. Define the smallest vocabulary needed to follow that workflow.
+3. Provide a small concrete example, including units and assumptions.
+4. Teach the mechanism, components and distinctions from related concepts.
+5. Demonstrate a complete task and explain the decisions.
+6. Guide a similar task, then fade support for independent transfer.
+7. Add optimization, exceptions and advanced trade-offs after prerequisites.
 
-## Course Workspace
+Build a prerequisite graph before lesson numbers. Check every technical noun,
+equation and required tool at its first meaningful use. A prerequisite bridge
+says what to recall and why, not simply "see lesson 2." A readiness check lets
+experienced learners skip familiar explanations without skipping new evidence.
 
-Default course layout:
+Keep one primary competency per lesson where practical. Split an overloaded
+lesson at a real conceptual boundary; do not split merely to hit a word limit.
+A short paragraph can define a simple term; a complex mechanism needs enough
+connected explanation and worked reasoning to support the stated outcome.
 
-```text
-course-topic/
-|-- MISSION.md
-|-- COURSE.md
-|-- SYLLABUS.md
-|-- RESOURCES.md
-|-- GLOSSARY.md
-|-- PUBLICATION-REVIEW.md
-|-- assets/
-|   `-- styles.css
-|-- lessons/
-|   `-- 0001-lesson-title.html
-|-- learning-records/
-|   `-- 0001-observed-understanding.md
-`-- reference/
-    `-- topic-reference.md
-```
+## Explanations That Teach
 
-Use this layout as a starting point, not a rigid contract. A short course may
-only need `MISSION.md`, `SYLLABUS.md`, `RESOURCES.md`, and one lesson. A longer
-course should grow reference sheets, exercises, and learning records.
+Begin every core concept with what it is, what it acts on and what it produces.
+Explain its operation before applications. Contrast likely confusions: a
+logical abstraction versus physical machinery, capacity versus rate, modeled
+bound versus measured outcome, or an interface versus its implementation.
 
-Do not create private notes inside the publishable course root by default. If
-the user explicitly asks for non-secret private planning notes, place them in a
-sibling path such as `course-topic.private/NOTES.md` and keep them out of any
-public bundle.
+Use everyday language without distorting meaning. Introduce symbols after
+plain-language relationships, define units and boundaries, and show arithmetic
+or decision steps. State when an analogy stops applying. Each example needs
+inputs, assumptions, reasoning, result and interpretation.
 
-## Mission First
+Do not manufacture depth with repeated "this matters" paragraphs. Add useful
+mechanism, examples, counterexamples, failure analysis or constraints. Avoid
+unexplained acronyms, ambiguous pronouns, fragments, mixed units and claims
+that exceed supplied code. Review wording in context, not with replacement
+lists that can silently change meaning.
 
-Before writing lessons, establish:
+## Practice, Feedback And Retention
 
-- learner audience and prior knowledge
-- concrete real-world goal
-- observable success criteria
-- time, tooling, accessibility, budget, and language constraints
-- topics that are intentionally out of scope
+- Use a worked example before the learner solves a comparable new problem.
+  Gradually remove hints rather than alternating unrelated difficulty.
+- Include short retrieval prompts and delayed review after intervening topics.
+  Give feedback or an answer key after a genuine attempt opportunity.
+- Mix related problem types once foundational procedures are established.
+  Explain how to choose a method, not only how to carry it out.
+- Ask explanatory questions: why did this result occur, what alternative
+  explanation remains, and what observation would distinguish the two?
+- End with an authentic transfer assessment using changed inputs or constraints.
+  Publish success criteria, correctness checks and reasoning expectations.
+- Offer equivalent accessible ways to demonstrate a competency when the
+  particular response medium is not itself the competency being assessed.
 
-If these are missing, ask concise questions. A vague mission produces generic
-lessons and weak practice.
+Do not promise universal learning gains or label students by supposed fixed
+visual/auditory learning styles. These are evidence-informed design choices,
+not a guarantee that every course or learner benefits equally.
 
-## Source Ranking
+## Preservation And Topic Ownership
 
-Rank course sources in this order:
+Before a redesign, inspect complete affected prose, implementation, guide and
+diagram sources. Inventory unique concepts, assumptions, worked examples,
+failure explanations, supported experiment capabilities and safety checks.
+Use a private, bounded task audit when permitted, not learner-facing history.
 
-1. Official documentation, standards, specifications, primary research, and
-   source code.
-2. Recognized expert books, papers, conference talks, or long-form guides.
-3. Maintainer discussions, issue trackers, or operational postmortems.
-4. Community material with strong moderation and clear provenance.
-5. User notes, only after classifying whether they are public-safe.
+For each candidate duplicate ask whether it has the same learning purpose and
+adds no distinct reasoning. Keep a purposeful recall cue, preview or advanced
+application and label its role. Consolidate truly repeated material into one
+primary lesson; relocate all associated labs, diagrams, helper files and
+references with it. Recheck links and practical readiness afterward.
 
-Every lesson should cite the specific public sources that support factual
-claims. If a useful claim comes only from private material, generalize it and
-cite no private link in public artifacts.
+Default to one canonical new path when restructuring. Do not create redirects,
+aliases or compatibility wrappers unless requested. Never silently discard
+material just because the new outline is shorter.
 
-## Course Blueprint
+## Course Profiles And Series
 
-Write `COURSE.md` as the stable blueprint:
+Record domain choices separately from format: learner language, example
+language, target hardware/OS, available services, dependency isolation,
+numerical tolerances, realistic scale, cost and authorized runtime actions.
+Verify version-sensitive official guidance; distinguish candidate versions
+from versions actually installed and exercised.
 
-- title and audience
-- prerequisite knowledge
-- course outcomes
-- lesson sequence
-- practice and review strategy
-- assessment approach
-- publication status
+Non-code courses still need practice, evidence and feedback, but may use a
+case analysis, role-play, calculation or annotated artifact instead of code.
+Do not create empty toolchain or cluster sections. In a series, prerequisites
+are competency relationships, not simply the visual catalog order.
 
-Keep it short enough that a future agent can quickly decide what to teach,
-revise, or validate next.
+## Attribution
 
-## Lesson Design
-
-Each lesson should:
-
-- teach one tightly scoped outcome
-- start from a motivating learner task
-- explain only the knowledge needed for that task
-- include retrieval practice before or after explanation
-- include at least one exercise with feedback or answer key
-- link to relevant `reference/` files and previous lessons
-- end with a review cue or next-step prompt
-
-Prefer a sequence of small lessons over one long chapter. If a lesson needs too
-many prerequisites, split it and update the syllabus.
-
-## Practice Model
-
-Use learning techniques deliberately:
-
-- Retrieval practice: ask learners to recall, predict, classify, or produce.
-- Spacing: add review cues that revisit earlier material after later lessons.
-- Interleaving: mix related skills after basics are stable.
-- Worked examples: show a complete solution, then fade support over exercises.
-- Feedback loops: include immediate feedback where possible, especially for
-  quizzes and short coding or reasoning tasks.
-
-Do not add difficulty for its own sake. Difficulty should serve retention,
-transfer, or real-world performance.
-
-## Learning Records
-
-Use `learning-records/` to store durable learner evidence or course decisions:
-
-- prior knowledge established
-- misconceptions corrected
-- skills demonstrated
-- mission shifts
-- terms promoted to the glossary
-- design decisions that affect future lessons
-
-Learning records are not session logs. Keep each record short and tied to a
-future course decision.
-
-## References And Glossary
-
-Use `reference/` for compressed, reusable material:
-
-- terminology and glossary entries
-- algorithms, checklists, commands, or syntax
-- decision trees and diagrams
-- source summaries with citations
-
-Create `GLOSSARY.md` when terminology matters. Use one canonical term for each
-concept and avoid teaching with inconsistent synonyms.
-
-## Course Update Flow
-
-When revising an existing course:
-
-1. Read `MISSION.md`, `COURSE.md`, `SYLLABUS.md`, `RESOURCES.md`, and
-   `PUBLICATION-REVIEW.md` first.
-2. Inspect the target lesson or reference file.
-3. Preserve numbering and links unless the user asks for a restructure.
-4. Update learning records when a durable learner or course-design fact
-   changes.
-5. Re-run the publication safety review on touched files.
-
-## Final Report
-
-Report:
-
-- workspace path
-- files created or updated
-- sources used
-- lesson outcomes
-- practice model
-- publication-safety status
-- remaining review or source gaps
+The early mission-led workflow drew high-level inspiration from the public
+[teach pattern](https://github.com/mattpocock/skills/tree/main/skills/productivity/teach).
+The current textbook format and verification contract are independently
+maintained. If substantial upstream implementation or text is reused, check
+its current license and retain the required notices.

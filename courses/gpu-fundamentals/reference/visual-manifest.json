@@ -1,0 +1,150 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/h100-beginner-overview.svg",
+      "title": "H100 overview: physical resources and logical work",
+      "lessons": [
+        1
+      ],
+      "after": "Start here",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/logical-h100-device-hierarchy.svg",
+      "title": "Logical H100 device hierarchy",
+      "lessons": [
+        3
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/simplified-hopper-sm-resource-model.svg",
+      "title": "Simplified Hopper SM resource model",
+      "lessons": [
+        3,
+        6
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/cuda-grid-blocks-sm-assignment-and-warps.svg",
+      "title": "CUDA grid, blocks, SM assignment, and warps",
+      "lessons": [
+        3
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/host-enqueue-and-device-execution-timeline.svg",
+      "title": "Host enqueue and device execution timeline",
+      "lessons": [
+        1,
+        8
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/gpu-performance-bottleneck-map.svg",
+      "title": "GPU performance bottleneck map",
+      "lessons": [
+        10
+      ],
+      "after": "Mental model",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/warp-scheduling-hides-latency.svg",
+      "title": "Warp scheduling hides latency",
+      "lessons": [
+        6
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/copy-path-and-kernel-memory-demand-path.svg",
+      "title": "Copy path and kernel memory-demand path",
+      "lessons": [
+        4
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/adjacent-and-strided-warp-memory-access.svg",
+      "title": "Adjacent and strided warp memory access",
+      "lessons": [
+        7
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/double-buffered-copy-and-compute-timeline.svg",
+      "title": "Double-buffered copy and compute timeline",
+      "lessons": [
+        8
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/conditions-for-a-tensor-core-execution-path.svg",
+      "title": "Conditions for a Tensor Core execution path",
+      "lessons": [
+        9
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/roofline-reasoning-for-two-workloads.svg",
+      "title": "Roofline reasoning for two workloads",
+      "lessons": [
+        10
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/discovered-two-node-communication-path.svg",
+      "title": "Discovered two-node communication path",
+      "lessons": [
+        12
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/gpu-networking-layers.svg",
+      "title": "GPU networking layers and their roles",
+      "lessons": [
+        12
+      ],
+      "after": "What it is",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/scale-up-and-scale-out.svg",
+      "title": "Supported scale-up and the course scale-out target",
+      "lessons": [
+        12
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/host-staging-versus-gpudirect-rdma.svg",
+      "title": "Host staging versus qualified GPUDirect RDMA",
+      "lessons": [
+        12
+      ],
+      "after": "Mechanism",
+      "home": "lesson"
+    }
+  ]
+}

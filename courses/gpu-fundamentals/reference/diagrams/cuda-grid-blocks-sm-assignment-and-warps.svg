@@ -1,0 +1,70 @@
+<svg viewBox="0 0 1200 810" role="img" aria-labelledby="detail-cuda-grid-blocks-sm-assignment-and-warps-execution-map-title detail-cuda-grid-blocks-sm-assignment-and-warps-execution-map-desc">
+<title id="detail-cuda-grid-blocks-sm-assignment-and-warps-execution-map-title">CUDA grid, blocks, SM assignment, and warps</title>
+<desc id="detail-cuda-grid-blocks-sm-assignment-and-warps-execution-map-desc">One kernel launch creates a grid of blocks. Blocks are assigned whole to available streaming multiprocessors, where block threads are grouped into 32-thread warps and scheduled on that SM. A later wave of blocks waits until resources become available.</desc>
+<defs>
+<marker id="detail-cuda-grid-blocks-sm-assignment-and-warps-execution-map-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<text x="35" y="40" font-size="20" font-weight="700">Logical launch</text>
+<rect x="35" y="60" width="1130" height="135" rx="14" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="65" y="92" font-weight="700">Grid: all blocks for one kernel launch</text>
+<g fill="#fff" stroke="#206757">
+<rect x="120" y="120" width="120" height="50" rx="7"/>
+<rect x="300" y="120" width="120" height="50" rx="7"/>
+<rect x="480" y="120" width="120" height="50" rx="7"/>
+<rect x="660" y="120" width="120" height="50" rx="7"/>
+<rect x="840" y="120" width="120" height="50" rx="7"/>
+<rect x="1020" y="120" width="120" height="50" rx="7"/>
+</g>
+<g text-anchor="middle" class="diagram-label">
+<text x="180" y="151">block 0</text>
+<text x="360" y="151">block 1</text>
+<text x="540" y="151">block 2</text>
+<text x="720" y="151">block 3</text>
+<text x="900" y="151">block 4</text>
+<text x="1080" y="151">more …</text>
+</g>
+<text x="35" y="258" font-size="20" font-weight="700">Physical scheduling</text>
+<text x="600" y="258" text-anchor="middle" class="diagram-label">Whole blocks are assigned as resources become available</text>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-cuda-grid-blocks-sm-assignment-and-warps-execution-map-arr)">
+<path d="M600 195 V235 H305 V275"/>
+<path d="M600 235 H895 V275"/>
+</g>
+<g text-anchor="middle">
+<rect x="80" y="275" width="450" height="165" rx="14" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+<rect x="670" y="275" width="450" height="165" rx="14" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+<text x="305" y="306" font-weight="700">SM A</text>
+<text x="895" y="306" font-weight="700">SM B</text>
+<rect x="110" y="325" width="180" height="70" rx="8" fill="#e0f0e6"/>
+<rect x="320" y="325" width="180" height="70" rx="8" fill="#e0f0e6"/>
+<rect x="700" y="325" width="180" height="70" rx="8" fill="#e0f0e6"/>
+<rect x="910" y="325" width="180" height="70" rx="8" fill="#e0f0e6"/>
+<text x="200" y="353">resident block 0</text>
+<text x="200" y="378" class="diagram-label">stays on SM A</text>
+<text x="410" y="353">resident block 2</text>
+<text x="410" y="378" class="diagram-label">if resources permit</text>
+<text x="790" y="353">resident block 1</text>
+<text x="790" y="378" class="diagram-label">stays on SM B</text>
+<text x="1000" y="353">resident block 3</text>
+<text x="1000" y="378" class="diagram-label">if resources permit</text>
+</g>
+<text x="600" y="479" text-anchor="middle" class="diagram-label">One possible assignment; block numbers do not prescribe the SM or execution order</text>
+<rect x="145" y="515" width="910" height="210" rx="14" fill="#fff" stroke="#245880" stroke-width="2"/>
+<text x="175" y="552" font-size="19" font-weight="700">Zoom into one resident block on one SM</text>
+<g text-anchor="middle">
+<rect x="190" y="590" width="190" height="70" rx="9" fill="#eef5fc" stroke="#245880"/>
+<rect x="425" y="590" width="190" height="70" rx="9" fill="#eef5fc" stroke="#245880"/>
+<rect x="660" y="590" width="190" height="70" rx="9" fill="#eef5fc" stroke="#245880"/>
+<rect x="895" y="590" width="110" height="70" rx="9" fill="#eef5fc" stroke="#245880"/>
+<text x="285" y="620">warp 0</text>
+<text x="285" y="643" class="diagram-label">threads 0–31</text>
+<text x="520" y="620">warp 1</text>
+<text x="520" y="643" class="diagram-label">threads 32–63</text>
+<text x="755" y="620">warp 2</text>
+<text x="755" y="643" class="diagram-label">next 32 threads</text>
+<text x="950" y="630">…</text>
+</g>
+<text x="600" y="700" text-anchor="middle" class="diagram-label">the block may contain any valid number of warps; two warps are not assumed</text>
+<text x="600" y="775" text-anchor="middle" fill="#52626b">A grid can require several waves when more blocks exist than can reside concurrently.</text>
+</svg>

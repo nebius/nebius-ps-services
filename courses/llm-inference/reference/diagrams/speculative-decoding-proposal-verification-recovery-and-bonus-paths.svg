@@ -1,0 +1,45 @@
+<svg viewBox="0 0 1160 500" role="img" aria-labelledby="detail-speculative-decoding-proposal-verification-recovery-and-bonus-paths-spec-title detail-speculative-decoding-proposal-verification-recovery-and-bonus-paths-spec-desc">
+<title id="detail-speculative-decoding-proposal-verification-recovery-and-bonus-paths-spec-title">Speculative decoding proposal, verification, recovery, and bonus paths</title>
+<desc id="detail-speculative-decoding-proposal-verification-recovery-and-bonus-paths-spec-desc">A cheaper proposer drafts several tokens. The target evaluates proposed positions under the selected acceptance rule. Commit the accepted prefix; recover at the first rejection or, if the algorithm allows, sample a bonus after full acceptance. Stochastic acceptance is not simple token equality; stop rules also apply.</desc>
+<defs>
+<marker id="detail-speculative-decoding-proposal-verification-recovery-and-bonus-paths-spec-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g text-anchor="middle">
+<rect x="35" y="55" width="205" height="125" rx="10" fill="#eef5fc" stroke="#245880"/>
+<rect x="300" y="55" width="220" height="125" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<rect x="580" y="55" width="220" height="125" rx="10" fill="#fff7e7" stroke="#86500e"/>
+<rect x="860" y="55" width="260" height="125" rx="10" fill="#eee5f5" stroke="#654886"/>
+<text x="137" y="86" font-weight="700"><tspan x="137">current target</tspan><tspan x="137" dy="24">state</tspan></text>
+<text x="137" y="135" class="diagram-label">accepted sequence + KV</text>
+<text x="410" y="104" font-weight="700">propose k tokens</text>
+<text x="410" y="135" class="diagram-label">draft / ngram / MTP</text>
+<text x="690" y="84" font-weight="700"><tspan x="690">evaluate k</tspan><tspan x="690" dy="24">proposals</tspan></text>
+<text x="690" y="130" class="diagram-small"><tspan x="690">possible next-position</tspan><tspan x="690" dy="18">distribution for an</tspan><tspan x="690" dy="18">algorithm-specific bonus</tspan></text>
+<text x="990" y="86" font-weight="700"><tspan x="990">accept longest</tspan><tspan x="990" dy="24">valid prefix</tspan></text>
+<text x="990" y="135" class="diagram-label">preserve target semantics</text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-speculative-decoding-proposal-verification-recovery-and-bonus-paths-spec-arr)">
+<line x1="240" y1="117" x2="300" y2="117"/>
+<line x1="520" y1="117" x2="580" y2="117"/>
+<line x1="800" y1="117" x2="860" y2="117"/>
+</g>
+<rect x="250" y="255" width="280" height="105" rx="10" fill="#f9e8eb" stroke="#923c49"/>
+<rect x="630" y="255" width="280" height="105" rx="10" fill="#e0f0e6" stroke="#206757"/>
+<g text-anchor="middle">
+<text x="390" y="291" font-weight="700">first rejection</text>
+<text x="390" y="320" class="diagram-label">prefix + rule-consistent recovery</text>
+<text x="390" y="343" class="diagram-label">restart from recovered state</text>
+<text x="770" y="291" font-weight="700">all k drafts accepted</text>
+<text x="770" y="320" class="diagram-label">prefix + bonus if supported</text>
+<text x="770" y="343" class="diagram-label">respect algorithm and stop rules</text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-speculative-decoding-proposal-verification-recovery-and-bonus-paths-spec-arr)">
+<path d="M990 180 V215 H390 V255"/>
+<path d="M990 180 V215 H770 V255"/>
+<path d="M390 360 V420 H137 V180"/>
+<path d="M770 360 V420 H137 V180"/>
+</g>
+<text x="600" y="465" text-anchor="middle" fill="#52626b">Report proposal cost, accepted prefix, recovery/bonus tokens, target calls, latency, memory, and quality.</text>
+</svg>

@@ -1,0 +1,46 @@
+<svg viewBox="0 0 1200 590" role="img" aria-labelledby="detail-gpu-performance-bottleneck-map-fund-bmap-title detail-gpu-performance-bottleneck-map-fund-bmap-desc">
+<title id="detail-gpu-performance-bottleneck-map-fund-bmap-title">GPU performance bottleneck map</title>
+<desc id="detail-gpu-performance-bottleneck-map-fund-bmap-desc">The learner starts with a user-visible metric, inspects the critical-path timeline, classifies host, input, transfer, memory, compute, parallelism, synchronization, communication, or capacity limits, and chooses a discriminating experiment.</desc>
+<defs>
+<marker id="detail-gpu-performance-bottleneck-map-fund-bmap-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
+<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
+</marker>
+</defs>
+<g text-anchor="middle">
+<rect x="35" y="220" width="180" height="80" rx="12" fill="#e0edfa" stroke="#245880" stroke-width="2"/>
+<text x="125" y="251" font-weight="700">user metric</text>
+<text x="125" y="278" class="diagram-label">defined boundary</text>
+<rect x="265" y="220" width="190" height="80" rx="12" fill="#e0f0e6" stroke="#206757" stroke-width="2"/>
+<text x="360" y="251" font-weight="700">critical-path</text>
+<text x="360" y="278" class="diagram-label">timeline</text>
+<rect x="980" y="210" width="185" height="100" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2"/>
+<text x="1072" y="238" font-weight="700">smallest</text>
+<text x="1072" y="262" font-weight="700"><tspan x="1072">discriminating</tspan><tspan x="1072" dy="24">test</tspan></text>
+</g>
+<g stroke="#245880" stroke-width="3" fill="none" marker-end="url(#detail-gpu-performance-bottleneck-map-fund-bmap-arr)">
+<line x1="215" y1="260" x2="265" y2="260"/>
+<line x1="455" y1="260" x2="510" y2="260"/>
+<line x1="925" y1="260" x2="980" y2="260"/>
+</g>
+<rect x="510" y="45" width="415" height="490" rx="16" fill="#fff" stroke="#245880" stroke-width="2"/>
+<text x="718" y="78" text-anchor="middle" font-weight="700">limiter families</text>
+<g class="diagram-label">
+<rect x="545" y="105" width="345" height="38" rx="7" fill="#eef5fc"/>
+<text x="565" y="130">host dispatch and launch overhead</text>
+<rect x="545" y="151" width="345" height="44" rx="7" fill="#eef5fc"/>
+<text x="565" y="168"><tspan x="565">input starvation or</tspan><tspan x="565" dy="19">blocking synchronization</tspan></text>
+<rect x="545" y="201" width="345" height="38" rx="7" fill="#eef5fc"/>
+<text x="565" y="226">host-device or interconnect transfer</text>
+<rect x="545" y="249" width="345" height="38" rx="7" fill="#eef5fc"/>
+<text x="565" y="274">memory bandwidth, latency, or layout</text>
+<rect x="545" y="295" width="345" height="44" rx="7" fill="#eef5fc"/>
+<text x="565" y="312"><tspan x="565">compute throughput or</tspan><tspan x="565" dy="19">instruction dependency</tspan></text>
+<rect x="545" y="345" width="345" height="38" rx="7" fill="#eef5fc"/>
+<text x="565" y="370">insufficient parallelism or wave tails</text>
+<rect x="545" y="393" width="345" height="38" rx="7" fill="#eef5fc"/>
+<text x="565" y="418">exposed collective communication</text>
+<rect x="545" y="446" width="345" height="72" rx="7" fill="#fff7e7"/>
+<text x="565" y="466"><tspan x="565">capacity constraint: changes what</tspan><tspan x="565" dy="21">can run, then may move the</tspan><tspan x="565" dy="21">performance bottleneck</tspan></text>
+</g>
+<text x="600" y="570" text-anchor="middle" fill="#52626b">Evidence narrows the cause; the label alone never proves it.</text>
+</svg>
