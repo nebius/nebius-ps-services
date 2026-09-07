@@ -13,6 +13,16 @@ import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+COURSE_NAMES = (
+    "gpu-fundamentals",
+    "gpu-optimizations",
+    "llm-training",
+    "llm-inference",
+    "custom-cuda-kernels",
+)
+COURSE_NAVIGATION_LINKS = {"../index.html"} | {
+    f"../{name}/index.html" for name in COURSE_NAMES
+}
 ALLOWED_HOSTS = {
     "docs.nvidia.com",
     "developer.nvidia.com",
@@ -129,6 +139,10 @@ class Parser(html.parser.HTMLParser):
         self.svg_has_desc = False
         self.svg_results: list[tuple[bool, bool]] = []
         self.style_parts: list[str] | None = None
+        self.course_nav_depth = 0
+        self.catalog_navigation_depth = 0
+        self.course_navigation_links: list[str] = []
+        self.current_courses: list[str | None] = []
 
     def check_css(self, css: str) -> None:
         # The course CSS subset needs only local SVG fragment URLs. Reject
@@ -180,6 +194,15 @@ class Parser(html.parser.HTMLParser):
             ):
                 self.errors.append(f"non-embedded resource on {tag}: {name}")
         element_id = values.get("id")
+        if tag == "nav" and (self.course_nav_depth or element_id == "course-contents"):
+            self.course_nav_depth += 1
+        if tag == "div":
+            if self.catalog_navigation_depth:
+                self.catalog_navigation_depth += 1
+            elif self.course_nav_depth and "catalog-navigation" in classes:
+                self.catalog_navigation_depth = 1
+        if self.catalog_navigation_depth and values.get("aria-current") == "page":
+            self.current_courses.append(values.get("data-course"))
         if element_id:
             if element_id in self.ids:
                 self.errors.append(f"duplicate id: {element_id}")
@@ -187,6 +210,13 @@ class Parser(html.parser.HTMLParser):
         href = values.get("href")
         if href and href.startswith("#"):
             self.fragments.append(href[1:])
+        elif (
+            tag == "a"
+            and self.course_nav_depth
+            and self.catalog_navigation_depth
+            and href in COURSE_NAVIGATION_LINKS
+        ):
+            self.course_navigation_links.append(href)
         elif (
             tag == "link"
             and values.get("rel") == "icon"
@@ -301,6 +331,12 @@ class Parser(html.parser.HTMLParser):
             self.lab_text.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "div" and self.catalog_navigation_depth:
+            self.catalog_navigation_depth -= 1
+        if tag == "nav" and self.course_nav_depth:
+            self.course_nav_depth -= 1
+            if not self.course_nav_depth:
+                self.catalog_navigation_depth = 0
         if tag == "h4" and self.lab_heading is not None:
             self.last_lab_section = slug("".join(self.lab_heading))
             self.lab_heading = None
@@ -761,6 +797,22 @@ def validate_figures(
         )
 
 
+def validate_course_navigation(parser: Parser, course_name: str) -> None:
+    if course_name not in COURSE_NAMES:
+        fail("course metadata needs a known catalog slug")
+    expected = {"../index.html"} | {
+        f"../{name}/index.html" for name in COURSE_NAMES if name != course_name
+    }
+    if (
+        len(parser.course_navigation_links) != len(expected)
+        or set(parser.course_navigation_links) != expected
+        or parser.current_courses != [course_name]
+    ):
+        fail(
+            "course navigation needs the catalog, four siblings and the current course"
+        )
+
+
 def main() -> None:
     missing = sorted(path for path in REQUIRED_FILES if not (ROOT / path).is_file())
     if missing:
@@ -834,8 +886,15 @@ def main() -> None:
     if parser.embedded != expected:
         fail("embedded lab source does not exactly match canonical source")
     metadata = json.loads((ROOT / "reference/course.json").read_text(encoding="utf-8"))
-    if set(metadata) != {"title", "estimated_guided_hours", "labs", "extensions"}:
+    if set(metadata) != {
+        "slug",
+        "title",
+        "estimated_guided_hours",
+        "labs",
+        "extensions",
+    }:
         fail("course metadata must use the current publication schema")
+    validate_course_navigation(parser, metadata["slug"])
     plan_paths = [item["path"] for item in metadata["labs"]]
     if len(plan_paths) != len(set(plan_paths)) or set(plan_paths) != set(expected):
         fail("course metadata must classify every numbered lab exactly once")

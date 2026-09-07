@@ -8,6 +8,10 @@ project folder.
 
 ### Changed
 
+- Added a static repository welcome page and a five-course learning catalog,
+  with direct course switching and embedded Apache-2.0 notices. GitHub Pages
+  publishes committed files from the root of `main` using `.nojekyll`, without
+  a custom deployment workflow; course generation and checks remain local.
 - Added path-scoped CI for the reusable project-spec lifecycle and its ordinary
   session, Task Implementer, Agentic SDLC, hook installer, and project
   instruction adapters.

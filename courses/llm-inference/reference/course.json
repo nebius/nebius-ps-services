@@ -1,4 +1,5 @@
 {
+  "slug": "llm-inference",
   "title": "LLM Inference",
   "estimated_guided_hours": 47,
   "labs": [

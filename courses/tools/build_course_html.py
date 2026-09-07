@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build consistent, self-contained HTML pages for the five GPU courses."""
+"""Build the self-contained GPU course catalog and individual course pages."""
 
 from __future__ import annotations
 
@@ -22,6 +22,59 @@ COURSES = (
     "llm-inference",
     "custom-cuda-kernels",
 )
+LICENSE_PATH = ROOT.parent / "LICENSE"
+CATALOG_COPY = {
+    "gpu-fundamentals": (
+        "Understand the machine",
+        "Build a working mental model of GPU execution before you begin optimizing. Connect what your code does to the hardware that runs it.",
+        (
+            "Explain threads, warps and scheduling",
+            "Reason about memory and precision",
+            "Read topology and health evidence",
+        ),
+        ("Execution", "Memory", "Precision"),
+    ),
+    "gpu-optimizations": (
+        "Turn measurements into decisions",
+        "Learn a repeatable approach to improving PyTorch workloads: establish a baseline, find the limiter, make one change and measure again.",
+        (
+            "Measure asynchronous GPU work correctly",
+            "Use profiler evidence to find bottlenecks",
+            "Evaluate changes with equivalent work",
+        ),
+        ("PyTorch", "Profiling", "Data movement"),
+    ),
+    "llm-training": (
+        "Understand how models learn",
+        "Connect the learning objective to the systems that make training possible. Explore correctness, memory, precision and distributed execution.",
+        (
+            "Preserve the intended learning objective",
+            "Manage training memory and precision",
+            "Investigate communication and recovery",
+        ),
+        ("Gradients", "Distributed training", "Recovery"),
+    ),
+    "llm-inference": (
+        "Follow a request from prompt to tokens",
+        "Understand how language models generate responses, then explore the trade-offs between serving capacity, latency, throughput and quality.",
+        (
+            "Explain prefill, decode and KV caches",
+            "Measure latency and throughput",
+            "Evaluate batching and serving behavior",
+        ),
+        ("Serving", "KV cache", "Latency"),
+    ),
+    "custom-cuda-kernels": (
+        "Make the hardware your programming model",
+        "Learn when a custom kernel is warranted, then build, validate and profile CUDA C++ kernels against a clear correctness and performance baseline.",
+        (
+            "Map computations to GPU execution",
+            "Build and validate CUDA kernels",
+            "Compare custom code with library baselines",
+        ),
+        ("CUDA C++", "Kernel design", "Validation"),
+    ),
+}
 COMMON_GUIDES = (
     "README.md",
     "MISSION.md",
@@ -584,8 +637,16 @@ def course_metadata(course: Path) -> dict:
     metadata = json.loads(
         (course / "reference/course.json").read_text(encoding="utf-8")
     )
-    if set(metadata) != {"title", "estimated_guided_hours", "labs", "extensions"}:
+    if set(metadata) != {
+        "slug",
+        "title",
+        "estimated_guided_hours",
+        "labs",
+        "extensions",
+    }:
         raise ValueError("course metadata must use the current publication schema")
+    if metadata["slug"] != course.name or metadata["slug"] not in COURSES:
+        raise ValueError("course slug must match its canonical catalog directory")
     hours = metadata["estimated_guided_hours"]
     if type(hours) is not int or hours <= 0:
         raise ValueError("estimated guided hours must be a positive whole number")
@@ -693,6 +754,99 @@ def detailed_diagram_markup(entry: dict) -> str:
     return f"""<figure class="detail-diagram" id="{entry["id"]}" data-after="{html.escape(entry["after"])}" data-diagram-source="{html.escape(entry["path"])}">
 {entry["svg"]}
 <figcaption><strong>{html.escape(entry["title"])}</strong><p>{html.escape(entry["description"])}</p></figcaption></figure>"""
+
+
+def catalog_metadata() -> dict[str, dict]:
+    """Read the same canonical metadata used by each course page."""
+    return {name: course_metadata(ROOT / name) for name in COURSES}
+
+
+def license_footer() -> str:
+    """Keep the complete license with each independently saved HTML document."""
+    license_text = html.escape(LICENSE_PATH.read_text(encoding="utf-8"))
+    return f"""<footer class="license-footer">
+<small>© 2026 Nebius B.V. Provided free of charge for learning and education.
+Licensed under <a href="#license">Apache License 2.0</a>.<br>
+Third-party materials retain their respective licenses.</small>
+<details id="license"><summary>License and notices</summary>
+<pre class="license-text">{license_text}</pre></details>
+</footer>"""
+
+
+def course_switcher(course_name: str, metadata: dict[str, dict]) -> str:
+    items = []
+    for name in COURSES:
+        title = html.escape(metadata[name]["title"])
+        if name == course_name:
+            item = f'<span aria-current="page" data-course="{name}">{title}<span class="current-label">Current course</span></span>'
+        else:
+            item = f'<a href="../{name}/index.html">{title}</a>'
+        items.append(f"<li>{item}</li>")
+    return f"""<div class="catalog-navigation">
+<a class="catalog-home" href="../index.html">← All courses</a>
+<details class="course-switcher"><summary>Switch course</summary>
+<ul>{"".join(items)}</ul></details></div>"""
+
+
+def render_catalog() -> str:
+    metadata = catalog_metadata()
+    cards = []
+    for number, name in enumerate(COURSES, 1):
+        title = html.escape(metadata[name]["title"])
+        hours = metadata[name]["estimated_guided_hours"]
+        eyebrow, introduction, outcomes, tags = CATALOG_COPY[name]
+        prerequisite = (
+            "Start here · No previous GPU course required"
+            if number == 1
+            else "Prerequisite: GPU Fundamentals"
+            if number == 2
+            else "Prerequisites: Fundamentals + Optimization"
+        )
+        outcome_items = "".join(f"<li>{html.escape(item)}</li>" for item in outcomes)
+        tag_items = "".join(f"<span>{html.escape(tag)}</span>" for tag in tags)
+        cards.append(f"""<article class="course-card course-{number}" id="{name}">
+<div class="card-top"><span class="course-number">0{number}</span><span class="course-hours">{hours} guided hours</span></div>
+<p class="card-eyebrow">{html.escape(eyebrow)}</p><h3>{title}</h3>
+<p class="course-description">{html.escape(introduction)}</p>
+<ul class="course-outcomes">{outcome_items}</ul>
+<div class="course-tags" aria-label="Topics">{tag_items}</div>
+<div class="card-bottom"><p class="prerequisite">{prerequisite}</p>
+<a class="course-link" href="{name}/index.html" aria-label="Read {title}">Read course <span aria-hidden="true">↗</span></a></div>
+</article>""")
+    css = (ROOT / "tools/catalog.css").read_text(encoding="utf-8")
+    lab_count = sum(len(item["labs"]) for item in metadata.values())
+    return f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Five free Nebius courses in GPU fundamentals, performance optimization, LLM training, inference and custom CUDA kernels, with practical NVIDIA H100 labs.">
+<title>GPU Performance Engineering Courses | Nebius</title><link rel="icon" href="data:,">
+<style>{css}</style></head>
+<body><a class="skip-link" href="#main">Skip to courses</a>
+<div class="site-header"><a class="wordmark" href="../index.html" aria-label="Nebius Platform Services home">nebius<span>courses</span></a>
+<nav aria-label="Main navigation"><a href="#catalog">Explore courses</a><a href="#learning-path">Learning path</a><a href="https://github.com/nebius/nebius-ps-services">GitHub <span aria-hidden="true">↗</span></a></nav></div>
+<main id="main"><header class="hero">
+<div class="hero-copy"><p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Learn the system. Understand the result.</p>
+<h1>GPU Performance<br><span>Engineering</span></h1>
+<p class="hero-description">From your first GPU mental model to language models and custom kernels. Five practical courses that connect concepts, code and measured evidence.</p>
+<div class="hero-actions"><a class="button primary" href="gpu-fundamentals/index.html">Start with GPU Fundamentals <span aria-hidden="true">↗</span></a><a class="button secondary" href="#catalog">Explore all courses <span aria-hidden="true">↓</span></a></div>
+<p class="platform-note">Built around NVIDIA H100 · Linux · Slurm</p></div>
+<aside class="learning-map" id="learning-path" aria-labelledby="path-title">
+<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">01 → 05</span></div>
+<h2 id="path-title">A foundation.<br>Then your direction.</h2>
+<ol class="path-foundations"><li><span class="path-step" aria-hidden="true">01</span><a href="#gpu-fundamentals">GPU Fundamentals<small>Understand the hardware</small></a></li><li><span class="path-step" aria-hidden="true">02</span><a href="#gpu-optimizations">GPU Performance Optimization<small>Learn how to measure and improve</small></a></li></ol>
+<div class="path-branches"><p>Then choose a specialization</p><ul><li><a href="#llm-training">LLM Training <span aria-hidden="true">↗</span></a></li><li><a href="#llm-inference">LLM Inference <span aria-hidden="true">↗</span></a></li><li><a href="#custom-cuda-kernels">Custom CUDA Kernels <span aria-hidden="true">↗</span></a></li></ul></div>
+<p class="path-note">The three specializations are independent. Start any of them after the two foundation courses.</p></aside>
+</header>
+<div class="catalog-facts" aria-label="Catalog overview"><p><strong>{len(COURSES)}</strong> focused courses</p><p><strong>{lab_count}</strong> practical labs</p><p><strong>One</strong> evidence-first approach</p><p class="fact-note">Free to read.<br>Built to put into practice.</p></div>
+<section id="catalog" class="catalog-section" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">The course collection</p><h2 id="catalog-title">Build understanding.<br>Put it to work.</h2></div><p>Begin with the foundations, then follow the questions that matter to your workload.</p></div>
+<div class="collection-label"><span>01 / Foundations</span><p>Take these in order</p></div>
+<div class="course-grid foundations">{"".join(cards[:2])}</div>
+<div class="collection-label"><span>02 / Specializations</span><p>Choose your direction</p></div>
+<div class="course-grid specializations">{"".join(cards[2:])}</div></section>
+<section class="approach" aria-labelledby="approach-title"><div><p class="eyebrow">More than a reading list</p><h2 id="approach-title">Learn. Practice. Review.</h2><p>Every course connects explanations to practical experiments. Build an intuition, make a prediction, then investigate what actually happens.</p></div>
+<ol><li><span>01</span><div><h3>Learn the mechanism</h3><p>Start with definitions, mental models and diagrams.</p></div></li><li><span>02</span><div><h3>Work through the experiment</h3><p>Read the prerequisites, explore the code and run the supplied lab.</p></div></li><li><span>03</span><div><h3>Explain the evidence</h3><p>Check correctness, interpret measurements and decide what to investigate next.</p></div></li></ol></section>
+<p class="environment-note">Read the courses in your browser. Run labs in the documented Linux and Slurm environment; GPU exercises require the specified hardware and dependencies. Each course explains its setup and readiness checks.</p>
+{license_footer()}</main></body></html>"""
 
 
 def render_course(course_name: str) -> str:
@@ -839,11 +993,11 @@ def render_course(course_name: str) -> str:
     )
     css = (ROOT / "tools/course.css").read_text(encoding="utf-8")
     return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><style>{css}</style></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><link rel="icon" href="data:,"><style>{css}</style></head>
 <body><a class="skip-link" href="#main">Skip to course</a>
 <header><h1>{html.escape(title)}</h1><p class="guided-hours">Estimated guided hours: {metadata["estimated_guided_hours"]}</p></header>
 <div class="course-layout"><aside>
-<nav id="course-contents" aria-label="Course contents"><details open><summary>Table of contents</summary>
+<nav id="course-contents" aria-label="Course contents">{course_switcher(course_name, catalog_metadata())}<details open><summary>Table of contents</summary>
 <ul class="section-links"><li><a href="#course-overview">Course overview</a></li><li><a href="#course-contract">How to use this course</a></li></ul>
 <h2>Lessons</h2><ol>{lesson_toc}</ol>
 <h2>Practice and reference</h2><ul class="section-links"><li><a href="#labs">Practical labs</a><details><summary>Browse labs</summary><ul>{lab_toc}</ul></details></li>
@@ -856,20 +1010,29 @@ def render_course(course_name: str) -> str:
 <section id="supporting-guides"><h2>Course guides</h2>{guides_html}</section>
 <section id="next-steps"><h2>Where to Go Next</h2>{next_steps_html}</section>
 <section id="official-references"><h2>Official references</h2><ol>{refs_html}</ol></section>
-<footer><p>Use the benchmark worksheet to record what your environment demonstrates and what remains to be tested.</p></footer>
+<p>Use the benchmark worksheet to record what your environment demonstrates and what remains to be tested.</p>
+{license_footer()}
 </main></div></body></html>"""
 
 
 def build(course_name: str) -> None:
     course = ROOT / course_name
     document = render_course(course_name)
+    write_page(course / "index.html", document)
+
+
+def write_page(destination: Path, document: str) -> None:
     with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=course, prefix=".index.", delete=False
+        mode="w",
+        encoding="utf-8",
+        dir=destination.parent,
+        prefix=".index.",
+        delete=False,
     ) as stream:
         stream.write(document)
         temporary = Path(stream.name)
     try:
-        os.replace(temporary, course / "index.html")
+        os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -880,9 +1043,23 @@ def main() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="fail when a committed HTML page differs from its canonical sources",
+        help="check selected course pages and the catalog against their canonical sources",
     )
     args = parser.parse_args()
+    catalog = render_catalog()
+    catalog_path = ROOT / "index.html"
+    if args.check:
+        if (
+            not catalog_path.is_file()
+            or catalog_path.read_text(encoding="utf-8") != catalog
+        ):
+            raise SystemExit(
+                "stale or missing generated page: index.html (course catalog)"
+            )
+        print("current index.html (course catalog)")
+    else:
+        write_page(catalog_path, catalog)
+        print("built index.html (course catalog)")
     for course_name in args.courses or COURSES:
         if args.check:
             expected = render_course(course_name)
