@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GPU Fundamentals</title><style>:root {
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GPU Fundamentals</title><link rel="icon" href="data:,"><style>:root {
   color-scheme: light;
   --ink: #24343d;
   --muted: #52626b;
@@ -86,6 +86,17 @@ svg .diagram-small { font-size: 13px; }
 .overview-diagram svg .exposed { fill: var(--amber-wash); stroke: var(--amber); }
 figcaption { padding: .8rem .4rem .25rem; font-size: .92rem; color: var(--muted); }
 footer { border-top: 1px solid var(--line); padding: 1rem .4rem; color: var(--muted); font-size: .9rem; }
+.catalog-navigation { border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin-bottom: 1rem; }
+.catalog-home { font-weight: 650; }
+.course-switcher { margin-top: .5rem; }
+.course-switcher ul { list-style: none; padding: 0; }
+.course-switcher li { margin-top: .5rem; }
+.course-switcher [aria-current="page"] { display: block; padding: .4rem; border-left: 3px solid var(--teal); background: var(--mint-wash); font-weight: 650; }
+.current-label { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); }
+.license-footer small { display: block; font-size: .875rem; line-height: 1.65; }
+.license-footer details { margin-top: .8rem; }
+.license-footer summary { font-size: .875rem; }
+.license-text { white-space: pre-wrap; overflow-wrap: anywhere; font: .875rem/1.65 system-ui, sans-serif; }
 @media (max-width: 950px) {
   .course-layout { grid-template-columns: 1fr; padding: 1rem 1rem 3rem; gap: 1.5rem; }
   nav { position: static; max-height: none; }
@@ -114,7 +125,10 @@ footer { border-top: 1px solid var(--line); padding: 1rem .4rem; color: var(--mu
 <body><a class="skip-link" href="#main">Skip to course</a>
 <header><h1>GPU Fundamentals</h1><p class="guided-hours">Estimated guided hours: 21</p></header>
 <div class="course-layout"><aside>
-<nav id="course-contents" aria-label="Course contents"><details open><summary>Table of contents</summary>
+<nav id="course-contents" aria-label="Course contents"><div class="catalog-navigation">
+<a class="catalog-home" href="../index.html">← All courses</a>
+<details class="course-switcher"><summary>Switch course</summary>
+<ul><li><span aria-current="page" data-course="gpu-fundamentals">GPU Fundamentals<span class="current-label">Current course</span></span></li><li><a href="../gpu-optimizations/index.html">GPU Performance Optimization</a></li><li><a href="../llm-training/index.html">LLM Training</a></li><li><a href="../llm-inference/index.html">LLM Inference</a></li><li><a href="../custom-cuda-kernels/index.html">Custom CUDA Kernels for GPU Optimization</a></li></ul></details></div><details open><summary>Table of contents</summary>
 <ul class="section-links"><li><a href="#course-overview">Course overview</a></li><li><a href="#course-contract">How to use this course</a></li></ul>
 <h2>Lessons</h2><ol><li><a href="#separate-cpu-work-gpu-work-and-orchestration">Separate CPU work, GPU work, and orchestration</a></li><li><a href="#read-the-driver-runtime-toolkit-ptx-sass-and-framework-stack">Read the driver, runtime, toolkit, PTX, SASS, and framework stack</a></li><li><a href="#map-h100-gpcs-sms-warps-and-tensor-cores">Map H100, GPCs, SMs, warps, and Tensor Cores</a></li><li><a href="#follow-data-through-registers-caches-shared-memory-and-hbm">Follow data through registers, caches, shared memory, and HBM</a></li><li><a href="#reason-about-simt-divergence-and-independent-work">Reason about SIMT divergence and independent work</a></li><li><a href="#use-occupancy-to-hide-latency-rather-than-chase-a-maximum">Use occupancy to hide latency rather than chase a maximum</a></li><li><a href="#make-global-memory-accesses-coalesced">Make global memory accesses coalesced</a></li><li><a href="#time-transfers-streams-and-synchronization-correctly">Time transfers, streams, and synchronization correctly</a></li><li><a href="#choose-precision-and-tensor-core-paths-deliberately">Choose precision and Tensor Core paths deliberately</a></li><li><a href="#classify-workloads-with-arithmetic-intensity-and-roofline">Classify workloads with arithmetic intensity and roofline</a></li><li><a href="#read-sharing-and-health-state-without-changing-it">Read sharing and health state without changing it</a></li><li><a href="#understand-gpu-networking-topology-and-collectives">Understand GPU networking, topology, and collectives</a></li></ol>
 <h2>Practice and reference</h2><ul class="section-links"><li><a href="#labs">Practical labs</a><details><summary>Browse labs</summary><ul><li><a href="#lab-00-cluster-preflight">Lab 00: Verify the two-node H100 platform</a></li><li><a href="#lab-01-cpu-gpu-crossover">Lab 01: Find the CPU–GPU crossover for vector work</a></li><li><a href="#lab-02-tensor-core-precision">Lab 02: Compare matrix precision, error, and throughput</a></li><li><a href="#lab-03-transfer-and-pinning">Lab 03: Measure pageable and pinned host transfers</a></li><li><a href="#lab-04-layout-and-coalescing">Lab 04: Evaluate strided access and the cost of repacking</a></li><li><a href="#lab-05-roofline-microbench">Lab 05: Contrast memory-oriented and compute-oriented work</a></li><li><a href="#lab-06-distributed-collectives">Lab 06: Measure a two-node NCCL all-reduce</a></li><li><a href="#lab-07-async-streams">Lab 07: Separate submission time from device completion</a></li><li><a href="#lab-08-operator-to-kernels">Lab 08: Map PyTorch operations to GPU activity</a></li><li><a href="#lab-09-triton-launch-geometry">Lab 09: Sweep logical work per Triton program</a></li><li><a href="#lab-10-compatibility-stack">Lab 10: Identify the software layer behind GPU execution</a></li><li><a href="#lab-11-scheduler-tail">Lab 11: Separate lane utilization from grid-tail behavior</a></li><li><a href="#lab-12-read-only-health">Lab 12: Read GPU health and sharing signals safely</a></li></ul></details></li>
@@ -2609,5 +2623,213 @@ sbatch slurm/single_gpu.sbatch labs/12_read_only_health.py --profile smoke</code
 <li id="reference-31"><a href="https://developer.nvidia.com/blog/nvidia-cuda-13-3-enhances-gpu-development-with-tile-programming-in-c-compiler-autotuning-and-python-updates">Read the CUDA Python release overview</a></li>
 <li id="reference-32"><a href="https://docs.nvidia.com/attestation/attestation-client-tools-sdk/latest/gpu_and_switch_attestation.html">Study NVIDIA GPU attestation</a></li>
 <li id="reference-33"><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/#control-flow">control-flow discussion</a></li></ol></section>
-<footer><p>Use the benchmark worksheet to record what your environment demonstrates and what remains to be tested.</p></footer>
+<p>Use the benchmark worksheet to record what your environment demonstrates and what remains to be tested.</p>
+<footer class="license-footer">
+<small>© 2026 Nebius B.V. Provided free of charge for learning and education.
+Licensed under <a href="#license">Apache License 2.0</a>.<br>
+Third-party materials retain their respective licenses.</small>
+<details id="license"><summary>License and notices</summary>
+<pre class="license-text">                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      &quot;License&quot; shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      &quot;Licensor&quot; shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      &quot;Legal Entity&quot; shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      &quot;control&quot; means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      &quot;You&quot; (or &quot;Your&quot;) shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      &quot;Source&quot; form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      &quot;Object&quot; form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      &quot;Work&quot; shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      &quot;Derivative Works&quot; shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      &quot;Contribution&quot; shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, &quot;submitted&quot;
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as &quot;Not a Contribution.&quot;
+
+      &quot;Contributor&quot; shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a &quot;NOTICE&quot; text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an &quot;AS IS&quot; BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets &quot;[]&quot;
+      replaced with your own identifying information. (Don&#x27;t include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same &quot;printed page&quot; as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</pre></details>
+</footer>
 </main></div></body></html>

@@ -1,4 +1,5 @@
 {
+  "slug": "custom-cuda-kernels",
   "title": "Custom CUDA Kernels for GPU Optimization",
   "estimated_guided_hours": 36,
   "labs": [

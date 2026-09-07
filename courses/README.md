@@ -3,6 +3,10 @@
 This directory contains five standalone, practical courses for engineers using
 NVIDIA H100 GPUs on Linux and Slurm.
 
+[Browse the course catalog](https://nebius.github.io/nebius-ps-services/courses/)
+for introductions, prerequisites and direct links to all five courses. The
+same catalog is available locally in [index.html](index.html).
+
 ```text
 gpu-fundamentals
        ↓
@@ -41,6 +45,56 @@ explanations and fit the available width without horizontal panning. The sidebar
 provides course navigation; each figure retains its caption and accessible SVG
 title and description without duplicate transcript controls. The banner
 contains only the main topic and a brief estimated guided-hours label.
+
+An **All courses** link and **Switch course** disclosure sit at the top of each
+sidebar. The switcher identifies the current course and links directly to the
+other four. These relative links work on GitHub Pages and in a local checkout.
+When downloading individual HTML files, keep the catalog and sibling directory
+layout to use cross-course links; each course's lessons, styles, diagrams and
+license remain readable on their own.
+
+## Website publication
+
+The repository welcome page links to this catalog. For initial publication,
+merge the reviewed website files into `main`, then open the repository's
+**Settings → Pages**. Select **Deploy from a branch**, branch **main**, folder
+**/(root)**, and save. Use HTTPS for the published site. The root `.nojekyll`
+file lets GitHub serve committed static files without Jekyll processing.
+This makes other eligible repository files available under the same site.
+The site has no custom deployment workflow, framework or external font
+dependency. GitHub still
+runs its managed Pages deployment when the publishing branch changes.
+
+`tools/build_course_html.py` generates the catalog and individual pages. Titles,
+guided hours and lab counts come from each course's `reference/course.json`;
+its stable `slug` identifies the course even if a downloaded folder is renamed.
+Catalog introductions and learning outcomes live in the renderer, while
+`tools/catalog.css` owns the catalog's embedded styles. Edit these sources
+instead of generated HTML. A selected-course build also refreshes the catalog;
+rebuild all five pages when shared metadata, navigation, styles or licensing
+changes. `--check` always checks the catalog as well as the selected courses.
+
+Run the offline validation commands below before committing generated HTML.
+Once Pages is enabled, reviewed changes to `main` publish those committed files.
+Confirm the deployment succeeded and the root, catalog and five course URLs
+serve the intended revision before declaring a publication complete. See
+[GitHub's publishing-source documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
+for the branch deployment settings.
+
+To preview from a local checkout, serve the repository root with
+`python3 -m http.server --bind 127.0.0.1` and open `/courses/` on that server.
+
+## Ownership and license
+
+© 2026 Nebius B.V. These courses are provided free of charge for learning and
+education under the repository's [Apache License 2.0](../LICENSE). This notice
+describes their educational purpose; it does not restrict the uses permitted
+by that license, including commercial reuse. Third-party materials retain
+their respective licenses.
+
+The catalog and every course contain a compact attribution footer and the full,
+unchanged repository license inside **License and notices**, so the license
+travels with each saved HTML file.
 
 ## Educational approach
 

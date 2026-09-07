@@ -85,6 +85,17 @@ svg .diagram-small { font-size: 13px; }
 .overview-diagram svg .exposed { fill: var(--amber-wash); stroke: var(--amber); }
 figcaption { padding: .8rem .4rem .25rem; font-size: .92rem; color: var(--muted); }
 footer { border-top: 1px solid var(--line); padding: 1rem .4rem; color: var(--muted); font-size: .9rem; }
+.catalog-navigation { border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin-bottom: 1rem; }
+.catalog-home { font-weight: 650; }
+.course-switcher { margin-top: .5rem; }
+.course-switcher ul { list-style: none; padding: 0; }
+.course-switcher li { margin-top: .5rem; }
+.course-switcher [aria-current="page"] { display: block; padding: .4rem; border-left: 3px solid var(--teal); background: var(--mint-wash); font-weight: 650; }
+.current-label { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); }
+.license-footer small { display: block; font-size: .875rem; line-height: 1.65; }
+.license-footer details { margin-top: .8rem; }
+.license-footer summary { font-size: .875rem; }
+.license-text { white-space: pre-wrap; overflow-wrap: anywhere; font: .875rem/1.65 system-ui, sans-serif; }
 @media (max-width: 950px) {
   .course-layout { grid-template-columns: 1fr; padding: 1rem 1rem 3rem; gap: 1.5rem; }
   nav { position: static; max-height: none; }

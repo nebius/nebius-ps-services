@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Five free Nebius courses in GPU fundamentals, performance optimization, LLM training, inference and custom CUDA kernels, with practical NVIDIA H100 labs.">
+<title>GPU Performance Engineering Courses | Nebius</title><link rel="icon" href="data:,">
+<style>:root {
+  color-scheme: light;
+  --paper: #f7f9f7;
+  --ink: #24343d;
+  --muted: #52626b;
+  --teal: #206757;
+  --blue: #245880;
+  --line: #dbe5e1;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: inherit; text-underline-offset: .2em; }
+a:hover { color: var(--teal); }
+:focus-visible { outline: 3px solid var(--teal); outline-offset: 5px; }
+.skip-link { position: absolute; top: .6rem; left: 1rem; padding: .5rem 1rem; background: white; transform: translateY(-160%); z-index: 5; }
+.skip-link:focus { transform: none; }
+.site-header, main { max-width: 1320px; margin-inline: auto; padding-inline: 48px; }
+.site-header { min-height: 96px; display: flex; justify-content: space-between; align-items: center; gap: 24px; border-bottom: 1px solid var(--line); }
+.wordmark { display: flex; align-items: center; gap: 20px; text-decoration: none; font-size: 29px; font-weight: 800; letter-spacing: -.07em; }
+.wordmark span { padding-left: 20px; border-left: 1px solid #bdcec7; color: var(--muted); font-size: 14px; letter-spacing: .02em; font-weight: 500; }
+.site-header nav { display: flex; gap: 28px; font-size: 13px; font-weight: 600; }
+.site-header nav a { text-decoration: none; padding-block: 10px; }
+.hero { display: grid; grid-template-columns: 1.35fr 1fr; gap: 64px; align-items: center; padding-block: 76px 60px; }
+.eyebrow { display: flex; align-items: center; gap: 9px; margin: 0 0 18px; color: var(--teal); font-size: 11px; line-height: 1.5; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
+.status-dot { width: 7px; height: 7px; background: var(--teal); border-radius: 50%; flex: 0 0 auto; }
+h1 { font-size: clamp(2.7rem, 4.5vw, 4.5rem); line-height: 1.06; letter-spacing: -.055em; font-weight: 650; margin: 24px 0; }
+h1 span { color: var(--teal); }
+.hero-description { max-width: 520px; color: var(--muted); font-size: 18px; line-height: 1.8; margin: 24px 0 28px; }
+.hero-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 16px; padding: 14px 18px; border-radius: 7px; text-decoration: none; font-size: 12px; font-weight: 650; transition: background-color .15s ease; }
+.primary { color: white; background: var(--teal); border: 1px solid var(--teal); }
+.primary:hover { background: #174d42; color: white; }
+.secondary { border: 1px solid var(--line); background: white; }
+.secondary:hover { background: #eef8f2; }
+.platform-note { font-size: 11px; color: var(--muted); margin-top: 24px; letter-spacing: .025em; }
+.learning-map { position: relative; background: linear-gradient(130deg, #eef6f0, #edf3f8); border: 1px solid #d2e2d9; border-radius: 16px; padding: 28px 30px 24px; }
+.map-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.map-heading .eyebrow { margin: 0; }
+.map-count { color: var(--teal); font: 11px/1.5 ui-monospace, monospace; }
+.learning-map h2 { margin: 20px 0 24px; font-size: 26px; line-height: 1.25; letter-spacing: -.03em; font-weight: 600; }
+.path-foundations { margin: 0; padding: 0; list-style: none; }
+.path-foundations li { display: flex; position: relative; align-items: center; gap: 14px; padding-bottom: 20px; }
+.path-foundations li:first-child::after { content: ""; position: absolute; top: 38px; left: 18px; height: 32px; border-left: 1px solid #9cbcac; }
+.path-step { background: white; border: 1px solid #bbd3c5; border-radius: 8px; width: 37px; height: 37px; display: grid; place-items: center; flex: 0 0 auto; color: var(--teal); font: 12px ui-monospace, monospace; }
+.path-foundations a { text-decoration: none; font-size: 13px; font-weight: 650; }
+.path-foundations a:hover, .path-branches a:hover { text-decoration: underline; }
+.path-foundations small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.path-branches { border-top: 1px solid #cbdcd2; padding-top: 14px; }
+.path-branches > p { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
+.path-branches ul { display: grid; grid-template-columns: 1fr; gap: 7px; list-style: none; padding: 0; margin: 0; }
+.path-branches a { display: flex; justify-content: space-between; background: #ffffffb8; padding: 8px 12px; border: 1px solid #d3e1d9; border-radius: 6px; text-decoration: none; font-size: 12px; }
+.path-note { font-size: 11px; line-height: 1.6; color: var(--muted); margin: 14px 0 0; }
+.catalog-facts { display: grid; grid-template-columns: repeat(3, 1fr) 1.15fr; align-items: center; gap: 26px; border-block: 1px solid var(--line); padding: 22px 0; }
+.catalog-facts p { margin: 0; font-size: 12px; color: var(--muted); }
+.catalog-facts strong { display: block; font-size: 29px; line-height: 1.35; color: var(--ink); font-weight: 550; letter-spacing: -.025em; }
+.catalog-facts .fact-note { border-left: 1px solid var(--line); padding-left: 32px; font-size: 13px; }
+.catalog-section { padding-top: 66px; }
+.section-heading { display: flex; justify-content: space-between; align-items: end; gap: 48px; }
+.section-heading h2, .approach h2 { font-size: clamp(1.8rem, 3vw, 2.45rem); line-height: 1.2; letter-spacing: -.04em; font-weight: 600; margin: 0; }
+.section-heading > p { max-width: 330px; margin: 0 0 4px; color: var(--muted); font-size: 14px; }
+.collection-label { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 32px 0 14px; }
+.collection-label span { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .09em; }
+.collection-label p { font-size: 11px; color: var(--muted); margin: 0; }
+.course-grid { display: grid; gap: 20px; }
+.foundations { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.specializations { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.course-card { display: flex; flex-direction: column; min-width: 0; background: white; border: 1px solid var(--line); border-radius: 12px; padding: 28px; scroll-margin-top: 24px; transition: border-color .15s ease, box-shadow .15s ease; }
+.course-card:hover { border-color: #9fc4b3; box-shadow: 0 8px 28px #24343d09; }
+.course-card:target { border-color: var(--teal); }
+.card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
+.course-number { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 7px; background: #edf6f0; color: var(--teal); font: 13px ui-monospace, monospace; }
+.course-2 .course-number, .course-4 .course-number { background: #eef5fc; color: var(--blue); }
+.course-5 .course-number { background: #fff7e7; color: #86500e; }
+.course-hours { color: var(--muted); font-size: 11px; }
+.card-eyebrow { color: var(--teal); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; line-height: 1.5; margin: 0 0 10px; }
+.course-card h3 { font-size: 23px; line-height: 1.2; letter-spacing: -.035em; margin: 0 0 16px; font-weight: 650; text-wrap: balance; }
+.course-description { font-size: 13px; line-height: 1.8; color: var(--muted); margin: 0 0 22px; }
+.course-outcomes { list-style: none; padding: 0; margin: auto 0 22px; font-size: 12px; }
+.course-outcomes li { position: relative; padding-left: 17px; margin: 9px 0; }
+.course-outcomes li::before { content: "↗"; position: absolute; left: 0; color: var(--teal); font-size: 11px; }
+.course-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
+.course-tags span { border: 1px solid #e3e9e6; background: #f8faf9; padding: 3px 8px; border-radius: 4px; color: var(--muted); font-size: 10px; }
+.card-bottom { border-top: 1px solid #e7ece9; padding-top: 14px; }
+.prerequisite { color: var(--muted); font-size: 10px; line-height: 1.7; margin: 0 0 14px; }
+.course-link { display: flex; justify-content: space-between; padding-block: 6px; color: var(--teal); font-size: 13px; font-weight: 700; text-decoration: none; }
+.course-link:hover { text-decoration: underline; }
+.approach { display: grid; grid-template-columns: 1fr 1fr; gap: 70px; margin-top: 64px; border-block: 1px solid var(--line); padding: 38px 0; }
+.approach > div > p:last-child { color: var(--muted); max-width: 420px; font-size: 14px; line-height: 1.8; }
+.approach ol { margin: 0; padding: 0; list-style: none; }
+.approach li { display: flex; gap: 18px; margin: 0 0 18px; }
+.approach li:last-child { margin-bottom: 0; }
+.approach li > span { color: var(--teal); font: 11px/1.8 ui-monospace, monospace; padding-top: 2px; }
+.approach h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.approach li p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.environment-note { max-width: 820px; color: var(--muted); font-size: 12px; line-height: 1.8; margin: 28px 0; }
+.license-footer { border-top: 1px solid var(--line); padding: 26px 0 36px; color: var(--muted); }
+.license-footer small { display: block; font-size: .875rem; line-height: 1.65; }
+.license-footer a { color: var(--blue); }
+.license-footer details { margin-top: 14px; }
+.license-footer summary { cursor: pointer; font-size: .875rem; padding-block: 5px; }
+.license-text { max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; font: .875rem/1.65 system-ui, sans-serif; background: white; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
+@media (max-width: 1100px) {
+  .site-header, main { padding-inline: 30px; }
+  .hero { gap: 32px; }
+  .hero-description { font-size: 16px; }
+  .course-card { padding: 22px; }
+  .course-card h3 { font-size: 21px; }
+}
+@media (max-width: 850px) {
+  .hero { grid-template-columns: 1fr; padding-top: 48px; }
+  h1 { font-size: clamp(2.7rem, 8vw, 4.5rem); }
+  .hero-description { max-width: 600px; }
+  .learning-map { max-width: 100%; }
+  .path-branches ul { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .path-branches a { height: 100%; gap: 10px; }
+  .specializations { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .section-heading { gap: 24px; }
+  .section-heading > p { max-width: 250px; }
+  .approach { gap: 32px; }
+}
+@media (max-width: 600px) {
+  .site-header, main { padding-inline: 20px; }
+  .site-header { min-height: 82px; flex-wrap: wrap; gap: 4px; padding-block: 14px; }
+  .wordmark { font-size: 25px; gap: 14px; }
+  .wordmark span { padding-left: 14px; }
+  .site-header nav { gap: 18px; font-size: 11px; flex-wrap: wrap; }
+  .hero { padding-top: 34px; padding-bottom: 32px; }
+  .hero-copy > .eyebrow { font-size: 9px; letter-spacing: .07em; }
+  h1 { font-size: clamp(2.25rem, 9vw, 3.3rem); }
+  .hero-actions { flex-direction: column; align-items: stretch; }
+  .button { justify-content: space-between; }
+  .learning-map { padding: 24px; }
+  .path-branches ul { grid-template-columns: 1fr; }
+  .catalog-facts { grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .catalog-facts .fact-note { padding-left: 0; border-left: 0; }
+  .catalog-facts strong { font-size: 26px; }
+  .catalog-section { padding-top: 40px; }
+  .section-heading { display: block; }
+  .section-heading > p { max-width: 100%; margin-top: 18px; }
+  .foundations, .specializations, .approach { grid-template-columns: 1fr; }
+  .course-card { padding: 24px; }
+  .course-card h3 { font-size: 25px; }
+  .course-description { font-size: 14px; }
+  .course-outcomes { font-size: 13px; }
+  .collection-label { gap: 10px; }
+  .collection-label span { font-size: 10px; }
+  .collection-label p { font-size: 10px; }
+  .approach { margin-top: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition: none !important; }
+}
+@media print {
+  .site-header nav, .hero-actions, .skip-link { display: none; }
+  body { background: white; }
+  main { padding: 0; }
+  .hero, .course-grid, .approach { display: block; }
+  .course-card { break-inside: avoid; margin-block: 16px; }
+}
+</style></head>
+<body><a class="skip-link" href="#main">Skip to courses</a>
+<div class="site-header"><a class="wordmark" href="../index.html" aria-label="Nebius Platform Services home">nebius<span>courses</span></a>
+<nav aria-label="Main navigation"><a href="#catalog">Explore courses</a><a href="#learning-path">Learning path</a><a href="https://github.com/nebius/nebius-ps-services">GitHub <span aria-hidden="true">↗</span></a></nav></div>
+<main id="main"><header class="hero">
+<div class="hero-copy"><p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Learn the system. Understand the result.</p>
+<h1>GPU Performance<br><span>Engineering</span></h1>
+<p class="hero-description">From your first GPU mental model to language models and custom kernels. Five practical courses that connect concepts, code and measured evidence.</p>
+<div class="hero-actions"><a class="button primary" href="gpu-fundamentals/index.html">Start with GPU Fundamentals <span aria-hidden="true">↗</span></a><a class="button secondary" href="#catalog">Explore all courses <span aria-hidden="true">↓</span></a></div>
+<p class="platform-note">Built around NVIDIA H100 · Linux · Slurm</p></div>
+<aside class="learning-map" id="learning-path" aria-labelledby="path-title">
+<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">01 → 05</span></div>
+<h2 id="path-title">A foundation.<br>Then your direction.</h2>
+<ol class="path-foundations"><li><span class="path-step" aria-hidden="true">01</span><a href="#gpu-fundamentals">GPU Fundamentals<small>Understand the hardware</small></a></li><li><span class="path-step" aria-hidden="true">02</span><a href="#gpu-optimizations">GPU Performance Optimization<small>Learn how to measure and improve</small></a></li></ol>
+<div class="path-branches"><p>Then choose a specialization</p><ul><li><a href="#llm-training">LLM Training <span aria-hidden="true">↗</span></a></li><li><a href="#llm-inference">LLM Inference <span aria-hidden="true">↗</span></a></li><li><a href="#custom-cuda-kernels">Custom CUDA Kernels <span aria-hidden="true">↗</span></a></li></ul></div>
+<p class="path-note">The three specializations are independent. Start any of them after the two foundation courses.</p></aside>
+</header>
+<div class="catalog-facts" aria-label="Catalog overview"><p><strong>5</strong> focused courses</p><p><strong>94</strong> practical labs</p><p><strong>One</strong> evidence-first approach</p><p class="fact-note">Free to read.<br>Built to put into practice.</p></div>
+<section id="catalog" class="catalog-section" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">The course collection</p><h2 id="catalog-title">Build understanding.<br>Put it to work.</h2></div><p>Begin with the foundations, then follow the questions that matter to your workload.</p></div>
+<div class="collection-label"><span>01 / Foundations</span><p>Take these in order</p></div>
+<div class="course-grid foundations"><article class="course-card course-1" id="gpu-fundamentals">
+<div class="card-top"><span class="course-number">01</span><span class="course-hours">21 guided hours</span></div>
+<p class="card-eyebrow">Understand the machine</p><h3>GPU Fundamentals</h3>
+<p class="course-description">Build a working mental model of GPU execution before you begin optimizing. Connect what your code does to the hardware that runs it.</p>
+<ul class="course-outcomes"><li>Explain threads, warps and scheduling</li><li>Reason about memory and precision</li><li>Read topology and health evidence</li></ul>
+<div class="course-tags" aria-label="Topics"><span>Execution</span><span>Memory</span><span>Precision</span></div>
+<div class="card-bottom"><p class="prerequisite">Start here · No previous GPU course required</p>
+<a class="course-link" href="gpu-fundamentals/index.html" aria-label="Read GPU Fundamentals">Read course <span aria-hidden="true">↗</span></a></div>
+</article><article class="course-card course-2" id="gpu-optimizations">
+<div class="card-top"><span class="course-number">02</span><span class="course-hours">36 guided hours</span></div>
+<p class="card-eyebrow">Turn measurements into decisions</p><h3>GPU Performance Optimization</h3>
+<p class="course-description">Learn a repeatable approach to improving PyTorch workloads: establish a baseline, find the limiter, make one change and measure again.</p>
+<ul class="course-outcomes"><li>Measure asynchronous GPU work correctly</li><li>Use profiler evidence to find bottlenecks</li><li>Evaluate changes with equivalent work</li></ul>
+<div class="course-tags" aria-label="Topics"><span>PyTorch</span><span>Profiling</span><span>Data movement</span></div>
+<div class="card-bottom"><p class="prerequisite">Prerequisite: GPU Fundamentals</p>
+<a class="course-link" href="gpu-optimizations/index.html" aria-label="Read GPU Performance Optimization">Read course <span aria-hidden="true">↗</span></a></div>
+</article></div>
+<div class="collection-label"><span>02 / Specializations</span><p>Choose your direction</p></div>
+<div class="course-grid specializations"><article class="course-card course-3" id="llm-training">
+<div class="card-top"><span class="course-number">03</span><span class="course-hours">48 guided hours</span></div>
+<p class="card-eyebrow">Understand how models learn</p><h3>LLM Training</h3>
+<p class="course-description">Connect the learning objective to the systems that make training possible. Explore correctness, memory, precision and distributed execution.</p>
+<ul class="course-outcomes"><li>Preserve the intended learning objective</li><li>Manage training memory and precision</li><li>Investigate communication and recovery</li></ul>
+<div class="course-tags" aria-label="Topics"><span>Gradients</span><span>Distributed training</span><span>Recovery</span></div>
+<div class="card-bottom"><p class="prerequisite">Prerequisites: Fundamentals + Optimization</p>
+<a class="course-link" href="llm-training/index.html" aria-label="Read LLM Training">Read course <span aria-hidden="true">↗</span></a></div>
+</article><article class="course-card course-4" id="llm-inference">
+<div class="card-top"><span class="course-number">04</span><span class="course-hours">47 guided hours</span></div>
+<p class="card-eyebrow">Follow a request from prompt to tokens</p><h3>LLM Inference</h3>
+<p class="course-description">Understand how language models generate responses, then explore the trade-offs between serving capacity, latency, throughput and quality.</p>
+<ul class="course-outcomes"><li>Explain prefill, decode and KV caches</li><li>Measure latency and throughput</li><li>Evaluate batching and serving behavior</li></ul>
+<div class="course-tags" aria-label="Topics"><span>Serving</span><span>KV cache</span><span>Latency</span></div>
+<div class="card-bottom"><p class="prerequisite">Prerequisites: Fundamentals + Optimization</p>
+<a class="course-link" href="llm-inference/index.html" aria-label="Read LLM Inference">Read course <span aria-hidden="true">↗</span></a></div>
+</article><article class="course-card course-5" id="custom-cuda-kernels">
+<div class="card-top"><span class="course-number">05</span><span class="course-hours">36 guided hours</span></div>
+<p class="card-eyebrow">Make the hardware your programming model</p><h3>Custom CUDA Kernels for GPU Optimization</h3>
+<p class="course-description">Learn when a custom kernel is warranted, then build, validate and profile CUDA C++ kernels against a clear correctness and performance baseline.</p>
+<ul class="course-outcomes"><li>Map computations to GPU execution</li><li>Build and validate CUDA kernels</li><li>Compare custom code with library baselines</li></ul>
+<div class="course-tags" aria-label="Topics"><span>CUDA C++</span><span>Kernel design</span><span>Validation</span></div>
+<div class="card-bottom"><p class="prerequisite">Prerequisites: Fundamentals + Optimization</p>
+<a class="course-link" href="custom-cuda-kernels/index.html" aria-label="Read Custom CUDA Kernels for GPU Optimization">Read course <span aria-hidden="true">↗</span></a></div>
+</article></div></section>
+<section class="approach" aria-labelledby="approach-title"><div><p class="eyebrow">More than a reading list</p><h2 id="approach-title">Learn. Practice. Review.</h2><p>Every course connects explanations to practical experiments. Build an intuition, make a prediction, then investigate what actually happens.</p></div>
+<ol><li><span>01</span><div><h3>Learn the mechanism</h3><p>Start with definitions, mental models and diagrams.</p></div></li><li><span>02</span><div><h3>Work through the experiment</h3><p>Read the prerequisites, explore the code and run the supplied lab.</p></div></li><li><span>03</span><div><h3>Explain the evidence</h3><p>Check correctness, interpret measurements and decide what to investigate next.</p></div></li></ol></section>
+<p class="environment-note">Read the courses in your browser. Run labs in the documented Linux and Slurm environment; GPU exercises require the specified hardware and dependencies. Each course explains its setup and readiness checks.</p>
+<footer class="license-footer">
+<small>© 2026 Nebius B.V. Provided free of charge for learning and education.
+Licensed under <a href="#license">Apache License 2.0</a>.<br>
+Third-party materials retain their respective licenses.</small>
+<details id="license"><summary>License and notices</summary>
+<pre class="license-text">                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      &quot;License&quot; shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      &quot;Licensor&quot; shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      &quot;Legal Entity&quot; shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      &quot;control&quot; means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      &quot;You&quot; (or &quot;Your&quot;) shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      &quot;Source&quot; form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      &quot;Object&quot; form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      &quot;Work&quot; shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      &quot;Derivative Works&quot; shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      &quot;Contribution&quot; shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, &quot;submitted&quot;
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as &quot;Not a Contribution.&quot;
+
+      &quot;Contributor&quot; shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a &quot;NOTICE&quot; text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an &quot;AS IS&quot; BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets &quot;[]&quot;
+      replaced with your own identifying information. (Don&#x27;t include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same &quot;printed page&quot; as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</pre></details>
+</footer></main></body></html>

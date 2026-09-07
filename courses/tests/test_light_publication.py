@@ -39,7 +39,13 @@ def test_publication_has_no_history_or_time_breakdown(course: str) -> None:
 def test_neutral_metadata_preserves_core_and_optional_lab_scope(course: str) -> None:
     root = ROOT / course
     metadata = json.loads((root / "reference/course.json").read_text())
-    assert set(metadata) == {"title", "estimated_guided_hours", "labs", "extensions"}
+    assert set(metadata) == {
+        "slug",
+        "title",
+        "estimated_guided_hours",
+        "labs",
+        "extensions",
+    }
     assert isinstance(metadata["estimated_guided_hours"], int)
     builder = load_builder()
     assert {item["path"] for item in metadata["labs"]} == {

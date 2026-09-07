@@ -3,8 +3,9 @@
 Nebius Platform Services: reusable AI/ML deployment building blocks for Nebius AI Cloud.
 
 This repository contains Terraform modules, Helm charts, CLI services, examples,
-and reusable Codex skills. Root-level files should stay focused on repository
-orientation and cross-project policy. Project-specific behavior, release notes,
+GPU engineering courses, and reusable Codex skills. Root-level files should
+stay focused on repository orientation and cross-project policy.
+Project-specific behavior, release notes,
 and operating instructions belong in the owning project folder.
 
 ## Repository Layout
@@ -13,6 +14,7 @@ and operating instructions belong in the owning project folder.
 | --- | --- | --- |
 | `.github/` | Repository automation, dependency updates, and shared workflows. | [root changelog](CHANGELOG.md) |
 | `services/` | Service and CLI projects. | service-local `README.md` / `CHANGELOG.md` files |
+| `courses/` | Five practical GPU performance engineering courses. | [course catalog](https://nebius.github.io/nebius-ps-services/courses/), [authoring and validation](courses/README.md) |
 | `platform-infra/` | Reusable Terraform modules and examples for Nebius infrastructure. | [README](platform-infra/README.md), [changelog](platform-infra/CHANGELOG.md) |
 | `helm-charts/` | Reusable Helm charts. | chart-local `README.md` / `CHANGELOG.md` files |
 | `skills/` | Public reusable Codex skills and the local skills installer. | [README](skills/README.md), [changelog](skills/CHANGELOG.md) |
@@ -20,6 +22,8 @@ and operating instructions belong in the owning project folder.
 
 ## Common Use Cases
 
+- Learn GPU fundamentals, performance optimization, LLM training and inference,
+  and custom CUDA kernels through the [course catalog](https://nebius.github.io/nebius-ps-services/courses/).
 - Deploy and operate Nebius AI/ML infrastructure with Terraform.
 - Package platform services and validation workloads with Helm.
 - Generate and deploy customer-facing Nebius configuration with service-local
@@ -27,6 +31,16 @@ and operating instructions belong in the owning project folder.
 - Build and publish reusable service, chart, and image release workflows.
 - Use reusable Codex skills for project alignment, PR workflows, shell/Python
   quality, Helm, Terraform, Nebius automation, and release helper authoring.
+
+## Repository Website
+
+The [repository website](https://nebius.github.io/nebius-ps-services/) is prepared
+for GitHub Pages and links to the course catalog. To publish it, configure
+Pages to deploy from branch `main` and folder `/(root)` after the website files
+merge. The root `.nojekyll` enables static publication without a custom
+deployment workflow. Other eligible repository files become available through
+Pages as well. Initial setup, course build and validation instructions live in
+[courses/README.md](courses/README.md#website-publication).
 
 ## Changelog Policy
 

@@ -2543,5 +2543,72 @@ remain separate; no speedup, publication or target-runtime claim is made.
 
 <!-- /FEATURE: FEAT-021 -->
 
+<!-- FEATURE: FEAT-022 reqs=REQ-013 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-022: Branch-published Nebius learning website
+
+#### Requirements Covered
+
+- REQ-013: Nebius course website and navigation.
+
+#### Context Evidence
+
+Five self-contained course pages and canonical course metadata exist. The repository is Apache-2.0 licensed and has no course-specific license. At task start, the website catalog, root HTML entry and Pages publishing configuration were absent.
+
+#### Design Details
+
+Extend the local builder with a catalog renderer and embedded editorial stylesheet. Derive titles, hours, ordering and link destinations from canonical course metadata and the catalog registry; author concise summaries and outcomes alongside the renderer. Present a hero, prerequisite route, two foundation cards and three specialization cards. Add a catalog link and native HTML course switcher before each course's lesson contents. Keep the current course marked and link directly to its four siblings. Each course metadata file carries a stable slug; standalone validators use that identity independently of the checkout folder name.
+
+The compact footer states: Copyright 2026 Nebius B.V.; provided free of charge for learning and education; licensed under Apache License 2.0. Preserve third-party licensing. Embed the unmodified repository license in a collapsed license section and link locally to it. Resource embedding remains mandatory; navigation exceptions are limited to declared course routes inside the navigation block.
+
+A small root welcome page links to the catalog and repository. Add root `.nojekyll` and configure branch-based Pages from `main` `/` after the reviewed change merges. No custom workflow or runtime dependency is required.
+
+#### Selected Option
+
+Generate the course website locally and commit its HTML; serve the complete selected branch root through GitHub Pages.
+
+#### Alternatives Considered
+
+A handwritten catalog would duplicate metadata. A custom deployment workflow is unnecessary for the selected whole-root publication. Noncommercial content terms were considered and rejected in favor of the existing Apache-2.0 license and a free educational offering statement.
+
+#### Implementation Boundaries
+
+Website rendering, explicit course navigation, validators, documentation and authorized Pages settings only. Preserve course teaching, lab logic, dependencies, existing copyright notices and branch protection. Standalone validators must not require sibling directories or the enclosing repository license file.
+
+#### Test-First Success Criteria
+
+- TDD-001: The catalog remains current with metadata and rejects missing or stale committed output.
+- TDD-002: All course navigation edges work; unknown destinations, misplaced relative links and external resources remain rejected.
+- TDD-003: The embedded license matches its canonical source and the attribution introduces no additional usage restriction.
+
+#### Validation Plan
+
+Run focused tests, the shared pytest suite, all standalone validators and alignment. Review desktop/mobile and keyboard behavior locally, then verify deployed content and the Pages source revision independently.
+
+#### Test Plan
+
+Add metadata, prerequisite, link graph, current-course marker, license parity and negative publication controls. Preserve existing course-content and presentation coverage.
+
+#### Evaluation Plan
+
+The learner can choose a course, understand its prerequisites, switch directly to another course and read the licensing terms without loading external resources.
+
+#### Rollout And Rollback
+
+Reuse the current branch and preserve its history. Merge through the required approving review, then enable HTTPS Pages from `main` `/`. Verify live routes before declaring publication complete. Revert website defects through the normal reviewed branch process.
+
+#### Done Definition
+
+The catalog, root welcome page, cross-course navigation and attribution are implemented and validated; the intended revision is independently confirmed on the live Pages site.
+
+#### Implementation Evidence
+
+Implemented the catalog renderer and embedded stylesheet, root welcome page and .nojekyll, course switchers, complete embedded Apache license and attribution, canonical metadata slugs, scoped navigation validation, publication regression tests and authoring documentation.
+
+#### Verification Evidence
+
+All 740 offline pytest tests passed. After the final favicon edit and rebuild, 78 focused publication/content tests, generated-source parity and all five standalone validators passed. Tests cover renamed standalone course copies, every local route, stale/missing catalog output, metadata escaping, navigation restrictions and license parity. Ruff, formatting, configured Markdown lint and whitespace checks passed. Browser checks covered desktop, tablet, 390px and 320px layouts; all five courses, root and catalog routes; keyboard switching and visible focus; embedded licensing; no horizontal overflow or external loaded resources. The final browser console had no errors. Existing GitHub CodeQL checks passed on the website implementation commit. Pages configuration and live deployed-revision verification remain pending the required approving review and merge.
+
+<!-- /FEATURE: FEAT-022 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
