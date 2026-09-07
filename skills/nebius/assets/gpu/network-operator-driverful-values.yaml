@@ -1,4 +1,6 @@
-# Reference values for the Nebius driverful InfiniBand path.
+# Reference values for an explicitly owned driverful InfiniBand node set.
+# Replace example.com/driverful with a caller-owned, verified label selector.
+# This is not a Nebius-provided node label.
 #
 # The host image already owns the OFED path, so Network Operator stays focused
 # on Kubernetes-side discovery and RDMA exposure.
@@ -18,7 +20,7 @@ node-feature-discovery:
         requiredDuringSchedulingIgnoredDuringExecution:
           nodeSelectorTerms:
             - matchExpressions:
-                - key: nebius.com/driverful
+                - key: example.com/driverful
                   operator: In
                   values:
                     - "true"

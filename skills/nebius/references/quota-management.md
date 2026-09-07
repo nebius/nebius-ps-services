@@ -42,7 +42,7 @@ Query both tenant and project allowances for the same `(quota_name, region)` key
 - If neither scope exposes a limit:
   - mark the quota unresolved instead of assuming the request is safe
 
-Operational caveat learned from live Nebius usage:
+Scope interpretation:
 
 - tenant scope often carries the effective hard limit
 - project scope may expose usage without a limit
@@ -68,7 +68,7 @@ Important operational rule:
   - what was confirmed
   - what could not be evaluated
 
-Example learned from the current MK8s module surface:
+Example when a workload input omits storage dimensions:
 
 - MK8s may confirm `mk8s.cluster.count`, `compute.instance.count`, `compute.disk.count`, and `compute.instance.non-gpu.vcpu`
 - the same MK8s component may still carry a coverage gap because node-group boot disk size/type is not exposed by the current module inputs, so disk-size quotas cannot be checked safely
@@ -129,11 +129,11 @@ Important lessons:
 - unsupported GPU-type mapping should be surfaced as a coverage gap, not guessed
 - preemptible GPU-type quotas may not be exposed by the current public allowance surface
 - if the configuration does not expose boot-disk size/type details, state that disk-size quotas were not checked
-- the current bundled MK8s module surface may still leave boot-disk size/type unresolved even when VM-count, cluster-count, and vCPU quotas are confirmed live
+- a caller that omits boot-disk size/type still has a coverage gap even when VM-count, cluster-count, and vCPU quotas are confirmed live
 
 ## Managed Service Examples
 
-Quota names are service-specific. Examples seen in live workflows include:
+Quota names are service-specific. Example names to verify in the selected live quota inventory include:
 
 - `msp.postgres.count`
 - `msp.postgres.cpu`
@@ -160,43 +160,26 @@ Do not extrapolate quota names blindly. Keep mappings explicit and emit a covera
   - when quota is insufficient or a user asks for alternatives, replay the same derived requirements across all discovered quota regions
   - keep this replay quota-only; it does not revalidate region-specific platform/preset support
 
-## Minimal Python Pattern
+## Inspection contract
 
-```python
-from nebius.api.nebius.quotas.v1 import (
-    ListQuotaAllowancesRequest,
-    QuotaAllowanceServiceClient,
-)
-
-
-def list_quotas(sdk, parent_id: str) -> dict[tuple[str, str], dict]:
-    client = QuotaAllowanceServiceClient(sdk)
-    items = {}
-    page_token = ""
-    while True:
-        response = client.list(
-            ListQuotaAllowancesRequest(
-                parent_id=parent_id,
-                page_size=500,
-                page_token=page_token,
-            )
-        ).wait()
-        for item in getattr(response, "items", []) or []:
-            name = str(getattr(getattr(item, "metadata", None), "name", "")).strip()
-            region = str(getattr(getattr(item, "spec", None), "region", "")).strip()
-            if not name or not region:
-                continue
-            spec = getattr(item, "spec", None)
-            status = getattr(item, "status", None)
-            items[(name, region)] = {
-                "limit": getattr(spec, "limit", None),
-                "usage": int(getattr(status, "usage", 0) or 0),
-            }
-        page_token = str(getattr(response, "next_page_token", "") or "").strip()
-        if not page_token:
-            return items
-```
+Use `scripts/inspect_quotas.py` for bounded pagination, explicit parent checking,
+unique dimensions and sanitized failures instead of copying a second list loop.
+The JSON envelope declares `mode: effective` unless `--raw` is requested,
+including when a selected scope is empty. The SDK uses scalar zero even for unknown usage, so accept measurements only
+for `STATE_ACTIVE` with `USAGE_STATE_USED` or `USAGE_STATE_NOT_USED`. Normalize
+unknown/unspecified/not-applicable usage and inactive quota states to unresolved.
+A known limit with unresolved usage cannot produce effective headroom using
+only the other scope; effective rows preserve both scopes' state fields. A missing limit may inherit from the other scope, but never
+means unlimited capacity. `complete` means collection completed, not that every
+workload dimension is resolved or that deployment is approved.
 
 ## Resource Advice Caveat
 
 Nebius `capacity.v1.ResourceAdvice` may exist, but it can be disabled or unavailable on some tenants. Treat it as optional enrichment, not as the primary quota gate.
+
+## Official references
+
+- [Quotas](https://docs.nebius.com/overview/quotas)
+- [Allowance API](https://docs.nebius.com/cli/reference/quotas/quota-allowance/list)
+
+- [Quota and usage states](https://docs.nebius.com/terraform-provider/reference/resources/quotas_v1_quota_allowance)

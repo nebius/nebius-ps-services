@@ -103,7 +103,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `maintain-project-specs` | Implicit allowed | Classify every direct root prompt, reconcile durable intent and delivery evidence through one canonical requirements/design pair, and migrate or validate specs without gating tools, Stop, or workflow completion. |
-| `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
+| `nebius` | Implicit allowed | Build and inspect Nebius compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
@@ -1429,9 +1429,12 @@ Python. Use it when you want syntax checks, `shellcheck`, `markdownlint`, or
 
 ### `nebius`
 
-`nebius` is the cloud automation skill for Nebius SDK-based workflows,
-including IAM bootstrap, object storage, VPC inspection, route analysis, quota
-checks, observability, and MK8s GPU/operator decisions.
+`nebius` covers compute, storage, networking, observability, IAM and API/SDK
+infrastructure through official-doc guides, portable Python request builders
+and six read-only inspectors. Shared helpers bound pagination and operations,
+verify identity and retain reconciliation IDs. Terraform, Helm, cxcli, vpngw
+and Grafana query workflows stay with their owners; AI services have selection
+and integration guidance. See [the skill guide](nebius/README.md).
 
 ### `nebius-audit-log`
 

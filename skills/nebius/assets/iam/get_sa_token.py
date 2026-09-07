@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 
-import jwt
-from nebius.api.nebius.iam.v1 import ExchangeTokenRequest, TokenExchangeServiceClient
+from sdk.runtime import rpc
 
 GRANT_TYPE_TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 REQUESTED_TOKEN_TYPE_ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
 SUBJECT_TOKEN_TYPE_JWT = "urn:ietf:params:oauth:token-type:jwt"
 
 
-def _wait(op_or_message):  # type: ignore[no-untyped-def]
-    return op_or_message.wait() if hasattr(op_or_message, "wait") else op_or_message
+@dataclass(frozen=True)
+class TokenMaterial:
+    access_token: str = field(repr=False)
+    expires_in: int
 
 
 def exchange_service_account_token(
@@ -24,14 +26,20 @@ def exchange_service_account_token(
     private_key_pem: str,
     audience: str | None = None,
     scopes: list[str] | None = None,
-) -> tuple[str, int]:
+) -> TokenMaterial:
     """
-    Returns (access_token, expires_in_seconds).
+    Returns token material whose representation excludes the access token.
 
     Requires:
     - existing IAM auth public key id (`auth_public_key_id`) for the service account
     - matching private key PEM (`private_key_pem`)
     """
+    import jwt
+    from nebius.api.nebius.iam.v1 import (
+        ExchangeTokenRequest,
+        TokenExchangeServiceClient,
+    )
+
     now = int(time.time())
     payload = {
         "iss": service_account_id,
@@ -60,14 +68,14 @@ def exchange_service_account_token(
     if scopes:
         request_kwargs["scopes"] = scopes
 
-    response = _wait(
-        TokenExchangeServiceClient(sdk).exchange(
-            ExchangeTokenRequest(**request_kwargs),
-        )
+    response = rpc(
+        TokenExchangeServiceClient(sdk).exchange,
+        ExchangeTokenRequest(**request_kwargs),
+        retries=1,
     )
 
     access_token = str(getattr(response, "access_token", "") or "").strip()
     if not access_token:
         raise RuntimeError("Token exchange succeeded but access_token is empty")
     expires_in = int(getattr(response, "expires_in", 0) or 0)
-    return access_token, expires_in
+    return TokenMaterial(access_token, expires_in)

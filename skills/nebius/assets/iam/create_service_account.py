@@ -1,28 +1,6 @@
-"""Snippet: create (or reuse) a Nebius Service Account by name."""
+"""Create a named service account or reuse an explicitly identified account."""
 
-from __future__ import annotations
-
-from nebius.api.nebius.common.v1 import ResourceMetadata
-from nebius.api.nebius.iam.v1 import (
-    CreateServiceAccountRequest,
-    GetServiceAccountByNameRequest,
-    ServiceAccountServiceClient,
-    ServiceAccountSpec,
-)
-
-
-def _wait(op_or_message):  # type: ignore[no-untyped-def]
-    return op_or_message.wait() if hasattr(op_or_message, "wait") else op_or_message
-
-
-def _is_not_found_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "not found" in message or "statuscode.not_found" in message
-
-
-def _is_already_exists_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "already exists" in message or "statuscode.already_exists" in message
+from sdk.runtime import CloudError, rpc, submit, verify_identity
 
 
 def ensure_service_account(
@@ -30,55 +8,57 @@ def ensure_service_account(
     sdk,
     project_id: str,
     service_account_name: str,
+    existing_service_account_id: str | None = None,
     description: str = "Service account managed by automation",
 ) -> tuple[str, bool]:
-    """Return (service_account_id, created_now)."""
-    service_accounts = ServiceAccountServiceClient(sdk)
-
-    try:
-        existing = _wait(
-            service_accounts.get_by_name(
-                GetServiceAccountByNameRequest(parent_id=project_id, name=service_account_name)
-            )
-        )
-        existing_id = getattr(getattr(existing, "metadata", None), "id", "")
-        if existing_id:
-            return existing_id, False
-    except Exception as exc:
-        if not _is_not_found_error(exc):
-            raise
-
-    try:
-        operation = _wait(
-            service_accounts.create(
-                CreateServiceAccountRequest(
-                    metadata=ResourceMetadata(parent_id=project_id, name=service_account_name),
-                    spec=ServiceAccountSpec(description=description),
-                )
-            )
-        )
-    except Exception as exc:
-        if _is_already_exists_error(exc):
-            existing = _wait(
-                service_accounts.get_by_name(
-                    GetServiceAccountByNameRequest(parent_id=project_id, name=service_account_name)
-                )
-            )
-            existing_id = getattr(getattr(existing, "metadata", None), "id", "")
-            if existing_id:
-                return existing_id, False
-        raise
-
-    service_account_id = getattr(operation, "resource_id", "")
-    if service_account_id:
-        return service_account_id, True
-
-    existing = _wait(
-        service_accounts.get_by_name(
-            GetServiceAccountByNameRequest(parent_id=project_id, name=service_account_name)
-        )
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.iam.v1 import (
+        CreateServiceAccountRequest,
+        GetServiceAccountByNameRequest,
+        GetServiceAccountRequest,
+        ServiceAccountServiceClient,
+        ServiceAccountSpec,
     )
-    existing_id = getattr(getattr(existing, "metadata", None), "id", "")
-    if existing_id:
-        return existing_id, True
-    raise RuntimeError("Service account created but ID could not be resolved")
+
+    client = ServiceAccountServiceClient(sdk)
+    try:
+        account = rpc(
+            client.get_by_name,
+            GetServiceAccountByNameRequest(
+                parent_id=project_id, name=service_account_name
+            ),
+        )
+    except CloudError as exc:
+        if exc.code != "NOT_FOUND" or existing_service_account_id is not None:
+            raise
+    else:
+        if existing_service_account_id is None:
+            raise CloudError("EXPLICIT_ACCOUNT_ADOPTION_REQUIRED")
+        return verify_identity(
+            account,
+            parent_id=project_id,
+            name=service_account_name,
+            resource_id=existing_service_account_id,
+        ), False
+    result = submit(
+        client.create,
+        CreateServiceAccountRequest(
+            metadata=ResourceMetadata(parent_id=project_id, name=service_account_name),
+            spec=ServiceAccountSpec(description=description),
+        ),
+    )
+    try:
+        account = rpc(client.get, GetServiceAccountRequest(id=result.resource_id))
+        return verify_identity(
+            account,
+            parent_id=project_id,
+            name=service_account_name,
+            resource_id=result.resource_id,
+        ), True
+    except Exception:  # noqa: BLE001 - Redact provider details at this boundary.
+        raise CloudError(
+            "ACCOUNT_READBACK_FAILED",
+            resource_id=result.resource_id,
+            operation_id=result.operation_id,
+            outcome="reconcile-required",
+        ) from None

@@ -1,7 +1,23 @@
 id,should_trigger,prompt
-nebius-positive-01,true,"Write Python automation for Nebius IAM Object Storage and VPC resources."
-nebius-positive-02,true,"Check Nebius quota and MK8s GPU platform readiness with the SDK."
-nebius-positive-03,true,"Design safe Nebius service-account and observability endpoint wiring in Python."
-nebius-negative-01,false,"Scaffold a Terraform module for Nebius infrastructure."
-nebius-negative-02,false,"Query metrics and logs from the configured Nebius Grafana MCP server."
-nebius-negative-03,false,"Onboard a component into nebius-cxcli."
+nebius-compute-vm,true,Build a Python Nebius VM provisioner with explicit disk and subnet identity and bounded readiness.
+nebius-compute-gpu,true,Check exact GPU platform preset fabric and quota prerequisites for Nebius MK8s.
+nebius-kubernetes,true,List Nebius Kubernetes clusters and all node groups safely using the Python SDK.
+nebius-storage-block,true,Compare persistent disks and local scratch for a Nebius workload and generate a typed disk request.
+nebius-storage-filesystem,true,Plan Nebius shared filesystem attachment and CSI PVC validation for Kubernetes.
+nebius-storage-s3,true,Create a versioned Nebius bucket in Python and verify S3 object checksums.
+nebius-storage-postgres,true,Write a private Nebius PostgreSQL cluster request with explicit backup settings.
+nebius-networking,true,Inspect Nebius VPC pool subnet and route relationships across all pages.
+nebius-networking-rules,true,Design explicit Nebius security groups and DNS for a private application.
+nebius-observability,true,Design metrics logs and traces ingestion for Nebius VMs and Kubernetes.
+nebius-iam,true,Build safe Nebius service account grants with dedicated groups and explicit adoption.
+nebius-iam-secrets,true,Inventory Nebius SecretStash and KMS metadata without reading payloads.
+nebius-sdk,true,Fix pagination and ambiguous operation failures in my Nebius Python SDK automation.
+nebius-ai-integration,true,Choose between Nebius Kubernetes Soperator and Serverless AI for training integration.
+nebius-terraform,false,Scaffold a Terraform module for Nebius infrastructure.
+nebius-helm,false,Lint and update values.schema.json for my Helm chart.
+nebius-grafana-query,false,Query metrics and logs from the configured Nebius Grafana MCP server.
+nebius-agent-auth,false,Diagnose why this Codex agent cannot discover its Nebius projects.
+nebius-cxcli,false,Onboard a component into nebius-cxcli and update its wizard status command.
+nebius-vpngw,false,Repair the vpngw HA controller fencing and failback state machine.
+nebius-soperator,false,Implement cxcli Soperator upgrade recovery checkpoints.
+nebius-python-project,false,Standardize my Python project with uv Ruff and pytest.
