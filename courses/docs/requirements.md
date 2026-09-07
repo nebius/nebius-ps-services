@@ -520,5 +520,39 @@ Keep source/CPU, installed environment, CUDA/NCCL/GDS, live H100 and browser lan
 
 <!-- /REQUIREMENT: REQ-012 -->
 
+<!-- REQUIREMENT: REQ-013 status=active priority=P1 type=feature -->
+### REQ-013: Nebius course website and navigation
+
+#### User Story
+
+Learners need an attractive central course catalog, direct navigation between the five courses, and clear Nebius attribution and licensing on a publicly browsable website.
+
+#### Acceptance Criteria
+
+- AC-001: A self-contained light editorial catalog at `courses/index.html` introduces the five courses in canonical order with source-derived titles and guided hours, prerequisites, outcomes and working relative links.
+- AC-002: The learning path shows Fundamentals then Optimization followed by three independent specializations. Every course has a catalog link, four direct sibling links and one current-course marker above its lesson contents.
+- AC-003: The catalog and courses carry a readable small-print Nebius B.V. copyright, free educational resource statement and Apache-2.0 license link with the complete license embedded. Preserve third-party notices; do not impose noncommercial or resale restrictions.
+- AC-004: The existing local build and check commands own the generated catalog and course pages. They retain embedded resources, keyboard navigation, readable responsive layouts and standalone course validation.
+- AC-005: A minimal repository welcome page links to the catalog and GitHub. GitHub Pages publishes all eligible repository files from `main` `/` with `.nojekyll`, HTTPS and no custom workflow file.
+
+#### Negative Criteria
+
+- NC-001: No JavaScript framework, external runtime asset, new course prerequisite, arbitrary relative-link permission or license replacement is introduced.
+- NC-002: Local checks do not establish live publication. Respect protected-branch review and verify the actual deployed revision and public routes.
+
+#### Validation Method
+
+Run generated-source parity, the standalone validators, metadata/navigation/license checks, desktop/mobile browser checks and authoritative GitHub Pages plus public HTTP verification.
+
+#### Test Method
+
+Exercise stale and missing catalog output, metadata changes, all navigation edges, current-course identity, disallowed links/resources and license-copy parity.
+
+#### Evaluation Method
+
+Navigate from the repository welcome page through the catalog and between all five courses using pointer and keyboard. Assess small-screen layout and readable attribution independently of static checks.
+
+<!-- /REQUIREMENT: REQ-013 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

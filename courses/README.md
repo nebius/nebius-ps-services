@@ -55,11 +55,14 @@ license remain readable on their own.
 
 ## Website publication
 
-The repository welcome page links to this catalog. GitHub Pages publishes
-`main` from `/(root)`, with a root `.nojekyll` file so committed static files
-are served without Jekyll processing. This makes other eligible repository
-files available under the same site. The site has no custom deployment
-workflow, build service, framework or external font dependency. GitHub still
+The repository welcome page links to this catalog. For initial publication,
+merge the reviewed website files into `main`, then open the repository's
+**Settings → Pages**. Select **Deploy from a branch**, branch **main**, folder
+**/(root)**, and save. Use HTTPS for the published site. The root `.nojekyll`
+file lets GitHub serve committed static files without Jekyll processing.
+This makes other eligible repository files available under the same site.
+The site has no custom deployment workflow, framework or external font
+dependency. GitHub still
 runs its managed Pages deployment when the publishing branch changes.
 
 `tools/build_course_html.py` generates the catalog and individual pages. Titles,
@@ -72,7 +75,12 @@ rebuild all five pages when shared metadata, navigation, styles or licensing
 changes. `--check` always checks the catalog as well as the selected courses.
 
 Run the offline validation commands below before committing generated HTML.
-After a reviewed change reaches `main`, Pages publishes those committed files.
+Once Pages is enabled, reviewed changes to `main` publish those committed files.
+Confirm the deployment succeeded and the root, catalog and five course URLs
+serve the intended revision before declaring a publication complete. See
+[GitHub's publishing-source documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
+for the branch deployment settings.
+
 To preview from a local checkout, serve the repository root with
 `python3 -m http.server --bind 127.0.0.1` and open `/courses/` on that server.
 

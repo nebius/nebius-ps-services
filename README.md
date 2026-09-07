@@ -34,11 +34,13 @@ and operating instructions belong in the owning project folder.
 
 ## Repository Website
 
-The [repository website](https://nebius.github.io/nebius-ps-services/) links to
-the course catalog. GitHub Pages serves committed static files from `main`
-and `/(root)`, with `.nojekyll` and no custom deployment workflow. Other
-eligible repository files are also available through Pages. Course build and
-validation instructions live in [courses/README.md](courses/README.md).
+The [repository website](https://nebius.github.io/nebius-ps-services/) is prepared
+for GitHub Pages and links to the course catalog. To publish it, configure
+Pages to deploy from branch `main` and folder `/(root)` after the website files
+merge. The root `.nojekyll` enables static publication without a custom
+deployment workflow. Other eligible repository files become available through
+Pages as well. Initial setup, course build and validation instructions live in
+[courses/README.md](courses/README.md#website-publication).
 
 ## Changelog Policy
 
