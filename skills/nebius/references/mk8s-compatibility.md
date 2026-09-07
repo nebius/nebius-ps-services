@@ -113,7 +113,7 @@ RDMA cluster checks, also load `references/mk8s-gpu-setup.md`.
 - Public-IP pools for pinned-address node groups must cover:
   - fixed node count, or autoscaling max count
   - plus rolling-update surge headroom
-- If quota or public IPs are fully utilized, a safe staged update is:
+- If quota or public IPs are fully utilized, a possible staged update, requiring disruption analysis and explicit authority, is:
   1. reduce size or max size
   2. apply the spec change
   3. restore the original size
@@ -121,7 +121,7 @@ RDMA cluster checks, also load `references/mk8s-gpu-setup.md`.
 ## Node infra-version checks
 
 - If Cluster Autoscaler or node provisioning behaves unexpectedly, inspect node-group infra versions before assuming the workload or scheduler is at fault.
-- Outdated node infra versions can be the hidden cause of scale-up failures or inconsistent behavior.
+- Infra-version drift is a diagnostic hypothesis; prove a causal divergence before attributing scale-up failures to it.
 - Compare the node-group’s current infra version against the latest rollout for the target region.
 
 ## Maintenance expectations

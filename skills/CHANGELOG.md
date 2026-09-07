@@ -6,6 +6,20 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Aligned `nebius` partial-operation recovery: group membership failures retain
+  both the completed group and pending membership identities with the original
+  sanitized error code. Provisioning rejects invalid readiness budgets and
+  callbacks before creating resources; added focused regression controls and
+  matched the README and API/IAM guidance to these behaviors.
+- Expanded `nebius` into six infrastructure categories with current official
+  sources, a service coverage catalog, portable Python provisioning assets and
+  compute, Kubernetes and storage inspectors alongside VPC/quotas. Added shared
+  bounded SDK operations, explicit identity/adoption, dedicated IAM group checks,
+  credential partial-success recovery and a common inspector JSON envelope.
+  Removed obsolete IAM/bucket helper paths and privileged host shell automation;
+  documented breaking interfaces, active diagnostics and lifecycle ownership.
+  Added pinned offline SDK validation, regression tests and trigger/quality cases.
+
 - Aligned the `create-learning-course` source checker with its literal-listing
   and CLI error contracts: unescaped comments/declarations in source now fail,
   and malformed reference URLs produce HTML validation errors. Added focused

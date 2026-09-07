@@ -4840,5 +4840,141 @@ The course-owned Markdown renderer/full-prose parity gate is a required future
 course artifact, not functionality claimed for this source checker.
 
 <!-- /FEATURE: FEAT-026 -->
+<!-- FEATURE: FEAT-027 reqs=REQ-028 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-027: Six-domain Nebius skill and reusable SDK foundation
+
+#### Requirements Covered
+
+- REQ-028: Provide comprehensive infrastructure guidance and safe portable Python assets.
+
+#### Context Evidence
+
+The existing nebius skill contains IAM assets, three VPC/quota inspectors and
+GPU/VPC/observability references. The accepted design audit found unpaginated
+lists, string-matched errors, implicit IAM group adoption and a privileged pod
+helper presented as inspection. Public Nebius documentation and the published
+Python SDK 0.6.7 provide the vendor baseline.
+
+#### Design Details
+
+Keep one concise skill router with six domain landings and focused references.
+Use a small shared SDK module for scoped authentication, bounded requests and
+operations, complete pagination, typed failures and sanitized reports. Inspectors
+retain explicit selectors and use one JSON envelope with scope, data, complete
+and errors; quota reports identify raw/effective mode. Exit 0 means complete,
+1 incomplete/failed, and 2 invalid input. Callable provisioning examples receive
+explicit clients and requests and perform no import-time operations. IAM reuse
+requires explicit identity and expected membership; partial writes retain safe
+resource/operation identifiers for reconciliation. Replace privileged host
+inspection execution with an explicitly active diagnostic guide.
+
+#### Selected Option
+
+One portable skill with Python-first assets and category references. Adapt
+public-safe patterns without importing or modifying vpngw or cxcli.
+
+#### Alternatives Considered
+
+A larger monolithic entry point hides service boundaries; independent service
+skills duplicate cross-cutting rules; a new lifecycle CLI exceeds scope.
+
+#### Implementation Boundaries
+
+Own nebius source, its metadata/evals/tests, catalog/changelog and this canonical
+spec pair. Terraform/Helm, VPN-HA and cxcli lifecycle remain with their owners.
+AI service coverage is selection/integration only. No new model or agent stack.
+
+#### Test-First Success Criteria
+
+- TDD-001: Identity drift, pagination cycles, false absence, unsafe group reuse, bucket mismatch and partial credential creation have negative controls.
+- TDD-002: Real SDK message construction and an isolated skill copy validate callable assets without cloud authentication or RPCs.
+
+#### Validation Plan
+
+Run strict skill validation, focused Python/shell/YAML/link checks and canonical
+spec validation; apply align-skill and changed-scope align.
+
+#### Test Plan
+
+Use stdlib unittest and mocked requests for failures and outcomes; separately
+check pinned real SDK classes and representative requests. Help/imports must be
+side-effect-free and inspector output must omit unrestricted resource payloads.
+
+#### Evaluation Plan
+
+Maintain six-category trigger cases and workflow-quality scenarios. Report
+STATIC_PASS, RUNTIME_PASS and QUALITY_PASS only with their own evidence.
+
+#### Rollout And Rollback
+
+Publish source changes only; verify a disposable isolated copy. Real installation,
+cloud operations and model eval runs are separate actions. Revert only the owned
+source changes if validation finds a regression; no infrastructure rollback.
+
+#### Done Definition
+
+All six routes, guides, assets and local validation agree; code/security review
+findings are resolved and evidence boundaries are explicit.
+
+#### Implementation Evidence
+
+Implemented a 127-line category router, six domain landing guides, service
+coverage/maturity catalog and focused integration/diagnostic/adoption references.
+The standalone assets provide typed compute, Kubernetes, storage, network and
+IAM patterns with shared SDK auth, full bounded pagination, explicit identity,
+operation/readiness handling and sanitized reports. Six read-only inspectors
+cover compute, Kubernetes, storage, VPC topology/routes and quotas. Existing
+service-account/bucket reuse requires exact adoption; dedicated-group grants
+and resumable credential retrieval preserve identity and mutation boundaries.
+
+The SDK helper retains identities learned during polling and preserves a
+primary reconciliation failure when client closure also fails. Quota
+measurements require active quota and known usage states; real protobuf default
+zero cannot become false headroom. VPC graph reads validate project, network,
+route table and route identities. Privileged host shell automation was removed
+in favor of an explicitly scoped active-diagnostic procedure. Catalog, README,
+changelog, metadata, 22 trigger cases and four quality cases match the source.
+Donor projects and real installed-skill directories were not modified.
+
+The subsequent alignment pass preserves completed group identities and pending
+membership operation/resource identities separately on IAM failure, retaining
+the original sanitized status. Provisioning validates readiness budgets and
+readiness/readback callables before submitting a create; bucket readiness
+budgets validate before cloud access. These repairs restore the existing
+partial-failure and fail-fast contracts without changing authorization scope.
+
+#### Verification Evidence
+
+STATIC_PASS: 39 offline unittest tests pass in the source tree and again from
+an isolated copied skill with no donor projects. Tests include pinned real
+nebius 0.6.7 API/request serialization, full pagination, identity/adoption,
+credential partial success, bucket mismatch, object integrity, quota states,
+side-effect-free imports/help and local reference closure. Python 3.10 syntax
+compatibility was checked; execution used Python 3.12. The complete validation
+environment is recorded in requirements-validation.txt.
+
+Ruff, Markdown lint, shell syntax/ShellCheck, YAML parsing, whitespace and strict
+skill validation pass. The structure validator's tests-directory warning was
+reviewed: it contains purposeful offline regression tests, not runtime skill
+resources. Read-only code/security and documentation reviews completed; exact
+negative controls for lost polling IDs, closure masking and false quota
+headroom failed before repair, passed afterward and were independently rechecked.
+
+The explicit alignment rerun added four focused regression tests, reproduced
+lost membership identity and invalid-timeout submission before repair, and
+reran the complete suite from source and a cache-free isolated copy. Independent
+nested code/security review approved the final repaired scope; documentation,
+CLI/help/import checks and static gates agree. No CI execution was requested or
+used as evidence; the documented validation commands run locally.
+
+RUNTIME_PASS and QUALITY_PASS are NOT_RUN: no fresh installed agent routing or
+clean model/baseline comparison was executed. Trigger/quality files are evaluated
+definitions only. The captured prior source was used for preservation review;
+line reduction is not a model-quality measurement. Live cloud provisioning,
+workload readiness, GPU/RDMA performance and telemetry delivery were NOT_RUN.
+The isolated copy demonstrates source portability, not real installation or
+cloud behavior.
+
+<!-- /FEATURE: FEAT-027 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

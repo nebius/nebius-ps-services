@@ -1,9 +1,11 @@
+# Active diagnostic: creates a GPU-consuming pod. Not GPUDirect/NCCL proof.
 apiVersion: v1
 kind: Pod
 metadata:
-  name: rdma-gpu-proof
+  generateName: rdma-gpu-proof-
 spec:
   restartPolicy: Never
+  activeDeadlineSeconds: 120
   tolerations:
     - key: nvidia.com/gpu
       operator: Exists
@@ -20,8 +22,8 @@ spec:
         - |
           set -euo pipefail
           nvidia-smi
-          ls -l /dev/infiniband || true
-          sleep 3600
+          test -d /dev/infiniband
+          ls -l /dev/infiniband
       resources:
         limits:
           nvidia.com/gpu: "1"

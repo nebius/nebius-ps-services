@@ -2541,5 +2541,44 @@ available. Otherwise label runtime routing and comparative quality unavailable
 without inferring them from static validation.
 
 <!-- /REQUIREMENT: REQ-027 -->
+<!-- REQUIREMENT: REQ-028 status=active priority=P1 type=feature -->
+### REQ-028: Provide reusable Nebius infrastructure guidance and safe SDK assets
+
+#### User Story
+
+Cloud engineers need one portable Nebius skill covering compute, storage,
+networking, observability, IAM, and API/SDK integration, with practical examples
+and reliable inspection helpers reusable outside this monorepo.
+
+#### Acceptance Criteria
+
+- AC-001: Six domain routes lead to current official-source guidance, service maturity and availability checks, lifecycle, permissions, effects, readiness, and reusable assets. Soperator, Serverless AI, and MLflow have selection/integration coverage.
+- AC-002: Python assets use one tested SDK contract for explicit identity, complete bounded pagination, typed failures, operation deadlines, owned client closure, and sanitized complete/incomplete reports.
+- AC-003: Existing IAM group adoption, credential partial-success recovery, bucket mismatch detection, VPC pagination, and active diagnostic boundaries fail safely.
+- AC-004: Existing VPC/quota and new compute/Kubernetes/storage inspectors work from an isolated skill copy; practical provisioning examples have offline tests and real SDK schema checks.
+- AC-005: Source tests, SDK compatibility, installation portability, runtime triggers, output quality, and live cloud evidence are reported independently.
+
+#### Negative Criteria
+
+- NC-001: Do not modify or depend on donor service projects, copy private automation, invent a cloud orchestration CLI, or retain compatibility shims.
+- NC-002: Do not treat skill selection as mutation authority, report failed inventory as empty, print secrets, silently substitute cloud targets, or run privileged diagnostics as passive observation.
+
+#### Validation Method
+
+Strict skill validation, canonical spec validation, focused lint/syntax and
+reference checks, and an isolated-copy portability check.
+
+#### Test Method
+
+Offline unittest regression tests and separate real SDK import/request-schema
+smoke checks against the pinned validation dependencies.
+
+#### Evaluation Method
+
+Review category coverage and public-safe references; define trigger and output
+quality cases. Fresh model/runtime and live target proof are separate optional
+lanes and cannot be inferred from deterministic checks.
+
+<!-- /REQUIREMENT: REQ-028 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

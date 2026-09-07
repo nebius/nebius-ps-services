@@ -1,0 +1,15 @@
+# Active storage configuration: creates a PVC and may cause volume provisioning.
+# Follow the Nebius mounted-filesystem CSI guide first. Verify node mount identity,
+# dataDir, StorageClass driver and Retain reclaim policy; names below are placeholders.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-workspace
+  namespace: <namespace>
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: <verified-retained-filesystem-storage-class>
+  resources:
+    requests:
+      storage: 1Gi

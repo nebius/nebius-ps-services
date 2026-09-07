@@ -1,3 +1,4 @@
+# Reviewed 2026-09-07; examples only. Verify service/region/auth support before use.
 services:
   monitoring:
     write:
@@ -48,20 +49,3 @@ auth:
     note: "Requires a VM-attached service account with observability write permissions."
   operator_tools:
     authorization_header: "Authorization: Bearer <observability static token or IAM token>"
-
-cxcli_contract:
-  catalog:
-    mk8s: "components.infra.mk8s.cli.observability.*"
-    vm: "components.infra.vm.cli.observability.*"
-    app_metric_targets: "components.apps.<id>.cli.observability.metric_targets"
-  config:
-    mk8s_target_switch: "deploy.targets[].observability.enabled"
-    deploy_switch_note: "Controls whether cxcli deploys/configures collectors; it does not create the project-scoped service endpoints."
-    kubernetes: "deploy.targets[].observability.kubernetes.*"
-    vm_project_switch: "deploy.observability.enabled"
-    vm_logs: "deploy.observability.vm.logs.*"
-    vm_collector: "deploy.observability.vm.collector.*"
-  runtime_materialization:
-    mk8s: "collector chart rows + values.config.*"
-    vm: "nebius.o11y.systemd-logs-collection.* labels in infra.components[].inputs.labels"
-    vm_standalone_collector: "hidden VM module inputs that bootstrap nebius-o11y-agent plus a Prometheus agent companion"

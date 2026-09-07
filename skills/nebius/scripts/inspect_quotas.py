@@ -2,24 +2,29 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-ASSET_IAM_DIR = Path(__file__).resolve().parents[1] / "assets" / "iam"
-sys.path.insert(0, str(ASSET_IAM_DIR))
+ASSET_DIR = Path(__file__).resolve().parents[1] / "assets"
+sys.path.insert(0, str(ASSET_DIR))
 
-from iam_api import init_nebius_sdk  # type: ignore  # noqa: E402
+from sdk.inspection import Report
+from sdk.runtime import (
+    CloudError,
+    collect_pages,
+    init_nebius_sdk,
+    verify_identity,
+)
 
 
 def _as_text(value: object) -> str:
     return str(value or "").strip()
 
 
-def _available(limit: int | None, usage: int) -> int | None:
-    if limit is None:
+def _available(limit: int | None, usage: int | None) -> int | None:
+    if limit is None or usage is None or limit < 0 or usage < 0:
         return None
     return max(limit - usage, 0)
 
@@ -30,7 +35,7 @@ class QuotaRow:
     name: str
     region: str
     limit: int | None
-    usage: int
+    usage: int | None
     available: int | None
     service: str
     description: str
@@ -40,60 +45,72 @@ class QuotaRow:
     usage_percentage: str
 
 
-def _list_quotas(client: Any, *, parent_id: str, scope: str) -> dict[tuple[str, str], QuotaRow]:
+def _list_quotas(
+    client: Any, *, parent_id: str, scope: str
+) -> dict[tuple[str, str], QuotaRow]:
     from nebius.api.nebius.quotas.v1 import (
         ListQuotaAllowancesRequest,
         QuotaAllowanceServiceClient,
+        QuotaAllowanceStatus,
     )
 
     quota_client = QuotaAllowanceServiceClient(client)
     items: dict[tuple[str, str], QuotaRow] = {}
-    page_token = ""
-    while True:
-        response = quota_client.list(
-            ListQuotaAllowancesRequest(
-                parent_id=parent_id,
-                page_size=500,
-                page_token=page_token,
-            )
-        ).wait()
-        for item in list(getattr(response, "items", []) or []):
-            metadata = getattr(item, "metadata", None)
-            spec = getattr(item, "spec", None)
-            status = getattr(item, "status", None)
-            name = _as_text(getattr(metadata, "name", None))
-            region = _as_text(getattr(spec, "region", None))
-            if not name or not region:
-                continue
-            limit = getattr(spec, "limit", None)
-            usage = int(getattr(status, "usage", 0) or 0)
-            items[(name, region)] = QuotaRow(
-                scope=scope,
-                name=name,
-                region=region,
-                limit=limit,
-                usage=usage,
-                available=_available(limit, usage),
-                service=_as_text(getattr(status, "service", None)),
-                description=_as_text(getattr(status, "description", None)),
-                unit=_as_text(getattr(status, "unit", None)),
-                state=_as_text(getattr(getattr(status, "state", None), "name", None)),
-                usage_state=_as_text(getattr(getattr(status, "usage_state", None), "name", None)),
-                usage_percentage=_as_text(getattr(status, "usage_percentage", None)),
-            )
-        page_token = _as_text(getattr(response, "next_page_token", None))
-        if not page_token:
-            return items
+    for item in collect_pages(
+        quota_client.list,
+        lambda token: ListQuotaAllowancesRequest(
+            parent_id=parent_id, page_size=500, page_token=token
+        ),
+    ):
+        verify_identity(item, parent_id=parent_id)
+        metadata = getattr(item, "metadata", None)
+        spec = getattr(item, "spec", None)
+        status = getattr(item, "status", None)
+        name = _as_text(getattr(metadata, "name", None))
+        region = _as_text(getattr(spec, "region", None))
+        if not name or not region:
+            raise CloudError("QUOTA_DIMENSION_MISSING")
+        if (name, region) in items:
+            raise CloudError("DUPLICATE_QUOTA_DIMENSION")
+        limit = getattr(spec, "limit", None)
+        usage = getattr(status, "usage", None)
+        # Proto scalar zero is not evidence of a measured zero.
+        measured = getattr(status, "usage_state", None) in (
+            QuotaAllowanceStatus.UsageState.USAGE_STATE_USED,
+            QuotaAllowanceStatus.UsageState.USAGE_STATE_NOT_USED,
+        )
+        active = (
+            getattr(status, "state", None) == QuotaAllowanceStatus.State.STATE_ACTIVE
+        )
+        if not measured or not active:
+            usage = None
+        items[(name, region)] = QuotaRow(
+            scope=scope,
+            name=name,
+            region=region,
+            limit=limit,
+            usage=usage,
+            available=_available(limit, usage),
+            service=_as_text(getattr(status, "service", None)),
+            description=_as_text(getattr(status, "description", None)),
+            unit=_as_text(getattr(status, "unit", None)),
+            state=_as_text(getattr(getattr(status, "state", None), "name", None)),
+            usage_state=_as_text(
+                getattr(getattr(status, "usage_state", None), "name", None)
+            ),
+            usage_percentage=_as_text(getattr(status, "usage_percentage", None)),
+        )
+    return items
 
 
-def _match_filters(row: QuotaRow, *, regions: set[str], names: set[str], prefixes: tuple[str, ...]) -> bool:
+def _match_filters(
+    row: QuotaRow, *, regions: set[str], names: set[str], prefixes: tuple[str, ...]
+) -> bool:
     if regions and row.region not in regions:
         return False
     if names and row.name not in names:
         return False
-    if prefixes and not any(row.name.startswith(prefix) for prefix in prefixes):
-        return False
-    return True
+    return not prefixes or any(row.name.startswith(prefix) for prefix in prefixes)
 
 
 def _filtered_rows(
@@ -115,14 +132,27 @@ def _effective_rows(
     project_rows: dict[tuple[str, str], QuotaRow],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for name, region in sorted(set(tenant_rows) | set(project_rows), key=lambda item: (item[1], item[0])):
+    for name, region in sorted(
+        set(tenant_rows) | set(project_rows), key=lambda item: (item[1], item[0])
+    ):
         tenant = tenant_rows.get((name, region))
         project = project_rows.get((name, region))
 
         tenant_available = tenant.available if tenant is not None else None
         project_available = project.available if project is not None else None
 
-        if tenant_available is not None and project_available is not None:
+        unresolved = any(
+            row is not None
+            and (
+                row.state != "STATE_ACTIVE"
+                or (row.limit is not None and row.usage is None)
+            )
+            for row in (tenant, project)
+        )
+        if unresolved:
+            available = None
+            source_scope = "unresolved"
+        elif tenant_available is not None and project_available is not None:
             available = min(tenant_available, project_available)
             source_scope = "tenant+project"
         elif project_available is not None:
@@ -151,61 +181,13 @@ def _effective_rows(
                 "project_limit": project.limit if project is not None else None,
                 "project_usage": project.usage if project is not None else None,
                 "project_available": project_available,
+                "tenant_state": tenant.state if tenant else None,
+                "tenant_usage_state": tenant.usage_state if tenant else None,
+                "project_state": project.state if project else None,
+                "project_usage_state": project.usage_state if project else None,
             }
         )
     return rows
-
-
-def _format_value(value: Any) -> str:
-    return "unresolved" if value is None else str(value)
-
-
-def _format_raw_rows(rows: list[QuotaRow]) -> str:
-    lines: list[str] = []
-    for row in rows:
-        lines.append(f"{row.scope}: {row.name} [{row.region}]")
-        lines.append(f"  available: {_format_value(row.available)} {row.unit}".rstrip())
-        lines.append(f"  limit: {_format_value(row.limit)}")
-        lines.append(f"  usage: {row.usage}")
-        if row.service:
-            lines.append(f"  service: {row.service}")
-        if row.description:
-            lines.append(f"  description: {row.description}")
-        if row.state:
-            lines.append(f"  state: {row.state}")
-        if row.usage_state:
-            lines.append(f"  usage_state: {row.usage_state}")
-        if row.usage_percentage:
-            lines.append(f"  usage_percentage: {row.usage_percentage}")
-    return "\n".join(lines)
-
-
-def _format_effective_rows(rows: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for row in rows:
-        lines.append(f"{row['name']} [{row['region']}]")
-        lines.append(
-            f"  effective_available: {_format_value(row['effective_available'])} ({row['source_scope']})"
-        )
-        lines.append(
-            "  tenant: "
-            f"limit={_format_value(row['tenant_limit'])} "
-            f"usage={_format_value(row['tenant_usage'])} "
-            f"available={_format_value(row['tenant_available'])}"
-        )
-        lines.append(
-            "  project: "
-            f"limit={_format_value(row['project_limit'])} "
-            f"usage={_format_value(row['project_usage'])} "
-            f"available={_format_value(row['project_available'])}"
-        )
-        if row["unit"]:
-            lines.append(f"  unit: {row['unit']}")
-        if row["service"]:
-            lines.append(f"  service: {row['service']}")
-        if row["description"]:
-            lines.append(f"  description: {row['description']}")
-    return "\n".join(lines)
 
 
 def main() -> int:
@@ -247,67 +229,59 @@ def main() -> int:
     )
     parser.add_argument("--profile", help="Optional Nebius CLI profile")
     parser.add_argument("--endpoint", help="Optional Nebius API endpoint override")
-    parser.add_argument("--config-file", type=Path, help="Optional Nebius CLI config file path")
+    parser.add_argument(
+        "--config-file", type=Path, help="Optional Nebius CLI config file path"
+    )
     args = parser.parse_args()
 
     if not args.tenant_id and not args.project_id:
         parser.error("at least one of --tenant-id or --project-id is required")
 
     config_file = args.config_file.expanduser().resolve() if args.config_file else None
-    client = init_nebius_sdk(
-        profile=args.profile,
-        endpoint=args.endpoint,
-        config_file=config_file,
-        parent_id=args.project_id or args.tenant_id,
+    report = Report(
+        {
+            "tenant_id": args.tenant_id,
+            "project_id": args.project_id,
+            "regions": args.region,
+            "names": args.name,
+            "prefixes": args.name_prefix,
+        },
+        mode="raw" if args.raw else "effective",
     )
-    regions = {item for item in (_as_text(value) for value in args.region) if item}
-    names = {item for item in (_as_text(value) for value in args.name) if item}
-    prefixes = tuple(item for item in (_as_text(value) for value in args.name_prefix) if item)
 
-    try:
-        tenant_rows = (
-            _filtered_rows(
-                _list_quotas(client, parent_id=args.tenant_id, scope="tenant"),
-                regions=regions,
-                names=names,
-                prefixes=prefixes,
-            )
-            if args.tenant_id
-            else {}
+    def build():
+        client = init_nebius_sdk(
+            profile=args.profile,
+            endpoint=args.endpoint,
+            config_file=config_file,
+            parent_id=args.project_id or args.tenant_id,
         )
-        project_rows = (
-            _filtered_rows(
-                _list_quotas(client, parent_id=args.project_id, scope="project"),
-                regions=regions,
-                names=names,
-                prefixes=prefixes,
-            )
-            if args.project_id
-            else {}
-        )
-
-        if args.raw or not tenant_rows or not project_rows:
-            raw_rows = sorted(
-                [*tenant_rows.values(), *project_rows.values()],
-                key=lambda item: (item.region, item.name, item.scope),
-            )
-            if args.json:
-                print(json.dumps([asdict(item) for item in raw_rows], indent=2))
-            else:
-                print(_format_raw_rows(raw_rows))
-            return 0
-
-        effective_rows = _effective_rows(tenant_rows, project_rows)
-        if args.json:
-            print(json.dumps(effective_rows, indent=2))
-        else:
-            print(_format_effective_rows(effective_rows))
-        return 0
-    finally:
         try:
-            client.sync_close()
-        except Exception:
-            pass
+            scopes = {}
+            for label, parent in [
+                ("tenant", args.tenant_id),
+                ("project", args.project_id),
+            ]:
+                scopes[label] = (
+                    _filtered_rows(
+                        _list_quotas(client, parent_id=parent, scope=label),
+                        regions=set(args.region),
+                        names=set(args.name),
+                        prefixes=tuple(args.name_prefix),
+                    )
+                    if parent
+                    else {}
+                )
+            if args.raw:
+                return [
+                    asdict(row) for rows in scopes.values() for row in rows.values()
+                ]
+            return _effective_rows(scopes["tenant"], scopes["project"])
+        finally:
+            client.sync_close(timeout=10.0)
+
+    report.collect("quotas", build)
+    return report.emit(as_json=args.json)
 
 
 if __name__ == "__main__":

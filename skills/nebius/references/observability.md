@@ -1,131 +1,68 @@
-# Nebius Observability
+# Observability
 
-Use this reference when the task is about Nebius observability architecture,
-public endpoints, agent selection, or how `services/nebius-cxcli` should model
-observability in `component_sources.yaml` and `config.yaml`.
+Reviewed 2026-09-07. Monitoring, Logging and Tracing have distinct ingest/read
+interfaces; Audit Logs is a separate tenant-level security service documented
+as preview. Use current service coverage and regional docs rather than assuming
+every resource emits every signal. The endpoint template is a reference, not
+proof that a credential or project can use the endpoint.
 
-## Public Product Model
+## Choose collection and query paths
 
-Nebius observability has three public services:
+| Path | Responsibility | Verification |
+| --- | --- | --- |
+| Built-in Compute Monitoring agent | Provider-managed VM system metrics; optional journald collection | Resource signal freshness and expected labels |
+| Standalone VM collector | Explicitly configured additional collection | Service health, auth, export errors and actual ingestion |
+| Nebius Observability Agent for Kubernetes | Chart-managed logs/metrics/traces | Config, pods, service endpoints and received signals |
+| Prometheus/OpenTelemetry integrations | Application-specific signals | Scrape/receiver/exporter health plus query results |
+| Audit Logs | Control-plane activity by actors/resources | Explicitly scoped audit query and supported-service coverage |
 
-- Monitoring: metrics storage, dashboards, alerts, and Prometheus-compatible
-  read/write flows.
-- Logging: log storage, LogQL-compatible querying, CLI access, and
-  Loki-compatible read flows.
-- Tracing: OpenTelemetry trace ingest plus Tempo-compatible read flows.
+The Kubernetes agent's documented chart is
+`oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`.
+Helm owns installation/upgrade; keep the selected chart version and effective
+values in the owning project. Built-in VM ingestion is not a configurable public
+write endpoint. Use `assets/observability/public-endpoints.yaml` for protocol,
+region/project placeholders and auth distinctions; resolve exact endpoints
+from current docs and never substitute private observed endpoints into templates.
 
-Nebius also has two agent families:
+## Operational workflow
 
-- Monitoring agent on Compute VMs:
-  - preinstalled on Compute VMs and Managed Kubernetes node VMs
-  - collects system metrics automatically
-  - can collect journald logs from systemd services when the supported VM
-    labels are enabled
-- Nebius Observability Agent for Kubernetes:
-  - explicit Helm chart for Managed Kubernetes clusters:
-    `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`
-  - detailed public docs define logs, metrics, and traces for this agent
-  - exposes an in-cluster OTLP/gRPC trace receiver
+1. Select project/region, target resources, signal types, collection owner and
+   read/write principals. Verify service-specific roles or static-token scope.
+2. Check built-in signals first. Avoid installing duplicate collectors or
+   duplicate scrape jobs; limit labels and exclude sensitive log fields.
+3. Configure only the authorized owner. Changing VM journald labels requires
+   stop/start according to the docs, so it is an availability-affecting change.
+   Explicit systemd unit selection makes collection scope reviewable.
+4. Verify configuration, agent pods/services and exporter errors without
+   claiming end-to-end delivery from component readiness alone.
+5. Query bounded resource/time-scoped metrics/logs/traces. Confirm freshness,
+   expected labels and timestamps. LogQL requires an explicit `__bucket__`
+   selector (or the Nebius CLI `--bucket`); verify it before diagnosing empty
+   results. Empty results may mean no signal, missing
+   permissions, wrong scope or query limitations; distinguish those outcomes.
+6. When a synthetic marker is needed, declare it as an active data write, run
+   it only with authority, and verify receipt independently. Keep configuration
+   readiness, ingest delivery and application performance as separate evidence.
 
-For `nebius-cxcli`, treat these as separate control surfaces. Do not collapse
-the VM Monitoring agent and the MK8s Helm agent into one generic "o11y agent"
-config branch.
+Alerts need a concrete condition, evaluation window, scope and response owner.
+Control scrape volume, high-cardinality labels and retention using current
+limits/pricing. Trace context propagation and sampling are application concerns;
+agent deployment alone does not instrument an application. Dashboard presence
+is not evidence of healthy workloads.
 
-## `nebius-cxcli` Design Contract
+Use the dedicated Grafana-query skill when available. Do not install/configure
+MCP or repair IAM during a query. Audit Logs are excluded from implicit broad
+inspection; follow the explicit audit workflow when requested. Log export,
+alert creation, agent installation and journal reconfiguration are writes.
 
-`component_sources.yaml` owns source facts:
+## Official references
 
-- `components.infra.mk8s.cli.observability.*`
-- `components.infra.vm.cli.observability.*`
-- `components.apps.<id>.cli.observability.metric_targets`
-- `components.apps.nebius-observability-agent.source.portable.repo` is pinned
-  to `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`
-  for the Kubernetes agent chart
-
-Built-in agent defaults now live under `primary_agent.*`:
-
-- MK8s: `primary_agent.{kind,chart_component_id,logs,metrics,traces}`
-- VM: `primary_agent.{kind,metrics,logs}`
-- VM standalone collector remains the separate `public_ingest.*` branch
-
-`config.yaml` owns deploy intent:
-
-- `deploy.targets[].observability.enabled`
-- `deploy.targets[].observability.kubernetes.*`
-- `deploy.observability.enabled`
-- `deploy.observability.vm.logs.*`
-- `deploy.observability.vm.collector.*`
-
-`deploy.targets[].observability.enabled` is the cxcli per-cluster switch for
-deploying/configuring MK8s collectors. `deploy.observability.enabled` gates the
-VM observability branches. These switches do not create the Nebius
-Monitoring/Logging/Tracing service endpoints themselves; those are
-project-scoped service surfaces.
-
-Normalization/materialization owns runtime state:
-
-- MK8s:
-  - ensure collector app rows
-  - write `values.config.*` into the chart rows
-  - keep target scoping explicit in multi-cluster projects
-- VM:
-  - write supported Compute labels into `infra.components[].inputs.labels`
-  - built-in Monitoring-agent metrics stay platform-managed
-- VM standalone collector:
-  - install/configure `nebius-o11y-agent` plus a Prometheus agent companion
-  - pull the package from the canonical public Artifactory APT repo `https://artifactory.nebius.dev/artifactory/nebius-o11y-agent`
-  - require a VM-attached service account and use `/mnt/cloud-metadata/token`
-  - keep this path separate from the built-in Monitoring agent
-
-## Endpoint Model
-
-Use `assets/observability/public-endpoints.yaml` for the public-safe endpoint
-map and config-branch summary.
-
-High-level split:
-
-- MK8s path:
-  - write endpoints are relevant
-  - read endpoints are relevant
-  - agent auth should stay on Nebius-managed metadata/IAM paths
-  - chart-native `config.metrics.additionalTargets` is the extension point for
-    custom Prometheus scrape configs
-  - source-owned app metric targets can use `discovery.kind: additional_target`
-    so cxcli renders catalog jobs into the agent while preserving customer jobs
-- VM path:
-  - read endpoints are relevant
-  - built-in VM metrics and opt-in journald logs use Nebius-managed internal ingest
-  - journald log collection uses supported Compute labels
-  - cxcli should not invent a customer-configurable VM public write-endpoint contract for the built-in agent
-- VM standalone collector path:
-  - public write endpoints are relevant
-  - host metrics use Monitoring Prometheus remote_write
-  - journald logs use the public Logging gRPC endpoint
-  - auth stays on the VM metadata token, not static repo config
-
-## Operational Notes
-
-- Existing VMs need stop/start after changing journald labels.
-- Public docs say omitted VM `systemd_units` means all units; explicit units are
-  still the deterministic smoke-test path.
-- The standalone VM collector is a narrower first cut: module-managed
-  Ubuntu-family boot disks, host metrics plus journald logs, and a required
-  attached service account for metadata-token auth.
-- The public agents overview page is simplified; use the detailed Kubernetes
-  agent page as the source of truth for the supported Helm chart source and
-  logs, metrics, and traces support.
-- Keep static observability keys, Grafana credentials, and raw agent secrets
-  out of public repo config and generated artifacts.
-
-## Useful Public Docs
-
-- `https://docs.nebius.com/observability/`
-- `https://docs.nebius.com/observability/agents`
-- `https://docs.nebius.com/observability/agents/nebius-o11y-agent`
-- `https://docs.nebius.com/observability/metrics/ingest/nebius-o11y-agent`
-- `https://docs.nebius.com/observability/logs/ingest/nebius-o11y-agent`
-- `https://docs.nebius.com/observability/traces/ingest`
-- `https://docs.nebius.com/observability/agents/monitoring-agent`
-- `https://docs.nebius.com/observability/logs/journald`
-- `https://docs.nebius.com/observability/metrics/grafana`
-- `https://docs.nebius.com/observability/traces/grafana`
+- [Service signal coverage](https://docs.nebius.com/observability/services)
+- [Agents](https://docs.nebius.com/observability/agents)
+- [Kubernetes agent](https://docs.nebius.com/observability/agents/nebius-o11y-agent)
+- [Journald labels](https://docs.nebius.com/observability/logs/journald)
+- [Alerts](https://docs.nebius.com/observability/alerts)
+- [Metrics queries](https://docs.nebius.com/observability/metrics/prometheus)
+- [Logs query language](https://docs.nebius.com/observability/logs/query-language)
+- [Tracing](https://docs.nebius.com/observability/tracing)
+- [Audit Logs](https://docs.nebius.com/audit-logs)

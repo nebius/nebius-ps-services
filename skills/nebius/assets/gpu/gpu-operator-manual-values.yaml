@@ -21,7 +21,9 @@ toolkit:
   enabled: true
 
 nfd:
-  enabled: false
+  # Enable when GPU Operator is the sole NFD owner. Disable only after verifying
+  # that Network Operator or another component already owns NFD.
+  enabled: true
 
 migManager:
   enabled: false
