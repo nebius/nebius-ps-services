@@ -95,6 +95,35 @@ def test_remote_install_lease_acquires_renews_and_releases() -> None:
     assert lease.object_state is None
 
 
+@pytest.mark.parametrize("key_case", (str.title, str.upper))
+def test_remote_install_lease_accepts_case_insensitive_metadata_headers(key_case) -> None:
+    class CasedHeadersLease(_InMemoryLease):
+        def _aws(self, *args: str) -> subprocess.CompletedProcess[str]:
+            response = super()._aws(*args)
+            if args[0] == "head-object" and response.returncode == 0:
+                payload = json.loads(response.stdout)
+                payload["Metadata"] = {key_case(k): v for k, v in payload["Metadata"].items()}
+                return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+            return response
+
+    lease = CasedHeadersLease(settings=_settings(), target_ref="mk8s", operation_id="operation-a")
+    with lease:
+        lease.assert_held()
+        lease.bind_cluster_identity(cluster_id="cluster-a", kubernetes_uid="uid-a")
+        lease.assert_held()
+        lease.renew()
+        lease.assert_held()
+    assert lease.object_state is None
+
+
+def test_remote_install_lease_rejects_ambiguous_metadata_key_casing() -> None:
+    lease = _InMemoryLease(settings=_settings(), target_ref="mk8s", operation_id="operation-a")
+    with lease:
+        lease.object_state["metadata"]["Holder"] = "another-owner"
+        with pytest.raises(RuntimeError, match="ambiguous.*metadata"):
+            lease.assert_held()
+
+
 def test_remote_install_lease_rejects_active_owner() -> None:
     lease = _InMemoryLease(
         settings=_settings(),

@@ -23,6 +23,16 @@ from .peer_parsers.importer import (
 )
 
 
+class MissingEnvironmentVariablesError(ValueError):
+    """Configuration admission failed without retaining any secret values."""
+
+    def __init__(self, variables: t.Iterable[str]) -> None:
+        self.variables = tuple(sorted(set(variables)))
+        super().__init__(
+            "Missing environment variables for placeholders: " + ", ".join(self.variables)
+        )
+
+
 @dataclass
 class GatewayGroupSpec:
     name: str
@@ -483,9 +493,7 @@ def load_local_config(
         missing.difference_update(unresolved_tunnel_psk_names)
     if missing and not allow_missing_placeholders:
         # Surface all missing vars at once to help the user export them.
-        raise ValueError(
-            "Missing environment variables for placeholders: " + ", ".join(sorted(missing))
-        )
+        raise MissingEnvironmentVariablesError(missing)
 
     # Optional convenience: read SSH public key from a path if provided
     # DO THIS BEFORE SCHEMA VALIDATION so schema sees the inline key

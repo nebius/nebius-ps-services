@@ -5,6 +5,7 @@ import io
 import subprocess
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -16,6 +17,62 @@ from nebius_cxcli.soperator_release_artifacts import (
     _run,
     _verify_rendered_release_graph,
 )
+
+
+def test_child_validation_checks_third_party_schema_and_hides_diagnostics(tmp_path):
+    import json
+    import shutil
+
+    if not shutil.which("helm"):
+        pytest.skip("helm is required to verify child schemas")
+    chart = tmp_path / "chart"
+    chart.mkdir()
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: example\nversion: 1.0.0\n")
+    (chart / "values.yaml").write_text("replicas: 1\n")
+    (chart / "values.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"replicas": {"type": "integer"}},
+            }
+        )
+    )
+    lock = SimpleNamespace(
+        release_graph=(
+            SimpleNamespace(
+                release_name="dependency",
+                chart_key="certManager",
+                owner="third-party",
+            ),
+        )
+    )
+    consumers = (
+        {
+            "metadata": {"name": "dependency"},
+            "spec": {
+                "releaseName": "example",
+                "targetNamespace": "consumer",
+                "values": {"replicas": "SENSITIVE"},
+            },
+        },
+    )
+    with pytest.raises(ValueError, match="certManager chart rejected") as error:
+        release_artifacts._validate_child_renders(
+            lock,
+            consumers,
+            {"certManager": chart},
+            helm="helm",
+            directory=tmp_path,
+        )
+    assert "SENSITIVE" not in str(error.value)
+    consumers[0]["spec"]["values"] = {"replicas": 2}
+    release_artifacts._validate_child_renders(
+        lock,
+        consumers,
+        {"certManager": chart},
+        helm="helm",
+        directory=tmp_path,
+    )
 
 
 def _render(names: set[str]) -> bytes:
@@ -171,3 +228,38 @@ def test_corrupt_chart_cache_is_refetched_from_exact_upstream(
 
     assert calls == 2
     assert repaired.read_bytes() == package_bytes
+
+
+@pytest.mark.parametrize("drift", [None, "package", "manifest"])
+def test_cold_oci_cache_uses_frozen_manifest_when_version_tag_moves(tmp_path, monkeypatch, drift):
+    original = b"approved chart"
+    sha = "sha256:" + hashlib.sha256(original).hexdigest()
+    manifest = "sha256:" + "a" * 64
+
+    def pull(command, *, label):
+        assert command[2] == "oci://registry.example.invalid/charts/checks@" + manifest
+        assert "--version" not in command
+        destination = Path(command[command.index("--destination") + 1])
+        (destination / "checks-1.0.0.tgz").write_bytes(
+            b"changed tag" if drift == "package" else original
+        )
+        return subprocess.CompletedProcess(
+            command, 0, "", "Digest: " + ("sha256:wrong" if drift == "manifest" else manifest)
+        )
+
+    monkeypatch.setattr(release_artifacts, "_run", pull)
+    kwargs = dict(
+        helm="helm",
+        chart="checks",
+        version="1.0.0",
+        repository="oci://registry.example.invalid/charts",
+        expected_sha256=sha,
+        expected_oci_digest=manifest,
+        cache_dir=tmp_path / "cache",
+    )
+    if drift:
+        with pytest.raises(ValueError, match="digest mismatch"):
+            _cache_chart_package(**kwargs)
+        assert not list((tmp_path / "cache").glob("*.tgz"))
+    else:
+        assert _cache_chart_package(**kwargs).read_bytes() == original

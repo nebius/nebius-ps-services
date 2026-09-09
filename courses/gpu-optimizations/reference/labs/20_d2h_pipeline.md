@@ -4,7 +4,7 @@ A GPU can finish producing an output while a copy or CPU consumer still owns its
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 6 and 8 for event dependencies, pinned D2H destinations, buffer pools, CPU threads, futures, backpressure and final drain. Use Lesson 2’s end-to-end boundary; distinguish GIL-releasing simulated I/O from CPU-bound Python processing.
+**Theory preparation:** Read Lesson 8 for allocation lifetime, bounded output ownership and host-read readiness. Reuse Lessons 2 and 6 for complete-loop timing and stream dependencies. The worker model and five comparison modes are explained below.
 
 Read Lessons 6 and 8 and understand Lab 19's ready/reuse events. Use one qualified H100 environment. The synthetic workload produces 512-square FP32 outputs in smoke mode or 2048-square outputs in h100 mode. Defaults allow two in-flight slots and two worker threads. `--sink-ms` is a controlled blocking delay, not a measurement of a disk, network or Python postprocessor.
 

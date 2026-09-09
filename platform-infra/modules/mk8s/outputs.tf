@@ -62,7 +62,10 @@ output "service_account_ids" {
   description = "Node-group service account IDs keyed by node_groups key when configured."
   value = {
     for key, id in local.node_group_service_account_ids : key => id
-    if id != null
+    if(
+      contains(keys(local.node_group_service_accounts_to_create), key) ||
+      length(trimspace(try(local.node_groups[key].service_account.id != null ? local.node_groups[key].service_account.id : "", ""))) > 0
+    )
   }
 }
 

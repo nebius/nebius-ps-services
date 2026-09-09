@@ -53,8 +53,10 @@
   Subnet allocation mode.
 - `subnet.spec.ipv4_private_pools.pools[*].cidrs`
   Explicit subnet CIDRs when `use_network_pools=false`.
-- `subnet.status.ipv4_private_cidrs`
-  Useful for comparison, but not safe as the only ownership signal.
+- `subnet.status.ipv4_private_pools[*].cidrs`
+  Effective CIDRs from each available pool, not sufficient proof of subnet
+  ownership. The flat `status.ipv4_private_cidrs` field is deprecated; reading
+  it in current SDKs emits a warning and stack trace. Use the pool records.
 - `subnet.status.route_table.default`
   Indicates whether the subnet uses the network default route table.
 - `subnet.status.route_table.id`
@@ -97,7 +99,7 @@ Officially documented behavior to keep in mind:
 
 - treat explicit subnet `spec` CIDRs as authoritative
 - treat inherited subnets as non-owning
-- treat `status.ipv4_private_cidrs` as display/effective-state data; use it as
+- treat `status.ipv4_private_pools[*].cidrs` as display/effective-state data; use it as
   an explicit-ownership fallback only after confirming
   `use_network_pools=false`
 - resolve network parent private CIDRs by reading attached pool IDs and then

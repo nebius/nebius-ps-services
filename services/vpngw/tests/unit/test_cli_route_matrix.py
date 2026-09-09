@@ -787,6 +787,7 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--project-id",),
             ("--region",),
             ("--dry-run",),
+            ("--approve-disruption",),
             ("--prepare-vm-ha-peer-rotation",),
             ("--approve-vm-ha-migration",),
             ("--recover-vm-ha-migration",),

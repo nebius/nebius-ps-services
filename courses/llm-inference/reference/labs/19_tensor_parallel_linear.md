@@ -4,7 +4,7 @@ Tensor parallelism can split a layer's weights across GPUs, but partial outputs 
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 14 for stored weight layout, column/row partitions, broadcast, all-gather concatenation and all-reduce summation. Use Fundamentals Lesson 9’s reference/error principles and Optimizations Lessons 11–12’s network and slowest-rank timing. Complete distributed preflight.
+**Theory preparation:** Read Lesson 14 for row and column partitions and their reconstruction collectives. Fundamentals Lesson 12 supplies ranks and process groups. The setup broadcasts and numerical checks are explained below.
 
 Pass the two-node mechanics preflight and review matrix partitioning. Exactly two ranks are required; both profiles use an evenly divisible hidden width. The experiment retains reference tensors for verification, so it is not a pure memory-minimized deployment. Training's tensor-parallel lab adds backward and gradient checks; this course owns the forward-only capacity and latency question.
 

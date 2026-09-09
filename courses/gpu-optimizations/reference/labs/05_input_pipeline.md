@@ -4,7 +4,7 @@ GPU utilization can be limited by preparing and delivering the next batch rather
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 6 for dataset indexing, collation, DataLoader workers, positive-worker prefetch, pinning and producer/consumer readiness. Use Lesson 2’s timing boundaries to separate preparation, transfer and device work before comparing worker settings.
+**Theory preparation:** Read Lesson 6 for producer-consumer readiness, pinning and input starvation. Use Lesson 2's timing boundaries to separate preparation, transfer and device work. The DataLoader settings are explained below.
 
 Use one H100 and a compute-node environment that supports DataLoader worker processes and pinned memory. The launcher must have enough CPU resources. Pinning is enabled in both variants; positive-worker prefetch is fixed at two.
 
@@ -12,7 +12,7 @@ H100 can consume data rapidly enough that shared storage and modest CPU transfor
 
 ## Concepts and code path
 
-Each dataset sample is generated from its index, so worker count does not change sample content. The loader batches eight samples, pins them, and transfers them to the GPU. Per-batch host timestamps measure readiness and completion; CUDA events measure transfer and consumption. The implementation synchronizes each batch, so these are serialized component measurements, not a proven overlapping pipeline.
+A dataset maps an index to a sample; collation assembles samples into a batch. Deterministic per-index generation keeps content fixed while the loader compares zero and four workers. Zero workers prepare data in the caller; four prepare ahead with prefetch factor two. Batches contain eight samples and use pinned memory. The program synchronizes each batch to measure readiness, transfer and consumption separately. These serialized measurements do not establish copy/compute overlap.
 
 ## Practice
 

@@ -5,6 +5,7 @@ import re
 import shlex
 import subprocess
 from collections.abc import Iterator, Mapping
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,7 @@ from nebius_cxcli.runtime_validation import (
     validate_runtime_payload,
 )
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
+from soperator_fixtures import sample_snapshot
 
 runner = CliRunner()
 _VALID_ED25519_PUBLIC_KEY = (
@@ -8126,3 +8128,629 @@ def test_reconcile_observability_gpu_node_labels_noops_without_enabled_policy(
         {"deploy": {"observability": {"enabled": False}}},
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
     )
+
+
+@pytest.mark.parametrize(
+    "profile,network", [("cpu", False), ("gpu", False), ("gpu", True), ("mixed", True)]
+)
+@pytest.mark.parametrize("interactive", [False, True])
+def test_soperator_install_real_creation_preserves_fields_and_frozen_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    network: bool,
+    interactive: bool,
+    notifier: bool = False,
+) -> None:
+    monkeypatch.setattr(cli_module, "_preflight_soperator_install_checks", lambda *_args: None)
+    snapshot = sample_snapshot()
+    frozen = SimpleNamespace(snapshot=snapshot)
+    captured: list[dict] = []
+    wizard_calls: list[dict] = []
+    monkeypatch.setattr(cli_module, "freeze_soperator_release", lambda *_args, **_kwargs: frozen)
+    monkeypatch.setattr(cli_module, "use_frozen_soperator_release", lambda _frozen: nullcontext())
+    monkeypatch.setattr(cli_module, "_validate_component_sources_or_raise", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli_module, "_validate_final_enabled_app_sources_or_raise", lambda **_kwargs: set()
+    )
+    monkeypatch.setattr(
+        cli_module, "_validate_requested_app_chart_versions_or_raise", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(cli_module, "_run_runtime_validation", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli_module, "_require_vpc_networking_for_noninteractive", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: pytest.fail("install must not offer component selection"),
+    )
+    monkeypatch.setattr(
+        cli_module, "_prompt_soperator_profile", lambda: pytest.fail("duplicate profile prompt")
+    )
+    for name in (
+        "_materialize_singleton_provider_defaults",
+        "_materialize_mk8s_image_defaults",
+        "_materialize_vm_image_defaults",
+    ):
+        monkeypatch.setattr(cli_module, name, lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli_module, "materialize_compute_boot_disk_defaults", lambda *_args, **_kwargs: None
+    )
+
+    apply_profile = cli_module._apply_soperator_profile_to_payload
+
+    def configure(payload: dict, *, profile: str) -> None:
+        apply_profile(payload, profile=profile)
+        mk8s = next(row for row in payload["infra"]["components"] if row["id"] == "mk8s")
+        inputs = mk8s["inputs"]
+        inputs["cluster"]["cluster_name"] = "configured-cluster"
+        gpu_platform = "gpu-h100-sxm" if network else "gpu-l40s-a"
+        gpu_preset = "8gpu-128vcpu-1600gb" if network else "1gpu-8vcpu-32gb"
+        inputs.setdefault("node_group_defaults", {}).setdefault("gpu", {}).update(
+            platform=gpu_platform, preset=gpu_preset, gpu_stack_source="nebius_image"
+        )
+        for group in inputs.get("node_groups", {}).values():
+            if group.get("gpu"):
+                group.update(
+                    platform=gpu_platform,
+                    preset=gpu_preset,
+                    gpu_stack_source="nebius_image",
+                )
+                if network:
+                    group["gpu_cluster_key"] = "workers"
+                else:
+                    group.pop("gpu_cluster_key", None)
+        if network:
+            inputs["gpu_clusters"] = {"workers": {"infiniband_fabric": "fabric-test"}}
+        else:
+            inputs.pop("gpu_clusters", None)
+
+    monkeypatch.setattr(cli_module, "_apply_soperator_profile_to_payload", configure)
+
+    def wizard(**kwargs):
+        wizard_calls.append(kwargs)
+        assert kwargs["selected_infra"] == {"mk8s", "sfs"}
+        assert kwargs["prompt_app_version_before_app_config"] is False
+        assert kwargs["skip_soperator_profile_prompt"] is True
+        assert kwargs["soperator_install"] is True
+        payload = yaml.safe_load(kwargs["config_yaml"])
+        row = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+        row["values"]["slurmConfig"]["clusterName"] = "configured-slurm"
+        if notifier:
+            row["values"]["soperator-notifier"].update(
+                enabled=True,
+                slack={
+                    "mode": "existing-webhook",
+                    "webhookSource": "mysterybox",
+                    "existingSecret": "soperator-notifier-slack-webhook",
+                    "existingSecretKey": "url",
+                    "mysterybox": {"secretId": "mbsec-example", "property": "url"},
+                },
+            )
+        return yaml.safe_dump(payload), True
+
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", wizard)
+    scaffold = cli_module._scaffold_instance
+
+    def capture(**kwargs):
+        captured.append(yaml.safe_load(kwargs["config_yaml"]))
+        return scaffold(**kwargs)
+
+    monkeypatch.setattr(cli_module, "_scaffold_instance", capture)
+    monkeypatch.setattr(cli_module, "render_command", lambda **_kwargs: None)
+    config_path = (
+        tmp_path
+        / _tenant_folder_name("tenant-123")
+        / _project_folder_name("project-456")
+        / "config.yaml"
+    )
+    paths = cli_module.resolve_project_paths(config_path)
+    monkeypatch.setattr(cli_module, "_load_deploy_context", lambda _path: (captured[-1], paths, {}))
+    monkeypatch.setattr(
+        cli_module, "_managed_soperator_install_target_ref", lambda *_args: "configured-cluster"
+    )
+    monkeypatch.setattr(
+        cli_module, "_soperator_install_operation_id", lambda **_kwargs: "sha256:" + "a" * 64
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_install_execution_lease",
+        lambda **_kwargs: nullcontext(SimpleNamespace(assert_held=lambda: None)),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_plan_soperator_install",
+        lambda **_kwargs: (
+            tmp_path / "plan",
+            tmp_path / "receipt",
+            {"approvalFingerprint": "sha256:" + "a" * 64, "release": {"version": snapshot.release}},
+        ),
+    )
+    args = [
+        "soperator",
+        "install",
+        str(tmp_path),
+        "--client-name",
+        "example",
+        "--tenant-id",
+        "tenant-123",
+        "--project-id",
+        "project-456",
+        "--region-id",
+        "eu-north1",
+        "--profile",
+        profile,
+        "--release",
+        snapshot.release,
+        "--dry-run",
+    ]
+    if not interactive:
+        args.append("--no-interactive")
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert len(captured) == 1
+    payload = yaml.safe_load(config_path.read_text())
+    assert {row["id"] for row in payload["infra"]["components"] if row.get("enabled")} == {
+        "mk8s",
+        "sfs",
+    }
+    charts = {row["id"]: row for row in payload["apps"]["charts"] if row.get("enabled")}
+    assert charts["soperator"]["version"] == snapshot.release
+    assert not {"grafana", "gateway-helm", "nebius-observability-agent"} & charts.keys()
+    assert ("external-secrets" in charts) == notifier
+    assert "cert-manager" not in charts
+    assert ("nvidia-gpu-operator" in charts) == (profile != "cpu")
+    assert ("nvidia-network-operator" in charts) == network
+    assert len(wizard_calls) == int(interactive)
+    if interactive:
+        assert charts["soperator"]["values"]["slurmConfig"]["clusterName"] == "configured-slurm"
+    assert "Continue with optional wizard phases" not in result.output
+    assert "Selected infra components" not in result.output
+    assert "Invalid --app-version" not in result.output
+    assert "Soperator install plan:" in result.output
+    dependency_issues = cli_module._component_dependency_issues_from_payload(payload)
+    assert not [issue for issue in dependency_issues if "release.install_after" in issue]
+
+
+def test_install_preserves_required_eso_from_upstream_notifier_configuration(monkeypatch, tmp_path):
+    test_soperator_install_real_creation_preserves_fields_and_frozen_release(
+        monkeypatch, tmp_path, "cpu", False, True, notifier=True
+    )
+
+
+def test_install_full_app_wizard_preserves_frozen_version_and_upstream_fields(monkeypatch, capsys):
+    from nebius_cxcli.soperator_adapter import compile_upstream_soperator_values
+
+    release = sample_snapshot()
+    entry = cli_module.soperator_install_entry(release.release)
+    payload = cli_module._starter_component_payload(
+        client_name="example",
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        email=None,
+        selected_infra={"mk8s", "sfs"},
+        selected_apps={"soperator"},
+        infra_entries=component_entries("infra"),
+        app_entries=(entry,),
+        soperator_profile="nebius-cpu-v1",
+    )
+    chart = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    chart["values"]["controllerManager"] = {"replicas": 1}
+    prompted = []
+
+    def prompt(path_label, current, **_kwargs):
+        prompted.append(path_label)
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", prompt)
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload),
+        selected_infra=set(),
+        selected_apps={"soperator"},
+        infra_entries=(),
+        app_entries=(entry,),
+        skip_soperator_profile_prompt=True,
+        prompt_app_version_before_app_config=False,
+        soperator_install=True,
+    )
+    assert completed
+    output = capsys.readouterr().out
+    assert "Soperator configuration wizard section" in output
+    assert "Apps wizard section" not in output
+    assert "namespace=flux-system" not in output
+    assert "frozen release 4.1.7" in output
+    updated = yaml.safe_load(updated_yaml)
+    result = next(row for row in updated["apps"]["charts"] if row["id"] == "soperator")
+    assert result["version"] == release.release
+    assert not any(re.fullmatch(r"apps\.charts\[\d+\]\.version", path) for path in prompted)
+    assert result["values"]["soperator-checks"]["enabled"] is True
+    assert result["values"]["soperator-activechecks"]["enabled"] is True
+    assert not any(
+        any(
+            field in path
+            for field in (
+                ".soperator-checks.enabled",
+                ".soperator-activechecks.enabled",
+                "waitForChecks",
+                "srunReadyPartition",
+            )
+        )
+        for path in prompted
+    )
+    assert "waitForChecks" not in result["values"]["soperator-activechecks"]
+    assert "srunReadyPartition" not in result["values"]["soperator-activechecks"]
+    umbrella, _contract = compile_upstream_soperator_values(result["values"], release=release)
+    assert umbrella["soperator"]["overrideValues"]["controllerManager"]["replicas"] == 1
+    assert umbrella["soperator"]["soperatorChecks"]["enabled"] is True
+
+
+@pytest.mark.parametrize("profile", ["cpu", "gpu"])
+@pytest.mark.parametrize(
+    "autoscaling,ephemeral,minimum",
+    [(False, False, 0), (True, False, 0), (True, True, 0), (True, True, 2)],
+)
+def test_install_worker_wizard_reaches_upstream_nodesets_and_storage(
+    monkeypatch, profile, autoscaling, ephemeral, minimum
+):
+    from nebius_cxcli.soperator_adapter import compile_upstream_soperator_values
+
+    release = sample_snapshot()
+    entry = cli_module.soperator_install_entry(release.release)
+    payload = cli_module._starter_component_payload(
+        client_name="example",
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        email=None,
+        selected_infra={"mk8s", "sfs"},
+        selected_apps={"soperator"},
+        infra_entries=component_entries("infra"),
+        app_entries=(entry,),
+        soperator_profile=f"nebius-{profile}-v1",
+    )
+    inputs = next(row for row in payload["infra"]["components"] if row["id"] == "mk8s")["inputs"]
+    inputs["soperator"][f"worker_{profile}_total_nodes"] = 4
+    cli_module._materialize_soperator_component_defaults(payload)
+    worker = next(iter(inputs["soperator"]["worker_node_groups"]))
+    base = f"inputs.soperator.worker_node_groups.{worker}"
+    answers = {
+        f"{base}.autoscaling.enabled": autoscaling,
+        f"{base}.autoscaling.min_node_count": minimum,
+        f"{base}.autoscaling.max_node_count": 3,
+        f"{base}.ephemeral_nodes.enabled": ephemeral,
+    }
+    prompted = set()
+
+    def prompt(label, current, **_kwargs):
+        for suffix, value in answers.items():
+            if label.endswith(suffix):
+                prompted.add(suffix)
+                return value, False
+        return current, False
+
+    mk8s = replace(
+        next(item for item in component_entries("infra") if item.id == "mk8s"),
+        wizard_fields={
+            key: {"type_hint": "bool" if key.endswith("enabled") else "number"} for key in answers
+        },
+    )
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", prompt)
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_a, **_k: True)
+    monkeypatch.setattr(ProviderOptionLookup, "_sdk_or_none", lambda self: None)
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload),
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(mk8s,),
+        app_entries=(entry,),
+        skip_soperator_profile_prompt=True,
+        soperator_install=True,
+    )
+    assert completed
+    assert f"{base}.autoscaling.enabled" in prompted
+    if ephemeral:
+        assert f"{base}.ephemeral_nodes.enabled" in prompted
+    updated = yaml.safe_load(updated_yaml)
+    group = next(row for row in updated["infra"]["components"] if row["id"] == "mk8s")["inputs"][
+        "node_groups"
+    ][worker]
+    if autoscaling:
+        assert group.get("node_count") is None
+        assert group["autoscaling"] == {"min_node_count": minimum, "max_node_count": 3}
+    else:
+        assert group["node_count"] == 4
+        assert not group.get("autoscaling")
+    values = next(row for row in updated["apps"]["charts"] if row["id"] == "soperator")["values"]
+    umbrella, contract = compile_upstream_soperator_values(values, release=release)
+    nodeset = umbrella["nodesets"]["overrideValues"]["nodesets"][0]
+    assert nodeset["replicas"] == (3 if autoscaling else 4)
+    if ephemeral:
+        assert nodeset["ephemeralNodes"] is True
+        assert nodeset["initialNumberEphemeralNodes"] == max(minimum, 1 if profile == "gpu" else 0)
+    else:
+        assert "ephemeralNodes" not in nodeset
+        assert "initialNumberEphemeralNodes" not in nodeset
+    assert nodeset["nodeSelector"]["nebius.com/node-group"] == worker
+    assert (
+        nodeset["slurmd"]["volumes"]["jail"]["persistentVolumeClaim"]["claimName"]
+        == "jail-rootfs-slot-a-pvc"
+    )
+    assert contract["active_pvc"] == "jail-rootfs-slot-a-pvc"
+    assert umbrella["slurmCluster"]["slurmClusterStorage"]["enabled"] is False
+
+
+@pytest.mark.parametrize(("scope", "selected"), [("cpu", "cpu-e2"), ("gpu", "gpu-h200-sxm")])
+def test_install_shape_wizard_propagates_groups_before_refreshing_disks(
+    monkeypatch, scope, selected
+):
+    entry = cli_module.soperator_install_entry(sample_snapshot().release)
+    payload = cli_module._starter_component_payload(
+        client_name="example",
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        email=None,
+        selected_infra={"mk8s", "sfs"},
+        selected_apps={"soperator"},
+        infra_entries=component_entries("infra"),
+        app_entries=(entry,),
+        soperator_profile="nebius-gpu-v1",
+    )
+    mk8s_row = next(row for row in payload["infra"]["components"] if row["id"] == "mk8s")
+    custom_disk = {"type": "NETWORK_SSD_IO_M3", "size_gibibytes": 2048}
+    mk8s_row["inputs"]["node_group_defaults"][scope]["boot_disk"] = dict(custom_disk)
+    cli_module._materialize_soperator_component_defaults(payload)
+    previous_platform = mk8s_row["inputs"]["node_group_defaults"][scope]["platform"]
+    refreshed = []
+    original_refresh = cli_module.refresh_compute_boot_disk_defaults
+
+    def refresh(inputs, previous_inputs, **kwargs):
+        if (
+            inputs.get("node_group_defaults", {}).get(scope, {}).get("platform") == selected
+            and previous_inputs.get("node_group_defaults", {}).get(scope, {}).get("platform")
+            == previous_platform
+        ):
+            current_groups = [
+                group
+                for group in inputs["node_groups"].values()
+                if bool(group.get("gpu")) == (scope == "gpu")
+            ]
+            old_groups = [
+                group
+                for group in previous_inputs["node_groups"].values()
+                if bool(group.get("gpu")) == (scope == "gpu")
+            ]
+            assert current_groups
+            assert all(group["platform"] == selected for group in current_groups)
+            assert all(group["platform"] == previous_platform for group in old_groups)
+            refreshed.append(selected)
+        return original_refresh(inputs, previous_inputs, **kwargs)
+
+    def prompt(path_label, current, **kwargs):
+        if path_label.endswith(f".node_group_defaults.{scope}.platform"):
+            return selected, False
+        return current, False
+
+    mk8s_entry = next(item for item in component_entries("infra") if item.id == "mk8s")
+    mk8s_entry = replace(
+        mk8s_entry,
+        wizard_fields={
+            f"inputs.node_group_defaults.{scope}.platform": {
+                "type_hint": "string",
+                "required": True,
+            }
+        },
+    )
+    monkeypatch.setattr(cli_module, "refresh_compute_boot_disk_defaults", refresh)
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", prompt)
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *args, **kwargs: True)
+    monkeypatch.setattr(ProviderOptionLookup, "_sdk_or_none", lambda self: None)
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload),
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(entry,),
+        skip_soperator_profile_prompt=True,
+    )
+    assert completed and refreshed
+    updated = yaml.safe_load(updated_yaml)
+    inputs = next(row for row in updated["infra"]["components"] if row["id"] == "mk8s")["inputs"]
+    assert inputs["node_group_defaults"][scope]["platform"] == selected
+    assert inputs["node_group_defaults"][scope]["boot_disk"] == custom_disk
+    for group in inputs["node_groups"].values():
+        if bool(group.get("gpu")) == (scope == "gpu"):
+            assert group["platform"] == selected
+            assert group["boot_disk"]["type"] == custom_disk["type"]
+            assert group["boot_disk"]["size_gibibytes"] == 2048
+
+
+def test_soperator_real_component_add_remove_render_keeps_protected_contract(monkeypatch, tmp_path):
+    from nebius_cxcli import ordinary_apps
+    from nebius_cxcli.deploy_targets import enabled_cluster_target_refs, flux_target_dir
+
+    test_soperator_install_real_creation_preserves_fields_and_frozen_release(
+        monkeypatch, tmp_path, "cpu", False, False
+    )
+    config_path = (
+        tmp_path
+        / _tenant_folder_name("tenant-123")
+        / _project_folder_name("project-456")
+        / "config.yaml"
+    )
+    paths = cli_module.resolve_project_paths(config_path)
+    payload = yaml.safe_load(config_path.read_text())
+    target = enabled_cluster_target_refs(payload)[0]
+    paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.infra_dir / "main.tf").write_text("terraform {}\n")
+    (paths.infra_dir / "terraform.auto.tfvars.json").write_text("{}\n")
+    root = flux_target_dir(paths, target)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "kustomization.yaml").write_text("resources: []\n")
+    cli_module._write_generated_runtime_manifest(payload, paths, source_profile=SourceProfile.LOCAL)
+    ordinary_apps.accept_ordinary_app_baseline(
+        paths, identities={target: {"cluster_id": "cluster-test", "kubernetes_uid": "uid-test"}}
+    )
+    protected = ordinary_apps.protected_config_digest(payload)
+    protected_files = {p: p.read_bytes() for p in ordinary_apps._protected_files(paths)}
+    monkeypatch.setattr(cli_module, "_validate_enabled_chart_sources", lambda *_a, **_k: [])
+    for app_id in ("grafana", "nebius-observability-agent", "n8n"):
+        added = _component_add(config_path, f"{app_id}@{target}", "--no-interactive")
+        assert added.exit_code == 0, added.output
+        saved = yaml.safe_load(config_path.read_text())
+        assert ordinary_apps.protected_config_digest(saved) == protected
+        selected = {row["id"] for row in saved["apps"]["charts"] if row.get("enabled")}
+        assert "soperator" in selected
+        if app_id == "grafana":
+            assert "gateway-helm" in selected
+            assert "nebius-observability-agent" not in selected
+    removed = _component_remove(
+        config_path, f"nebius-observability-agent@{target}", "--no-interactive"
+    )
+    assert removed.exit_code == 0, removed.output
+    saved = yaml.safe_load(config_path.read_text())
+    assert saved["deploy"]["targets"][0]["observability"]["enabled"] is False
+    for _ in range(2):
+        rendered = runner.invoke(app, ["render", str(config_path), "--force"])
+        assert rendered.exit_code == 0, rendered.output
+        assert (
+            ordinary_apps.protected_config_digest(yaml.safe_load(config_path.read_text()))
+            == protected
+        )
+        config, _ = cli_module._load_context_readonly(config_path)
+        selected = {
+            row["id"] for row in to_plain_data(config)["apps"]["charts"] if row.get("enabled")
+        }
+        assert {"grafana", "gateway-helm", "n8n", "soperator"} <= selected
+        assert "nebius-observability-agent" not in selected
+    assert {p: p.read_bytes() for p in protected_files} == protected_files
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_soperator_install_rejects_removed_app_option_before_side_effects(
+    monkeypatch, tmp_path, resume
+):
+    monkeypatch.setattr(
+        cli_module, "freeze_soperator_release", lambda *_a, **_k: pytest.fail("release read")
+    )
+    monkeypatch.setattr(cli_module, "_create_project", lambda **_k: pytest.fail("creation"))
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "install",
+            str(tmp_path),
+            "--app",
+            "grafana",
+            *(["--resume"] if resume else []),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "No such option: --app" in result.output
+    assert not list(tmp_path.iterdir())
+
+
+def test_ordinary_component_filter_preserves_exact_protected_soperator_row():
+    protected = {
+        "id": "soperator",
+        "enabled": True,
+        "version": "4.1.7",
+        "values": {"clusterName": "example"},
+    }
+    payload = {
+        "infra": {
+            "components": [{"id": "mk8s", "instance_id": "example", "enabled": True, "inputs": {}}]
+        },
+        "apps": {"charts": [protected, {"id": "unknown", "enabled": True}]},
+    }
+    payload["deploy"] = {"targets": [{"id": "mk8s", "instance_id": "example", "enabled": True}]}
+    result = cli_module._filter_runtime_payload_for_selected_components(
+        payload=payload,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(
+            ComponentEntry(
+                id="mk8s",
+                scope="infra",
+                config_path="infra.mk8s",
+                description="mk8s",
+                source="example",
+            ),
+        ),
+        app_entries=(),
+    )
+    assert result["infra"]["components"][0]["instance_id"] == "example"
+    assert result["apps"]["charts"] == [protected]
+    assert result["apps"]["charts"][0] is not protected
+
+
+def test_soperator_ordinary_helm_upgrade_uses_scoped_render_and_config_publication(
+    monkeypatch, tmp_path
+):
+    from typer.main import get_command
+
+    from nebius_cxcli import ordinary_apps
+    from nebius_cxcli.deploy_targets import enabled_cluster_target_refs
+    from nebius_cxcli.generated_manifest import load_generated_manifest
+
+    test_soperator_real_component_add_remove_render_keeps_protected_contract(monkeypatch, tmp_path)
+    config_path = (
+        tmp_path
+        / _tenant_folder_name("tenant-123")
+        / _project_folder_name("project-456")
+        / "config.yaml"
+    )
+    paths = cli_module.resolve_project_paths(config_path)
+    payload = yaml.safe_load(config_path.read_text())
+    target = enabled_cluster_target_refs(payload)[0]
+    protected = {p: p.read_bytes() for p in ordinary_apps._protected_files(paths)}
+    applied = []
+    monkeypatch.setattr(
+        cli_module, "render_command", get_command(app).commands["render"].callback.__wrapped__
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_ensure_project_auth_identity",
+        lambda **_kwargs: pytest.fail("ordinary Helm upgrade bootstrapped IAM"),
+    )
+    monkeypatch.setattr(cli_module, "_verify_helm_chart_upgrade_ready", lambda *_a, **_k: None)
+
+    def apply(generated, **kwargs):
+        assert generated == paths.generated_dir
+        assert kwargs["target_ref"] == target
+        manifest = load_generated_manifest(generated)
+        ordinary_apps.validate_ordinary_bundle(paths, manifest)
+        applied.append(manifest)
+
+    monkeypatch.setattr(cli_module, "flux_apply_command", apply)
+    cli_module._run_helm_chart_upgrade_command(
+        config_path=config_path,
+        target_selector=f"apps:n8n@{target}",
+        to_version="9.9.9",
+        dry_run=False,
+        interactive=False,
+    )
+    assert len(applied) == 1
+    assert (
+        next(row for row in applied[0]["runtime_config"]["apps"]["charts"] if row["id"] == "n8n")[
+            "version"
+        ]
+        == "9.9.9"
+    )
+    assert {p: p.read_bytes() for p in protected} == protected
+    before = config_path.read_bytes()
+    (paths.infra_dir / "main.tf").write_text("protected drift\n")
+    with pytest.raises(RuntimeError, match="Protected Soperator"):
+        cli_module._run_helm_chart_upgrade_command(
+            config_path=config_path,
+            target_selector=f"apps:n8n@{target}",
+            to_version="9.9.10",
+            dry_run=False,
+            interactive=False,
+        )
+    assert config_path.read_bytes() == before

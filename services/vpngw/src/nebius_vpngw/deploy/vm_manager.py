@@ -1227,30 +1227,6 @@ class VMManager:
             raise RuntimeError(f"VM-HA disk {name} returned an inexact identity")
         return disk
 
-    def _get_ha_disk_by_id(self, client: t.Any, disk_id: str) -> t.Any | None:
-        """Resolve one exact HA disk, treating only typed NOT_FOUND as absence."""
-
-        if not disk_id:
-            raise ValueError("VM-HA disk lookup requires an exact ID")
-        from nebius.api.nebius.compute.v1 import (  # type: ignore
-            DiskServiceClient,
-            GetDiskRequest,
-        )
-
-        try:
-            return (
-                DiskServiceClient(client)
-                .get(
-                    GetDiskRequest(id=disk_id),
-                    **vm_ha_request_kwargs(),
-                )
-                .wait()
-            )
-        except Exception as error:
-            if nebius_request_error_code_is(error, "NOT_FOUND"):
-                return None
-            raise RuntimeError("VM-HA disk identity could not be classified") from error
-
     def _require_retained_allocation(
         self,
         allocation_client: t.Any,
@@ -2076,21 +2052,14 @@ class VMManager:
                 results.append((inst_name, diff))
                 continue
 
-            # Resolve an HA boot disk from the Compute attachment. Replacement
-            # disks are cycle-qualified, while retired canonical disks remain
-            # intentionally untouched.
-            if spec.vm_ha is not None:
-                boot_disk_id = self._instance_boot_disk_id(vm_obj)
-                disk_obj = self._get_ha_disk_by_id(client, boot_disk_id) if boot_disk_id else None
-            else:
-                boot_disk_name = f"{inst_name}-boot"
-                disk_obj = self._get_disk_by_name(client, boot_disk_name)
-
+            # The attachment identifies the running VM's disk even after a
+            # rename or HA replacement. Missing disk evidence is not VM absence.
+            boot_disk_id = self._instance_boot_disk_id(vm_obj)
+            if not boot_disk_id:
+                raise RuntimeError(f"Gateway VM {inst_name!r} has no exact boot disk attachment")
+            disk_obj = self._get_disk_by_id(client, boot_disk_id)
             if disk_obj is None:
-                print(f"[VMManager] Warning: VM {inst_name} exists but boot disk not found")
-                diff = self.diff_analyzer.compare(desired_spec, None)
-                results.append((inst_name, diff))
-                continue
+                raise RuntimeError(f"Gateway VM {inst_name!r} attached boot disk is unavailable")
 
             # Extract actual spec from live resources
             actual_spec = VMSpec.from_live_vm(vm_obj, disk_obj)
@@ -2128,27 +2097,33 @@ class VMManager:
             raise RuntimeError(f"Gateway VM {name!r} returned an inexact identity")
         return vm
 
-    def _get_disk_by_name(self, client: t.Any, name: str) -> t.Any | None:
-        """Get one exact disk by name, treating only typed NOT_FOUND as absence."""
+    def _get_disk_by_id(self, client: t.Any, disk_id: str) -> t.Any | None:
+        """Resolve the attached disk, treating only typed NOT_FOUND as absence."""
         if not self.project_id:
             raise RuntimeError("Boot disk lookup requires an exact project ID")
+        if not disk_id:
+            raise ValueError("Boot disk lookup requires an exact ID")
         try:
-            from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
-            from nebius.api.nebius.compute.v1 import DiskServiceClient  # type: ignore
+            from nebius.api.nebius.compute.v1 import (  # type: ignore
+                DiskServiceClient,
+                GetDiskRequest,
+            )
 
-            dsc = DiskServiceClient(client)
-            disk = dsc.get_by_name(GetByNameRequest(parent_id=self.project_id, name=name)).wait()
+            disk = (
+                DiskServiceClient(client)
+                .get(GetDiskRequest(id=disk_id), **vm_ha_request_kwargs())
+                .wait()
+            )
         except Exception as error:
             if nebius_request_error_code_is(error, "NOT_FOUND"):
                 return None
-            raise RuntimeError(f"Boot disk {name!r} could not be classified") from error
+            raise RuntimeError("Boot disk identity could not be classified") from error
         metadata = getattr(disk, "metadata", None)
         if (
-            not self._resource_id(disk)
-            or str(getattr(metadata, "name", "") or "") != name
+            self._resource_id(disk) != disk_id
             or str(getattr(metadata, "parent_id", "") or "") != self.project_id
         ):
-            raise RuntimeError(f"Boot disk {name!r} returned an inexact identity")
+            raise RuntimeError("Boot disk returned an inexact identity")
         return disk
 
     @staticmethod
@@ -2685,7 +2660,7 @@ class VMManager:
                 result["strongswan_installed"] = True
             if "frr" in pkg_check.stdout:
                 result["frr_installed"] = True
-            if "active" in pkg_check.stdout:
+            if pkg_check.returncode == 0 and pkg_check.stdout.splitlines()[-1:] == ["active"]:
                 result["agent_installed"] = True
         except Exception:
             pass
@@ -2831,6 +2806,22 @@ class VMManager:
         ):
             raise RuntimeError(f"Gateway VM {name} returned an inexact identity")
         return response
+
+    def inspect_ordinary_targets(self, names: t.Iterable[str]) -> dict[str, tuple[str, str]]:
+        """Read exact Compute and transport identities; only typed absence is omitted."""
+        client = self._build_sdk_client(self.region or "")
+        if client is None:
+            raise RuntimeError("Ordinary apply requires authoritative Compute discovery")
+        targets = {}
+        for name in names:
+            instance = self._get_vm_by_name_for_ordinary_ssh_preflight(client, name)
+            if instance is None:
+                continue
+            target = self._vm_public_ip_from_object(instance)
+            if not target:
+                raise RuntimeError("Existing gateway has no authoritative SSH target")
+            targets[name] = (str(self._resource_id(instance)), target)
+        return targets
 
     @staticmethod
     def _vm_public_ip_from_object(vm_obj: t.Any) -> str | None:
@@ -3954,6 +3945,7 @@ class VMManager:
         base = self._build_cloud_init(
             ssh_key=spec.vm_spec.get("ssh_public_key"),
             local_prefixes=local_prefixes,
+            vm_ha=spec.vm_ha is not None,
         )
         rendered: dict[str, str] = {}
         for index in range(spec.instance_count):
@@ -4158,7 +4150,9 @@ class VMManager:
         self._ensure_vpngw_route_table(client, subnet_id)
 
         ssh_key = spec.vm_spec.get("ssh_public_key")
-        cloud_init = self._build_cloud_init(ssh_key=ssh_key, local_prefixes=local_prefixes)
+        cloud_init = self._build_cloud_init(
+            ssh_key=ssh_key, local_prefixes=local_prefixes, vm_ha=spec.vm_ha is not None
+        )
 
         return VMProvisioningConfig(
             subnet_id=subnet_id,
@@ -4191,8 +4185,10 @@ class VMManager:
                 return
             if hasattr(op, "wait"):
                 op.wait()
-        except Exception:
-            pass
+                return
+        except Exception as error:
+            raise RuntimeError("Cloud operation did not complete successfully") from error
+        raise RuntimeError("Cloud operation returned no completion interface")
 
     def _sync_vm_ha_operation(self, operation: t.Any) -> None:
         """Synchronize an HA mutation without swallowing SDK ambiguity."""
@@ -5329,47 +5325,8 @@ class VMManager:
         strict_vm_ha: bool = False,
         operation_id: str | None = None,
     ) -> bool:
-        inst_req = {
-            "metadata": {
-                "name": inst_name,
-                **({"parent_id": self.project_id} if self.project_id else {}),
-            },
-            "spec": {
-                "resources": {
-                    "platform": provisioning.platform,
-                    **({"preset": provisioning.preset} if provisioning.preset else {}),
-                },
-                **(
-                    {
-                        "boot_disk": {
-                            "attach_mode": "READ_WRITE",
-                            "device_id": "boot",
-                            "existing_disk": {"id": boot_disk_id},
-                        }
-                    }
-                    if boot_disk_id
-                    else {}
-                ),
-                "network_interfaces": [
-                    {
-                        "name": f"eth{nic_idx}",
-                        "ip_address": (
-                            {"allocation_id": self._private_alloc_ids[inst_name][nic_idx]}
-                            if nic_idx < len(self._private_alloc_ids.get(inst_name, []))
-                            else {}
-                        ),
-                        "public_ip_address": (
-                            {"allocation_id": alloc_ids[nic_idx], "static": True}
-                            if nic_idx < len(alloc_ids)
-                            else {}
-                        ),
-                        "subnet_id": provisioning.subnet_id,
-                    }
-                    for nic_idx in range(min(provisioning.num_nics, 1))
-                ],
-                "cloud_init_user_data": provisioning.cloud_init,
-            },
-        }
+        if not boot_disk_id or not boot_disk_id.strip():
+            raise RuntimeError("Compute creation requires an authoritative boot disk identity")
 
         created = False
         try:
@@ -5405,11 +5362,6 @@ class VMManager:
                     device_id="boot",
                     existing_disk=ExistingDisk(id=boot_disk_id),
                 )
-            if not boot_disk_id:
-                print(
-                    "[VMManager] Warning: boot_disk_id missing; proceeding without boot_disk in spec."
-                )
-
             ni_msgs = []
             for nic_idx in range(provisioning.num_nics):
                 nic_name = f"eth{nic_idx}"
@@ -5474,10 +5426,7 @@ class VMManager:
                 if strict_vm_ha:
                     self._sync_vm_ha_operation(op)
                 else:
-                    try:
-                        op.sync_wait()
-                    except Exception:
-                        pass
+                    self._sync_operation(op)
                 created = True
                 print(f"[VMManager] Instance {inst_name} created successfully via SDK")
 
@@ -5499,34 +5448,18 @@ class VMManager:
                     print(
                         f"[VMManager] Warning: {inst_name} did not receive public IP within {max_ip_wait}s"
                     )
-            except Exception as e:
-                print(f"[VMManager] InstanceServiceClient create failed: {e}")
+            except Exception as error:
                 if strict_vm_ha:
                     raise
-                import traceback
-
-                traceback.print_exc()
-        except Exception as e:
-            print(f"[VMManager] InstanceServiceClient initialization failed: {e}")
+                raise RuntimeError("Compute creation or readiness verification failed") from error
+        except Exception as error:
             if strict_vm_ha:
                 raise
+            raise RuntimeError(
+                "Compute creation failed; inspect the existing target before retrying"
+            ) from error
 
-        if created:
-            return True
-
-        if not strict_vm_ha and instance_api is not None and hasattr(instance_api, "create"):
-            print(f"[VMManager] Creating instance {inst_name} ...")
-            try:
-                try:
-                    instance_api.create(**inst_req)  # type: ignore[arg-type]
-                except TypeError:
-                    instance_api.create(inst_req)
-                return True
-            except Exception as e:
-                print(f"[VMManager] create failed for {inst_name}: {e}")
-
-        print(f"[VMManager] Would create with payload: {inst_req}")
-        return False
+        return created
 
     def _provision_instance(
         self,
@@ -5581,10 +5514,7 @@ class VMManager:
                     print(f"[VMManager] {inst_name} IP: {vm_ip}")
                 return
         if vm_exists and recreate:
-            print(
-                f"[VMManager] WARNING: VM {inst_name} still exists after deletion (race condition?)"
-            )
-            return
+            raise RuntimeError("Compute remains present after requested deletion")
 
         if provisioning is None:
             raise RuntimeError(
@@ -5620,9 +5550,9 @@ class VMManager:
             strict_vm_ha=spec.vm_ha is not None,
             operation_id=operation_id,
         )
+        if not created:
+            raise RuntimeError("Compute creation did not complete")
         if spec.vm_ha is not None:
-            if not created:
-                raise RuntimeError(f"VM-HA Compute {inst_name} was not created")
             authoritative = self._get_ha_instance_by_name(client, inst_name)
             compute_id = self._resource_id(authoritative)
             if not compute_id:
@@ -8156,6 +8086,8 @@ class VMManager:
         self,
         ssh_key: str | None = None,
         local_prefixes: list[str] | None = None,
+        *,
+        vm_ha: bool = False,
     ) -> str:
         """Return a hardened cloud-init to install deps, configure security, and setup the gateway.
 
@@ -8173,7 +8105,11 @@ class VMManager:
         """
         try:
             with resources.as_file(
-                resources.files("nebius_vpngw").joinpath("systemd/nebius-vpngw-agent.service")
+                resources.files("nebius_vpngw").joinpath(
+                    "systemd/nebius-vpngw-agent.service"
+                    if vm_ha
+                    else "systemd/nebius-vpngw-ordinary-agent.service"
+                )
             ) as p:
                 unit_text = p.read_text(encoding="utf-8")
         except Exception:
@@ -8181,6 +8117,7 @@ class VMManager:
                 """
                 [Unit]
                 Description=Nebius VPNGW Agent
+                ConditionPathExists=/etc/nebius-vpngw/config-resolved.yaml
                 After=network.target
 
                 [Service]
@@ -8200,12 +8137,10 @@ class VMManager:
 
         indented_unit = textwrap.indent(unit_text, " " * 12)
 
-        # Build users section with SSH key if provided
+        # Client admission already requires one exact key; preserve its YAML-sensitive comment.
         users_section = ""
         if ssh_key:
-            users_section = (
-                f"users:\n  - name: ubuntu\n    ssh_authorized_keys:\n      - {ssh_key}\n"
-            )
+            users_section = f"users:\n  - name: ubuntu\n    ssh_authorized_keys:\n      - {json.dumps(ssh_key)}\n"
 
         cloud = (
             "#cloud-config\n"
@@ -8377,9 +8312,9 @@ class VMManager:
             "            \n"
             "            [Install]\n"
             "            WantedBy=multi-user.target\n"
-            "  - path: /etc/frr/daemons\n"
+            "  - path: /etc/nebius-vpngw/frr-daemons.bootstrap\n"
             '    permissions: "0644"\n'
-            "    owner: frr:frr\n"
+            "    owner: root:root\n"
             "    content: |\n"
             "            # FRR daemons configuration - enable bgpd\n"
             "            bgpd=yes\n"
@@ -8471,20 +8406,25 @@ class VMManager:
             "    content: |\n"
             "            [Unit]\n"
             "            After=strongswan-starter.service frr.service\n"
-            "            Wants=strongswan-starter.service frr.service\n"
+            + ("            Wants=strongswan-starter.service frr.service\n" if vm_ha else "")
         )
 
         # Add runcmd section
         cloud += (
             "runcmd:\n"
+            "  - set -eu\n"
             '  - [ bash, -lc, "mkdir -p /etc/nebius-vpngw" ]\n'
             '  - [ bash, -lc, "mkdir -p /var/lib/nebius-vpngw" ]\n'
             '  - [ bash, -lc, "mkdir -p /etc/ipsec.d" ]\n'
             "  # Install FRR 10.x from official repository (fixes route installation bug in 8.4.4)\n"
-            '  - [ bash, -c, "curl -s https://deb.frrouting.org/frr/keys.asc | tee /usr/share/keyrings/frrouting.asc > /dev/null" ]\n'
-            '  - [ bash, -c, "UBUNTU_CODENAME=$(lsb_release -cs); echo \\"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\\" > /etc/apt/sources.list.d/frr.list" ]\n'
+            "  # Prevent package post-install scripts from starting FRR before configuration/ESP4 readiness\n"
+            "  - [ systemctl, mask, frr.service ]\n"
+            "  - [ curl, -fsS, https://deb.frrouting.org/frr/keys.asc, -o, /usr/share/keyrings/frrouting.asc ]\n"
+            '  - [ bash, -euc, "UBUNTU_CODENAME=$(lsb_release -cs); echo \\"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\\" > /etc/apt/sources.list.d/frr.list" ]\n'
             "  - [ apt-get, update ]\n"
             '  - [ bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools" ]\n'
+            "  - [ install, -o, frr, -g, frr, -m, '0644', /etc/nebius-vpngw/frr-daemons.bootstrap, /etc/frr/daemons ]\n"
+            "  - [ systemctl, unmask, frr.service ]\n"
             "  # Prepare ESP4 after Ubuntu package upgrades; defer VPN services if a reboot is required\n"
             '  - [ bash, -lc, "/usr/local/bin/nebius-vpngw-esp4-preflight.sh --prepare; rc=$?; if [ $rc -eq 75 ]; then exit 0; fi; exit $rc" ]\n'
             "  # Comment out conflicting sysctl settings in /etc/sysctl.conf (prevents our 99-zzz-vpngw.conf from being overridden)\n"
@@ -8497,7 +8437,7 @@ class VMManager:
             "  # UFW MUST be active for proper packet forwarding through XFRM tunnels\n"
             "  # Without UFW active, netfilter is not properly initialized and VPC traffic\n"
             "  # may not be correctly routed through the VPN gateway\n"
-            '  - [ bash, -lc, "/usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true" ]\n'
+            '  - [ bash, -lc, "/usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1" ]\n'
             "  # Load auditd rules\n"
             '  - [ bash, -lc, "augenrules --load || true" ]\n'
             "  # Enable and start services\n"

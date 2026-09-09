@@ -53,9 +53,7 @@ def test_lab_defines_required_concepts_before_commands(path, terms):
 
 
 def test_lora_teaches_composition_before_counting_savings():
-    primer = lesson("llm-training", "Perform SFT and LoRA with explicit savings")[
-        "What it is"
-    ]
+    primer = lesson("llm-training", "Parameter-efficient adaptation")["How it works"]
     assert "B(Ax)" in primer
     assert "[3, 7]" in primer
     x = [3, 4]

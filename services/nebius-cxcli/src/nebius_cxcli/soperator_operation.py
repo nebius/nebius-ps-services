@@ -27,7 +27,7 @@ from .soperator_release import (
     write_soperator_release_snapshot,
 )
 
-SOPERATOR_OPERATION_ANCHOR_SCHEMA = "nebius-cxcli.soperator-operation-anchor.v7"
+SOPERATOR_OPERATION_ANCHOR_SCHEMA = "nebius-cxcli.soperator-operation-anchor.v8"
 SOPERATOR_RELEASE_INTENT_SCHEMA = "nebius-cxcli.soperator-release-intent.v3"
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 _IMMUTABLE_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
@@ -58,6 +58,7 @@ class SoperatorOperationSpec:
     protected_state_sha256: str
     scheduling_sha256: str
     admission_sha256: str
+    checks_policy_sha256: str
     intervention_generation: int = 0
 
 
@@ -198,6 +199,7 @@ def build_soperator_operation_spec(
     protected_state_evidence: object | None = None,
     admission_evidence: object | None = None,
     intervention_generation: int = 0,
+    checks_policy_sha256: str,
 ) -> SoperatorOperationSpec:
     """Bind one operation to exact generated, protected, and scheduling inputs."""
 
@@ -216,6 +218,7 @@ def build_soperator_operation_spec(
     for label, digest in (
         ("source capability", source_capability_sha256),
         ("target capability", target_capability_sha256),
+        ("checks policy", checks_policy_sha256),
     ):
         if not _SHA256.fullmatch(str(digest or "")):
             raise ValueError(f"Soperator operation requires an exact {label} SHA-256")
@@ -253,6 +256,7 @@ def build_soperator_operation_spec(
             {"mode": "not-required"} if admission_evidence is None else admission_evidence
         ),
         intervention_generation=intervention_generation,
+        checks_policy_sha256=checks_policy_sha256,
     )
 
 

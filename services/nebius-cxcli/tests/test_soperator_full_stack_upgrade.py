@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from nebius_cxcli.mk8s_upgrade import CompatibilityChoice
+from nebius_cxcli.soperator_checks_policy import freeze_checks_proposal
 from nebius_cxcli.soperator_failures import SoperatorSafetyPauseError
 from nebius_cxcli.soperator_full_stack_upgrade import (
     CampaignControllerSpoolMigrationStore,
@@ -34,6 +35,10 @@ from nebius_cxcli.soperator_full_stack_upgrade import (
 
 def _intent():
     return build_campaign_intent(
+        checks_policy_proposal=freeze_checks_proposal(
+            {"soperator-checks": {"enabled": True}, "soperator-activechecks": {"enabled": True}}
+        ),
+        checks_release_snapshot_sha256="sha256:" + "d" * 64,
         target_ref="cluster-a",
         ownership="managed",
         backend="terraform",
@@ -171,6 +176,134 @@ def test_group_mutation_revalidates_each_tuple_against_changing_provider_api() -
         )
 
     assert applied == ["worker"]
+
+
+def test_managed_child_defers_required_graph_until_parent_refresh(tmp_path, monkeypatch) -> None:
+    from nebius_cxcli import cli
+
+    specs = [
+        {"kind": "mk8s_cluster_smoke", "required": True, "target_ref": "cluster-a"},
+        {"kind": "mk8s_gpu_operator_readiness", "target_ref": "cluster-a"},
+        {"kind": "mk8s_gpu_visibility", "target_ref": "cluster-a"},
+        {
+            "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+            "required": True,
+            "target_ref": "cluster-a",
+        },
+    ]
+    available = False
+    events = []
+
+    def validate():
+        selected = cli._filter_deploy_validations(specs, skip_validations=False, skip_kinds=set())
+        for spec in selected:
+            if spec["kind"] == cli.SOPERATOR_CLUSTER_VALIDATION_KIND and not available:
+                raise RuntimeError("Source not ready: artifact not found")
+            events.append(spec["kind"])
+        return selected
+
+    monkeypatch.setattr(cli, "_execute_node_template_upgrade", lambda **_kwargs: validate())
+    cli._run_node_template_upgrade_suboperation(
+        config_path=tmp_path / "config.yaml",
+        target_selector="infra:mk8s@cluster-a",
+        to_version="1.35",
+        to_os="ubuntu24.04",
+        to_gpu_stack_preset="",
+        node_group="system",
+        disruption_policy="zero-surge",
+        drain_timeout="30m",
+        strategy_max_surge_count=0,
+        config_transition_store=cli.CampaignConfigTransitionStore(
+            path=tmp_path / "campaign.json", intent=_intent()
+        ),
+        config_transition_owner="soperator-upgrade",
+        config_transition_prefix="node-group:system:template:1.35",
+    )
+    assert events == [spec["kind"] for spec in specs[:-1]]
+    assert cli._SOPERATOR_PARENT_CONFIG_TRANSITION_STORE.get() is None
+
+    def refresh():
+        nonlocal available
+        events.append("refresh-sources")
+        available = True
+        return ("verified-frozen-source",)
+
+    def prove():
+        assert available
+        events.append("prove-graph")
+        return object()
+
+    run_final_runtime_validation_boundary(
+        refresh_sources=refresh,
+        prove_release_graph=prove,
+        freeze_capacity=lambda: {"worker": {"resourceVersion": "1", "targetNodeCount": 2}},
+        validate_runtime=lambda _snapshot: validate(),
+    )
+    assert events.count(cli.SOPERATOR_CLUSTER_VALIDATION_KIND) == 1
+    assert events.index("refresh-sources") < events.index(cli.SOPERATOR_CLUSTER_VALIDATION_KIND)
+    assert events.count("prove-graph") == 2
+
+
+@pytest.mark.parametrize(
+    "owner,target,with_store",
+    [
+        ("", "cluster-a", False),
+        ("soperator-upgrade", "cluster-a", False),
+        ("soperator-destroy", "cluster-a", True),
+        ("soperator-upgrade", "another-cluster", True),
+    ],
+)
+def test_graph_deferral_requires_matching_parent_campaign(
+    tmp_path, monkeypatch, owner, target, with_store
+) -> None:
+    from nebius_cxcli import cli
+
+    spec = {"kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND, "required": True, "target_ref": target}
+
+    def execute(**_kwargs):
+        assert cli._filter_deploy_validations(
+            [spec], skip_validations=True, skip_kinds={cli.SOPERATOR_CLUSTER_VALIDATION_KIND}
+        ) == [spec]
+        raise RuntimeError("required graph remains blocked")
+
+    monkeypatch.setattr(cli, "_execute_node_template_upgrade", execute)
+    store = (
+        cli.CampaignConfigTransitionStore(path=tmp_path / "campaign.json", intent=_intent())
+        if with_store
+        else None
+    )
+    with pytest.raises(RuntimeError, match="required graph remains blocked"):
+        cli._run_node_template_upgrade_suboperation(
+            config_path=tmp_path / "config.yaml",
+            target_selector=f"infra:mk8s@{target}",
+            to_version="1.35",
+            to_os="ubuntu24.04",
+            to_gpu_stack_preset="",
+            node_group="system",
+            disruption_policy="zero-surge",
+            drain_timeout="30m",
+            strategy_max_surge_count=0,
+            config_transition_store=store,
+            config_transition_owner=owner,
+            config_transition_prefix="node-group:system:template:1.35",
+        )
+    assert cli._SOPERATOR_PARENT_CONFIG_TRANSITION_STORE.get() is None
+    assert cli._filter_deploy_validations(
+        [spec], skip_validations=True, skip_kinds={cli.SOPERATOR_CLUSTER_VALIDATION_KIND}
+    ) == [spec]
+
+
+def test_final_runtime_boundary_stops_when_frozen_source_refresh_fails() -> None:
+    def refresh():
+        raise RuntimeError("frozen source package digest mismatch")
+
+    with pytest.raises(RuntimeError, match="package digest mismatch"):
+        run_final_runtime_validation_boundary(
+            refresh_sources=refresh,
+            prove_release_graph=lambda: pytest.fail("must not accept an unverified source"),
+            freeze_capacity=lambda: pytest.fail("must not advance after source failure"),
+            validate_runtime=lambda _snapshot: pytest.fail("must not advance after source failure"),
+        )
 
 
 def test_final_runtime_boundary_refreshes_before_validation_and_reproves_after() -> None:

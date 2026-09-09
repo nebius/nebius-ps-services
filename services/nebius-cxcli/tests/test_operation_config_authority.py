@@ -116,6 +116,69 @@ def test_applied_config_generation_recovers_after_receipt_write_interruption(
     assert store.transitions["stage-a"].status == "applied"
 
 
+@pytest.mark.parametrize("receipt_applied", [False, True])
+def test_runtime_changes_after_commit_require_a_durable_applied_receipt(
+    tmp_path: Path, receipt_applied: bool
+) -> None:
+    paths = _paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.config_path.write_bytes(b"old\n")
+    runtime = paths.infra_dir / ".terraform" / "terraform.tfstate"
+    runtime.parent.mkdir()
+    runtime.write_bytes(b"old runtime\n")
+    plan = _plan(tmp_path, new=b"new\n")
+    # Model a completed generation that previously included a runtime tombstone.
+    plan = replace(
+        plan,
+        removals=(runtime,),
+        expected_preimages={**plan.expected_preimages, runtime: file_sha256(runtime)},
+    )
+    store = _Store(fail_first_applied_record=not receipt_applied)
+
+    def apply():
+        return apply_project_generation_transition(
+            project_dir=tmp_path,
+            config_path=paths.config_path,
+            owner="test",
+            stage="stage-a",
+            store=store,
+            build_plan=lambda: plan,
+            assert_authority=lambda: None,
+            current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
+        )
+
+    if receipt_applied:
+        original = apply()
+    else:
+        with pytest.raises(RuntimeError, match="receipt write interruption"):
+            apply()
+    assert not runtime.exists()
+    runtime.write_bytes(b"new runtime\n")
+    assert ProjectBundleTransaction(tmp_path).current_generation_sha256() is None
+
+    def assert_current():
+        assert_config_authority_current(
+            tuple(store.transitions.values()),
+            initial_config_sha256=_digest(b"old\n"),
+            initial_project_snapshot_sha256="sha256:" + "a" * 64,
+            current_config_sha256=file_sha256(paths.config_path),
+            current_project_snapshot_sha256=project_generation_snapshot_sha256(paths),
+            current_project_generation_sha256=ProjectBundleTransaction(
+                tmp_path
+            ).current_generation_sha256(),
+        )
+
+    if receipt_applied:
+        assert_current()
+        assert apply() == original
+        assert runtime.read_bytes() == b"new runtime\n"
+    else:
+        with pytest.raises(SoperatorSafetyPauseError, match="last durable operation generation"):
+            assert_current()
+        with pytest.raises(SoperatorSafetyPauseError, match="generated state does not"):
+            apply()
+
+
 def test_config_authority_rejects_a_foreign_postimage(tmp_path: Path) -> None:
     project = tmp_path / "project"
     config = project / "config.yaml"

@@ -118,7 +118,16 @@ def test_semantic_diagram_layouts_match_named_relationships() -> None:
     assert 'data-diagram-kind="roofline"><svg' in fundamentals
     assert 'data-diagram-kind="comparison"><svg' in fundamentals
     assert 'data-diagram-kind="matrix"><svg' in inference
-    assert 'data-diagram-kind="topology"><svg' in inference
+    # The disaggregation overview teaches the direction of KV handoff;
+    # coordination traffic does not make that handoff bidirectional.
+    disaggregation = re.search(
+        r'<figure[^>]+id="diagram-\d+-disaggregation".*?</figure>',
+        inference,
+        re.S,
+    ).group()
+    assert 'data-diagram-kind="flow"' in disaggregation
+    assert "marker-start" not in disaggregation
+    assert "KV" in disaggregation
 
 
 def test_pure_scheduling_and_capacity_helpers() -> None:
@@ -155,6 +164,7 @@ def test_evidence_lanes_remain_separate_and_pending() -> None:
 
 def test_only_official_https_references_are_published() -> None:
     allowed = {
+        "arxiv.org",
         "docs.nvidia.com",
         "developer.nvidia.com",
         "docs.pytorch.org",

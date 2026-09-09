@@ -31,10 +31,11 @@ from .operation_config_authority import (
     upsert_config_transition,
     validate_config_transition_chain,
 )
-from .soperator_failures import SoperatorSafetyPauseError
+from .soperator_checks_policy import parse_checks_proposal
+from .soperator_failures import SoperatorMainWorkloadIdentity, SoperatorSafetyPauseError
 from .soperator_receipt_io import read_owner_only_json, write_owner_only_json
 
-SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli.soperator-upgrade-campaign.v3"
+SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli.soperator-upgrade-campaign.v4"
 SOPERATOR_UPGRADE_CAMPAIGN_RECEIPT_SCHEMA = "nebius-cxcli.soperator-upgrade-campaign-receipt.v3"
 
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
@@ -221,6 +222,17 @@ class SoperatorUpgradeCampaignIntent:
     job_refresh_interval: str
     node_groups: tuple[FrozenNodeGroupTarget, ...]
     compatibility_rows: tuple[FrozenCompatibilityRow, ...]
+    checks_policy_proposal: str
+    checks_release_snapshot_sha256: str
+
+    @property
+    def requires_fresh_checks(self) -> bool:
+        proposal = json.loads(self.checks_policy_proposal) if self.checks_policy_proposal else {}
+        return (
+            self.source_release != self.target_release
+            or len(self.segments) > 2
+            or proposal.get("before") != proposal.get("after")
+        )
 
     @property
     def digest(self) -> str:
@@ -465,6 +477,8 @@ def build_campaign_intent(
     job_refresh_interval: str,
     node_groups: Sequence[FrozenNodeGroupTarget],
     compatibility_rows: Sequence[FrozenCompatibilityRow],
+    checks_policy_proposal: str,
+    checks_release_snapshot_sha256: str,
 ) -> SoperatorUpgradeCampaignIntent:
     target_version, hops = resolve_kubernetes_upgrade_path(
         selector=requested_kubernetes_selector,
@@ -473,6 +487,8 @@ def build_campaign_intent(
     )
     intent = SoperatorUpgradeCampaignIntent(
         schema=SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA,
+        checks_policy_proposal=checks_policy_proposal,
+        checks_release_snapshot_sha256=checks_release_snapshot_sha256,
         target_ref=str(target_ref).strip(),
         ownership=str(ownership).strip().lower(),
         backend=str(backend).strip().lower(),
@@ -520,6 +536,9 @@ def build_campaign_intent(
 def validate_campaign_intent(intent: SoperatorUpgradeCampaignIntent) -> None:
     if intent.schema != SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA:
         raise ValueError("Soperator upgrade campaign intent has an unsupported schema")
+    parse_checks_proposal(intent.checks_policy_proposal)
+    if not _SHA256.fullmatch(intent.checks_release_snapshot_sha256):
+        raise ValueError("Soperator checks require a frozen release snapshot")
     if intent.ownership not in {"managed", "onboarded"}:
         raise ValueError("Soperator upgrade campaign ownership is invalid")
     if intent.backend not in {"terraform", "provider-api"}:
@@ -638,6 +657,8 @@ def campaign_intent_from_payload(payload: Mapping[str, Any]) -> SoperatorUpgrade
     try:
         intent = SoperatorUpgradeCampaignIntent(
             schema=str(payload.get("schema", "")),
+            checks_policy_proposal=str(payload.get("checks_policy_proposal", "")),
+            checks_release_snapshot_sha256=str(payload.get("checks_release_snapshot_sha256", "")),
             target_ref=str(payload.get("target_ref", "")),
             ownership=str(payload.get("ownership", "")),
             backend=str(payload.get("backend", "")),
@@ -929,6 +950,67 @@ class CampaignConfigTransitionStore:
         )
 
 
+def campaign_validation_target(store: object, *, owner: str) -> str:
+    """Identify the campaign that owns final graph proof for a private child."""
+    if isinstance(store, CampaignConfigTransitionStore) and owner == "soperator-upgrade":
+        return store.intent.target_ref
+    return ""
+
+
+@dataclass(frozen=True)
+class CampaignMainWorkloadAuthority:
+    """Bind policy-stage observations to the existing fenced campaign receipt."""
+
+    path: Path
+    intent: SoperatorUpgradeCampaignIntent
+    assert_authority: Callable[[], object]
+
+    def freeze(self, identity: SoperatorMainWorkloadIdentity) -> SoperatorMainWorkloadIdentity:
+        self.assert_authority()
+        receipt = load_campaign_receipt(self.path)
+        if (
+            receipt is None
+            or receipt.intent_sha256 != self.intent.digest
+            or receipt.target_ref != self.intent.target_ref
+            or receipt.cluster_id != self.intent.cluster_id
+            or receipt.kubernetes_uid != self.intent.kubernetes_uid
+            or receipt.status != "active"
+            or receipt.maintenance != "active"
+        ):
+            raise SoperatorSafetyPauseError("campaign main-workload authority is unavailable")
+        evidence = dict(receipt.maintenance_evidence)
+        key = "checksMainWorkloadAuthority"
+        if key in evidence:
+            binding = evidence[key]
+            try:
+                if not isinstance(binding, Mapping) or set(binding) != {"identity", "sha256"}:
+                    raise ValueError
+                stored = binding["identity"]
+                if not isinstance(stored, Mapping) or _sha256(stored) != binding["sha256"]:
+                    raise ValueError
+                previous = SoperatorMainWorkloadIdentity(**stored)
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                raise SoperatorSafetyPauseError(
+                    "campaign main-workload authority is invalid"
+                ) from exc
+            if previous == identity:
+                return previous
+            if (
+                replace(previous, generation=1, observed_generation=1)
+                != replace(identity, generation=1, observed_generation=1)
+                or identity.generation <= previous.generation
+            ):
+                raise SoperatorSafetyPauseError("campaign main-workload authority changed")
+        payload = asdict(identity)
+        evidence[key] = {"identity": payload, "sha256": _sha256(payload)}
+        self.assert_authority()
+        _write_receipt(
+            self.path,
+            replace(receipt, maintenance_evidence=evidence, updated_at=_utc_now()),
+        )
+        return identity
+
+
 @dataclass(frozen=True)
 class CampaignControllerSpoolMigrationStore:
     """Persist protected controller-spool recovery under parent maintenance."""
@@ -998,6 +1080,18 @@ def record_campaign_supervisor_state(
     )
 
 
+def record_campaign_maintenance_event(
+    *, path: Path, intent: SoperatorUpgradeCampaignIntent, event: Mapping[str, Any]
+) -> None:
+    """Journal a segment-owned maintenance transition before its external write."""
+    receipt = load_campaign_receipt(path)
+    if receipt is None or receipt.intent_sha256 != intent.digest or receipt.maintenance != "active":
+        raise RuntimeError("Soperator campaign maintenance authority is unavailable")
+    evidence = dict(receipt.maintenance_evidence)
+    evidence["events"] = [*evidence.get("events", ()), dict(event)]
+    _write_receipt(path, replace(receipt, maintenance_evidence=evidence, updated_at=_utc_now()))
+
+
 def _replace_segment(
     receipt: SoperatorUpgradeCampaignReceipt,
     index: int,
@@ -1058,6 +1152,7 @@ def run_campaign(
         Mapping[str, Any],
     ],
     assert_fence: Callable[[], None],
+    verify_maintenance: Callable[[str], None] | None = None,
 ) -> SoperatorUpgradeCampaignReceipt:
     """Run or resume child segments under one durable maintenance boundary."""
 
@@ -1207,6 +1302,16 @@ def run_campaign(
         if segment.status == "complete":
             continue
         assert_fence()
+        if verify_maintenance is not None:
+            verify_maintenance(segment.name)
+            # Final policy preparation and interrupted handoff recovery can
+            # durably refine authority before the segment executor starts.
+            refreshed = load_campaign_receipt(path)
+            if refreshed is None or refreshed.intent_sha256 != intent.digest:
+                raise RuntimeError(
+                    "Soperator campaign receipt disappeared during maintenance proof"
+                )
+            receipt = refreshed
         running = replace(
             segment,
             status="running",
@@ -1343,6 +1448,7 @@ def run_campaign(
 __all__ = [
     "CampaignConfigTransitionStore",
     "CampaignControllerSpoolMigrationStore",
+    "CampaignMainWorkloadAuthority",
     "CampaignSegmentReceipt",
     "CampaignSegmentResult",
     "FrozenCompatibilityRow",
@@ -1358,6 +1464,7 @@ __all__ = [
     "build_campaign_intent",
     "campaign_intent_from_payload",
     "campaign_receipt_path",
+    "campaign_validation_target",
     "create_or_resume_campaign",
     "final_node_group_capacity_snapshot",
     "load_campaign_receipt",

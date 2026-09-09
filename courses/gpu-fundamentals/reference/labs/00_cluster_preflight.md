@@ -4,7 +4,7 @@ Before interpreting GPU timings, establish that the program is running on the pl
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 12 for Slurm/rank placement, process groups and known-value collectives, and Lesson 1 for readiness checks. Run this preflight before Lesson 12’s two-node experiment; it is not required for the introductory single-GPU labs.
+**Theory preparation:** Read Lesson 12 for Slurm/rank placement, process groups and known-value collectives, and Lab 10 for readiness checks. Run this preflight before Lesson 12’s two-node experiment; it is not required for the introductory single-GPU labs.
 
 Activate this course's approved environment and follow the [cluster smoke runbook](../cluster-smoke-test.md). You need two available nodes with one full H100 each. Keep scheduler output private because placement diagnostics can identify infrastructure.
 

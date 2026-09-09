@@ -35,3 +35,5 @@
 - [GPUDirect Storage design and control/data paths](https://docs.nvidia.com/gpudirect-storage/design-guide/index.html)
 - [GPUDirect Storage direct and compatibility paths](https://docs.nvidia.com/gpudirect-storage/o-direct-guide/)
 - [Dynamo KV-cache offload tiers](https://docs.nvidia.com/dynamo/latest/kubernetes/kv-cache-offloading/overview)
+- [Exact speculative sampling and recovery (original paper)](https://arxiv.org/abs/2211.17192)
+- [FlashAttention: tiled attention and online normalization (original paper)](https://arxiv.org/abs/2205.14135)

@@ -4,7 +4,7 @@ A communication problem can affect tiny synchronization messages differently fro
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 11 for collective size curves, asynchronous Work handles, stream joins and event completion, selected transport, algorithm/protocol controls, job-local trials and bandwidth units. Fundamentals Lesson 12 supplies the networking layers; Lessons 2–3 distinguish benchmark timing from diagnostic logging.
+**Theory preparation:** Read Lesson 11 for collective size curves, transport, controlled communicator settings and bandwidth units. Fundamentals Lesson 12 supplies networking layers; Lessons 2–3 distinguish timing from diagnostic profiling.
 
 Complete Lesson 11's networking explanation and the two-node preflight. Use two allocated nodes with one full H100 on each, a working course PyTorch environment and the existing torchrun launcher. The baseline needs working NCCL communication; it does not require RDMA. The GDR-disabled and QP experiments require an independently qualified IB/RoCE path. Keep the same nodes, interfaces, versions and absence of competing workloads across comparisons where the scheduler permits; otherwise record that allocation variability remains a confounder.
 
@@ -14,7 +14,7 @@ Required execution is two nodes with one full H100 and one rank per node. It can
 
 The program is a measurement harness, not a custom implementation of a collective. PyTorch creates the NCCL process group; each rank fills a tensor with its rank number plus one. On two ranks, every element must become exactly three after sum all-reduce. The simple small integers are exactly representable in FP32, so this particular fixture uses an exact check rather than a loose numerical tolerance. For changed floating-point inputs, return to the course FP32 tolerance of rtol=1e-5 and atol=1e-6 against a trusted reference.
 
-The pure networking helper validates the power-of-two size range and selects one environment override before NCCL starts. For each size, the lab refills the buffer, synchronizes readiness, times the collective with CUDA events, waits for completion and checks every element. Preparation, validation and result gathering are outside the timed interval. After the repeated samples, ranks combine durations using MAX, producing the slowest rank's time for each synchronized iteration. A synchronized host wall-time sample also includes launch and event-handling overhead, providing a separate completion-boundary cross-check. This includes exposed waiting within the collective; it is not a measurement of cable latency alone.
+The networking helper selects one environment override before NCCL starts. For each payload size, the lab refills the tensor and synchronizes readiness. It records a CUDA start event, submits `all_reduce` with `async_op=True`, calls `work.wait()`, records the stop event on that stream and synchronizes it before reading elapsed time. Preparation, output checks and result gathering stay outside the interval. MAX aggregation supplies the slowest rank's duration per iteration; a separate synchronized host sample includes launch and event-handling overhead.
 
 ## Practice
 

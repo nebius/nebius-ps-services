@@ -16,11 +16,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from nebius_vpngw.vm_ha_tls import (
-    generate_vm_ha_managed_identity,
-    validate_vm_ha_managed_certificate,
-)
-
 from .models import canonical_json
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -231,6 +226,8 @@ class MTLSReceipt:
         except (ValueError, TypeError):
             raise ManagedMTLSError("managed mTLS public receipt is invalid") from None
         node_id = _require_identifier("receipt node identity", str(value["node_id"]))
+        from nebius_vpngw.vm_ha_tls import validate_vm_ha_managed_certificate
+
         certificate = validate_vm_ha_managed_certificate(node_id, certificate_pem)
         certificate_fingerprint = _require_sha256(
             "receipt certificate fingerprint", str(value["certificate_fingerprint"])
@@ -631,7 +628,11 @@ class ManagedMTLSStore:
             active = self._load_active()
             if active is not None and target_epoch <= int(active["epoch"]):
                 raise ManagedMTLSError("managed mTLS target epoch does not advance")
+            from nebius_vpngw.vm_ha_tls import generate_vm_ha_managed_identity
+
             identity = generate_vm_ha_managed_identity(node_id)
+            from nebius_vpngw.vm_ha_tls import validate_vm_ha_managed_certificate
+
             validated = validate_vm_ha_managed_certificate(
                 node_id,
                 identity.certificate_pem,
@@ -773,6 +774,8 @@ class ManagedMTLSStore:
                 or peer_epoch != transaction["peer_target_epoch"]
             ):
                 raise ManagedMTLSError("managed mTLS peer receipt is outside the operation")
+            from nebius_vpngw.vm_ha_tls import validate_vm_ha_managed_certificate
+
             certificate = validate_vm_ha_managed_certificate(peer_node_id, certificate_pem)
             pending_local = transaction.get("pending_local")
             if not isinstance(
@@ -1050,6 +1053,8 @@ class ManagedMTLSStore:
         certificate_path, key_path = self._identity_paths(str(active["certificate_fingerprint"]))
         certificate_pem = _safe_read(certificate_path)
         private_key_pem = _safe_read(key_path)
+        from nebius_vpngw.vm_ha_tls import validate_vm_ha_managed_certificate
+
         local = validate_vm_ha_managed_certificate(
             str(active["node_id"]), certificate_pem, private_key_pem=private_key_pem
         )
@@ -1063,6 +1068,8 @@ class ManagedMTLSStore:
         for peer in peers:
             peer_path = self._peer_path(peer.certificate_fingerprint)
             peer_pem = _safe_read(peer_path)
+            from nebius_vpngw.vm_ha_tls import validate_vm_ha_managed_certificate
+
             peer_certificate = validate_vm_ha_managed_certificate(peer.node_id, peer_pem)
             if (
                 peer_certificate.certificate_fingerprint != peer.certificate_fingerprint

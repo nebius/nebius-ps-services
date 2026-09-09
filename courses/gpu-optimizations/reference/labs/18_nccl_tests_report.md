@@ -4,7 +4,9 @@ NVIDIA NCCL Tests separates collective performance from model computation. In th
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 11 for MPI versus torchrun, NCCL Tests, in-place/out-of-place buffers, correctness checking and normalized bandwidth. Use Lab 17’s size-curve reasoning, but qualify this independent benchmark’s own runtime and placement.
+Qualify the benchmark's own MPI and NCCL libraries. Its MPI-enabled binary uses the site's Slurm integration; the course's `torchrun` launcher cannot substitute for that launch protocol.
+
+**Theory preparation:** Read Lesson 11 for collective semantics, message-size curves and normalized bandwidth. Use Lab 17's unit reasoning, then qualify this independent benchmark's runtime and rank placement.
 
 Complete Lab 17 and ask the cluster owner for an MPI-enabled `all_reduce_perf` built from the reviewed nccl-tests v2.20.0 source, commit `b4d5beebca8a76cf01335f724d154b9b9d394d96`. This is a researched candidate, not a build qualified by this course. The same executable and compatible CUDA/NCCL/MPI libraries must be available on both nodes. Keep its per-node binary hashes, build configuration and loaded-library identities in a private qualification record. The runner records only the local binary hash; that does not prove the remote copy matches.
 
@@ -47,7 +49,7 @@ Add `--diagnostic` when parsing a diagnostic log. An offline parse validates con
 
 Start with identity, not bandwidth. Verify two ranks, two different nodes, full H100 devices and visible device zero. Check nccl-tests version separately from nccl_headers and nccl_library; a header/library difference needs compatibility review, and matching numbers alone do not prove every node loaded the same file. Confirm the intended size range was not silently reduced, and that validation_iterations is positive.
 
-For each size, the out_of_place and in_place records contain time_us, algbw_GBps, normalized_busbw_GBps and wrong. Out-of-place uses separate send/receive storage; in-place allows the result to reuse input storage. Require wrong=0 in both, the final zero-error check, and a zero launcher exit. `N/A` means no correctness proof. Time is microseconds for this collective table; the separate upstream communicator-operations tool reports different units and is not this lab.
+For every size, inspect both `out_of_place` and `in_place`: `time_us`, `algbw_GBps`, `normalized_busbw_GBps` and `wrong`. The modes use separate input/output storage or reuse input storage, respectively. Require enabled correctness checking, `wrong=0` in both modes, the final zero-error check and a zero launcher exit. `wrong` counts incorrect checked elements, not network packet errors. `N/A` supplies no correctness proof.
 
 Use [Lab 17's Practice](17_nccl_transport_sweep.md#practice) illustration of 64 MiB / 4,000 microseconds to check the units yourself. With two ranks, all-reduce busbw equals algbw because its factor is one. With four ranks the normalization would be 1.5, not proof that a NIC transferred that many additional bytes per second. The average-bandwidth footer averages across the tested sizes; it does not represent application throughput. Prefer the rows matching the application's payloads and one consistent buffer mode.
 

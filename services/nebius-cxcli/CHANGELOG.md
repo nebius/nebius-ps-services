@@ -6,6 +6,337 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Reject FIFO/device inputs for Soperator values and SSSD runtime files before
+  reading, and reject malformed feature enablement or disabled required checks
+  during input validation.
+- Add fresh Soperator install `--values-file`, wizard prefill and saved explicit
+  value provenance, preserving false, default-equal and list choices through
+  normalization and upgrades while retaining generic catalog separation.
+- Complete conditional backup destination, schedule, retention and Secret-reference
+  inputs; route them through upstream `backup.config.values` and validate frozen
+  child chart renders before installation.
+- Complete shared SSSD Secret/optional CA references and runtime file delivery.
+  Resolve runtime namespaces from rendered consumers, require explicit target
+  context and lifecycle authority for each create, reuse complete objects and
+  reject incomplete objects without overwriting credentials. Runtime paths and
+  contents remain outside saved configuration and receipts.
+
+- Separate Soperator maintenance, fresh diagnostic acceptance and final user
+  admission. Preserve all existing job-policy/TUI choices, pause reviewed passive
+  diagnostics only after isolation, and keep unsupported passive behavior at its
+  verified desired policy with a warning. Required bootstrap and operational
+  hooks remain active.
+- Keep ordinary scheduling closed while native acceptance and recurring schedule
+  restoration complete. Journal partition/hold ownership and reservation release
+  separately, preserve original closed partitions and ACLs, and resume interrupted
+  handoff without releasing unrelated holds or recreating maintenance.
+- Bind passive acceptance to fresh native logs, worker identity and the desired
+  rendered configuration, with bounded transport and incremental private worker
+  receipts. New checks receipts require the matching operation executable.
+- Require positive native GPU-health, boot-disk and memory measurements for
+  applicable passive acceptance. Freeze GPU-busy and optional NVMe proof as
+  supporting-only, report their limitations, and prevent native completion or
+  skipped discovery from becoming measured PASS evidence. Bound and recheck
+  child-log reads. Align wizard and upgrade-plan guidance with phase-based
+  diagnostic suppression and the selected job policy.
+- Respect the desired Slurm health-check node-state selector during passive
+  acceptance, recording inapplicable periodic runs without inventing PASS or
+  skipping native job-hook evidence. Preserve partial baseline progress across
+  busy workers and resume without requiring a cluster-wide quiet sweep.
+
+- Keep parent-owned graph-validation selection in the campaign module, preserving
+  its ownership checks while satisfying the CLI architecture gate.
+
+- Update lifecycle validation documentation with the completed managed install
+  recovery and full-stack upgrade, retaining the clean-install and scale limits.
+
+- Bind final upgrade check-policy readiness and catch-up recovery to durable
+  campaign main-workload authority, fixing a wait that could time out despite
+  the exact Slurm HelmRelease already being Ready.
+- Resume interrupted final check-policy stages before full-graph readiness,
+  prove source adoption after target writers resume, retain campaign authority
+  evidence, and keep fresh diagnostics after
+  runtime validation. Accepted restoration resumes reuse verified acceptance
+  without recreating maintenance reservations or diagnostic jobs.
+
+- Verify effective diagnostic deferral before install infrastructure restoration
+  and between upgrade segments, including CronJobs and in-flight Kubernetes and
+  Slurm work. Preserve verified bootstrap and owned acceptance recovery; require
+  exact cron expressions and time zones when restoring desired schedules.
+- Retain Nebius provider node-group IDs in GPU inventory and use those exact IDs
+  for campaign validation, independently of shared logical Kubernetes labels.
+- Fetch cold OCI chart caches by the frozen manifest digest and verify both the
+  manifest and package digests, so moved version tags cannot replace approved charts.
+
+- Keep complete Soperator graph validation in the parent upgrade after frozen
+  source refresh. Managed node-template children retain node, GPU and other
+  deployment checks without deadlocking on suspended HelmChart artifacts lost
+  during system-node replacement. Standalone required checks remain mandatory.
+
+- Preserve Terraform caches and local state across renders and exclude them from
+  generated-configuration authority. Upgrade validation can initialize Terraform
+  without invalidating its applied generation; configuration and the provider
+  dependency lock remain fingerprinted. Interrupted commits still require exact
+  transaction recovery, while applied stages require their recorded postimage
+  through the same check at campaign admission and per-stage recovery.
+
+- Resolve protected local SFS through retained PV/PVC bindings and exact Nebius
+  node-group attachments for both managed and onboarded upgrades. Declaring SFS
+  in configuration no longer incorrectly requires CSI volume handles. Match
+  configured mount tags exactly instead of assuming they equal protected role
+  names; reject duplicate or missing tag assignments.
+
+- Retain approved Soperator release snapshots by digest and pass the campaign's
+  frozen identity to checks and release execution. Resume no longer re-resolves
+  chart tags after discovery cache expiry; missing or altered content fails
+  before maintenance without changing the approval receipt.
+
+- Preserve native check lifecycle and full-stack source, target and catch-up receipts as lifecycle
+  evidence during rendering. Their creation or progress cannot change the
+  admitted generated-configuration fingerprint or block maintenance entry or
+  final release readiness.
+
+- Initialize upgrade checks after creating the durable campaign receipt and
+  bind source-check compilation to the rendered Slurm cluster name. Preserve
+  the original initialization failure in resumable supervisor reporting.
+
+- Resolve a managed Soperator upgrade's immutable cluster ID from its exact
+  generated Terraform output before preparing renewable Kubernetes credentials.
+  Read the existing backend without initialization; external targets retain
+  their registered identity and never read Terraform state.
+
+- Capture Slurm reservation identity with standard UTC timestamps and complete
+  canonical fields. Reject incomplete check-reservation times before accepting
+  ownership; preserve exact preimages for upgrade recovery.
+
+- Validate Soperator deployments through the authoritative upstream release graph.
+  Replace legacy jail-object smoke lookups with the same exact storage, workload
+  and required-check readiness used by reconciliation; retain canonical reports
+  and show pending readiness progress without validation-side recovery mutations.
+
+- Release the verified diagnostic reservation before restoring recurring upstream
+  checks during install and upgrade. Close temporary diagnostic authorization
+  first, retain the independent admission barrier and existing customer job
+  holds until the final policy handoff, and journal reservation release
+  intent/completion for interruption recovery. Recover proven native catch-up
+  submission failures through the staged workflow and fresh checks, preserving
+  failed evidence. Recognize a retained Flux retry only after the exact admitted
+  checks writer has acknowledged suspension and completed native rollback, with
+  independent source artifact verification. Report policy restoration stages
+  during resume.
+
+- Keep terminal native scheduled-check history from blocking Soperator service
+  readiness after successful recovery. Validate the complete Kubernetes owner
+  chain and matching Helm-owned ActiveCheck; retain required check-result gates
+  and strict readiness for service Pods and unproven Job ownership.
+  Bind the auxiliary extensive-check workload to its cluster's existing Slurm
+  ConfigMap and munge Secret in staged and steady rendering. Recover only a
+  proven never-started stale auxiliary Job through a journaled, UID-bound native
+  deadline after writer suspension; preserve accepted checks and frozen inputs.
+
+- Require actual native health-checker PASS reports and validated NCCL results
+  before accepting Slurm diagnostics, including output revalidation before maintenance release. After release, verify
+  the bound diagnostic verdict/digest plus live Job and accounting evidence so
+  upstream local-log retention cannot invalidate a completed acceptance.
+  Accept the native CUDA sample report with null subchecks only when all four
+  exact sample commands succeeded and the overall report is PASS.
+  Correct the managed eight-H200, 128-vCPU worker topology without converting
+  its Kubernetes CPU-time quota into a physical CPU mask. Preserve the quota,
+  retain native affinity failures and replay fresh acceptance through sealed
+  values repairs. Verify reservation resource totals during physical topology
+  repair; removing a generated CPU mask preserves the complete reservation.
+
+- Bind GPU workers to the upstream Docker Supervisor configuration and daemon
+  settings, with a pod-local disposable image cache under the existing storage
+  allowance. Recover an initial native Docker NCCL missing-socket failure through
+  an exact sealed values repair, retaining failed jobs and the original
+  reservation and requiring fresh upstream checks.
+  Recover the exact drains left by those failed checks after proving native
+  Docker readiness. Quiesce only an attributable queued bootstrap probe and
+  resume its native Job after drain restoration and check authorization;
+  preserve failed history and reject unrelated drains or workloads.
+
+- Declare an Enroot-specific AppArmor user-namespace profile through the
+  upstream Security Profiles Operator. Wait for installation on all ready
+  nodes before opening the Slurm workload, preserving the host-wide
+  restriction. Recover a proven initial Enroot namespace denial through a
+  sealed additive adapter repair and fresh acceptance under the original
+  reservation, retaining the failed job and its accounting.
+
+- Correct the GPU wizard `ephemeralStorage` default from 10Gi to 55Gi, matching the
+  pinned upstream GPU examples. Fill missing GPU allowances while preserving explicit settings.
+  Recover an initial native image import interrupted by a proven worker
+  storage eviction through an exact sealed values repair. Retain its failed
+  accounting and require fresh checks under the original reservation. Bind
+  durable kubelet termination and eviction cursors to the node boot identity
+  and the native passive checker's over-limit storage report instead of relying
+  on short-lived Kubernetes Events.
+
+- Pin native acceptance jobs with supported Slurm allocation directives and
+  bind their projected script contents to executable identity. Preserve the
+  upstream diagnostic body and entrypoint. Retain exact terminal submissions
+  made with unsupported worker-selection variables, then require fresh jobs
+  with independently verified worker and GPU coverage on resume.
+
+- Materialize upstream runtime script mounts and the node-local job metrics
+  directory for both installed and registered NodeSets. Verify the normalized
+  Pod mount paths emitted by the upstream renderer and the target-file permissions
+  of projected ConfigMap links. Recover an exact initial
+  acceptance blocked by missing mounts through a sealed values repair, native
+  probe quiescence and verified restoration of only its attributable prolog
+  drains. Preserve failed evidence and require fresh checks after replay.
+
+- Match the upstream `<cluster>-munge` Secret in native check verification while
+  retaining the distinct `munge-key` volume name, exact key paths and permissions.
+
+- Include check reservation binding and initial partition restoration in both
+  normal execution and interrupted recovery, and verify both before accepting
+  the combined restoration step. Repair the exact missing-GPU install frontier
+  with a sealed successor that retains the original reservation and failed
+  history, changes only absent `Gres` counts, and replays from declarative apply.
+  Authenticate both full-values policy identities through that sealed delta
+  before carrying reservation ownership into the successor.
+
+- Validate unlimited check reservations using Slurm's native 365-day duration
+  output, preserving active-state, resource coverage, authorization and
+  fingerprint checks.
+
+- Bind the upstream jail-log collector to the approved system placement and
+  active jail storage, including slot switches. Preserve upstream configuration
+  and readiness, and support an exact pre-acceptance install repair with native
+  HelmChart identity and uninstall verification.
+  Recover a healthy corrected collector stalled without a rollback target using
+  one source-bound native retry per configuration; preserve waits and stop on
+  another failure.
+
+- Bind native bootstrap check login commands to the declared cluster Service
+  using exact verified upstream script bytes. Reject arbitrary command
+  changes, and admit interrupted installs through a sealed two-file repair
+  that preserves source, storage and earlier repair evidence.
+  Recognize the recorded failed-apply checkpoint as well as an interrupted
+  apply, retaining exact pending-intent and pre-acceptance checks.
+
+- Keep the orchestration-only Soperator umbrella from waiting on suspended
+  child releases during install and upgrade; retain child waits, hooks and all
+  staged acceptance gates. Resolve checks handoff through the same rendered
+  umbrella identity and require acknowledged source-writer suspension.
+
+- Populate missing Slurm GPU counts even when worker CPU topology already fits.
+  Reject changes to existing IAM permit settings during failed-install recovery.
+
+- Require the upstream Slurm REST service for configuration reconciliation,
+  including its existing JWT startup gate and OpenMetrics handling. Repair an
+  omitted dependency during interrupted install through a sealed successor
+  that preserves all worker, storage, source and check inputs.
+
+- Recognize completed uninstall remediation as quiescent for the exact admitted
+  checks-install repair, even when Flux retains a queued retry condition.
+
+- Bind native Soperator checks and the reservation CronJob to the active jail
+  PVC; suspend and verify restoration of the auxiliary schedule across install
+  and upgrade. Resume interrupted first installs through a sealed render repair
+  and exact old wait-hook deadline, preserving source, storage and failed history.
+
+- Preserve the frozen absent source on install resume after the target main
+  release appears, instead of inferring a no-op from live discovery.
+
+- Apply temporary Soperator check policy to the umbrella HelmRelease inline
+  values that Helm consumes, as well as the matching values record. Reject
+  missing, ambiguous, or drifted umbrella values before mutation.
+
+- Extend the upstream dashboard source adapter to the pinned Soperator 4.1.5
+  chart. Interrupted installs can resume its exact pre-main separator failure
+  with cluster-bound repair evidence, preserved compiled values and failed
+  history, and a fenced successor operation.
+
+- Use the supported project `editor` role for upstream observability ingestion
+  instead of assigning permission names as IAM roles. Failed install replanning
+  refreshes only Terraform root wiring with frozen-input checks and may replace
+  only uncreated grants for retained groups; existing resources remain protected.
+  Recovery compares desired values using provider schemas so normal status
+  changes after node creation do not prevent resuming a partial apply.
+
+- Keep the Soperator strategy guard inside its release branch so ordinary Flux
+  app deployment remains independent of Soperator lifecycle policy.
+
+- Require canonical project admin permissions for Terraform-owned IAM and MK8s
+  service-account attachment. Cached commands verify permissions read-only;
+  explicit targeted `auth` reconciles managed project roles without rotating a
+  healthy key or granting tenant access.
+- Recover failed Soperator infrastructure applies through `install --resume
+  --dry-run --replan`. Preserve failed evidence, infrastructure and shared-group addresses,
+  known identities, and frozen inputs; reject destructive changes and require
+  a new approval fingerprint before resuming.
+
+- Include exact renderer-owned Soperator observability IAM instances in the
+  install plan ownership check. Reject unrelated accounts and resource names,
+  destructive actions, and fresh IAM-only plans without infrastructure changes.
+
+- Repair the MK8s service-account output used by Soperator observability IAM:
+  account keys remain known in the first Terraform plan while IDs resolve at
+  apply time. No targeted bootstrap apply is needed.
+
+- Normalize Object Storage lease metadata header casing so Soperator install
+  retains valid ownership on Nebius responses. Reject ambiguous duplicate keys
+  and keep exact ETag, owner, expiry, and cluster-binding checks. Suppress the
+  generic deploy hint during install's internal render step.
+
+- Fix fresh Soperator rendering before Terraform state exists and resolve the
+  managed cluster output without duplicating its target prefix. Restore the
+  required fabric prompt when regional capacity advice is missing, and report
+  absent regional coverage as unknown instead of confirmed zero capacity.
+
+- Keep upstream Soperator checks enabled while deferring scheduling-dependent
+  diagnostics during install and the full upgrade campaign. Run fresh native
+  acceptance on every required worker under retained maintenance, verify all
+  required GPU allocations and executable/script identity, and restore schedules
+  and authorization before customer handoff. Freeze policy changes in upgrade
+  plans, including equal-release campaigns, reject unsupported execution knobs,
+  and preserve exact submission/restoration evidence across interruption.
+
+- Align the install wizard with upstream Soperator ownership: show infrastructure,
+  dedicated upstream Soperator settings, and required platform/integration
+  components. Remove optional-app questions, generic observability prompts, and
+  `soperator install --app`; optional apps use `component add` afterward. Preserve
+  placement and storage mappings, with separate autoscaling and ephemeral-worker
+  choices. Require explicit
+  collector selection on each Soperator target, keep Grafana independent, retain
+  protected ownership during ordinary dependency filtering, and report ordinary
+  telemetry signals from effective collector configuration. Saved install/resume
+  state and existing upstream observability remain unchanged.
+
+- Fix ordinary app reapplication when namespaces already exist: remove their
+  matching Kustomization references from the private apply snapshot while
+  preserving the saved generated bundle and live namespaces.
+- Use public Nebius Grafana by default for Soperator installs. Local
+  Grafana plus Gateway and the additional app telemetry agent are independent
+  optional apps selected afterward through `component add`.
+  Ordinary catalog apps use the existing component, render, deploy, Flux apply,
+  and Helm upgrade commands on Soperator MK8s targets. Publish and apply only
+  ordinary app resources, preserve protected infrastructure and the upstream
+  graph, verify target identity and resource ownership, and fence concurrent
+  lifecycle operations. Preserve ordinary app generations through upgrade and
+  recovery; omission does not uninstall live releases. Render the upstream
+  logging endpoint for the selected region and retain cxcli Grafana dashboards.
+
+- Refactor `soperator install` to use the shared typed project-creation workflow
+  directly, fixing the `Invalid --app-version value '4'` failure. Select MK8s,
+  SFS, and Soperator automatically while preserving their full field wizards
+  and the one frozen upstream release. Apply the worker profile before
+  materializing topology, reconcile GPU helpers after field changes, and keep
+  cert-manager exclusively upstream-owned. Report release, authentication,
+  service-account, provider, render, and plan progress using the same terminal
+  presentation as upgrade, with stable stderr records when redirected. Keep
+  cached lookups quiet and report failed validation or provider requests as
+  failures even when the wizard handles their errors.
+- Read supported Nebius subnet status pools without SDK deprecation tracebacks,
+  preserving explicit versus inherited subnet ownership. Reuse complete project
+  platform inventories for preset metadata, and propagate CPU/GPU selections
+  to managed node groups before refreshing disk recommendations. This avoids
+  repeated failed requests for unavailable prior defaults without replacing
+  explicit selections or caching failed inventory reads.
+- Align workflow regression tests with the existing pinned setup-uv v10.0.1
+  release and download-artifact v8 action.
 - Remove the downstream Soperator Helm chart family, its verifier workflow, and
   its publication entry. Soperator is no longer declared in the generic source
   or CLI-settings catalogs; the six lifecycle commands now combine a dedicated
@@ -616,8 +947,8 @@ All notable changes to this project are tracked here. This changelog follows
   bind source/target capability plus rendered/reconcile stage-plan fingerprints
   into operation, anchor, and receipt authority.
 - Disable upstream bundled Grafana, avoid duplicate collection of
-  Soperator-owned namespaces, and grant Soperator identities only the required
-  metrics-writer and logs-writer roles.
+  Soperator-owned namespaces, and grant configured Soperator node-account groups
+  project-scoped editor access for metrics and log ingestion.
 - Align offline rendering tests with frozen official-upstream release fixtures,
   add direct hostile-archive/cache, fencing, recovery-journal, rootfs race, and
   observability-verifier negative coverage, verify the single delivery path in

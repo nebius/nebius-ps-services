@@ -4,19 +4,25 @@ A GPU can execute arithmetic quickly while still losing an application compariso
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 1 for elementwise work, CPU/resident-GPU/transfer-inclusive boundaries, warm-up, CUDA events and absolute/relative reference checks. Complete its single-GPU preflight before comparing the same formula on both devices.
+**Theory preparation:** Read Lesson 1 for CPU, resident-GPU and transfer-inclusive timing boundaries. Complete the README setup and Lab 10 before this experiment. The formula, timing procedure and numerical check are explained below.
 
-Use one H100 and the Fundamentals environment after the README setup and Lab 10's single-GPU compatibility/preflight check. The two-node Lab 00 acceptance check belongs to the final collective lesson, not this local crossover experiment. Read Lesson 1's warm-up and completed-work timing rules before running. The smoke profile includes 1,024 and 1,000,000 FP32 elements; the H100 profile adds 32,000,000. No input dataset is needed.
+Use one H100 and the Fundamentals environment. The smoke profile tests 1,024 and 1,000,000 FP32 elements; the H100 profile adds 32,000,000. A profile selects workload size, not a different correctness standard. No dataset is needed. The two-node Lab 00 belongs to the final collective lesson.
 
 H100 provides enormous parallel and matrix throughput, but it does not remove Python dispatch, launch latency, PCIe or network transfer, or application queueing. Large H100 peak numbers are relevant only after the measured path supplies enough eligible work.
 
 ## Concepts and code path
 
-Floating-point implementations can differ slightly because of rounding. The `allclose` check compares each observed element with its reference and permits absolute error up to `atol + rtol * abs(reference)`. Absolute tolerance protects values near zero; relative tolerance scales with the reference magnitude. With this lab's FP32 settings and reference value 2, the allowance is 0.000021; for a zero reference it is 0.000001. Every element must satisfy its bound, not just the average error.
+An elementwise operation applies the same formula independently at each position. Here `x * y + x` multiplies corresponding input values and adds `x`. The CPU computes the reference answer; a faster GPU result is useful only if it agrees with that answer.
+
+Floating-point arithmetic rounds values. This lab accepts each GPU value only when `abs(candidate - reference) <= atol + rtol * abs(reference)`, using `atol=1e-6` and `rtol=1e-5`. Absolute tolerance allows a fixed difference near zero; relative tolerance scales with the CPU reference. For reference 2, the allowance is `2.1e-5` (0.000021); for reference zero, it is 0.000001. Every element must pass. A finite result alone does not establish agreement. Pure copies of fixed values can instead require exact equality.
+
+Warm-up initializes the device path before steady-state samples. CUDA events mark the beginning and end of queued device work; the end event must complete before its elapsed time can be read. A host timer must include completion of the requested result. Repeat measurements to see variation rather than relying on one sample.
 
 The program creates CPU inputs and resident GPU copies once per size. CUDA events measure resident-device work. A separate host timer includes both input copies, the expression, and the output copy back to the CPU. CPU timing measures the expression without a transfer. These are three different application contracts, not interchangeable measurements of one kernel.
 
 ## Practice
+
+Slurm assigns cluster resources to jobs. The `sbatch` commands below run the script inside a GPU allocation; they do not execute GPU work on the login host.
 
 Given a CPU add that takes 8 microseconds, a GPU launch that costs 10 microseconds, a tiny resident kernel that takes 2 microseconds, and two 7-microsecond copies, resident GPU time is 2 microseconds but transfer-inclusive time is 26 microseconds. Change the input to millions of values so the CPU takes 900 microseconds while launch and copies total 140 microseconds and GPU computation takes another 100 microseconds (240 microseconds end to end). Expected observation: the placement decision flips, and the report must say which boundary produced each number.
 

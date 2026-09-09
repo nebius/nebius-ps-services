@@ -774,8 +774,62 @@ def _write_recent_release_snapshot(
         replace(snapshot, selector=normalized, snapshot_sha256="")
     )
     path = _recent_release_snapshot_path(normalized, cache_root=cache_root)
+    _retain_release_snapshot(cached, cache_root=cache_root)
+    if path.exists():
+        _retain_release_snapshot(load_soperator_release_snapshot(path), cache_root=cache_root)
     write_soperator_release_snapshot(path, cached)
     return path
+
+
+def _retain_release_snapshot(
+    snapshot: SoperatorReleaseSnapshot, *, cache_root: Path | None
+) -> None:
+    """Keep selector and exact-release identities after discovery cache expiry."""
+
+    root = prepare_private_cache_root(
+        _recent_release_snapshot_path(snapshot.release, cache_root=cache_root).parent / "by-digest"
+    )
+    for selector in {snapshot.selector, snapshot.release}:
+        sealed = seal_soperator_release_snapshot(
+            replace(snapshot, selector=selector, snapshot_sha256="")
+        )
+        path = root / f"{sealed.snapshot_sha256.removeprefix('sha256:')}.json"
+        if path.exists() or path.is_symlink():
+            if load_soperator_release_snapshot(path) != sealed:
+                raise ValueError("retained Soperator release snapshot differs from its identity")
+        else:
+            write_soperator_release_snapshot(path, sealed)
+
+
+def _load_frozen_release_snapshot(
+    selector: str, digest: str, *, cache_root: Path | None
+) -> SoperatorReleaseSnapshot:
+    """Locate content by admitted digest; discovery freshness grants no authority."""
+
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError("invalid frozen Soperator release snapshot digest")
+    root = _recent_release_snapshot_path(selector, cache_root=cache_root).parent
+    candidates = (
+        root / "by-digest" / f"{digest.removeprefix('sha256:')}.json",
+        root / f"{selector}.json",
+        root / "latest.json",
+    )
+    for index, path in enumerate(candidates):
+        if not path.exists() and not path.is_symlink():
+            continue
+        snapshot = load_soperator_release_snapshot(path)
+        normalized = seal_soperator_release_snapshot(
+            replace(snapshot, selector=selector, snapshot_sha256="")
+        )
+        if normalized.snapshot_sha256 != digest:
+            if index == 0:
+                raise ValueError("retained Soperator release snapshot digest differs")
+            continue
+        if selector != "latest" and normalized.release != selector:
+            raise ValueError("frozen Soperator release snapshot version differs")
+        _retain_release_snapshot(normalized, cache_root=cache_root)
+        return normalized
+    raise RuntimeError("the approved Soperator release snapshot content is unavailable")
 
 
 def freeze_soperator_release(
@@ -784,18 +838,35 @@ def freeze_soperator_release(
     current_release: str | None = None,
     cache_root: Path | None = None,
     identity_root: Path | None = None,
+    snapshot_sha256: str | None = None,
     opener: Any = None,
     emit: Callable[[str], None] | None = None,
 ) -> FrozenSoperatorRelease:
     """Resolve, verify, and freeze a stable official release before mutation."""
 
     normalized_selector = normalize_soperator_release_selector(selector)
+    if snapshot_sha256 is not None:
+        snapshot = _load_frozen_release_snapshot(
+            normalized_selector, snapshot_sha256, cache_root=cache_root
+        )
+        if current_release and SoperatorVersion.parse(snapshot.release) < SoperatorVersion.parse(
+            current_release
+        ):
+            raise ValueError(
+                f"Soperator downgrade {current_release} -> {snapshot.release} is not supported"
+            )
+        _notify(emit, "Re-verifying the approved release snapshot source and identity")
+        frozen = frozen_soperator_release_from_snapshot(snapshot, cache_root=cache_root)
+        with SoperatorReleaseIdentityLedger(identity_root).locked(frozen.metadata):
+            pass
+        return frozen
     if opener is None:
         cached_snapshot = _load_recent_release_snapshot(
             normalized_selector,
             cache_root=cache_root,
         )
         if cached_snapshot is not None:
+            _retain_release_snapshot(cached_snapshot, cache_root=cache_root)
             _notify(
                 emit,
                 "Cached release snapshot found; re-verifying source and identity",

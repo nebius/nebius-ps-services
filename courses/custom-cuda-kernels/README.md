@@ -106,10 +106,6 @@ The sanitizer launcher takes an explicit allow-listed tool, for example
 `sbatch slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose"`; use `memcheck`,
 `racecheck`, `initcheck`, or `synccheck` according to the failure hypothesis.
 
-## Begin with the concepts
-
-Start with the first lesson's **Start here** section and its inline workflow diagram. It defines the subject and essential vocabulary, explains why it is useful, and walks through a small example before advanced engineering details. Follow the syllabus checkpoints for the beginner route; experienced readers can use those checkpoints to identify what they already understand.
-
 ## Continue learning
 
 After the core course, use [Where to Go Next](NEXT-STEPS.md) for optional

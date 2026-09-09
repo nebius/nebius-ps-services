@@ -79,6 +79,8 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
         names = set(wheel_zip.namelist())
 
     assert "nebius_vpngw/_version.py" in names
+    assert "nebius_vpngw/tunnel_state.py" in names
+    assert "nebius_vpngw/ordinary_routes.py" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-esp4-preflight.sh" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.service" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.timer" in names
@@ -130,6 +132,26 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     )
     assert capability.returncode == 0, capability.stderr
     assert "vm-ha-standby-restoration-v2" in json.loads(capability.stdout)["features"]
+
+    bootstrap = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from nebius_vpngw import ordinary_bootstrap as b;"
+            "import subprocess,sys,json;"
+            "p=subprocess.run([sys.executable,'-I','-S','-c',b.LOADER],"
+            'input=b.source_frame()+b\'{"action":"inspect-package","manifest":{}}\','
+            "capture_output=True);"
+            "assert p.returncode==1 and json.loads(p.stdout)['stage']=='inspect',p.stderr",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert bootstrap.returncode == 0, bootstrap.stderr
 
 
 def test_wheel_metadata_retains_runtime_dependency_bounds(tmp_path) -> None:
@@ -195,3 +217,54 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     assert archive.returncode == 0, archive.stderr
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.service" in archive.stdout
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.timer" in archive.stdout
+    assert "nebius_vpngw/deploy/ordinary_remote.py" in archive.stdout
+    assert "nebius_vpngw/ordinary_operations.py" in archive.stdout
+    from PyInstaller.archive.readers import CArchiveReader
+
+    from nebius_vpngw import ordinary_routes
+
+    reader = CArchiveReader(str(binary_path))
+    for source in ordinary_routes.OWNERSHIP_SOURCES:
+        assert (
+            reader.extract("nebius_vpngw/" + source)
+            == (Path(ordinary_routes.__file__).parent / source).read_bytes()
+        )
+    from nebius_vpngw.handoff_bootstrap import SOURCES
+
+    for _module, relative in SOURCES:
+        assert "nebius_vpngw/" + relative in archive.stdout
+    assert "nebius_vpngw/systemd/nebius-vpngw-ordinary-agent.service" in archive.stdout
+
+    # Rebuild and execute the full transport from the binary's actual readable
+    # sources, outside the checkout and without installed product imports.
+    extracted = tmp_path / "frozen-sources"
+    for relative in (
+        "ordinary_bootstrap.py",
+        "ordinary_operations.py",
+        "ordinary_routes.py",
+        "tunnel_state.py",
+        "deploy/ordinary_remote.py",
+    ):
+        path = extracted / "nebius_vpngw" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(reader.extract("nebius_vpngw/" + relative))
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import sys,subprocess,json;sys.path.insert(0,sys.argv[1]);"
+            "from nebius_vpngw import ordinary_bootstrap as b;"
+            "p=subprocess.run([sys.executable,'-I','-S','-c',b.LOADER],"
+            'input=b.source_frame()+b\'{"action":"inspect-package","manifest":{}}\','
+            "capture_output=True);"
+            "assert p.returncode==1 and json.loads(p.stdout)['stage']=='inspect',p.stderr",
+            str(extracted),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert probe.returncode == 0, probe.stderr

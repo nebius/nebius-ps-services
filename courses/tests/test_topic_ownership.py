@@ -191,7 +191,7 @@ def test_no_identical_complete_lessons_or_non_preflight_labs():
         for lesson in load_builder().parse_course(ROOT / course / "COURSE.md")[2]:
             key = tuple(
                 " ".join(re.findall(r"\w+", lesson[f].lower()))
-                for f in ("Objective", "Mental model", "Mechanism")
+                for f in ("Objective", "How it works", "Mental model")
             )
             lessons[key].append((course, lesson["title"]))
         for path in (ROOT / course / "labs").glob("[0-9]*"):

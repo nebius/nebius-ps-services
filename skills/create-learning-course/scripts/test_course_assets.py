@@ -19,26 +19,45 @@ CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
 
 
+def lesson_fixture(number: int = 1) -> str:
+    lesson = (ROOT / "assets/lesson-fragment.html").read_text()
+    values = {
+        "LESSON_ID": f"lesson-{number:02}",
+        "LESSON_NUMBER": str(number),
+        "LESSON_TITLE": "Process inputs and results",
+        "OBJECTIVE_HTML": "<p>Trace an input through a process to its result.</p>",
+        "CONNECTED_EXPLANATION_HTML": (
+            "<p>A process transforms inputs into a result. A comparison needs "
+            "a stated baseline and the same result criterion.</p>"
+        ),
+        "FIGURE_ID": f"figure-workflow-{number}",
+        "INLINE_SVG_WITH_UNIQUE_IDS": (ROOT / "assets/diagram-example.svg")
+        .read_text()
+        .replace("workflow-", "workflow-" if number == 1 else f"workflow-{number}-"),
+        "CAPTION_WITH_ESSENTIAL_MEANING": (
+            "Inputs become a checked result; arrows show processing order."
+        ),
+        "PRACTICE_HTML": '<p><a href="#lab-01">Lab 01: Compare two cases</a></p>',
+        "MENTAL_MODEL_HTML": "<p>An input is transformed, then checked.</p>",
+    }
+    for key, value in values.items():
+        lesson = lesson.replace("{{" + key + "}}", value)
+    if "{{" in lesson:
+        raise AssertionError("Unfilled lesson slot")
+    return lesson
+
+
 def fixture() -> str:
     shell = (ROOT / "assets/textbook-shell.html").read_text()
     values = {
         "COURSE_TITLE": "Reasoning from observations",
         "GUIDED_HOURS": "2",
         "INLINE_CSS": (ROOT / "assets/styles.css").read_text(),
-        "LESSON_TOC": '<li><a href="#lesson-01">1. Observe a process</a></li>',
+        "LESSON_TOC": '<li><a href="#lesson-01">1. Process inputs and results</a></li>',
         "LAB_TOC": '<li><a href="#lab-01">Lab 01: Compare two cases</a></li>',
         "MISSION_HTML": "<p>Describe a process before choosing a change.</p>",
         "SYLLABUS_HTML": "<p>Observe, explain, then compare.</p>",
-        "LESSONS_HTML": (
-            '<section class="lesson" id="lesson-01"><h2>1. Observe a process</h2>'
-            '<div class="concept-introduction"><h3>Start here</h3>'
-            "<p>A process transforms inputs into a result. A comparison needs "
-            "a stated baseline and the same result criterion.</p></div>"
-            '<figure id="figure-workflow">'
-            + (ROOT / "assets/diagram-example.svg").read_text()
-            + "<figcaption>Inputs become a checked result; arrows show processing "
-            "order.</figcaption></figure></section>"
-        ),
+        "LESSONS_HTML": lesson_fixture(),
         "LABS_HTML": (
             '<article class="lab" id="lab-01"><h3>Lab 01: Compare two cases</h3>'
             "<p>Compare a baseline with one changed condition and explain the "
@@ -100,6 +119,11 @@ class CourseAssets(unittest.TestCase):
                 "https://www.w3.org/TR/WCAG22/",
                 "https://[",
                 "Invalid reference URL",
+            ),
+            (
+                'href="https://www.w3.org/TR/WCAG22/"',
+                'href="https://www.w3.org/TR/WCAG22/" attributionsrc',
+                "Active or external-loading attribute",
             ),
         ):
             with self.subTest(case=diagnostic):
@@ -226,6 +250,23 @@ class CourseAssets(unittest.TestCase):
             with self.subTest(active=active):
                 self.assertTrue(
                     self.run_check(fixture().replace("</main>", active + "</main>"))
+                )
+
+    def test_attribution_reporting_rejected_without_blocking_reference_links(
+        self,
+    ) -> None:
+        self.assertEqual(self.run_check(fixture()), [])
+        link = 'href="https://www.w3.org/TR/WCAG22/"'
+        for attribute in (
+            "attributionsrc",
+            'attributionsrc=""',
+            'attributionsrc="https://example.com/register-source"',
+            'ATTRIBUTIONSRC="https://example.com/register-source"',
+        ):
+            with self.subTest(attribute=attribute):
+                self.assertIn(
+                    "Active or external-loading attribute",
+                    self.run_check(fixture().replace(link, f"{link} {attribute}")),
                 )
 
     def test_external_css_and_svg_rejected(self) -> None:

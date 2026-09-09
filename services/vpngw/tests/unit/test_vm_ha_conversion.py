@@ -490,6 +490,7 @@ def test_declining_passive_reservation_never_authenticates(
 def test_command_publishes_mode_0600_and_rerun_is_noop(
     sample_config: dict,
     tmp_path: Path,
+    ordinary_handoff_preview,
 ) -> None:
     sample_config["region_id"] = "eu-east1"
     sample_config["gateway_group"]["region"] = "eu-north1"
@@ -503,6 +504,9 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
         patch("nebius_vpngw.cli._vm_ha_wizard_streams_interactive", return_value=True),
         patch("nebius_vpngw.cli._reserve_vm_ha_passive_public_ip") as reserve,
         patch("nebius_vpngw.cli.os.fchmod", wraps=os.fchmod),
+        patch(
+            "nebius_vpngw.cli._ensure_authentication", side_effect=RuntimeError("offline fixture")
+        ),
     ):
         old_umask = os.umask(0)
         try:
@@ -578,7 +582,11 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
         patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
         patch(
             "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
-            return_value=SimpleNamespace(sha256="f" * 64),
+            return_value=SimpleNamespace(sha256="f" * 64, dependency_plans=()),
+        ),
+        patch(
+            "nebius_vpngw.cli._plan_vm_ha_package_dependencies",
+            side_effect=lambda artifact, **kwargs: artifact,
         ),
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
         patch("nebius_vpngw.cli.SSHPush") as ssh_push,
@@ -593,7 +601,8 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
     assert "no lifecycle, cloud, route, or host state was changed" in dry_run.output
     assert calls == ["discover", "verify-existing", "check-changes"]
     ensure_credentials.assert_not_called()
-    ssh_push.assert_not_called()
+    ordinary_handoff_preview.assert_called_once()
+    assert ssh_push.return_value.method_calls == []
 
 
 def test_reserved_ip_is_reported_when_candidate_publication_fails(

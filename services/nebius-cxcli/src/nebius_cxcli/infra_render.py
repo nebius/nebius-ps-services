@@ -1127,29 +1127,59 @@ def _render_soperator_observability_iam_blocks(
                 ),
                 "\n".join(
                     [
-                        f'resource "nebius_iam_v1_access_permit" "{resource_name}_metrics" {{',
+                        f'resource "nebius_iam_v1_access_permit" "{resource_name}" {{',
                         f"  for_each = module.{plan.module_name}.service_account_ids",
                         "",
                         f"  parent_id  = nebius_iam_v1_group.{resource_name}[each.key].id",
                         "  resource_id = var.nebius_provider_parent_id",
-                        '  role        = "monitoring.metrics.writer"',
-                        "}",
-                    ]
-                ),
-                "\n".join(
-                    [
-                        f'resource "nebius_iam_v1_access_permit" "{resource_name}_logs" {{',
-                        f"  for_each = module.{plan.module_name}.service_account_ids",
-                        "",
-                        f"  parent_id  = nebius_iam_v1_group.{resource_name}[each.key].id",
-                        "  resource_id = var.nebius_provider_parent_id",
-                        '  role        = "logging.logs.writer"',
+                        '  role        = "editor"',
                         "}",
                     ]
                 ),
             ]
         )
     return tuple(blocks)
+
+
+def rendered_soperator_observability_iam_instances(
+    config: Any, module_sources: tuple[RenderedModuleSource, ...]
+) -> frozenset[str]:
+    """Exact root IAM instances owned by the configured Soperator node groups."""
+    payload = to_plain_data(config)
+    if not isinstance(payload, dict):
+        return frozenset()
+    targets = _enabled_soperator_target_refs(payload)
+    if not targets:
+        return frozenset()
+    modules = {
+        item.instance_id: item.module_name
+        for item in module_sources
+        if item.component_id == "mk8s" and item.instance_id in targets
+    }
+    addresses: set[str] = set()
+    for row in payload.get("infra", {}).get("components", []):
+        if not isinstance(row, dict) or not row.get("enabled"):
+            continue
+        module_name = modules.get(component_instance_id(row))
+        if component_type_id(row) != "mk8s" or module_name is None:
+            continue
+        resource_name = _safe_hcl_identifier(
+            f"{module_name}_soperator_observability", fallback_prefix="soperator_observability"
+        )
+        for key, group in row.get("inputs", {}).get("node_groups", {}).items():
+            account = group.get("service_account") or {}
+            if group.get("enabled", True) is False or not any(
+                isinstance(account.get(field), str) and account[field].strip()
+                for field in ("id", "name")
+            ):
+                continue
+            for kind, suffix in (
+                ("nebius_iam_v1_group", ""),
+                ("nebius_iam_v1_group_membership", ""),
+                ("nebius_iam_v1_access_permit", ""),
+            ):
+                addresses.add(f"{kind}.{resource_name}{suffix}[{json.dumps(key)}]")
+    return frozenset(addresses)
 
 
 def rendered_module_sources(

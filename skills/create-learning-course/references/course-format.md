@@ -32,33 +32,83 @@ A user-requested partial artifact need not contain every full-course file.
 
 ## Lesson Pattern
 
-Use plain headings and labels without trailing periods. The first lesson
-starts with a substantive **Start here** explanation: what, why, how, vocabulary,
-workflow and beginner route. Subsequent lessons begin with **What it is**,
-before application, objectives or lab instructions.
+Apply this pattern to every lesson, including the first, across all subjects.
+Use plain headings without trailing periods and exactly four main sections:
 
-Then keep these teaching roles in this order:
+1. **Objective** — first after the lesson title. State an observable capability
+   and its success conditions in concise language; detailed teaching follows.
+2. **How it works** — the complete explanation, with concepts defined before
+   application, connected prerequisite knowledge, purpose, mechanism, concrete
+   worked reasoning, assumptions and limitations. Include at least one
+   meaningful diagram of this lesson's core concepts inside this section.
+3. **Practice** — link the exact owning lab, case or exercise and say what the
+   learner will apply. For a lesson-only request, include the activity and
+   feedback here instead of creating an unrequested course package.
+4. **Mental model** — last. Give a concise synthesis of the relationships or
+   process already taught, with any necessary qualification. Introduce no new
+   concept, abbreviation, prerequisite or mechanism here.
 
-1. Objective — an observable competency.
-2. Prerequisite bridge — prior knowledge and why it is needed.
-3. Recall — a short retrieval task with later feedback.
-4. Why it matters — a concrete use and its limitations.
-5. Mental model — the components and their relationship.
-6. Mechanism — what actually happens, in order, with definitions.
-7. Context — relevant environment/domain assumptions; not a forced GPU field.
-8. Worked example — inputs, units, assumptions, steps and interpretation.
-9. Trade-offs — when the approach helps, costs or fails.
-10. Practice — exact lab/exercise title and entry point.
-11. Evidence — what counts as success and what must be recorded.
-12. Interpretation — how to reason from observations and uncertainty.
-13. Common failure — symptom, cause, diagnostic and safe response.
-14. Answer — explanation, worked solution or assessment rubric.
-15. Review — retrieval cue and a next independent task.
+### Conceptual Titles
 
-Use meaningful prose beneath labels; headings alone do not satisfy the role.
-Related roles can share a coherent paragraph in a very short lesson, but must
-not disappear. The learner sees the concept before being asked to apply it.
-Use a consistent field-to-CSS mapping across courses; avoid a rainbow of boxes.
+Name the idea, relationship or capability taught. Avoid enumerating every
+technology, component or command in a lesson title. For example, use "GPU
+execution software layers" rather than "Read the driver, runtime, toolkit,
+PTX, SASS and framework stack"; use "Tracing a request" rather than a list of
+protocols and tools. Keep a technology name when it is the actual subject.
+"Overview", "Basics" and "Concepts" alone are usually too vague. Use one exact
+title across syllabus, TOC and lesson; update affected references on revision.
+
+### Connected Explanations
+
+Begin How it works by explaining what the concept is, what acts on what and
+what results. The first lesson also establishes the subject's whole workflow
+and beginner vocabulary. Later lessons briefly restate necessary prior ideas
+and explain the dependency before adding the new concept. A prerequisite link
+is supplemental; do not assume the reader already knows the needed concept.
+
+Connect steps causally: explain what changes, why the next step follows, and
+how the result supports the objective. Introduce terms before notation; define
+symbols, units and assumptions, then work through a concrete example. Explain
+where the approach helps and where it fails. Select current authoritative
+sources for the actual claims and use original prose, not stitched summaries.
+Depth follows conceptual difficulty and the objective, not a word quota.
+
+Expand unfamiliar abbreviations at first meaningful use in each lesson and
+explain their meaning or role. For example, introduce
+[Parallel Thread Execution (PTX)](https://docs.nvidia.com/cuda/parallel-thread-execution/)
+before relying on PTX; GPU and CPU need no expansion for an audience that
+already knows them. A term with no authoritative expansion needs a clear
+explanation, not an invented full name. Check ambiguous abbreviations and
+product names in context; never apply blind global substitutions. The glossary
+reinforces the local explanation and never replaces it.
+
+Do not add standalone Start here, What it is, Prerequisite bridge, Recall,
+Why it matters or Mechanism sections. Preserve their useful substance in How
+it works. Integrate examples and trade-offs into that prose. If a long
+explanation needs subheadings, use a few specific conceptual h4 headings,
+not a repeated checklist of authoring roles. A separate course-level orientation
+may still be called Start here; it is not a lesson section. Keep commands, experiment setup,
+evidence collection, result interpretation, troubleshooting, answer keys and
+retrieval/transfer tasks in their owning practice guides. A worked conceptual
+example stays in How it works so the learner is prepared before practice.
+
+### Rendered Structure
+
+Use `section.lesson` with its title in a direct `h2`, followed by four direct
+`div` containers in order: `.lesson-outcome`, `.how-it-works`, `.practice-links`
+and `.mental-model`. Each starts with one direct `h3` with the matching visible
+label above and contains substantive content. All other lesson content belongs
+inside those sections; nothing follows Mental model within the lesson.
+Place every lesson figure inside `.how-it-works`, near its explanatory prose.
+The starter metadata's diagram `section` names the enclosing section, not a
+sibling after which to append the figure. A real inline SVG in a contextual
+figure is required for each lesson; a
+caption-only placeholder or a linked figure elsewhere does not count.
+Use consistent classes without adding a rainbow of boxes. The bundled checker
+verifies this bounded structure for a complete standard HTML course. It does
+not evaluate title quality, concept accuracy, prose completeness, abbreviation
+meaning or diagram usefulness. Review those semantically. Syllabus-only and
+review-only requests do not require this complete-HTML checker.
 
 ## Practical Guide Pattern
 
@@ -104,9 +154,12 @@ identity. Keep essential meaning independent of color.
 
 ## Diagram Contract
 
-Create original inline SVGs for workflows, topology, hierarchy, memory/data
-movement, execution timelines, scheduling and parallelism when they clarify
-relationships. Other subjects use similarly meaningful visual forms.
+Every lesson needs at least one original inline SVG inside How it works that
+explains the core concept. Use workflows, hierarchy, timelines, comparisons,
+branching decisions or other forms appropriate to the subject. A nontechnical
+lesson might show evidence leading to a decision, cause and effect, or a case
+comparison. Never force a hardware diagram into another domain or add a
+cosmetic diagram merely to meet the count.
 
 Each figure has a unique ID, SVG viewBox, accessible title and description,
 visible caption, readable labels and one primary inline placement immediately
@@ -157,7 +210,8 @@ Mark embedded source as `<code data-source="labs/example.py">...</code>`.
 Use one such marker per included file; repeat mentions link to the primary
 listing. `scripts/check_course.py` checks exact UTF-8 bytes after HTML entity
 decoding against a separate allowlist, along with selected navigation/safety
-properties. It does not render Markdown or verify full prose parity; the
+properties and the four-section, per-lesson diagram contract. It does not
+render Markdown or verify full prose parity; the
 course-owned generator and tests own that additional gate.
 
 The starter's metadata is illustrative, not a prescribed runtime API. A course

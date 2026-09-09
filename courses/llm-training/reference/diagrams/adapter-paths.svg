@@ -1,0 +1,24 @@
+<svg viewBox="0 0 380 540" role="img" aria-labelledby="adapter-title adapter-desc">
+<title id="adapter-title">Frozen base and trainable adapter paths</title>
+<desc id="adapter-desc">An input x splits into a frozen base matrix path and a trainable low-rank A then B path. Their outputs add to form y. Arrows carry values; only adapter matrices update during training.</desc>
+<defs><marker id="adapter-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#236056"/></marker></defs>
+<g fill="#edf7f3" stroke="#236056" stroke-width="2">
+<rect x="120" y="15" width="140" height="60" rx="10"/>
+<rect x="15" y="160" width="155" height="100" rx="10"/>
+<rect x="210" y="130" width="150" height="85" rx="10"/>
+<rect x="210" y="265" width="150" height="85" rx="10"/>
+<rect x="90" y="410" width="200" height="105" rx="10"/>
+</g>
+<g fill="none" stroke="#236056" stroke-width="2" marker-end="url(#adapter-arrow)">
+<path d="M190 75 V100 H92 V153"/><path d="M190 100 H285 V123"/>
+<path d="M285 215 V258"/><path d="M92 260 V375 H155 V403"/>
+<path d="M285 350 V375 H225 V403"/>
+</g>
+<g font-family="system-ui, sans-serif" font-size="18" fill="#183830" text-anchor="middle">
+<text x="190" y="52">Input x</text>
+<text x="92" y="197">Frozen base W</text><text x="92" y="231">Wx</text>
+<text x="285" y="165">Trainable A</text><text x="285" y="193">Ax</text>
+<text x="285" y="300">Trainable B</text><text x="285" y="328">s B(Ax)</text>
+<text x="190" y="445">Add outputs</text><text x="190" y="475">y = Wx + s B(Ax)</text>
+</g>
+</svg>

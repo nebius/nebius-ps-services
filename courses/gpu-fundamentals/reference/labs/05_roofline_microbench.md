@@ -4,7 +4,7 @@ Roofline reasoning starts by counting work and data movement before looking at a
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 2, 4, 9 and 10 for GEMM work, memory traffic, precision and arithmetic intensity/rooflines. Lesson 4 is an input-and-code preview only. Run the complete experiment after Lesson 10; the script has no byte-ledger-only mode.
+**Theory preparation:** Read Lab 08 and Lessons 4, 9 and 10 for GEMM work, memory traffic, precision and arithmetic intensity/rooflines. Lesson 4 is an input-and-code preview only. Run the complete experiment after Lesson 10; the script has no byte-ledger-only mode.
 
 Use one H100 and record its exact variant, precision mode, and environment. Obtain any proposed bandwidth or compute ceiling independently from an appropriate specification or calibrated experiment, not from the result being evaluated.
 

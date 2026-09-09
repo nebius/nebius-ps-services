@@ -10,6 +10,13 @@ $create-learning-course Revise <course-folder> without losing useful explanation
 $create-learning-course --help
 ```
 
+Every lesson has a conceptual title and follows **Objective → How it works →
+Practice → Mental model**. How it works integrates definitions, prerequisite
+connections, purpose, mechanism, examples and limitations in connected prose;
+unfamiliar abbreviations are expanded and explained locally. Every explanation
+contains a meaningful core diagram. The final mental model summarizes prior
+teaching. Practice covers both code labs and non-code activities.
+
 The format preserves complete canonical teaching and source, not summaries.
 Practical guides explain purpose, prerequisites, architecture, steps, result
 checks, investigation, failure diagnosis and transferable lessons. Nontechnical
@@ -41,7 +48,10 @@ python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
 
 The source manifest is a JSON array of every UTF-8 file expected in an embedded
 listing; use an empty array for a course with no source listings. The checker
-verifies a bounded HTML/identity/accessibility/source-byte contract. It does
+verifies a bounded HTML/identity/accessibility/source-byte contract, including
+four-section lesson order, matching visible headings, nonempty explanation
+outside diagram text and a core SVG figure inside each How it works. It rejects
+old section layouts; there is no compatibility switch. It does
 not establish prose completeness, diagram geometry, browser behavior, domain
 accuracy, secret freedom or target execution.
 
@@ -51,6 +61,8 @@ required HTML attributes produce validation failures rather than tracebacks.
 Malformed reference URLs are also course-format failures (exit 1). Source
 listings reject unescaped comments, declarations and processing instructions;
 the same text is accepted when properly escaped as literal source.
+Reference links reject both `ping` tracking and `attributionsrc` reporting,
+including empty or valueless attributes; ordinary HTTPS links remain allowed.
 Help requires no course files and performs no course inspection.
 
 Strict skill structure and evaluation definitions are checked separately with

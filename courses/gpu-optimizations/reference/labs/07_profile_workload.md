@@ -4,7 +4,7 @@ A useful profile connects application regions to GPU activity so that you can ex
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 3 for operator attribution, self time, instrumentation and profiler scope. Fundamentals Lesson 2 defines the projection/GELU/reduction chain; Optimizations Lesson 2 supplies the separate unprofiled timing contract.
+**Theory preparation:** Read Lesson 3 for operator attribution, self time, instrumentation and profiler scope. Fundamentals Lab 08 defines the projection/GELU/reduction chain; Optimizations Lesson 2 supplies the separate unprofiled timing contract.
 
 Complete the [diagnostic tooling setup](../tooling-setup.md) on the compute node. Use one H100. Trace files may contain paths or environment details and must remain private until reviewed.
 

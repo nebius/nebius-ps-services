@@ -3875,7 +3875,7 @@ def test_soperator_bulk_prompt_comment_explains_apply_to_all(monkeypatch) -> Non
     )
 
     assert messages == [
-        "[dim]Bulk worker shard choice: true applies one autoscaling/ephemeral "
+        "[dim]Bulk worker shard choice: true applies one autoscaling "
         "choice to all worker shards; false asks each shard separately.[/dim]"
     ]
 

@@ -15,6 +15,7 @@ classifiers = [
 # Python package dependencies (installed via pip)
 # Upper bounds stop before vendor-documented breaking runtime/API changes.
 dependencies = [
+	"packaging>=24.2,<27.0",
 	"PyYAML>=6.0.3,<7.0.0",
 	"paramiko>=5.0.0,<6.0.0",
 	"rich>=14.2.0,<15.0.0",

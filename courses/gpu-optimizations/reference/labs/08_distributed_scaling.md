@@ -4,13 +4,13 @@ Adding a GPU adds both compute capacity and communication work. This lab runs a 
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 11–12 for qualified communication, the forward/loss/backward/AdamW update, DDP gradient averaging, fixed-global-batch scaling and slowest-rank timing. Fundamentals supplies matrix/GELU/BF16 meanings. The Training course is a later specialization, not a hidden prerequisite for this bounded example.
+**Theory preparation:** Read Lessons 11–12 for communication, DDP gradient averaging, fixed-global-batch scaling and slowest-rank timing. Fundamentals Lab 08 supplies matrix and activation concepts. The bounded training loop is explained below; the Training course is not a prerequisite.
 
 Pass the two-node preflight and use matching environments. The global batch must be divisible by world size. This topology has an inter-node link, not a shared NVLink/NVSwitch fabric.
 
 ## Concepts and code path
 
-The one-rank path runs the model locally. The distributed path splits global samples across ranks, wraps the model in DDP, executes backward communication, and updates parameters. Each iteration's duration is reduced to the maximum rank time before throughput is calculated. The local batch gets smaller when rank count grows, which can also change kernel efficiency.
+The model applies a linear projection, GELU and another linear projection. Its loss is the mean squared output. Each step clears gradients, computes the loss, calls backward and updates parameters with AdamW. AdamW maintains running averages of gradients and squared gradients and applies weight decay separately from the gradient update. The one-rank path runs locally. The script splits fixed global samples across ranks; DDP synchronizes gradients during backward. Reporting uses the slowest rank. A smaller local batch can also change kernel efficiency; finite loss alone does not establish equal trajectories or convergence.
 
 ## Practice
 

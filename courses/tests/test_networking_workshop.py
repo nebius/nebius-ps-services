@@ -15,8 +15,8 @@ from test_course_review_fixes import load_lab
 
 def test_networking_precedes_application_scaling():
     lessons = load_builder().parse_course(ROOT / "gpu-optimizations/COURSE.md")[2]
-    assert lessons[10]["title"] == "Qualify GPU networking and tune NCCL with evidence"
-    assert lessons[11]["title"] == "Diagnose distributed scaling and collective overlap"
+    assert lessons[10]["title"] == "GPU communication paths and performance"
+    assert lessons[11]["title"] == "Distributed scaling and communication overlap"
     assert "Lab 17" in lab_section("gpu-optimizations", 17, "Practice")
     assert "Lab 18" in lab_section("gpu-optimizations", 17, "Practice")
 

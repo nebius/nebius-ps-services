@@ -241,6 +241,7 @@ def starter_config_yaml(
     selected_apps: set[str] | None = None,
     infra_entries: tuple[ComponentEntry, ...] | None = None,
     app_entries: tuple[ComponentEntry, ...] | None = None,
+    soperator_profile: str | None = None,
 ) -> str:
     """Render a starter project config.yaml with source-driven component defaults."""
     payload = _starter_payload(
@@ -260,5 +261,9 @@ def starter_config_yaml(
         app_entries=app_entries,
     )
     _materialize_app_target_instance_ids(payload)
+    if soperator_profile is not None:
+        for row in payload["apps"]["charts"]:
+            if row.get("id") == "soperator" and row.get("enabled"):
+                row["profile"] = soperator_profile
     normalize_runtime_config_payload(payload)
     return yaml.safe_dump(payload, sort_keys=False)

@@ -3,74 +3,41 @@
 {Brief orientation and beginner/experienced routes. Complete canonical
 teaching follows; this file must not be reduced to a planning summary.}
 
-## 1. {First lesson title}
-
-### Start here
-
-{Define the subject in plain English: what it is, why it exists, inputs,
-outputs, how the end-to-end workflow operates, key vocabulary and where this
-lesson sits. Place its original workflow diagram beside this explanation.}
+## 1. {Concise conceptual lesson title}
 
 ### Objective
 
-{An observable capability and the conditions for success.}
+{State the observable capability and conditions for success.}
 
-### Prerequisite bridge
+### How it works
 
-{What the learner needs to recall and why. For lesson one, teach any missing
-entry concept instead of assuming it.}
+{Define the concept in plain language: what it is, what acts on what and what
+results. In the first lesson establish the whole workflow and beginner
+vocabulary. In later lessons briefly explain any needed prior concept and its
+connection to this one. Explain purpose and limitations within this prose.}
 
-### Recall
+{Explain the real process step by step, connecting causes, dependencies and
+results. Expand unfamiliar abbreviations at first use and explain their roles;
+do not mechanically expand audience-obvious terms or invent official names.
+Introduce notation after concepts, with units and assumptions. Work through a
+concrete example and interpret its result before asking the learner to apply it.}
 
-{One short retrieval question; provide feedback in Answer.}
-
-### Why it matters
-
-{A concrete use case after the definition, including when it does not fit.}
-
-### Mental model
-
-{Components and relationships, with the boundaries of any analogy.}
-
-### Mechanism
-
-{Explain the real process step by step, with clear terms and distinctions.}
-
-### Context
-
-{Domain/environment assumptions relevant to the mechanism.}
-
-### Worked example
-
-{Inputs, assumptions, units, reasoning, output and interpretation.}
-
-### Trade-offs
-
-{Costs, alternatives and conditions where the approach stops helping.}
+{Insert an original core-concept diagram here, beside the explanation it
+supports, with a visible caption and accessible title/description. Define what
+the connectors mean and explain the important conclusion in the prose. Every
+lesson needs its own explanatory diagram inside How it works.}
 
 ### Practice
 
-{Exact practical-work ID/title and link; what the supplied activity supports.}
+{Give the exact owning activity ID/title and link and state what the learner
+will apply. Put commands, evidence, troubleshooting, feedback and retrieval in
+that guide. For a lesson-only deliverable, include the exercise and feedback
+here without inventing an unrequested package.}
 
-### Evidence
+### Mental model
 
-{Observable result or assessment rubric and what it cannot establish.}
+{End with a concise synthesis of concepts and relationships already explained.
+Keep essential qualifications; introduce no new terms or mechanisms.}
 
-### Interpretation
-
-{Reason from the result, including uncertainty and alternative explanations.}
-
-### Common failure
-
-{Symptom, cause, discriminating check and safe response.}
-
-### Answer
-
-{Reasoned feedback for recall/practice, available after an attempt.}
-
-### Review
-
-{Delayed retrieval cue and independent next task.}
-
-{Repeat this lesson structure in prerequisite order. Later lessons start with
-What it is instead of Start here. Do not ship this authoring instruction.}
+{Repeat the same four-section structure in prerequisite order for every
+lesson. Do not ship these authoring placeholders.}

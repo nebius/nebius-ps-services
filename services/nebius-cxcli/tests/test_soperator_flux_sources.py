@@ -726,8 +726,9 @@ def test_staged_release_rejects_missing_main_before_kubectl(
         )
 
 
+@pytest.mark.parametrize("retry_installation", [None, False, True])
 def test_staged_release_opens_exact_sources_and_releases_in_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retry_installation: bool | None
 ) -> None:
     patches: list[tuple[str, bool]] = []
     activations: list[str] = []
@@ -737,6 +738,19 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
     progress: list[tuple[int, int, tuple[str, ...]]] = []
     applied: list[str] = []
     main_stage_events: list[str] = []
+    retry_waits: list[dict[tuple[str, str], str]] = []
+    retry_identity = {
+        "name": "cxcli-soperator-fluxcd-product",
+        "namespace": "flux-system",
+        "sourceKind": "HelmChart",
+    }
+
+    def _retry(expected, **kwargs):
+        assert expected == retry_identity
+        main_stage_events.append("retry")
+        return "retry-token"
+
+    monkeypatch.setattr(flux_ops, "_request_collector_install_retry", _retry)
 
     def _fake_run(command: list[str], **kwargs):
         if "kustomize" in command:
@@ -783,6 +797,7 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
         lambda contract, stage, **kwargs: (
             waited_stages.append(stage),
             main_stage_events.append(f"wait:{stage}"),
+            retry_waits.append(kwargs["pending_install_retries"]),
         ),
     )
     monkeypatch.setattr(
@@ -798,6 +813,8 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
         _paths(tmp_path),
         cache_dir=tmp_path / "cache",
         poll_interval_seconds=0.01,
+        checks_installing=retry_installation is True,
+        remediated_install_release=retry_identity if retry_installation is not None else None,
         on_stage_progress=lambda index, count, releases: progress.append((index, count, releases)),
         prepare_main_release_stage=lambda: (
             main_stage_events.append("prepare-main") or {"status": "prepared"}
@@ -830,10 +847,17 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
         "activate:cxcli-soperator-fluxcd-ns",
         "wait:0",
         "prepare-main",
+        *(["retry"] if retry_installation else []),
         "activate:cxcli-soperator-fluxcd-product",
         "wait:1",
         "finish-main:True",
         "activate:soperator-controller",
+    ]
+    assert retry_waits == [
+        {},
+        {("flux-system", "cxcli-soperator-fluxcd-product"): "retry-token"}
+        if retry_installation
+        else {},
     ]
     assert len(applied) == 2
     staged_outer = yaml.safe_load(applied[0])
@@ -853,6 +877,11 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
     assert staged_outer["spec"]["suspend"] is False
     stable_outer = yaml.safe_load(applied[1])
     assert stable_outer["spec"]["suspend"] is True
+    for outer in (staged_outer, stable_outer):
+        assert outer["spec"]["install"]["disableWait"] is True
+        assert outer["spec"]["upgrade"]["disableWait"] is True
+        assert "disableHooks" not in outer["spec"]["install"]
+        assert "disableHooks" not in outer["spec"]["upgrade"]
     stable_patches = stable_outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
     stable_suspend_by_target = {
         item["target"]["name"]: any(
@@ -1435,3 +1464,47 @@ def test_soperator_controller_dependency_health_blocks_unready_webhook(
             timeout_seconds=0,
             poll_interval_seconds=0.01,
         )
+
+
+@pytest.mark.parametrize("mutation", [None, "uid", "owner", "success", "terminating", "extra"])
+def test_retired_dashboard_frontier_is_exact_and_never_admits_other_children(mutation):
+    outer = yaml.safe_load(_outer_bundle())
+    rows = flux_ops._normalize_soperator_outer_post_renderers(
+        outer,
+        _staged_contract()["releases"],
+        suspend_children=True,
+    )
+    retired = {
+        "namespace": "flux-system",
+        "name": "cxcli-soperator-fluxcd-monitoring-dashboards",
+        "uid": "original-uid",
+    }
+    child = {
+        "metadata": {**retired, "labels": {"soperator.nebius.ai/release-graph": "nebius-cxcli"}},
+        "status": {"history": None},
+    }
+    if mutation == "uid":
+        child["metadata"]["uid"] = "recreated"
+    elif mutation == "owner":
+        child["metadata"]["labels"] = {}
+    elif mutation == "success":
+        child["status"]["history"] = [{"status": "deployed"}]
+    elif mutation == "terminating":
+        child["metadata"]["deletionTimestamp"] = "now"
+    elif mutation == "extra":
+        child["metadata"]["name"] = "another-owned-child"
+    if mutation is None:
+        assert flux_ops._existing_soperator_release_frontier(
+            {"items": [child]},
+            outer=outer,
+            rows=rows,
+            retired_release=retired,
+        ) == {(retired["namespace"], retired["name"])}
+    else:
+        with pytest.raises(RuntimeError):
+            flux_ops._existing_soperator_release_frontier(
+                {"items": [child]},
+                outer=outer,
+                rows=rows,
+                retired_release=retired,
+            )

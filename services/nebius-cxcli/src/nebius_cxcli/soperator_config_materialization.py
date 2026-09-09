@@ -27,13 +27,15 @@ from .deploy_targets import (
 from .mk8s_node_groups import iter_node_groups as iter_mk8s_node_groups
 from .runtime_config import to_plain_data
 from .soperator_gpu_driver_jail import ensure_soperator_gpu_driver_jail_values
+from .soperator_rest_contract import materialize_soperator_rest
+from .soperator_values import (
+    SSSD_REFERENCE_FIELDS,
+    explicit_values,
+    merge_values,
+    soperator_rows,
+)
 from .soperator_wizard import soperator_wizard_settings
-
-_SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH = "soperator-activechecks.srunReadyPartition"
-
-
-_SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME = "hidden"
-
+from .soperator_worker_docker import materialize_worker_docker
 
 _SOPERATOR_GUIDED_SSSD_ENABLED_PATH = "sssd.enabled"
 
@@ -74,7 +76,7 @@ _SOPERATOR_STATIC_CONFIG_REVISION_SCHEMA = "nebius-cxcli.soperator-static-slurm-
 _SOPERATOR_STATIC_CONFIG_REVISION_LEGACY_SCHEMA = "nebius-cxcli.soperator-static-slurm-config.v1"
 
 
-_SOPERATOR_REGISTERED_RUNTIME_MOUNTS = (
+_SOPERATOR_NODESET_RUNTIME_MOUNTS = (
     {
         "name": "slurm-scripts",
         "mountPath": "/opt/slurm_scripts/",
@@ -480,27 +482,6 @@ def _profile_mapping(profile: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
-def _soperator_profile_activechecks_ready_partition(profile: Mapping[str, Any]) -> str:
-    activechecks = _profile_mapping(_profile_mapping(profile, "chart"), "activechecks")
-    return _non_empty_text(activechecks.get("srunReadyPartition"))
-
-
-def _soperator_internal_activechecks_partition() -> dict[str, Any]:
-    return {
-        "name": _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME,
-        "isAll": True,
-        "policy": {
-            "default": False,
-            "hidden": True,
-            "state": "UP",
-            "maxTime": "INFINITE",
-            "priorityTier": 10,
-            "preemptMode": "OFF",
-            "overSubscribe": "YES",
-        },
-    }
-
-
 def _soperator_registered_default_partitions() -> list[dict[str, Any]]:
     """Return the structured equivalent of upstream's default partitions.
 
@@ -648,12 +629,41 @@ def _soperator_registered_legacy_static_config_revision(values: Mapping[str, Any
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _materialize_soperator_registered_runtime_mounts(values: dict[str, Any]) -> bool:
+_SOPERATOR_WORKER_SCRATCH = "55Gi"
+
+
+def _materialize_soperator_worker_scratch(values: dict[str, Any]) -> bool:
+    """Fill the native worker scratch field without replacing explicit resources.
+
+    Both pinned upstream GPU examples allocate 55Gi, including the disk-backed
+    /tmp used by native Enroot imports. This is an allowance, not a disk
+    provisioning step.
+    """
+    nodesets = values.get("nodesets")
+    if not isinstance(nodesets, list):
+        return False
+    changed = False
+    for node in nodesets:
+        if not isinstance(node, dict) or not _non_empty_text(node.get("name")):
+            continue
+        slurmd = node.get("slurmd")
+        if not isinstance(slurmd, dict):
+            raise ValueError("Soperator worker slurmd must be a mapping")
+        resources = slurmd.setdefault("resources", {})
+        if not isinstance(resources, dict):
+            raise ValueError("Soperator worker slurmd.resources must be a mapping")
+        if resources.get("gpu") and "ephemeralStorage" not in resources:
+            resources["ephemeralStorage"] = _SOPERATOR_WORKER_SCRATCH
+            changed = True
+    return changed
+
+
+def _materialize_soperator_nodeset_runtime_mounts(values: dict[str, Any]) -> bool:
     """Restore operational mounts supplied by the pre-split worker chart.
 
-    The 4.1.7 SlurmCluster still enables ``hc_program.sh`` and owns the
+    The upstream SlurmCluster enables ``hc_program.sh`` and owns the
     ``slurm-scripts`` ConfigMap, but split NodeSets do not inherit that volume.
-    Registered workers also retain the node-local job metrics directory used by
+    Workers also retain the node-local job metrics directory used by
     the Soperator/DCGM runtime. Reserved name or path collisions fail closed.
     """
 
@@ -683,14 +693,15 @@ def _materialize_soperator_registered_runtime_mounts(values: dict[str, Any]) -> 
                 "must be a list"
             )
         matched_ids: set[int] = set()
-        for expected in _SOPERATOR_REGISTERED_RUNTIME_MOUNTS:
+        for expected in _SOPERATOR_NODESET_RUNTIME_MOUNTS:
             collisions = [
                 candidate
                 for candidate in mounts
                 if isinstance(candidate, Mapping)
                 and (
                     _non_empty_text(candidate.get("name")) == expected["name"]
-                    or _non_empty_text(candidate.get("mountPath")) == expected["mountPath"]
+                    or _non_empty_text(candidate.get("mountPath")).rstrip("/")
+                    == expected["mountPath"].rstrip("/")
                 )
             ]
             if collisions:
@@ -702,7 +713,7 @@ def _materialize_soperator_registered_runtime_mounts(values: dict[str, Any]) -> 
                 matched_ids.add(id(collisions[0]))
         unrelated = [mount for mount in mounts if id(mount) not in matched_ids]
         normalized_mounts = [
-            *(copy.deepcopy(item) for item in _SOPERATOR_REGISTERED_RUNTIME_MOUNTS),
+            *(copy.deepcopy(item) for item in _SOPERATOR_NODESET_RUNTIME_MOUNTS),
             *unrelated,
         ]
         if mounts != normalized_mounts:
@@ -775,54 +786,6 @@ def _materialize_soperator_registered_static_worker_rollout(
     return changed
 
 
-def _remove_internal_activechecks_partition(values: dict[str, Any]) -> bool:
-    partition_config = values.get("partitionConfiguration")
-    if not isinstance(partition_config, dict):
-        return False
-    partitions = partition_config.get("partitions")
-    if not isinstance(partitions, list):
-        return False
-    internal_partition = _soperator_internal_activechecks_partition()
-    filtered = [partition for partition in partitions if partition != internal_partition]
-    if len(filtered) == len(partitions):
-        return False
-    partition_config["partitions"] = filtered
-    return True
-
-
-def _prepend_internal_activechecks_partition(values: dict[str, Any]) -> bool:
-    partition_config = values.setdefault("partitionConfiguration", {})
-    if not isinstance(partition_config, dict):
-        return False
-    config_type = _non_empty_text(partition_config.get("configType"))
-    if config_type and config_type != "structured":
-        return False
-    partition_config["configType"] = "structured"
-    existing = partition_config.get("partitions")
-    partitions = list(existing) if isinstance(existing, list) else []
-    internal_partition = _soperator_internal_activechecks_partition()
-    if any(
-        isinstance(partition, Mapping)
-        and _non_empty_text(partition.get("name")) == _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME
-        for partition in partitions
-    ):
-        return False
-    next_partitions = [internal_partition, *partitions]
-    if partitions == next_partitions:
-        return False
-    partition_config["partitions"] = next_partitions
-    return True
-
-
-def _remove_guided_sssd_helper(values: dict[str, Any]) -> bool:
-    changed = _delete_mapping_path_value(values, _SOPERATOR_GUIDED_SSSD_ENABLED_PATH)
-    helper = values.get("sssd")
-    if isinstance(helper, dict) and not helper:
-        values.pop("sssd", None)
-        changed = True
-    return changed
-
-
 def _materialize_soperator_render_only_values(payload: dict[str, Any]) -> bool:
     """Materialize Soperator values that should not be source-config knobs."""
     profile_by_target = _soperator_profile_by_target(payload)
@@ -854,27 +817,12 @@ def _materialize_soperator_render_only_values(payload: dict[str, Any]) -> bool:
                 placements=_soperator_row_placements(row),
             )
         _materialize_soperator_guided_sssd_values(values)
-        _remove_guided_sssd_helper(values)
-        _remove_internal_activechecks_partition(values)
-        activechecks_enabled = _mapping_path_value(values, "soperator-activechecks.enabled") is True
-        if activechecks_enabled:
-            partition = _soperator_profile_activechecks_ready_partition(
-                profile_by_target.get(target_ref, {})
-            )
-            if partition:
-                _set_mapping_path_value(
-                    values,
-                    _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH,
-                    partition,
-                )
-                if partition == _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME:
-                    _prepend_internal_activechecks_partition(values)
-        else:
-            _delete_mapping_path_value(values, _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH)
         if install_mode_by_target.get(target_ref) == _SOPERATOR_TARGET_MODE_REGISTERED:
             _materialize_soperator_registered_static_partitions(values)
-            _materialize_soperator_registered_runtime_mounts(values)
             _materialize_soperator_registered_static_worker_rollout(values)
+        _materialize_soperator_nodeset_runtime_mounts(values)
+        _materialize_soperator_worker_scratch(values)
+        materialize_worker_docker(values)
         if values != before:
             changed = True
     return changed
@@ -2501,19 +2449,24 @@ def _soperator_fit_gpu_node_config_to_group(
     slurmd_cpu_millicores: int | None,
     gpu_count: int | None,
 ) -> None:
-    if group_cpu_millicores is None or group_cpu_millicores <= 0 or gpu_count is None:
+    if gpu_count is None or gpu_count <= 0:
         return
     node_config = nodeset.setdefault("nodeConfig", {})
     if not isinstance(node_config, dict):
         return
     static_cpu_count = _soperator_node_config_static_cpu_count(node_config.get("static"))
-    group_cpu_count = max(1, math.ceil(group_cpu_millicores / 1000))
-    if static_cpu_count is not None and static_cpu_count <= group_cpu_count:
-        return
-    effective_cpu_millicores = slurmd_cpu_millicores or group_cpu_millicores
-    node_config["static"] = (
-        f"{_soperator_cpu_node_config_static(effective_cpu_millicores)} Gres=gpu:{gpu_count}"
-    )
+    if group_cpu_millicores is not None and group_cpu_millicores > 0:
+        group_cpu_count = max(1, math.ceil(group_cpu_millicores / 1000))
+        if static_cpu_count is None or static_cpu_count > group_cpu_count:
+            effective_cpu_millicores = slurmd_cpu_millicores or group_cpu_millicores
+            node_config["static"] = (
+                f"{_soperator_cpu_node_config_static(effective_cpu_millicores)} Gres=gpu:{gpu_count}"
+            )
+    # gres.conf identifies devices, but Slurm also needs the node's Gres count.
+    # CPU topology may already fit, so filling this default cannot depend on resizing.
+    static = str(node_config.get("static") or "").strip()
+    if not re.search(r"(?:^|\s)Gres=", static, flags=re.IGNORECASE):
+        node_config["static"] = f"{static} Gres=gpu:{gpu_count}".strip()
 
 
 def _soperator_resource_memory_gib(value: Any) -> int | None:
@@ -2598,7 +2551,16 @@ def _soperator_fit_nodeset_resources_to_group(
         ):
             slurmd_resources["memory"] = f"{max(1, memory_gib // 4)}Gi"
 
-    if gpu_enabled:
+    if gpu_enabled and (group.get("platform"), _soperator_node_group_resource_preset(group)) == (
+        "gpu-h200-sxm",
+        "8gpu-128vcpu-1600gb",
+    ):
+        from .soperator_worker_topology import materialize_h200_topology
+
+        if gpu_count != 8:
+            raise ValueError("H200 CPU topology requires the complete eight-GPU worker allocation")
+        materialize_h200_topology(nodeset, cpu_millicores=current_cpu)
+    elif gpu_enabled:
         _soperator_fit_gpu_node_config_to_group(
             nodeset,
             group_cpu_millicores=cpu_millicores,
@@ -2697,6 +2659,10 @@ def _materialize_soperator_guided_sssd_values(values: dict[str, Any]) -> None:
             slurm_sssd = {}
             slurm_nodes["sssd"] = slurm_sssd
         slurm_sssd["enabled"] = enabled
+        helper = values.get("sssd", {})
+        for field in SSSD_REFERENCE_FIELDS:
+            if field in helper:
+                slurm_sssd[field] = helper[field]
 
     nodesets = values.get("nodesets")
     if not isinstance(nodesets, list):
@@ -2709,29 +2675,9 @@ def _materialize_soperator_guided_sssd_values(values: dict[str, Any]) -> None:
             nodeset_sssd = {}
             nodeset["sssd"] = nodeset_sssd
         nodeset_sssd["enabled"] = enabled
-
-
-def _materialize_soperator_rest_compatibility(values: dict[str, Any]) -> None:
-    """Keep REST functional with the target's shared Slurm configuration."""
-
-    slurm_nodes = values.get("slurmNodes")
-    if not isinstance(slurm_nodes, dict):
-        return
-    rest = slurm_nodes.get("rest")
-    if not isinstance(rest, Mapping) or rest.get("enabled") is not True:
-        return
-    controller = slurm_nodes.setdefault("controller", {})
-    if not isinstance(controller, dict):
-        controller = {}
-        slurm_nodes["controller"] = controller
-    open_metrics = controller.setdefault("openMetrics", {})
-    if not isinstance(open_metrics, dict):
-        open_metrics = {}
-        controller["openMetrics"] = open_metrics
-    # Soperator 4.1.7 includes slurm.conf from slurm_rest.conf. Slurmrestd
-    # rejects the controller-only MetricsType property, so native controller
-    # OpenMetrics and REST cannot be enabled together in that release graph.
-    open_metrics["enabled"] = False
+        for field in SSSD_REFERENCE_FIELDS:
+            if field in values.get("sssd", {}):
+                nodeset[field] = values["sssd"][field]
 
 
 def _soperator_merge_nodeset_with_generated(
@@ -4111,6 +4057,18 @@ def _materialize_soperator_worker_ephemeral_values(
 
 
 def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
+    selected = [(row, explicit_values(row)) for row in soperator_rows(payload)]
+    changed = _materialize_soperator_generated_defaults(payload)
+    for row, supplied in selected:
+        values = row.setdefault("values", {})
+        before = copy.deepcopy(values)
+        merge_values(values, supplied)
+        _materialize_soperator_guided_sssd_values(values)
+        changed = changed or before != values
+    return changed
+
+
+def _materialize_soperator_generated_defaults(payload: dict[str, Any]) -> bool:
     soperator_targets = _soperator_app_target_refs(payload)
     if not soperator_targets:
         return False
@@ -4230,7 +4188,6 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
         before = copy.deepcopy(row)
         values = row.setdefault("values", {})
         if isinstance(values, dict):
-            _delete_mapping_path_value(values, _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH)
             inferred_placements = _soperator_infer_placements(
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
                 profile=profile_by_target.get(target_ref, {}),
@@ -4325,10 +4282,12 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 values,
                 context=f"Soperator target {target_ref}",
             )
+            _materialize_soperator_nodeset_runtime_mounts(values)
+            _materialize_soperator_worker_scratch(values)
+            materialize_worker_docker(values)
             _materialize_soperator_guided_sssd_values(values)
-            _materialize_soperator_rest_compatibility(values)
+            materialize_soperator_rest(values)
             _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values)
-            _remove_internal_activechecks_partition(values)
             current_cluster_name = str(values.get("clusterName", "") or "").strip()
             install_mode = install_mode_by_target.get(
                 target_ref,

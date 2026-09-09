@@ -49,9 +49,11 @@ def _fake_subnet(
                         cidrs=pool_cidrs,
                     )
                 ]
-            )
+            ),
         ),
-        status=SimpleNamespace(ipv4_private_cidrs=status_private_cidrs or []),
+        status=SimpleNamespace(
+            ipv4_private_pools=[SimpleNamespace(cidrs=status_private_cidrs or [])]
+        ),
     )
 
 
@@ -154,9 +156,7 @@ def _patch_mk8s_gpu_stack_compatibility(
                     SimpleNamespace(
                         items=[
                             SimpleNamespace(
-                                compatible_platforms=list(
-                                    item.get("compatible_platforms", [])
-                                ),
+                                compatible_platforms=list(item.get("compatible_platforms", [])),
                                 drivers_preset=item.get("drivers_preset"),
                                 os=item.get("os"),
                             )
@@ -252,9 +252,7 @@ def test_validate_mk8s_gpu_stack_compatibility_preflight_accepts_valid_tuple(
         ],
     )
 
-    validate_mk8s_gpu_stack_compatibility_preflight(
-        _gpu_stack_config(stack_preset="cuda12.8")
-    )
+    validate_mk8s_gpu_stack_compatibility_preflight(_gpu_stack_config(stack_preset="cuda12.8"))
 
 
 def test_validate_mk8s_gpu_stack_compatibility_preflight_uses_node_group_version(
@@ -490,9 +488,7 @@ def test_validate_vpc_networking_preflight_uses_status_cidr_for_prefix_allocated
             self.sdk = sdk
 
         def get(self, request: object) -> _FakeRequest:
-            return _FakeRequest(
-                _fake_subnet("/16", status_private_cidrs=["172.21.0.0/16"])
-            )
+            return _FakeRequest(_fake_subnet("/16", status_private_cidrs=["172.21.0.0/16"]))
 
     class _FakeSDK:
         def sync_close(self) -> None:
@@ -555,9 +551,7 @@ def test_validate_vpc_networking_preflight_uses_status_cidr_for_explicit_subnet_
             self.sdk = sdk
 
         def get(self, request: object) -> _FakeRequest:
-            return _FakeRequest(
-                _fake_subnet(None, status_private_cidrs=["172.21.0.0/16"])
-            )
+            return _FakeRequest(_fake_subnet(None, status_private_cidrs=["172.21.0.0/16"]))
 
     class _FakeSDK:
         def sync_close(self) -> None:
@@ -1348,7 +1342,9 @@ def test_validate_vpc_networking_preflight_uses_planned_subnet_cidr_for_node_cap
     assert "10.10.0.0/24 provide 1" in message
 
 
-def test_validate_vpc_networking_preflight_uses_planned_node_group_subnet_binding_capacity() -> None:
+def test_validate_vpc_networking_preflight_uses_planned_node_group_subnet_binding_capacity() -> (
+    None
+):
     inputs = _cpu_mk8s_inputs(service_cidrs=["/28"])
     inputs["node_groups"]["cpu"]["node_count"] = 1
     inputs["cluster"].pop("network_id")

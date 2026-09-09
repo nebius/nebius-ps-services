@@ -1,0 +1,18 @@
+[Unit]
+Description=Nebius VPNGW Agent
+ConditionPathExists=/etc/nebius-vpngw/config-resolved.yaml
+After=network-online.target strongswan-starter.service frr.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

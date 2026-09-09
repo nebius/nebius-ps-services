@@ -4,7 +4,7 @@ Reduced precision can unlock faster matrix paths, but a faster multiplication is
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 2 for matrix shapes and GEMM work, then Lesson 9 for floating-point formats, matmul policies, accumulation and relative L2 error. Run the complete four-mode comparison after Lesson 9; a dtype name alone does not identify the arithmetic path.
+**Theory preparation:** Read Lab 08 for matrix shapes and GEMM work, then Lesson 9 for floating-point formats, matmul policies, accumulation and relative L2 error. Run the complete four-mode comparison after Lesson 9; a dtype name alone does not identify the arithmetic path.
 
 Use one full H100 and the approved PyTorch environment. Begin with smoke-sized matrices; `--matrix-size` overrides the preset size when a controlled square-matrix comparison is needed. Keep all other settings fixed.
 

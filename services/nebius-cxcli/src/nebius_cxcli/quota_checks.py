@@ -1210,6 +1210,14 @@ def _gpu_capacity_availability(
     )
     if selected is None:
         fabric_detail = f", fabric {shape.fabric}" if shape.fabric else ""
+        if not any(item.region == requirement.region for item in capacity_resource_advice):
+            return (
+                None,
+                None,
+                "capacity-dashboard",
+                "Capacity Dashboard GPU availability is unknown: no regional coverage for "
+                f"{requirement.region} ({shape.platform}/{shape.preset}{fabric_detail})",
+            )
         return (
             0,
             False,

@@ -19,6 +19,22 @@ from nebius_cxcli.soperator_registration import (
 from soperator_fixtures import sample_infrastructure_receipt
 
 
+@pytest.mark.parametrize("group_cpu", [128000, None])
+@pytest.mark.parametrize("gres", ["", " Gres=gpu:h200:8"])
+def test_gpu_gres_materialization_does_not_depend_on_cpu_resize(group_cpu, gres) -> None:
+    static = "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1"
+    node = {
+        "nodeConfig": {"static": static + gres, "gresConfig": ["Name=gpu File=/dev/nvidia[0-7]"]}
+    }
+    expected = copy.deepcopy(node)
+    expected["nodeConfig"]["static"] = static + (gres or " Gres=gpu:8")
+    for _ in range(2):
+        soperator_config._soperator_fit_gpu_node_config_to_group(
+            node, group_cpu_millicores=group_cpu, slurmd_cpu_millicores=32000, gpu_count=8
+        )
+        assert node == expected
+
+
 def _registered_payload() -> dict:
     payload = {
         "version": "v1",
@@ -526,8 +542,11 @@ def test_registration_materialization_compiles_live_default_partitions_for_stati
         "name": soperator_config._SOPERATOR_STATIC_CONFIG_REVISION_ENV,
         "value": soperator_config._soperator_registered_static_config_revision(row["values"]),
     } in worker["slurmd"]["customEnv"]
+    from nebius_cxcli.soperator_worker_docker import DOCKER_DAEMON_MOUNT
+
     assert worker["slurmd"]["volumes"]["customVolumeMounts"] == [
-        copy.deepcopy(item) for item in soperator_config._SOPERATOR_REGISTERED_RUNTIME_MOUNTS
+        *[copy.deepcopy(item) for item in soperator_config._SOPERATOR_NODESET_RUNTIME_MOUNTS],
+        DOCKER_DAEMON_MOUNT,
     ]
     assert row["values"]["slurmNodes"]["rest"]["enabled"] is True
     assert row["values"]["slurmNodes"]["rest"]["k8sNodeFilterName"] == "system"
@@ -555,10 +574,10 @@ def test_registration_runtime_mount_materialization_rejects_reserved_path_collis
     }
 
     with pytest.raises(ValueError, match="runtime mount slurm-scripts"):
-        soperator_config._materialize_soperator_registered_runtime_mounts(values)
+        soperator_config._materialize_soperator_nodeset_runtime_mounts(values)
 
 
-def test_activechecks_cleanup_preserves_a_frozen_customer_hidden_partition() -> None:
+def test_registered_materialization_preserves_a_frozen_customer_hidden_partition() -> None:
     frozen = {
         "partitionConfiguration": {
             "configType": "structured",
@@ -572,15 +591,8 @@ def test_activechecks_cleanup_preserves_a_frozen_customer_hidden_partition() -> 
         }
     }
 
-    assert not soperator_config._remove_internal_activechecks_partition(frozen)
+    assert not soperator_config._materialize_soperator_registered_static_partitions(frozen)
     assert frozen["partitionConfiguration"]["partitions"][0]["name"] == "hidden"
-
-    generated = copy.deepcopy(frozen)
-    generated["partitionConfiguration"]["partitions"] = [
-        soperator_config._soperator_internal_activechecks_partition()
-    ]
-    assert soperator_config._remove_internal_activechecks_partition(generated)
-    assert generated["partitionConfiguration"]["partitions"] == []
 
 
 def test_registered_all_node_partition_preimage_suppresses_profile_partitions() -> None:
@@ -707,6 +719,84 @@ def test_registered_storage_discovery_uses_node_group_sfs_attachments(
         "sfs_node_group_ids": ("mk8snodegroup-a", "mk8snodegroup-b"),
         "sfs_kubernetes_bindings": {"jail": {"pv_names": ("jail-pv",), "pvc_names": ("jail-pvc",)}},
     }
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_local_sfs_discovery_uses_live_bindings_independent_of_config_presence(
+    monkeypatch, configured
+):
+    payload = _registered_payload()
+    roles = ("accounting", "controller-spool", "jail")
+    if configured:
+        payload["infra"]["components"] = [
+            {
+                "id": "sfs",
+                "instance_id": "existing-a",
+                "enabled": True,
+                "inputs": {"filesystems": {role: {"mount_tag": f"lab-{role}"} for role in roles}},
+            }
+        ]
+    claims = {
+        "accounting-pv": "storage-lab-acct-db-0",
+        "controller-spool-pv": "controller-spool-pvc",
+        "jail-rootfs-slot-a-pv": "jail-rootfs-slot-a-pvc",
+        "jail-rootfs-slot-b-pv": "jail-rootfs-slot-b-pvc",
+    }
+    snapshot = {
+        "collection_errors": [],
+        "node_groups": {"mk8snodegroup-a": {}, "mk8snodegroup-b": {}},
+        "pvcs": [
+            {"metadata": {"name": pvc, "namespace": "soperator"}, "spec": {"volumeName": pv}}
+            for pv, pvc in claims.items()
+        ],
+        "pvs": [
+            {
+                "metadata": {"name": pv},
+                "spec": {
+                    "local": {"path": "/mnt/retained/data"},
+                    "persistentVolumeReclaimPolicy": "Retain",
+                },
+            }
+            for pv in claims
+        ],
+    }
+    monkeypatch.setattr(
+        cli, "collect_kubectl_soperator_snapshot", lambda **_: copy.deepcopy(snapshot)
+    )
+    result = cli._soperator_protected_storage_discovery_inputs(
+        payload=payload, target_ref="existing-a", chart_values={}, kube_context="ctx", extra_env={}
+    )
+    assert result["sfs_node_group_ids"] == ("mk8snodegroup-a", "mk8snodegroup-b")
+    assert set(result["sfs_kubernetes_bindings"]) == set(roles)
+    assert result["sfs_kubernetes_bindings"]["accounting"]["pvc_names"] == (
+        "storage-lab-acct-db-0",
+    )
+    assert len(result["sfs_kubernetes_bindings"]["jail"]["pv_names"]) == 2
+    assert "sfs_filesystems" not in result
+    if configured:
+        assert {
+            role: binding["mount_tag"]
+            for role, binding in result["sfs_kubernetes_bindings"].items()
+        } == {role: f"lab-{role}" for role in roles}
+        accounting = snapshot["pvs"].pop(0)
+        with pytest.raises(RuntimeError, match="incomplete retained"):
+            cli._soperator_protected_storage_discovery_inputs(
+                payload=payload,
+                target_ref="existing-a",
+                chart_values={},
+                kube_context="ctx",
+                extra_env={},
+            )
+        snapshot["pvs"].insert(0, accounting)
+    snapshot["node_groups"] = {}
+    with pytest.raises(RuntimeError, match="node.group"):
+        cli._soperator_protected_storage_discovery_inputs(
+            payload=payload,
+            target_ref="existing-a",
+            chart_values={},
+            kube_context="ctx",
+            extra_env={},
+        )
 
 
 def test_recovery_storage_discovery_reuses_admitted_identity_without_fresh_snapshot() -> None:

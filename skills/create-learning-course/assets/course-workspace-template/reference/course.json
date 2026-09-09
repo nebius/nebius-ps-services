@@ -4,7 +4,7 @@
   "lessons": [
     {
       "id": "lesson-01",
-      "title": "Replace with first lesson title",
+      "title": "Replace with concise conceptual lesson title",
       "prerequisites": [],
       "labs": [
         "lab-01"
@@ -28,8 +28,8 @@
       "id": "figure-workflow",
       "path": "reference/diagrams/workflow.svg",
       "lesson": "lesson-01",
-      "after": "Start here",
-      "caption": "Replace with the essential relationship and conclusion"
+      "caption": "Replace with the essential relationship and conclusion",
+      "section": "How it works"
     }
   ]
 }

@@ -15,3 +15,4 @@ course-negative-05,false,"Use $align-skill to update the course-authoring skill 
 course-negative-06,false,"Write product reference documentation for this package."
 course-negative-07,false,"Brainstorm course ideas without creating files."
 course-negative-08,false,"Fix this production code bug; the example happens to be used in a course."
+course-positive-09,true,"Use $create-learning-course to revise the lessons in my course with conceptual titles, Objective first, a diagram in each How it works and a final Mental model."

@@ -4,7 +4,7 @@ Vector addition is simple enough to expose the essential CUDA program structure 
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 2–3 for the build, RAII buffer ownership, global indexing, ceiling division, bounds checks, asynchronous errors, reference tolerances and event timing. Lesson 1 is a conceptual preview; first run in Lesson 3 and return in Lesson 4 for sanitizer/profiler interpretation.
+**Theory preparation:** Read Lessons 2–3 for the build, RAII buffer ownership, global indexing, ceiling division, bounds checks, asynchronous errors, complete-output correctness and event timing. Lesson 1 is a conceptual preview; first run in Lesson 3 and return in Lesson 4 for sanitizer/profiler interpretation.
 
 Complete the SM90 build and preflight, then set `COURSE_BUILD_DIR` to the completed build. Use one H100. The smoke case contains 1,003 elements; the full case contains 2^24 elements. Both use 256 threads per block.
 

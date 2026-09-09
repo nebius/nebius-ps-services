@@ -28,8 +28,9 @@ A mixed-audience course is not an advanced course with a glossary attached.
 7. Add optimization, exceptions and advanced trade-offs after prerequisites.
 
 Build a prerequisite graph before lesson numbers. Check every technical noun,
-equation and required tool at its first meaningful use. A prerequisite bridge
-says what to recall and why, not simply "see lesson 2." A readiness check lets
+equation and required tool at its first meaningful use. Within How it works,
+briefly explain the needed prior idea and its connection, not simply "see
+lesson 2"; do not create a separate prerequisite heading. A readiness check lets
 experienced learners skip familiar explanations without skipping new evidence.
 
 Keep one primary competency per lesson where practical. Split an overloaded
@@ -80,6 +81,11 @@ Before a redesign, inspect complete affected prose, implementation, guide and
 diagram sources. Inventory unique concepts, assumptions, worked examples,
 failure explanations, supported experiment capabilities and safety checks.
 Use a private, bounded task audit when permitted, not learner-facing history.
+When adopting the four-section lesson pattern, move useful definitions,
+prerequisite connections, purpose and mechanisms into How it works rather
+than deleting their teaching. Move operational evidence and feedback with the
+owning practice. Rewrite Mental model only after the explanation is complete;
+move any first-time teaching found in a summary back into How it works.
 
 For each candidate duplicate ask whether it has the same learning purpose and
 adds no distinct reasoning. Keep a purposeful recall cue, preview or advanced

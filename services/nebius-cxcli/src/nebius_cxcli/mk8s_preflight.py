@@ -117,9 +117,7 @@ def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolved
         instance_id = component_instance_id(item)
         cluster_inputs = inputs.get("cluster")
         project_id = (
-            _as_text(cluster_inputs.get("parent_id"))
-            if isinstance(cluster_inputs, Mapping)
-            else ""
+            _as_text(cluster_inputs.get("parent_id")) if isinstance(cluster_inputs, Mapping) else ""
         ) or default_project_id
         resolved_components.append(
             _Mk8sResolvedComponent(
@@ -181,7 +179,9 @@ def has_mk8s_gpu_stack_compatibility_preflight_targets(config: Any) -> bool:
     return bool(_gpu_stack_compatibility_targets(payload))
 
 
-def _mk8s_gpu_stack_compatibility_choices(response: Any) -> tuple[_Mk8sGpuStackCompatibilityChoice, ...]:
+def _mk8s_gpu_stack_compatibility_choices(
+    response: Any,
+) -> tuple[_Mk8sGpuStackCompatibilityChoice, ...]:
     items = list(getattr(response, "items", []) or [])
     if not items:
         items = [
@@ -256,9 +256,7 @@ def _compatible_gpu_stack_os_values(
 ) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
-            choice.os
-            for choice in choices
-            if choice.platform == group.platform and choice.os
+            choice.os for choice in choices if choice.platform == group.platform and choice.os
         )
     )
 
@@ -274,11 +272,12 @@ def _gpu_stack_compatibility_error(
         candidate_os_values = _compatible_gpu_stack_os_values_for_preset(choices, group)
         if candidate_os_values:
             candidate_text = (
-                " Compatible OS values for this platform/preset: "
-                f"{', '.join(candidate_os_values)}."
+                f" Compatible OS values for this platform/preset: {', '.join(candidate_os_values)}."
             )
         else:
-            candidate_text = " The live compatibility matrix returned no OS values for that platform/preset."
+            candidate_text = (
+                " The live compatibility matrix returned no OS values for that platform/preset."
+            )
         return RuntimeError(
             "MK8s GPU stack compatibility preflight failed: "
             f"component '{component.component_label}' node group '{group.name}' uses "
@@ -302,7 +301,9 @@ def _gpu_stack_compatibility_error(
             f"{', '.join(candidate_os_values)}."
         )
     else:
-        candidate_text = " The live compatibility matrix returned no GPU stack presets for that platform."
+        candidate_text = (
+            " The live compatibility matrix returned no GPU stack presets for that platform."
+        )
     return RuntimeError(
         "MK8s GPU stack compatibility preflight failed: "
         f"component '{component.component_label}' node group '{group.name}' uses "
@@ -460,9 +461,13 @@ def _enabled_resolved_infra_components(
 def _vpc_networking_refs(payload: Mapping[str, Any]) -> tuple[_VpcNetworkingRef, ...]:
     default_project_id = _default_project_id(payload)
     refs: list[_VpcNetworkingRef] = []
-    for component_id, _instance_id, component_label, inputs, raw_row in (
-        _enabled_resolved_infra_components(payload)
-    ):
+    for (
+        component_id,
+        _instance_id,
+        component_label,
+        inputs,
+        raw_row,
+    ) in _enabled_resolved_infra_components(payload):
         bindings = _row_bindings_by_target(raw_row)
         if component_id == "mk8s":
             cluster_inputs = inputs.get("cluster")
@@ -543,7 +548,9 @@ def _vpc_networking_refs(payload: Mapping[str, Any]) -> tuple[_VpcNetworkingRef,
                         field_label="inputs",
                         project_id=_as_text(inputs.get("parent_id")) or default_project_id,
                         network_id=_as_text(inputs.get("network_id")),
-                        subnet_id=_as_text(inputs.get("subnet_id")) if subnet_binding is None else None,
+                        subnet_id=_as_text(inputs.get("subnet_id"))
+                        if subnet_binding is None
+                        else None,
                     )
                 )
             continue
@@ -741,7 +748,10 @@ def mk8s_node_subnet_capacity_guidance(
 def _subnet_pool_cidrs(subnet: Any) -> tuple[str, ...]:
     spec = getattr(subnet, "spec", None)
     ipv4_private_pools = getattr(spec, "ipv4_private_pools", None)
-    if bool(getattr(ipv4_private_pools, "use_network_pools", False)):
+    check_presence = getattr(spec, "check_presence", None)
+    if callable(check_presence) and not check_presence("ipv4_private_pools"):
+        ipv4_private_pools = None
+    if ipv4_private_pools is None or bool(getattr(ipv4_private_pools, "use_network_pools", False)):
         return ()
     pools = list(getattr(ipv4_private_pools, "pools", []) or [])
     cidrs: list[str] = []
@@ -756,7 +766,8 @@ def _subnet_pool_cidrs(subnet: Any) -> tuple[str, ...]:
     status = getattr(subnet, "status", None)
     status_cidrs = tuple(
         value
-        for cidr in list(getattr(status, "ipv4_private_cidrs", []) or [])
+        for pool in list(getattr(status, "ipv4_private_pools", []) or [])
+        for cidr in list(getattr(pool, "cidrs", []) or [])
         if (value := (_as_text(getattr(cidr, "cidr", None)) or _as_text(cidr)))
         and not value.startswith("/")
     )
@@ -1078,9 +1089,13 @@ def _vpc_row_project_id(
 def _validate_planned_vpc_bindings(payload: Mapping[str, Any]) -> None:
     default_project_id = _default_project_id(payload)
     vpc_rows = _enabled_vpc_rows(payload)
-    for component_id, _instance_id, component_label, inputs, raw_row in (
-        _enabled_resolved_infra_components(payload)
-    ):
+    for (
+        component_id,
+        _instance_id,
+        component_label,
+        inputs,
+        raw_row,
+    ) in _enabled_resolved_infra_components(payload):
         bindings = _row_bindings_by_target(raw_row)
         if not bindings:
             continue
@@ -1136,7 +1151,11 @@ def _validate_planned_vpc_bindings(payload: Mapping[str, Any]) -> None:
                 )
             if binding.source_output_name == "subnets":
                 subnets = read_component_path(vpc_row, "inputs.subnets")
-                if not binding.key or not isinstance(subnets, Mapping) or binding.key not in subnets:
+                if (
+                    not binding.key
+                    or not isinstance(subnets, Mapping)
+                    or binding.key not in subnets
+                ):
                     raise RuntimeError(
                         "VPC networking preflight failed: "
                         f"component '{component_label}' binding {target_path} references "
@@ -1158,9 +1177,7 @@ def _validate_planned_vpc_bindings(payload: Mapping[str, Any]) -> None:
             vpc_row = vpc_rows.get(subnet_binding.source_instance_id or "")
             vpc_network = read_component_path(vpc_row or {}, "inputs.network")
             existing_id = (
-                _as_text(vpc_network.get("existing_id"))
-                if isinstance(vpc_network, Mapping)
-                else ""
+                _as_text(vpc_network.get("existing_id")) if isinstance(vpc_network, Mapping) else ""
             )
             if selected_network_id and existing_id != selected_network_id:
                 raise RuntimeError(
@@ -1231,9 +1248,7 @@ def _validate_vpc_hierarchy(payload: Mapping[str, Any]) -> None:
             network_key = (ref.project_id, ref.network_id)
             network = network_cache.get(network_key)
             if network is None:
-                network = NetworkServiceClient(sdk).get(
-                    GetNetworkRequest(id=ref.network_id)
-                ).wait()
+                network = NetworkServiceClient(sdk).get(GetNetworkRequest(id=ref.network_id)).wait()
                 network_cache[network_key] = network
             network_parent_id = _resource_parent_id(network)
             if network_parent_id != ref.project_id:
@@ -1288,7 +1303,9 @@ def validate_vpc_networking_preflight(config: Any) -> None:
     subnet_client = None
     subnet_pool_cidrs_by_id: dict[str, tuple[str, ...]] = {}
 
-    def _live_subnet_pool_cidrs(component: _Mk8sResolvedComponent, subnet_id: str) -> tuple[str, ...]:
+    def _live_subnet_pool_cidrs(
+        component: _Mk8sResolvedComponent, subnet_id: str
+    ) -> tuple[str, ...]:
         nonlocal sdk, subnet_client
         if subnet_id in subnet_pool_cidrs_by_id:
             return subnet_pool_cidrs_by_id[subnet_id]

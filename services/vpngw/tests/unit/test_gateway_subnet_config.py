@@ -158,9 +158,7 @@ def test_explicit_gateway_network_rejects_inexact_sdk_identity(monkeypatch) -> N
             parent_id="project-test",
         )
     )
-    network_client = SimpleNamespace(
-        get=Mock(return_value=SimpleNamespace(wait=lambda: network))
-    )
+    network_client = SimpleNamespace(get=Mock(return_value=SimpleNamespace(wait=lambda: network)))
     monkeypatch.setattr(vpc_v1, "NetworkServiceClient", lambda _client: network_client)
     monkeypatch.setattr(vpc_v1, "SubnetServiceClient", lambda _client: object())
     manager = VMManager(project_id="project-test", region="eu-west1")
@@ -706,6 +704,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
 
     assert json.loads(capsys.readouterr().out) == {
         "features": [
+            "ordinary-apply-v1",
             "force-reconcile-v1",
             "vm-ha-authority-bound-force-reconcile-v1",
             "vm-ha-controller-route-reconcile-v1",

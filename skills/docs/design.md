@@ -4710,7 +4710,7 @@ only the existing public syntax and public-safe placeholders.
   inferred from source verification; the installed skill remains unchanged.
 
 <!-- /FEATURE: FEAT-025 -->
-<!-- FEATURE: FEAT-026 reqs=REQ-027 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-026 reqs=REQ-027 status=ready delivery=implemented priority=P1 version=5 -->
 ### FEAT-026: Portable digital-textbook authoring kit
 
 #### Requirements Covered
@@ -4734,6 +4734,22 @@ own builder owns canonical Markdown-to-HTML generation and atomic publication;
 the skill specifies and validates that boundary rather than adding an LMS.
 Research-backed teaching guidance and project visual conventions are labeled
 separately. Technical execution requirements are selected in a course profile.
+
+Use concise conceptual lesson titles, synchronized across syllabus and page.
+Replace the many standalone teaching labels with Objective, How it works,
+Practice and a final Mental model. Retain definitions, prerequisite links,
+purpose, mechanisms, worked reasoning and limitations in connected explanatory
+prose; practical steps, evidence, feedback and retrieval belong to the owning
+practice activity. The final mental model summarizes already-taught concepts.
+Every How it works contains its own meaningful accessible SVG diagram.
+Introduce unfamiliar abbreviations by their full wording and meaning in context;
+avoid global substitutions that confuse mathematical terms with product names.
+
+Templates expose the four sections explicitly. The read-only checker verifies
+lesson-local section order, visible labels, explanatory text and inline SVG
+ownership without treating these as proof of teaching quality. Semantic evals
+cover topic titles, causal depth, terminology and diagram meaning in technical,
+non-code and revision cases. No old section-order compatibility path is added.
 
 #### Selected Option
 
@@ -4759,6 +4775,10 @@ and generic paths; no external publishing, dependency installation or live labs.
   lab structure and accessible diagram pattern; revised assets pass.
 - TDD-002: Mutated navigation, unsafe HTML and mismatched embedded code fail
   focused checks without executing learner code or fetching resources.
+- TDD-003: Missing, duplicate, reordered or mislabeled lesson sections, trailing
+  lesson content and absent, caption-only or misplaced core diagrams fail;
+  diagrams in another lesson never satisfy local coverage. Nested explanatory
+  containers remain valid and diagram captions cannot stand in for prose.
 
 #### Validation Plan
 
@@ -4791,53 +4811,57 @@ course standard; required local checks pass and unexecuted gates remain visible.
 
 #### Implementation Evidence
 
-The source skill now uses a 190-line core with focused teaching, format,
-practical-work, research and safety references. Templates cover complete
-canonical prose, a light responsive HTML shell, contextual SVGs, seven-part
-guides, course/source metadata and explicit publication gates. A dependency-free
-read-only checker verifies bounded HTML structure and exact embedded UTF-8
-source bytes against an allowlist. The old split-page and learner-record
-starter defaults were removed; the catalog and changelog describe the new kit.
-Explicit-only invocation is retained. No course, installed skill or external
-system was changed by this work.
+The source skill uses a 207-line core with focused teaching, format, practice,
+research and safety references. Every lesson now has a conceptual title and
+Objective, How it works, Practice and final Mental model sections. Definitions,
+prerequisite connections, purpose, mechanisms, worked examples and limitations
+are integrated into complete prose. Unfamiliar abbreviations are explained in
+context; the summary introduces no new teaching. Each explanation owns at
+least one meaningful core diagram. Practical guides retain their seven roles.
+
+Markdown and HTML templates, diagram section metadata, styles, README/catalog,
+publication review and evaluations share that contract. The dependency-free
+read-only checker enforces direct section order and visible labels, local SVG
+figure ownership and nonempty content outside headings and figures. Canonical
+Markdown-to-HTML generation, full prose parity and atomic output remain the
+responsibility of each course's builder. Existing safe-path, active-content,
+malformed-input and exact escaped-source byte checks are preserved.
 
 #### Verification Evidence
 
-Strict skill validation passed with no failures or warnings. Twenty-five focused
-tests, Python lint/format, configured Markdown lint, CLI help and whitespace
-checks passed. Seven review-specific negative assertions failed before their
-repairs and passed afterward. Independent read-only review rechecked the fixes
-and found no remaining blocking issue in the changed checker scope. The original
-working-byte starter lacked the side TOC, embedded CSS and seven-part guide;
-the revised template satisfies the corresponding static fixture checks.
-The diagram example was rendered and visually inspected at two widths.
+STATIC_PASS: strict skill structure validation, 34 deterministic tests, Python
+lint/format, configured Markdown lint, CLI success/error/help checks and
+whitespace validation pass. Fourteen negative assertions against the former
+checker failed for the intended missing lesson contract; revised checks reject
+missing, duplicate, reordered or mislabeled sections, misplaced or absent
+local diagrams and heading/caption-only content. Nested explanations and two
+complete lessons pass. Independent read-only code and security review found no
+remaining blocking issue. The installed mirror and existing courses were not
+changed by this source-skill revision.
 
-The follow-up alignment pass verified template/reference/catalog wiring and
-repaired missing-value HTML attributes at the parser boundary. Three malformed
-attribute cases and the CLI error-reporting check reproduced the failure before
-repair; the final suite passed. Actual CLI checks also cover successful input,
-strict flag handling and help without course inputs or file creation. README
-exit-status guidance and publication-safety review instructions match the code.
+Trigger definitions cover 17 cases (9 positive, 8 negative); invocation remains
+explicit-only and help remains side-effect-free. Five output-quality cases
+cover technical creation, non-code creation, preservation revision, read-only
+review and lesson-only generation. These definitions alone do not prove routing
+or generated quality.
 
-The source-only skill alignment also repaired literal-source handling for
-comments, declarations, processing instructions and marked sections, and kept
-malformed reference URLs within the HTML error path (exit 1). Four markup
-negative controls and one CLI classification control failed before repair and
-passed afterward; escaped-markup and valid-HTTPS controls remain accepted.
-Independent code and security review confirmed both findings fixed with no
-remaining blocking issue. Trigger definitions now cover 16 cases (8 positive,
-8 negative), including both help spellings and partial authoring/review scope;
-four quality definitions include a read-only lesson review. These definitions
-are not model-run evidence. The starter's lesson fields and HTML concept
-introduction use semantic headings; Markdown lint now passes without a
-template-specific rule exception.
+QUALITY_PASS is limited to case 5: one identical synthetic waiting-line request
+ran against captured prior working bytes and revised source in separate clean
+read-only agent contexts. Both drafts retained correct FIFO/WIP definitions,
+counting examples, capacity-versus-departure distinctions and non-code practice.
+The prior output used the former sixteen-field pattern; the revised output
+used the four sections in both lessons, placed one meaningful diagram inside
+each explanation and closed with summaries of already-taught concepts. All
+eight case assertions passed for the revised output. This bounded sample is
+not evidence of learner outcomes or quality across all future subjects.
 
-STATIC_PASS applies to these bounded source checks, not teaching outcomes or
-publication readiness. Fresh routing, installed parity and comparative generated
-course quality were not run; no clean authorized evaluation context was used.
-Full-page browser evidence and comparable token measurements remain unavailable.
-The course-owned Markdown renderer/full-prose parity gate is a required future
-course artifact, not functionality claimed for this source checker.
+Cases 1-4 and fresh installed routing are NOT_RUN; installation was outside the
+source-only request. Full-page browser, live-target and comparable time/token
+measurements are not established. The two new CSS rules preserve intended
+reading/figure widths statically; no fresh integrated browser pass is claimed.
+The source remains implemented rather than claiming every qualification lane
+verified. Temporary working-byte comparison copies are task-owned and removed
+after verification; no generated trial artifacts enter reusable skill sources.
 
 <!-- /FEATURE: FEAT-026 -->
 <!-- FEATURE: FEAT-027 reqs=REQ-028 status=ready delivery=implemented priority=P1 version=3 -->

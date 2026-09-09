@@ -12,7 +12,7 @@ from nebius_cxcli.soperator_flux_graph import (
     soperator_graph_post_render_patches,
     target_soperator_release_name,
 )
-from soperator_fixtures import sample_snapshot
+from soperator_fixtures import sample_jail_logs_binding, sample_snapshot
 
 
 def _core_values() -> dict[str, object]:
@@ -178,10 +178,12 @@ def test_post_render_repairs_exact_controller_storage_shape() -> None:
 
 def test_post_render_disables_cleanup_only_on_exact_vm_stack_raw_child() -> None:
     values = _core_values()
+    binding, adapter = sample_jail_logs_binding()
+    values["slurmCluster"] = binding["slurmCluster"]
     values["observability"] = {"enabled": True, "vmStack": {"enabled": True}}
     lock = _vm_stack_snapshot(values)
 
-    patches = soperator_graph_post_render_patches(lock, values)
+    patches = soperator_graph_post_render_patches(lock, values, adapter_documents=adapter)
 
     vm_stack_patch = next(
         item for item in patches if item["target"]["name"] == "soperator-fluxcd-vm-stack"
@@ -218,13 +220,15 @@ def test_post_render_disables_cleanup_only_on_exact_vm_stack_raw_child() -> None
 
 def test_post_render_does_not_patch_changed_vm_stack_identity() -> None:
     values = _core_values()
+    binding, adapter = sample_jail_logs_binding()
+    values["slurmCluster"] = binding["slurmCluster"]
     values["observability"] = {"enabled": True, "vmStack": {"enabled": True}}
 
     for lock in (
         _vm_stack_snapshot(values, package_sha256="sha256:" + "d" * 64),
         _vm_stack_snapshot(values, chart_key="certManager"),
     ):
-        patches = soperator_graph_post_render_patches(lock, values)
+        patches = soperator_graph_post_render_patches(lock, values, adapter_documents=adapter)
         vm_stack_patch = next(
             item for item in patches if item["target"]["name"] == "soperator-fluxcd-vm-stack"
         )

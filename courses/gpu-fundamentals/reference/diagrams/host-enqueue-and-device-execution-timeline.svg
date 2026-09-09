@@ -1,27 +1,63 @@
-<svg viewBox="0 0 1000 360" role="img" aria-labelledby="detail-host-enqueue-and-device-execution-timeline-async-title detail-host-enqueue-and-device-execution-timeline-async-desc">
-<title id="detail-host-enqueue-and-device-execution-timeline-async-title">Host enqueue and device execution timeline</title>
-<desc id="detail-host-enqueue-and-device-execution-timeline-async-desc">The CPU enqueues operations quickly while the GPU executes them later on CUDA streams; an explicit event marks completion.</desc>
+<svg viewBox="0 0 480 850" style="max-width: 560px; margin-inline: auto" role="img" aria-labelledby="detail-host-enqueue-and-device-execution-timeline-async-title detail-host-enqueue-and-device-execution-timeline-async-desc">
+<title id="detail-host-enqueue-and-device-execution-timeline-async-title">The CPU submits work, then waits for GPU completion</title>
+<desc id="detail-host-enqueue-and-device-execution-timeline-async-desc">Read downward in each column. This is one possible execution order, not a measured timeline: box heights and gaps do not show how long operations take. The CPU starts a host timer, submits kernel A, kernel B and an event to one stream, then waits. The dashed blue arrow shows submission; the GPU can begin A while the CPU is still submitting work. The GPU executes A, then B, then completes the event. The green arrow shows that event completion lets the CPU finish waiting and stop the host timer. The timer includes submission and waiting. Event completion does not copy results: data remains on the GPU until a separate required copy makes it CPU-readable.</desc>
 <defs>
-<marker id="detail-host-enqueue-and-device-execution-timeline-async-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
-<path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
-</marker>
+  <marker id="detail-host-enqueue-and-device-execution-timeline-order-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#245880"/></marker>
+  <marker id="detail-host-enqueue-and-device-execution-timeline-done-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#206757"/></marker>
 </defs>
-<text x="35" y="62" font-weight="700">CPU thread</text>
-<line x1="160" y1="55" x2="930" y2="55" stroke="#24343d" stroke-width="2"/>
-<rect x="190" y="30" width="120" height="48" rx="8" fill="#e0edfa"/>
-<text x="250" y="59" text-anchor="middle">enqueue A</text>
-<rect x="330" y="30" width="120" height="48" rx="8" fill="#e0edfa"/>
-<text x="390" y="59" text-anchor="middle">enqueue B</text>
-<text x="35" y="162" font-weight="700">CUDA stream</text>
-<line x1="160" y1="155" x2="930" y2="155" stroke="#24343d" stroke-width="2"/>
-<rect x="260" y="130" width="250" height="48" rx="8" fill="#e0f0e6"/>
-<text x="385" y="159" text-anchor="middle">kernel A executes</text>
-<rect x="510" y="130" width="270" height="48" rx="8" fill="#e0f0e6"/>
-<text x="645" y="159" text-anchor="middle">kernel B executes</text>
-<line x1="250" y1="78" x2="285" y2="127" stroke="#245880" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-async-arrow)"/>
-<line x1="390" y1="78" x2="540" y2="127" stroke="#245880" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-async-arrow)"/>
-<line x1="780" y1="155" x2="860" y2="245" stroke="#245880" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-async-arrow)"/>
-<rect x="750" y="245" width="210" height="55" rx="8" fill="#fff7e7" stroke="#86500e"/>
-<text x="855" y="278" text-anchor="middle">event / synchronize</text>
-<text x="500" y="335" text-anchor="middle" fill="#52626b">Host wall time without synchronization measures enqueue work, not completed device work.</text>
+<g font-family="Arial, Helvetica, sans-serif" fill="#24343d" text-anchor="middle">
+  <text x="240" y="28" font-size="22" font-weight="700">Read from top to bottom</text>
+  <text x="240" y="55" font-size="19">One possible execution order</text>
+  <text x="110" y="100" font-size="23" font-weight="700">CPU thread</text>
+  <text x="370" y="100" font-size="23" font-weight="700">GPU stream</text>
+
+  <rect x="18" y="120" width="184" height="58" rx="10" fill="#f4f7f9" stroke="#52616c"/>
+  <text x="110" y="156" font-size="21">Start host timer</text>
+
+  <rect x="18" y="211" width="184" height="134" rx="10" fill="#e0edfa" stroke="#245880" stroke-width="1.5"/>
+  <text x="110" y="241" font-size="21" font-weight="700">Submit work</text>
+  <text x="110" y="271" font-size="20">A, then B,</text>
+  <text x="110" y="298" font-size="19">then record event</text>
+  <text x="110" y="328" font-size="19">Calls return</text>
+
+  <rect x="278" y="273" width="184" height="70" rx="10" fill="#e0f0e6" stroke="#206757" stroke-width="1.5"/>
+  <text x="370" y="316" font-size="23" font-weight="700">Execute A</text>
+  <rect x="278" y="378" width="184" height="70" rx="10" fill="#e0f0e6" stroke="#206757" stroke-width="1.5"/>
+  <text x="370" y="421" font-size="23" font-weight="700">Execute B</text>
+
+  <rect x="18" y="378" width="184" height="188" rx="10" fill="#fff7e7" stroke="#86500e" stroke-width="1.5"/>
+  <text x="110" y="415" font-size="21" font-weight="700">Wait for event</text>
+  <text x="110" y="454" font-size="20">CPU cannot pass</text>
+  <text x="110" y="482" font-size="20">this point until</text>
+  <text x="110" y="510" font-size="20">A and B finish</text>
+
+  <rect x="278" y="486" width="184" height="80" rx="10" fill="#e0f0e6" stroke="#206757" stroke-width="1.5"/>
+  <text x="370" y="516" font-size="20" font-weight="700">Event completes</text>
+  <text x="370" y="546" font-size="19">A and B are done</text>
+
+  <g fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-order-arrow)">
+    <path d="M110 180 V207"/>
+    <path d="M110 348 V374"/>
+    <path d="M370 346 V374"/>
+    <path d="M370 451 V482"/>
+    <path d="M110 569 V609"/>
+    <path d="M205 252 H238 V300 H274" stroke-dasharray="6 5"/>
+  </g>
+  <path d="M275 536 H206" fill="none" stroke="#206757" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-done-arrow)"/>
+
+  <rect x="18" y="613" width="184" height="58" rx="10" fill="#f4f7f9" stroke="#52616c"/>
+  <text x="110" y="649" font-size="21">Stop host timer</text>
+  <text x="370" y="629" font-size="20">Data stays on GPU</text>
+  <text x="370" y="656" font-size="19">No result copy shown</text>
+
+  <path d="M28 705 H74" fill="none" stroke="#245880" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-order-arrow)"/>
+  <text x="88" y="711" font-size="19" text-anchor="start">Submit work</text>
+  <path d="M266 705 H310" fill="none" stroke="#206757" stroke-width="3" marker-end="url(#detail-host-enqueue-and-device-execution-timeline-done-arrow)"/>
+  <text x="324" y="711" font-size="19" text-anchor="start">Wait can end</text>
+
+  <rect x="18" y="740" width="444" height="96" rx="12" fill="#f4f7f9" stroke="#c6d1d8"/>
+  <text x="240" y="770" font-size="21" font-weight="700">This drawing shows order, not duration</text>
+  <text x="240" y="799" font-size="20">Box heights and gaps do not show</text>
+  <text x="240" y="825" font-size="20">how long the operations take</text>
+</g>
 </svg>

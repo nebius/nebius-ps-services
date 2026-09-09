@@ -63,6 +63,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .local_commands import run
 from .tunnel_iterator import iter_active_tunnels
 
 logger = logging.getLogger(__name__)
@@ -142,7 +143,7 @@ def require_vm_ha_current_boot_ready(
 
 
 def _ipv4_forwarding_disabled() -> bool:
-    result = subprocess.run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
+    result = run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
     return result.returncode == 0 and result.stdout.strip() == "0"
 
 
@@ -184,13 +185,13 @@ def enforce_vm_ha_passive_routing_hygiene_locked(
     )
     table_removed = _remove_table_220()
     apipa_removed = _remove_broad_apipa_route()
-    rules = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
-    all_routes = subprocess.run(
+    rules = run(["ip", "rule", "show"], capture_output=True, text=True)
+    all_routes = run(
         ["ip", "-j", "-4", "route", "show", "table", "all"],
         capture_output=True,
         text=True,
     )
-    apipa = subprocess.run(
+    apipa = run(
         ["ip", "route", "show", "169.254.0.0/16"],
         capture_output=True,
         text=True,
@@ -294,6 +295,14 @@ def enforce_periodic_routing_invariants(cfg: dict[str, Any]) -> None:
         return
     try:
         mode = _vm_ha_route_maintenance_mode(cfg)
+        if cfg.get("vm_ha") is None:
+            from ..ordinary_operations import OperationBlocked, require_idle
+
+            try:
+                require_idle()
+            except OperationBlocked:
+                print("[RoutingGuard] Ordinary operation pending; skipping repair")
+                return
         if mode == "passive":
             enforce_vm_ha_passive_routing_hygiene_locked(cfg)
             return
@@ -341,7 +350,7 @@ def _enforce_routing_sysctls() -> tuple[int, list[str]]:
 
     for key, expected_value in REQUIRED_SYSCTLS.items():
         # Read current value
-        result = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True)
+        result = run(["sysctl", "-n", key], capture_output=True, text=True)
 
         if result.returncode != 0:
             logger.warning(f"[RoutingGuard] Could not read sysctl {key}: {result.stderr.strip()}")
@@ -354,7 +363,7 @@ def _enforce_routing_sysctls() -> tuple[int, list[str]]:
             print(
                 f"[RoutingGuard] Fixing sysctl: {key} (current={current_value}, expected={expected_value})"
             )
-            result = subprocess.run(
+            result = run(
                 ["sysctl", "-w", f"{key}={expected_value}"],
                 capture_output=True,
                 text=True,
@@ -368,7 +377,7 @@ def _enforce_routing_sysctls() -> tuple[int, list[str]]:
                 logger.error(f"[RoutingGuard] Failed to set {key}: {result.stderr.strip()}")
 
     # Also enforce rp_filter=0 on all XFRM interfaces
-    result = subprocess.run(["ip", "link", "show", "type", "xfrm"], capture_output=True, text=True)
+    result = run(["ip", "link", "show", "type", "xfrm"], capture_output=True, text=True)
 
     for line in result.stdout.split("\n"):
         if ": xfrm" in line:
@@ -376,10 +385,10 @@ def _enforce_routing_sysctls() -> tuple[int, list[str]]:
             iface_name = line.split(": ")[1].split("@")[0] if ": " in line else None
             if iface_name:
                 key = f"net.ipv4.conf.{iface_name}.rp_filter"
-                result = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True)
+                result = run(["sysctl", "-n", key], capture_output=True, text=True)
 
                 if result.returncode == 0 and result.stdout.strip() != "0":
-                    subprocess.run(["sysctl", "-w", f"{key}=0"], capture_output=True)
+                    run(["sysctl", "-w", f"{key}=0"], capture_output=True)
                     fixed_count += 1
                     fixed_sysctls.append(key)
                     print(f"[RoutingGuard] ✓ Fixed {key}=0")
@@ -529,8 +538,8 @@ def _remove_table_220() -> bool:
     """
     removed = False
 
-    rules = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
-    routes = subprocess.run(
+    rules = run(["ip", "rule", "show"], capture_output=True, text=True)
+    routes = run(
         ["ip", "-j", "-4", "route", "show", "table", "all"],
         capture_output=True,
         text=True,
@@ -547,24 +556,21 @@ def _remove_table_220() -> bool:
         return False
 
     # Flush table state independently of whether its policy rule is present.
-    result = subprocess.run(
-        ["ip", "route", "flush", "table", "220"], capture_output=True, text=True
-    )
-    if result.returncode == 0:
-        print("[RoutingGuard] Flushed table 220 routes")
-        removed = True
+    if has_routes:
+        result = run(["ip", "route", "flush", "table", "220"], capture_output=True, text=True)
+        if result.returncode == 0:
+            print("[RoutingGuard] Flushed table 220 routes")
+            removed = True
 
     for _rule in table_rules:
-        result = subprocess.run(
-            ["ip", "rule", "del", "lookup", "220"], capture_output=True, text=True
-        )
+        result = run(["ip", "rule", "del", "lookup", "220"], capture_output=True, text=True)
         if result.returncode == 0:
             print("[RoutingGuard] Removed policy rule selecting table 220")
             removed = True
 
     # Verify removal
-    result = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
-    remaining_routes = subprocess.run(
+    result = run(["ip", "rule", "show"], capture_output=True, text=True)
+    remaining_routes = run(
         ["ip", "-j", "-4", "route", "show", "table", "all"],
         capture_output=True,
         text=True,
@@ -646,16 +652,12 @@ def _remove_broad_apipa_route() -> bool:
         True if broad route was removed, False if it didn't exist
     """
     # Check if broad APIPA route exists
-    result = subprocess.run(
-        ["ip", "route", "show", "169.254.0.0/16"], capture_output=True, text=True
-    )
+    result = run(["ip", "route", "show", "169.254.0.0/16"], capture_output=True, text=True)
 
     if result.stdout.strip():
         route_info = result.stdout.strip()
         # Route exists, remove it
-        result = subprocess.run(
-            ["ip", "route", "del", "169.254.0.0/16"], capture_output=True, text=True
-        )
+        result = run(["ip", "route", "del", "169.254.0.0/16"], capture_output=True, text=True)
         if result.returncode == 0:
             print(f"[RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: {route_info})")
             return True
@@ -666,7 +668,7 @@ def _remove_broad_apipa_route() -> bool:
 
 
 def _flush_route_cache() -> None:
-    result = subprocess.run(["ip", "route", "flush", "cache"], capture_output=True, text=True)
+    result = run(["ip", "route", "flush", "cache"], capture_output=True, text=True)
     if result.returncode != 0:
         print(f"[RoutingGuard] WARNING: Failed to flush route cache: {result.stderr.strip()}")
 
@@ -701,7 +703,7 @@ def _remove_scope_link_local_prefixes(cfg: dict[str, Any]) -> int:
 
     for prefix in local_prefixes:
         # Get the current route for this prefix
-        result = subprocess.run(["ip", "route", "show", prefix], capture_output=True, text=True)
+        result = run(["ip", "route", "show", prefix], capture_output=True, text=True)
 
         if result.returncode != 0 or not result.stdout.strip():
             # No route exists for this prefix
@@ -712,7 +714,7 @@ def _remove_scope_link_local_prefixes(cfg: dict[str, Any]) -> int:
         # Check if this is a scope link route
         if "scope link" in route_info:
             # This is a problematic scope link route - remove it
-            result = subprocess.run(["ip", "route", "del", prefix], capture_output=True, text=True)
+            result = run(["ip", "route", "del", prefix], capture_output=True, text=True)
             if result.returncode == 0:
                 print(
                     f"[RoutingGuard] ⚠ CRITICAL: Removed scope link route that breaks forwarding: {prefix}"
@@ -793,7 +795,7 @@ def ensure_local_prefix_routes(cfg: dict[str, Any], interface: str = "eth0") -> 
 
     # Get the default gateway IP for proper routing
     try:
-        result = subprocess.run(
+        result = run(
             ["ip", "route", "show", "default"],
             capture_output=True,
             text=True,
@@ -874,7 +876,7 @@ def ensure_local_prefix_routes(cfg: dict[str, Any], interface: str = "eth0") -> 
             cmd.extend(["src", str(attrs["src"])])
         if attrs.get("onlink"):
             cmd.append("onlink")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=False)
+        result = run(cmd, capture_output=True, text=True, timeout=5, check=False)
         if result.returncode == 0:
             print(f"[RoutingGuard] Removed duplicate route: {line}")
             return True
@@ -900,7 +902,7 @@ def ensure_local_prefix_routes(cfg: dict[str, Any], interface: str = "eth0") -> 
             continue
 
         existing_routes: list[str] = []
-        result = subprocess.run(
+        result = run(
             ["ip", "-o", "route", "show", prefix],
             capture_output=True,
             text=True,
@@ -921,7 +923,7 @@ def ensure_local_prefix_routes(cfg: dict[str, Any], interface: str = "eth0") -> 
         # Add static route via gateway (NOT scope link)
         # This allows BGP to advertise the prefix while enabling proper forwarding
         try:
-            subprocess.run(
+            run(
                 [
                     "ip",
                     "route",
@@ -950,7 +952,7 @@ def ensure_local_prefix_routes(cfg: dict[str, Any], interface: str = "eth0") -> 
             prefixes_fixed += 1
 
     if changes_made:
-        subprocess.run(
+        run(
             ["ip", "route", "flush", "cache"],
             capture_output=True,
             text=True,
@@ -1004,7 +1006,7 @@ def _cleanup_unexpected_apipa_routes(cfg: dict[str, Any]) -> int:
             expected_tunnel_peers[f"{peer_ip}/32"] = iface_name
 
     # Get all current APIPA routes
-    result = subprocess.run(["ip", "route", "show"], capture_output=True, text=True)
+    result = run(["ip", "route", "show"], capture_output=True, text=True)
 
     if result.returncode != 0:
         print(f"[RoutingGuard] ⚠ Failed to get routes: {result.stderr}")
@@ -1085,7 +1087,7 @@ def _cleanup_unexpected_apipa_routes(cfg: dict[str, Any]) -> int:
     if routes_to_remove:
         print(f"[RoutingGuard] Found {len(routes_to_remove)} unexpected APIPA route(s) to remove")
         for prefix, dev, _full_route in routes_to_remove:
-            result = subprocess.run(
+            result = run(
                 ["ip", "route", "del", prefix, "dev", dev],
                 capture_output=True,
                 text=True,
@@ -1163,7 +1165,7 @@ def _ensure_bgp_peer_routes(cfg: dict[str, Any]) -> int:
 
         # Add /32 route for BGP peer through VTI
         # Use 'replace' to make this idempotent
-        result = subprocess.run(
+        result = run(
             ["ip", "route", "replace", f"{remote_ip}/32", "dev", iface_name],
             capture_output=True,
             text=True,
@@ -1194,20 +1196,18 @@ def get_routing_diagnostics() -> dict[str, Any]:
     diagnostics: dict[str, Any] = {}
 
     # Check for table 220 rule
-    result = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)
+    result = run(["ip", "rule", "show"], capture_output=True, text=True)
     diagnostics["all_rules"] = result.stdout.split("\n")
     diagnostics["table_220_rule_exists"] = "220" in result.stdout
 
     # Check table 220 routes
-    result = subprocess.run(["ip", "route", "show", "table", "220"], capture_output=True, text=True)
+    result = run(["ip", "route", "show", "table", "220"], capture_output=True, text=True)
     diagnostics["table_220_routes"] = [
         route for route in result.stdout.split("\n") if route.strip()
     ]
 
     # Check for broad APIPA route
-    result = subprocess.run(
-        ["ip", "route", "show", "169.254.0.0/16"], capture_output=True, text=True
-    )
+    result = run(["ip", "route", "show", "169.254.0.0/16"], capture_output=True, text=True)
     diagnostics["apipa_broad_route_exists"] = bool(result.stdout.strip())
 
     return diagnostics

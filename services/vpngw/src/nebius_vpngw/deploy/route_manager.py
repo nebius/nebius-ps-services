@@ -1466,7 +1466,7 @@ class RouteManager:
     ) -> dict[int, str]:
         import ipaddress
 
-        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+        from nebius.api.nebius.common.v1 import metadata_pb2  # type: ignore[attr-defined]
         from nebius.api.nebius.compute.v1 import (  # type: ignore[attr-defined]
             instance_service_pb2_grpc,
         )
@@ -1480,7 +1480,7 @@ class RouteManager:
         for hostname, instance_index in host_to_index.items():
             try:
                 inst = istub.GetByName(
-                    GetByNameRequest(
+                    metadata_pb2.GetByNameRequest(
                         parent_id=self.project_id or "",
                         name=hostname,
                     )

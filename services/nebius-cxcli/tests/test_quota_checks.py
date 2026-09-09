@@ -896,6 +896,42 @@ def test_evaluate_requirement_requires_exact_selected_gpu_fabric() -> None:
     )
 
 
+def test_evaluate_requirement_missing_region_is_unknown_not_zero_capacity() -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h200",
+        region="eu-north2",
+        required=16,
+        reason="two reserved eight-GPU workers",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h200-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="eu-north2-a",
+            mode="reserved",
+            gpu_count_per_instance=8,
+        ),
+    )
+    for rows in (
+        (),
+        (
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h200-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-7",
+            ),
+        ),
+    ):
+        check = _evaluate_requirement(
+            requirement, tenant_quotas={}, project_quotas={}, capacity_resource_advice=rows
+        )
+        assert check.available is None
+        assert check.sufficient is None
+        assert "no regional coverage for eu-north2" in check.description
+
+
 def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_not_fixed() -> None:
     requirement = AggregatedQuotaRequirement(
         component_id="mk8s",

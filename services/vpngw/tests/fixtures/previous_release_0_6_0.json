@@ -1,0 +1,27 @@
+{
+  "provenance": {
+    "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.6.0/nebius_vpngw-0.6.0-py3-none-any.whl",
+    "sha256": "0e1f20c001005ac78ba7551ea029ddcc60c13cd736f69984143a420ee1b0e18d",
+    "method": "Installed release wheel in an isolated environment; ran agent capabilities and StateStore.save_last_applied on generic empty configuration."
+  },
+  "capabilities": {
+    "schema": "nebius-vpngw.agent-capabilities.v1",
+    "features": [
+      "force-reconcile-v1",
+      "vm-ha-authority-bound-force-reconcile-v1",
+      "vm-ha-controller-route-reconcile-v1",
+      "vm-ha-mtls-rotation-quiescence-v1",
+      "vm-ha-standby-auto-healing-policy-v4",
+      "vm-ha-live-peer-replacement-v4",
+      "vm-ha-standby-replacement-inhibition-v2",
+      "vm-ha-standby-restoration-v2"
+    ]
+  },
+  "state": {
+    "config_hash": "655a9b379d4147d0130c1ce8dd2c79092ed77413461a3c4ff68e4fd8d1f39275",
+    "package_version": "0.6.0",
+    "render_version": 4,
+    "resolved_config": {"connections": [], "gateway": {}},
+    "timestamp": "2026-09-09T02:02:32.224920Z"
+  }
+}

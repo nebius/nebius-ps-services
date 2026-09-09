@@ -18,6 +18,7 @@ from nebius_cxcli.terraform_ops import (
     terraform_output_json,
     terraform_output_raw,
     terraform_plan,
+    terraform_provider_schema_json,
     terraform_show_json,
     terraform_state_list,
     terraform_state_show,
@@ -794,3 +795,39 @@ def test_terraform_destroy_passes_abort_check_to_streaming_runner(monkeypatch) -
         "-lock-timeout=5m",
     )
     assert calls["abort_check"] is abort_check
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["invalid", "[]", '{"format_version":"2.0","provider_schemas":{}}', '{"format_version":"1.0"}'],
+)
+def test_provider_schema_rejects_invalid_formats(monkeypatch, tmp_path, payload):
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._run_capture", lambda *_a, **_kw: (payload, ""))
+    with pytest.raises(RuntimeError, match="schema"):
+        terraform_provider_schema_json(tmp_path)
+
+
+def test_provider_schema_uses_installed_provider_and_runtime_env(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+
+    def capture(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return '{"format_version":"1.1","provider_schemas":{}}', ""
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._run_capture", capture)
+    assert terraform_provider_schema_json(tmp_path, extra_env={"EXAMPLE": "value"}) == {
+        "format_version": "1.1",
+        "provider_schemas": {},
+    }
+    assert calls == [
+        (
+            ["terraform", "providers", "schema", "-json"],
+            {
+                "cwd": tmp_path,
+                "timeout": 120,
+                "extra_env": {"EXAMPLE": "value"},
+            },
+        )
+    ]

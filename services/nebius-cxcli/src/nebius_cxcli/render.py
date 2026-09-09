@@ -50,6 +50,7 @@ class ProjectGenerationPlan:
 _LIFECYCLE_REPORT_FILENAMES = frozenset(
     {
         "deploy-report.md",
+        "ordinary-apps-baseline.json",
         "soperator-install-plan.json",
         "soperator-release-reconcile.json",
         "soperator-upgrade-report.md",
@@ -67,7 +68,16 @@ _LIFECYCLE_REPORT_GLOBS = (
     "deploy-smoke-report*.json",
     "deploy-gpu-stack-readiness-report*.json",
     "deploy-gpu-visibility-report*.json",
+    "soperator-campaign-checks-*.json",
+    "soperator-checks-*.json",
     "soperator-destroy-*.json",
+    "soperator-install-render-repair-*.json",
+    "soperator-install-checks-repair-*.json",
+    "soperator-install-rest-repair-*.json",
+    "soperator-install-login-repair-*.json",
+    "soperator-install-collector-repair-*.json",
+    "soperator-install-gpu-maintenance-repair-*.json",
+    "soperator-install-runtime-repair-*.json",
     "soperator-protected-data-plane-*.json",
     "soperator-protected-source-ownership-*.json",
     "soperator-recovery-*.json",
@@ -78,8 +88,27 @@ _LIFECYCLE_REPORT_GLOBS = (
     "soperator-slurm-actions-*.json",
     "soperator-upgrade-admission-*.json",
 )
-_LIFECYCLE_REPORT_DIRNAMES = frozenset({".locks", "soperator-clusters", "soperator-discovery"})
+_LIFECYCLE_REPORT_DIRNAMES = frozenset(
+    {".locks", "soperator-clusters", "soperator-discovery", "soperator-install-history"}
+)
 _REPORT_JSON_REF_RE = re.compile(r"`([^`/\\]+\.json)`")
+_TERRAFORM_RUNTIME_NAMES = frozenset(
+    {
+        ".terraform",
+        "terraform.tfstate.d",
+        "terraform.tfstate",
+        "terraform.tfstate.backup",
+        ".terraform.tfstate.lock.info",
+    }
+)
+
+
+def _terraform_runtime_artifact(path: Path, paths: ProjectPaths) -> bool:
+    """Classify runtime paths only inside the generated Terraform working directory."""
+    return (
+        path.is_relative_to(paths.infra_dir)
+        and path.relative_to(paths.infra_dir).parts[0] in _TERRAFORM_RUNTIME_NAMES
+    )
 
 
 def reset_generated_bundle(paths: ProjectPaths) -> None:
@@ -145,7 +174,9 @@ def render_replaceable_generated_files(paths: ProjectPaths) -> tuple[Path, ...]:
         sorted(
             path
             for path in paths.generated_dir.rglob("*")
-            if path.is_file() and path not in preserved_reports
+            if path.is_file()
+            and path not in preserved_reports
+            and not _terraform_runtime_artifact(path, paths)
         )
     )
 
@@ -208,7 +239,7 @@ def build_project_generation_plan(
     config_path: Path,
     config_content: bytes | str,
 ) -> ProjectGenerationPlan:
-    """Build exact writes and tombstones without targeting lifecycle reports."""
+    """Build exact writes and tombstones without targeting runtime artifacts."""
 
     encoded_config = (
         config_content.encode("utf-8") if isinstance(config_content, str) else bytes(config_content)
@@ -348,6 +379,24 @@ def _copy_missing_lifecycle_report_tree(source: Path, target: Path) -> None:
         _copy_missing_lifecycle_report_tree(child, target / child.name)
 
 
+def _preserve_terraform_runtime_artifacts(
+    staged_paths: ProjectPaths, final_paths: ProjectPaths
+) -> None:
+    """Carry current state and caches through promotion without following links."""
+    for name in sorted(_TERRAFORM_RUNTIME_NAMES):
+        source = final_paths.infra_dir / name
+        if not source.exists() and not source.is_symlink():
+            continue
+        target = staged_paths.infra_dir / name
+        if target.exists() or target.is_symlink():
+            raise RuntimeError(f"staged render contains conflicting Terraform runtime: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir() and not source.is_symlink():
+            shutil.copytree(source, target, symlinks=True)
+        else:
+            shutil.copy2(source, target, follow_symlinks=False)
+
+
 def promote_staged_generated_paths(
     staged_paths: ProjectPaths,
     final_paths: ProjectPaths,
@@ -356,6 +405,7 @@ def promote_staged_generated_paths(
     backup_dir: Path | None = None
     try:
         _preserve_lifecycle_report_artifacts(staged_paths, final_paths)
+        _preserve_terraform_runtime_artifacts(staged_paths, final_paths)
         if final_paths.generated_dir.exists():
             backup_dir = final_paths.project_dir / f".generated-backup-{uuid4().hex}"
             final_paths.generated_dir.rename(backup_dir)

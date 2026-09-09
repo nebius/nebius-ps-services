@@ -1,14 +1,25 @@
 <section class="lesson" id="{{LESSON_ID}}">
   <h2>{{LESSON_NUMBER}}. {{LESSON_TITLE}}</h2>
-  <div class="concept-introduction">
-    <h3>{{START_HERE_OR_WHAT_IT_IS}}</h3>
-    {{CONCEPT_PRIMER_HTML}}
+  <div class="lesson-outcome">
+    <h3>Objective</h3>
+    {{OBJECTIVE_HTML}}
   </div>
-  <!-- Insert each figure immediately after its relevant concept/mechanism.
-       Keep one primary inline home; later mentions link to that figure. -->
-  <figure id="{{FIGURE_ID}}">
-    {{INLINE_SVG_WITH_UNIQUE_IDS}}
-    <figcaption>{{CAPTION_WITH_ESSENTIAL_MEANING}}</figcaption>
-  </figure>
-  {{COMPLETE_ORDERED_LESSON_FIELDS_HTML}}
+  <div class="how-it-works">
+    <h3>How it works</h3>
+    {{CONNECTED_EXPLANATION_HTML}}
+    <!-- Keep each diagram inside How it works beside its explanatory prose.
+         Add further explanatory paragraphs/figures here when needed. -->
+    <figure id="{{FIGURE_ID}}">
+      {{INLINE_SVG_WITH_UNIQUE_IDS}}
+      <figcaption>{{CAPTION_WITH_ESSENTIAL_MEANING}}</figcaption>
+    </figure>
+  </div>
+  <div class="practice-links">
+    <h3>Practice</h3>
+    {{PRACTICE_HTML}}
+  </div>
+  <div class="mental-model">
+    <h3>Mental model</h3>
+    {{MENTAL_MODEL_HTML}}
+  </div>
 </section>

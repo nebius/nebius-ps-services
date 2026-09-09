@@ -15,6 +15,8 @@ from .soperator_adapter import (
     SOPERATOR_LIFECYCLE_RECREATABLE,
     soperator_vm_stack_cleanup_exception,
 )
+from .soperator_checks_binding import CHECKS_RELEASE, auxiliary_post_renderers
+from .soperator_jail_logs_binding import JAIL_LOGS_RELEASE, jail_logs_binding_operations
 from .soperator_release import SoperatorReleaseGraphNode, SoperatorReleaseSnapshot
 
 SOPERATOR_GRAPH_LABEL = "soperator.nebius.ai/release-graph"
@@ -333,6 +335,8 @@ def _readiness_contract(
 def soperator_graph_post_render_patches(
     lock: SoperatorReleaseSnapshot,
     values: Mapping[str, Any],
+    *,
+    adapter_documents: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     expected = expected_soperator_release_names(values)
     nodes = {node.release_name: node for node in lock.release_graph}
@@ -430,6 +434,16 @@ def soperator_graph_post_render_patches(
                         },
                     ]
                 )
+        if release_name == CHECKS_RELEASE:
+            patch.append(
+                {
+                    "op": "add",
+                    "path": "/spec/postRenderers",
+                    "value": auxiliary_post_renderers(values),
+                }
+            )
+        if release_name == JAIL_LOGS_RELEASE:
+            patch.extend(jail_logs_binding_operations(values, adapter_documents or []))
         if release_name == _SLURM_CLUSTER_RELEASE_NAME:
             override_values = _nested(values, "slurmCluster", "overrideValues")
             cluster_name = str(override_values.get("clusterName") or "").strip()

@@ -20,7 +20,20 @@ env:
   ASSET_GLOB: "dist/*.whl"
 
 jobs:
+  ordinary-job-settlement:
+    name: Ordinary systemd and networkd settlement
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify delegated work in isolated systemd
+        working-directory: services/vpngw
+        run: python3 tests/systemd/run.py
+
   release:
+    needs: ordinary-job-settlement
     name: nebius-vpngw-release
     runs-on: ubuntu-latest
     defaults:

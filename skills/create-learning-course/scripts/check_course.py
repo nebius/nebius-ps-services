@@ -27,6 +27,12 @@ GUIDE_HEADINGS = (
     "If something goes wrong",
     "Takeaways and next step",
 )
+LESSON_FIELDS = {
+    "lesson-outcome": "Objective",
+    "how-it-works": "How it works",
+    "practice-links": "Practice",
+    "mental-model": "Mental model",
+}
 
 
 def safe_file(root: Path, relative: str) -> Path:
@@ -63,11 +69,89 @@ class CoursePage(HTMLParser):
         self.figure: dict[str, object] | None = None
         self.has_viewport = False
         self.has_skip = False
+        self.lesson_count = 0
+        self.lesson_depth: int | None = None
+        self.lesson_fields: list[str] = []
+        self.lesson_titles = 0
+        self.lesson_diagrams = 0
+        self.field: str | None = None
+        self.field_depth: int | None = None
+        self.field_headings: list[str] = []
+        self.field_has_text = False
+        self.field_children = 0
+        self.heading_depth: int | None = None
+        self.heading_text: list[str] = []
+
+    def start_lesson_element(self, tag: str, attributes: dict[str, str]) -> None:
+        """Track ownership by depth, so nested containers cannot end a field."""
+        classes = attributes.get("class", "").split()
+        if "lesson" in classes:
+            if self.lesson_depth is not None:
+                self.errors.append("Nested lessons are not supported")
+            else:
+                self.lesson_count += 1
+                self.lesson_depth = len(self.stack) + 1
+                self.lesson_fields = []
+                self.lesson_titles = self.lesson_diagrams = 0
+                if tag != "section" or not attributes.get("id"):
+                    self.errors.append("Lesson needs a section and unique ID")
+            return
+        if self.lesson_depth is None:
+            return
+        if len(self.stack) == self.lesson_depth:
+            fields = [name for name in classes if name in LESSON_FIELDS]
+            if tag == "h2" and not self.lesson_fields:
+                self.lesson_titles += 1
+            elif tag == "div" and len(fields) == 1:
+                self.field = fields[0]
+                self.lesson_fields.append(self.field)
+                self.field_depth = len(self.stack) + 1
+                self.field_headings = []
+                self.field_has_text = False
+                self.field_children = 0
+            else:
+                self.errors.append(
+                    "Lesson content must use the four canonical sections"
+                )
+        elif self.field_depth is not None and len(self.stack) == self.field_depth:
+            self.field_children += 1
+            if self.field_children == 1 and tag != "h3":
+                self.errors.append("Lesson section must start with its visible heading")
+        if tag == "h3":
+            if self.field_depth is None or len(self.stack) != self.field_depth:
+                self.errors.append("Lesson section heading must be a direct h3")
+            else:
+                self.heading_depth = len(self.stack) + 1
+                self.heading_text = []
+        if tag == "figure" and self.field != "how-it-works":
+            self.errors.append("Lesson figures must be inside How it works")
+
+    def end_lesson_element(self) -> None:
+        if self.heading_depth == len(self.stack):
+            self.field_headings.append(" ".join("".join(self.heading_text).split()))
+            self.heading_depth = None
+        if self.field_depth == len(self.stack):
+            if self.field_headings != [LESSON_FIELDS[self.field]]:
+                self.errors.append("Lesson section needs its matching visible heading")
+            if not self.field_has_text:
+                self.errors.append(
+                    "Lesson section needs content outside its heading and figures"
+                )
+            self.field = self.field_depth = None
+        if self.lesson_depth == len(self.stack):
+            if self.lesson_fields != list(LESSON_FIELDS):
+                self.errors.append("Lesson needs the four canonical sections in order")
+            if self.lesson_titles != 1:
+                self.errors.append("Lesson needs exactly one opening h2 title")
+            if not self.lesson_diagrams:
+                self.errors.append("Each How it works needs its own inline SVG figure")
+            self.lesson_depth = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         # HTMLParser uses None for attributes without a value. Normalize at
         # the input boundary; required-value checks still reject empty values.
         attributes = {key: value or "" for key, value in attrs}
+        self.start_lesson_element(tag, attributes)
         self.reject_source_markup()
         self.tags[tag] = self.tags.get(tag, 0) + 1
         if len(attributes) != len(attrs):
@@ -82,6 +166,7 @@ class CoursePage(HTMLParser):
                 "srcdoc",
                 "action",
                 "ping",
+                "attributionsrc",
                 "background",
                 "poster",
                 "manifest",
@@ -143,13 +228,19 @@ class CoursePage(HTMLParser):
         if tag == "figure":
             if self.figure is not None:
                 self.errors.append("Nested figures are not supported")
-            self.figure = {"captions": 0, "text": ""}
+            self.figure = {"captions": 0, "text": "", "depth": len(self.stack) + 1}
         if tag == "figcaption":
             if self.figure is None:
                 self.errors.append("Caption must be inside its figure")
             else:
                 self.figure["captions"] += 1
         if tag == "svg":
+            if (
+                self.field == "how-it-works"
+                and self.figure is not None
+                and self.figure["depth"] > self.field_depth
+            ):
+                self.lesson_diagrams += 1
             if self.current_svg is not None:
                 self.errors.append("Nested SVG is not supported")
             self.current_svg = {
@@ -196,6 +287,7 @@ class CoursePage(HTMLParser):
         if not self.stack or self.stack[-1] != tag:
             self.errors.append("Unbalanced HTML structure")
             return
+        self.end_lesson_element()
         if tag == "code":
             self.source = None
         if tag in {"title", "desc"}:
@@ -210,6 +302,19 @@ class CoursePage(HTMLParser):
         self.stack.pop()
 
     def handle_data(self, data: str) -> None:
+        if self.heading_depth is not None:
+            self.heading_text.append(data)
+        elif self.field is not None and data.strip():
+            if not any(
+                tag in self.stack for tag in ("figure", "svg", "h3", "h4", "h5", "h6")
+            ):
+                self.field_has_text = True
+                if not self.field_headings:
+                    self.errors.append(
+                        "Lesson section must start with its visible heading"
+                    )
+        elif self.lesson_depth == len(self.stack) and data.strip():
+            self.errors.append("Lesson text must be inside a canonical section")
         if self.source is not None:
             self.listings[self.source] += data
         if "style" in self.stack:
@@ -239,6 +344,8 @@ class CoursePage(HTMLParser):
                 self.fragments.append(value.strip()[1:])
 
     def finish(self) -> list[str]:
+        if not self.lesson_count:
+            self.errors.append("Expected at least one lesson")
         if self.stack:
             self.errors.append("Unclosed HTML element")
         for tag in ("html", "head", "body", "header", "h1", "nav", "main", "style"):

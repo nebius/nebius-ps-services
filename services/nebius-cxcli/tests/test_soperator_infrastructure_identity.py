@@ -428,6 +428,36 @@ def test_sfs_identity_accepts_typed_nebius_read_write_mode() -> None:
     }
 
 
+def test_sfs_role_mapping_uses_exact_declared_mount_tags_with_sdk_objects() -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.mk8s import v1
+
+    roles = ("accounting", "controller-spool", "jail")
+    attachments = []
+    for role in roles:
+        attachment = v1.AttachedFilesystemSpec()
+        attachment.mount_tag = f"lab-{role}"
+        attachment.attach_mode = v1.AttachedFilesystemSpec.AttachMode.READ_WRITE
+        attachment.existing_filesystem = v1.ExistingFilesystem(id=f"filesystem-{role}")
+        attachments.append(attachment)
+    group = v1.NodeGroup(
+        metadata=ResourceMetadata(id="mk8snodegroup-a"),
+        spec=v1.NodeGroupSpec(template=v1.NodeTemplate(filesystems=attachments)),
+    )
+    bindings = {role: {"mount_tag": f"lab-{role}"} for role in roles}
+    observed = sfs_filesystem_observations_from_node_groups((group,), kubernetes_bindings=bindings)
+    assert {row["role"]: row["mount_tag"] for row in observed} == {
+        role: f"lab-{role}" for role in roles
+    }
+    assert {row["filesystem_id"] for row in observed} == {f"filesystem-{role}" for role in roles}
+    bindings["jail"]["mount_tag"] = "other-jail"
+    with pytest.raises(RuntimeError, match="missing roles: jail"):
+        sfs_filesystem_observations_from_node_groups((group,), kubernetes_bindings=bindings)
+    bindings["jail"]["mount_tag"] = "lab-accounting"
+    with pytest.raises(RuntimeError, match="unique"):
+        sfs_filesystem_observations_from_node_groups((group,), kubernetes_bindings=bindings)
+
+
 def test_discovery_authoritatively_reads_node_group_filesystems(monkeypatch) -> None:
     from nebius.api.nebius.compute import v1 as compute_v1
     from nebius.api.nebius.mk8s import v1 as mk8s_v1

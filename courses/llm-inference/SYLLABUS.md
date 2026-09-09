@@ -26,22 +26,22 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 | Lesson | Topic | Competency to build | Practice at this stage |
 | --- | --- | --- | --- |
-| 1 | Understand inference and prepare a model safely | Establish trusted model identity and compatible metadata before loading | Lab 35 fixed-model mechanics; Lab 16 metadata audit |
-| 2 | Follow tokenization, prefill, decode, and stopping | Trace tokenization, first-token production, cached decoding and stopping | Lab 09; preview Lab 08's cache shapes for Lesson 4 |
-| 3 | Keep sampling and quality semantics fixed | Fix sampling and quality semantics before comparing optimization variants | Lab 17 |
-| 4 | Calculate KV-cache capacity for MHA, GQA, and MQA | Derive per-token KV bytes from model heads, layers and format | Labs 08, 26 |
-| 5 | Define ISL × OSL × concurrency workloads | Specify prompt length, output length and concurrency as a workload | Labs 18, 25 |
-| 6 | Operate vLLM and TensorRT-LLM with Triton | Launch, probe, warm and stop a controlled single-GPU serving engine | Lab 10; Lab 30 probe after engine setup |
-| 7 | Measure TTFT, ITL, TPOT, throughput, and goodput | Separate client metric boundaries and interpret throughput versus goodput | Labs 11 and 15; introductory AIPerf profile |
-| 8 | Allocate and recycle paged KV blocks | Track physical cache blocks through growth, release and reuse | Lab 27 |
-| 9 | Use continuous batching and chunked prefill | Compare scheduling policies with conserved work and real-engine evidence | Labs 28, 34; reuse Lesson 5's Lab 18 padding evidence |
-| 10 | Reuse prefix KV safely | Explain when identical prefixes can safely reuse cached state | Lab 36 CPU retention model, then Labs 20, 34 live prefix policies |
-| 11 | Select SDPA and attention backends by phase | Establish the actual attention backend for fixed prefill/decode shapes | Lab 24 |
-| 12 | Quantize weights and KV with quality gates | Measure representation savings with numerical and quality checks | Lab 29 |
-| 13 | Verify speculative decoding acceptance and recovery | Verify draft acceptance and recovery while preserving output semantics | Labs 23, 33 |
-| 14 | Choose inference DP, TP, PP, and EP | Partition models or requests and measure the resulting serving behavior | Labs 00, 12, 19; batch-one control in Lab 19 |
-| 15 | Benchmark with AIPerf and bound disaggregation claims | Design token-aware campaigns and bound optional disaggregation claims | Lab 30 revisit; AIPerf campaign and optional disaggregation study |
-| 16 | Deliver a causal inference optimization report | Distinguish attention microbenchmarks from end-to-end serving acceptance | Lab 32 |
+| 1 | Model inference and artifact preparation | Establish trusted model identity and compatible metadata before loading | Lab 35 fixed-model mechanics; Lab 16 metadata audit |
+| 2 | Autoregressive generation | Trace tokenization, first-token production, cached decoding and stopping | Lab 09; preview Lab 08's cache shapes for Lesson 4 |
+| 3 | Decoding policy and output quality | Fix sampling and quality semantics before comparing optimization variants | Lab 17 |
+| 4 | Attention-cache capacity | Derive per-token KV bytes from model heads, layers and format | Labs 08, 26 |
+| 5 | Inference workload shape | Specify prompt length, output length and concurrency as a workload | Labs 18, 25 |
+| 6 | Model-serving architecture | Launch, probe, warm and stop a controlled single-GPU serving engine | Lab 10; Lab 30 probe after engine setup |
+| 7 | Serving latency and useful throughput | Separate client metric boundaries and interpret throughput versus goodput | Labs 11 and 15; introductory AIPerf profile |
+| 8 | Attention-cache allocation and reclamation | Track physical cache blocks through growth, release and reuse | Lab 27 |
+| 9 | Request scheduling and prompt chunking | Compare scheduling policies with conserved work and real-engine evidence | Labs 28, 34; reuse Lesson 5's Lab 18 padding evidence |
+| 10 | Prefix reuse and cache retention | Explain when identical prefixes can safely reuse cached state | Lab 36 CPU retention model, then Labs 20, 34 live prefix policies |
+| 11 | Efficient attention execution | Establish the actual attention backend for fixed prefill/decode shapes | Lab 24 |
+| 12 | Quantized inference representations | Measure representation savings with numerical and quality checks | Lab 29 |
+| 13 | Speculative generation | Verify draft acceptance and recovery while preserving output semantics | Labs 23, 33 |
+| 14 | Distributed inference placement | Partition models or requests and measure the resulting serving behavior | Labs 00, 12, 19; batch-one control in Lab 19 |
+| 15 | Serving workloads and phase separation | Design token-aware campaigns and bound optional disaggregation claims | Lab 30 revisit; AIPerf campaign and optional disaggregation study |
+| 16 | Evidence-based inference optimization | Distinguish attention microbenchmarks from end-to-end serving acceptance | Lab 32 |
 
 ## Readiness checkpoints
 

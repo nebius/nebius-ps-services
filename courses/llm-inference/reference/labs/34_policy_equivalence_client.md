@@ -10,6 +10,8 @@ Qualify the live engine and client environment, immutable model revision, and ca
 
 ## Concepts and code path
 
+Each response digest is SHA-256 of the returned text's encoded bytes. Compare matched prompts, sampling settings and artifact identity within the owning campaign.
+
 The client selects a declared fixed workload, sends greedy seeded requests, requires generated text, and writes response digests with workload and variant identity. It does not start an engine or compare another record itself. The campaign launcher manages policy changes, restarts, paired comparison, independent trials, and cleanup, then associates benchmark evidence with the same policy contract.
 
 ## Practice

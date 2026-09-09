@@ -93,11 +93,11 @@ def test_light_palette_contrast_and_responsive_reading_rules() -> None:
 def test_all_course_lessons_labs_and_diagrams_remain_published() -> None:
     builder = load_builder()
     counts = {
-        "gpu-fundamentals": (12, 13, 26),
-        "gpu-optimizations": (13, 19, 26),
-        "llm-training": (16, 24, 18),
-        "llm-inference": (16, 25, 25),
-        "custom-cuda-kernels": (16, 13, 13),
+        "gpu-fundamentals": (12, 13, 27),
+        "gpu-optimizations": (13, 19, 28),
+        "llm-training": (16, 24, 22),
+        "llm-inference": (16, 25, 28),
+        "custom-cuda-kernels": (16, 13, 17),
     }
     for course, expected in counts.items():
         root = ROOT / course

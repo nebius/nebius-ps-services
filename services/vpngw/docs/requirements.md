@@ -2397,5 +2397,251 @@ test demonstrates the fail-closed postcondition independently of live cloud
 state.
 
 <!-- /REQUIREMENT: REQ-017 -->
+<!-- REQUIREMENT: REQ-018 status=active priority=P0 type=reliability -->
+### REQ-018: Apply compatible gateway updates with exact confirmation
+
+#### User Story
+
+Operators can apply the current release to existing ordinary and HA gateways
+without changing their configuration schema, persisted formats, cloud identity,
+SSH trust, or ownership contracts. This explicit compatibility requirement also
+covers previously released agents. Missing new capabilities require an approved
+in-place upgrade, never an automatic recreation or a version-only rejection.
+
+#### Acceptance Criteria
+
+- Ordinary apply inspects configuration, installed artifact contents and
+  dependencies, and local runtime before changes. Healthy unchanged gateways
+  receive fresh verification without config writes, installation, or restarts.
+- Potential VPN interruption requires default-No interactive confirmation or
+  `--approve-disruption` with the exact plan digest. Dry-run reports that plan.
+  Approval binds target identities, predecessor observations, desired artifacts,
+  dependencies, and effects; stale approval fails before gateway mutation.
+- Successful ordinary deployment requires a bounded synchronous agent receipt
+  matching the request, exact configuration bytes, boot, and installed artifact.
+  Required local reconciliation and verification errors exit nonzero. Peer
+  reachability, established SAs, and BGP sessions remain informational.
+- Installation, publication, reconciliation, service activation, and final
+  verification are serialized and bounded. State is saved only after local
+  invariants pass. Failure reports partial progress and stops later targets.
+- Ordinary operations have inclusive 300-second reconciliation, 600-second remote
+  and 630-second client deadlines. Accepted systemd jobs and networkd changes
+  outlive command processes; unresolved work retains durable exclusive admission
+  after process locks are released. Every product ordinary writer checks it under
+  the routing lock. No uncertain submission is blindly retried or cancelled.
+- A root-owned journal binds intent before effects to the operation, boot, exact
+  owner/process identity, predecessor and desired artifacts. Success requires
+  independently observed settlement and durable journal completion. Corrupt or
+  ambiguous evidence blocks mutation. Read-only inspection never clears evidence.
+- Previous-release management writers must be quiescent before upgrade publication.
+  Durable inert startup preconditions precede reservation so a reboot during a
+  partial package upgrade cannot restart an old unguarded management service.
+  Ordinary service units and the product bootstrap drop-in must not implicitly
+  start dataplane services before guard admission. Established HA ownership remains
+  unchanged; conversion admits no unresolved ordinary operation.
+- Recovery requires fresh current observations and disruption approval bound to
+  the previous journal. Dead owners, absent jobs, elapsed time or a reboot alone
+  never authorize clearing it. No automatic reboot, rollback or dataplane shutdown
+  is added. Normal product Nebius Ubuntu/networkd gateways are the supported scope.
+- Raw SDK stubs receive protobuf requests within the existing SDK constraint.
+  New-VM bootstrap installs FRR before assigning its account-owned files and
+  propagates required-step failures. Missing disks, targets, or readiness and
+  failed provisioning or SSH deployment cannot produce a success banner.
+- HA fencing, controller-only activation, staged receipts, and existing exact
+  lifecycle approvals remain authoritative. No upgrade can bypass them.
+
+- HA package planning binds immutable artifact, dependency, environment, target and
+  configuration predecessors independently from runtime admission. The retained
+  ordinary handoff owns package effects; its approved journal and service-stop
+  transitions cannot invalidate its own package plan. Unrelated drift still fails.
+- Interrupted conversion selects recovery from exact operational evidence, never
+  SSH provenance alone. Pre-marker recovery retains ordinary exclusion; after the
+  marker, canonical HA recovery owns repair. Marker presence alone grants no authority.
+- An unfinished conversion may repair the retained host's damaged package, including
+  failed product imports, only with fresh exact approval, both exact-generation
+  apply locks, current-boot forwarding exclusion and settled authoritative effects.
+  Durable startup exclusion and a package-independent cold guard survive interruption.
+  Repair preserves configuration, credentials, cloud identity and controller ownership.
+- Pending handoffs recover after completed package writes or first-start interruption.
+  Completed handoffs do not require repair locks for healthy HA convergence. Initial
+  checkpoint publication uses canonical empty state and never replaces durable
+  controller evidence or manufactures readiness.
+
+- Approved ordinary applies retire obsolete IPv4 static remote routes only with
+  validated predecessor configuration and exact current kernel ownership evidence.
+  Prefix removal, tunnel disabling/removal, positional reuse and static-to-BGP
+  transitions are covered. Desired, foreign and FRR-owned routes are preserved.
+- Route retirement evidence survives partial publication and state replacement.
+  Fresh approval and settled prior writers are required for recovery; retained
+  absence history never grants automatic deletion authority. Unchanged older
+  gateways and route-equivalent upgrades remain supported without historical state.
+- Route cleanup preserves interface/address/neighbor resources, public formats and
+  HA authority. Background reconciliation cannot acquire implicit retirement approval.
+
+#### Negative Criteria
+
+- No automatic failed-cloud-init repair, gateway recreation, rollback, fleet
+inventory requirement, SDK migration, or SSH multi-key expansion is included.
+An actual upgrade does not promise zero traffic interruption.
+
+#### Validation Method
+
+Run real serializer, generated-shell failure injection, exact-receipt,
+no-mutation approval/no-op, prior-release upgrade, timeout, and composed HA
+regressions. Run source gates and isolated wheel tests across the supported
+SDK range. Live compatibility requires separately authorized gateway trials.
+
+#### Test Method
+
+Use deterministic local subprocess and SSH fixtures with effect spies; reject
+stale, malformed, incomplete, or failed evidence. Keep cloud calls disabled.
+
+#### Evaluation Method
+
+Distinguish source, installed-wheel, CI, and live evidence. Do not infer live
+compatibility or non-interruption from offline tests.
+
+`ALIGN-JOB-001` is implemented and locally verified with a durable admission
+journal, exact systemd submissions, action-specific results, networkd convergence,
+previous-release startup protection and an exclusion handoff to existing HA
+activation authority. The isolated Linux lane proves a manager job can finish
+after its caller dies while another ordinary writer remains blocked. It also
+covers failed reloads, lost replies, interrupted handoff recovery, old/partial
+package startup, effective dependencies and native Netplan behavior. Source,
+installed-wheel, CI and live evidence remain distinct; CI execution and live
+ordinary/HA upgrade canaries have not been performed in this implementation turn.
+
+`ALIGN-WIRING-001` is implemented with composed migration and HA package-repair
+regressions, including fresh approval after interruption and damaged-import recovery.
+The final local gates passed 2,423 unit tests, 100 integration/build checks and
+12 isolated systemd/networkd checks. The same installed wheel passed 87 focused
+checks for each supported SDK sample (0.3.18, 0.3.40 and 0.3.101), along with
+installed-origin, dependency, capability and CLI-help verification. Canonical
+controller, credential, cloud and lifecycle authority remain unchanged. This
+requirement stays active pending independently authorized live compatibility trials.
+
+The subsequent alignment passed 2,536 host tests and 14 isolated systemd/networkd
+tests after repairing ordinary whole-process-group settlement, stale-route
+verification on configured static interfaces and empty table-220 cleanup.
+`ALIGN-ROUTE-002` was deferred by that alignment until predecessor-bound ownership
+could authorize exact cleanup and negative verification.
+The accepted route-retirement remediation is now implemented: approved, exact
+ordinary static route cleanup precedes interface reuse, and durable evidence proves
+absence across success, unchanged checks and interrupted retries. Fresh validation
+passed 2,578 host tests (including installed-wheel and frozen-binary checks) and
+16 isolated Ubuntu systemd/networkd tests with real XFRM interfaces. Ruff, mypy,
+Markdown and paired-spec checks passed. No live gateway or remote CI trial was run;
+this evidence does not establish live compatibility or satisfy this requirement.
+
+A follow-up alignment repaired full-source SSH argument overflow and fresh-retry
+proof binding after a lost final reply. Source and JSON use bounded binary stdin
+within the original remote deadline; active mutating retries publish the new
+operation binding even when the preceding runtime proof remains valid. Fresh
+validation passed 2,581 host tests and three isolated Linux transport tests.
+The earlier 16 systemd/XFRM cases were not repeated in this follow-up. Remote CI
+and live gateway validation remain outstanding.
+
+Subsequent read-only verification of an operator-updated retained HA pair confirmed
+the expected generation, established IPsec/BGP sessions, exclusive forwarding,
+cloud allocation ownership and released operation locks. The exact issue-190
+lookup succeeded against both members with SDK 0.3.101; the former facade request
+still failed the local raw serializer. This proves the lookup boundary and current
+HA state, not fresh provisioning or an independently observed upgrade transition.
+An additional planning defect was repaired: missing disk evidence for an existing
+VM can no longer become a new-VM creation plan. Both modes inspect the exact
+Compute-attached disk and reject missing or inexact evidence before deployment.
+Fresh validation passed 2,598 host tests and 76 focused checks on SDK 0.3.18.
+The 19 dedicated Linux cases were not repeated in this investigation. Fresh
+ordinary creation/recreation, interrupted live apply, workload forwarding and
+reboot/failover acceptance remain unverified; this requirement remains active.
+
+A subsequent fresh ordinary gateway exposed admission failures on the supported
+Ubuntu/FRR environment: a pre-package agent restart wait and an absent optional
+FRR failure handler. The repair admits only process-free, job-free management
+restart waits for planning; the existing journaled stop and strict settlement
+remain mandatory before publication. Inactive unit definitions are loaded for
+inspection, and exact failure-handler absence is bound to the approval evidence.
+Agent units wait for their first resolved configuration. Focused host regressions
+and real systemd admission/startup checks pass; the subsequent isolated live
+lifecycle replay completed as recorded below.
+
+The ordinary reapply trial also exposed URL policy checks running before optional
+dependency markers. Inspection now excludes inactive environment and extra
+requirements first, preserving rejection of active direct URL requirements. Two
+new negative-oracle regressions reproduced the failure; all 94 affected host
+checks pass after the private dependency-inspection repair.
+
+Ordinary-to-HA conversion must admit the apply planner's exact `migration` /
+`migrate` managed-trust action through the existing migration approval. The
+public command previously rejected this required handoff before provisioning.
+The trust receipt remains bound to the approval digest and the whole plan is
+revalidated under the deployment lock and at the apply pre-effect boundary.
+Other trust repairs, identity rotations and destructive plans remain gated.
+
+Migration approval must remain stable across unchanged read-only plans when the
+standby has no adopted identity. Bind exact retained trust and predecessor
+evidence plus the scoped intent to generate a default product-owned Ed25519 key
+for the absent member. Dry-run must not persist that key. Execution still
+publishes and verifies an exact generated identity before SSH; operator-supplied
+keys and already-adopted member pins remain bound exactly.
+
+The final durable-intent check must preserve ordinary admission evidence already
+revalidated by the exact held reservation while freshly checking cloud authority.
+The holder's own journal transition must not invalidate its approval, and cloud
+identity drift after reservation must still prevent durable intent publication.
+
+The one validated management public-key record must remain an exact YAML string
+in ordinary and HA cloud-init, including YAML-sensitive comments. Existing
+single-key client admission must reject multi-key input before provisioning.
+
+The completed isolated Classic VPN trial exercised actual guided configuration,
+validation, fresh ordinary apply/status, ordinary-to-HA conversion and final
+status. Both fresh VMs completed bootstrap without cloud-init errors. Real route
+creation with SDK 0.3.101 passed. The resulting HA pair had one cloud-confirmed
+forwarding owner, a ready cold static standby, healthy mTLS, complete ordinary
+handoff and no pending apply operation. The workload route followed the shared
+allocation, and gateway-originated private-peer pings passed before and after
+conversion. The preexisting HA pair remained healthy. Product retries performed
+all recovery; no guest guard, service or journal was manually changed.
+
+This closes the declared creation/conversion trial, not all compatibility
+acceptance: destructive recreation, forced failover, post-deployment reboot,
+workload-originated forwarding and remote CI remain unverified. Source regression
+coverage includes the other PR-179 failure branches and safe SSH-key YAML rendering;
+PR-179's multi-key extension is excluded by the existing single-identity contract.
+The requirement remains active for its broader acceptance criteria.
+
+Ordinary and HA `apply`, including dry-run, must report missing environment
+placeholders as a concise nonzero configuration error before acquiring a writer
+lock or entering cloud/deployment work. The diagnostic may name missing variables
+and explain shell setup, but must not expose configuration or secret values.
+Missing credentials remain blocking; existing literal and environment-reference
+configuration behavior is preserved.
+
+Focused verification covers ordinary/HA and dry-run missing-variable admission,
+safe diagnostics, zero pre-admission effects and valid-input continuation. The
+operator-approved private configuration also completed live apply with its PSK
+environment variables absent, preserving the existing configuration generation.
+
+Ordinary static tunnels sharing an identical IPv4 destination retain the existing
+last-enabled-tunnel selection in resolved per-VM order. Verification must require
+that effective owner and reject remote routes on superseded static interfaces.
+Distinct overlapping networks remain independent. Connected inner-subnet exceptions
+require kernel protocol, link scope, the configured interface and no gateway or
+multipath. Full historical claims, route-retirement formulas, persisted schemas,
+approval and recovery rules remain unchanged; HA and BGP arbitration are unaffected.
+Acceptance covers the shipped shared-prefix example, wrong-owner rejection,
+transitions, unchanged reapply and old-format interrupted-operation recovery, plus
+real XFRM route replacement in the isolated Linux lane.
+
+Source regressions, existing-record recovery, unchanged reapply and package checks
+pass for this correction. The four shared-static kernel cases also pass on each
+of two existing HA test gateway standby kernels, using current source and synthetic
+ordinary configuration in private namespaces. Gateway configuration, service and
+network snapshots remain unchanged, and both deployments remain healthy afterward.
+This verifies route writing and verification on real XFRM interfaces; the complete
+systemd suite, ordinary deployment lifecycle and HA failover are separate evidence.
+
+<!-- /REQUIREMENT: REQ-018 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

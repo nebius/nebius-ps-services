@@ -9,87 +9,87 @@ from test_course_content_contract import lab_section, COURSES, ROOT, load_builde
 
 EXPECTED_ORDER = {
     "gpu-fundamentals": [
-        "Separate CPU work, GPU work, and orchestration",
-        "Read the driver, runtime, toolkit, PTX, SASS, and framework stack",
-        "Map H100, GPCs, SMs, warps, and Tensor Cores",
-        "Follow data through registers, caches, shared memory, and HBM",
-        "Reason about SIMT divergence and independent work",
-        "Use occupancy to hide latency rather than chase a maximum",
-        "Make global memory accesses coalesced",
-        "Time transfers, streams, and synchronization correctly",
-        "Choose precision and Tensor Core paths deliberately",
-        "Classify workloads with arithmetic intensity and roofline",
-        "Read sharing and health state without changing it",
-        "Understand GPU networking, topology, and collectives",
+        "CPU–GPU cooperation",
+        "GPU execution software layers",
+        "GPU execution architecture",
+        "GPU memory hierarchy",
+        "Parallel control flow",
+        "Occupancy and latency hiding",
+        "Memory access efficiency",
+        "Asynchronous execution and timing",
+        "Numerical precision and accelerated arithmetic",
+        "Arithmetic intensity and performance limits",
+        "GPU sharing and operational health",
+        "GPU communication and distributed execution",
     ],
     "gpu-optimizations": [
-        "Freeze the workload and correctness contract",
-        "Measure asynchronous GPU work correctly",
-        "Select Nsight Systems, PyTorch Profiler, or Nsight Compute",
-        "Reduce launch and Python overhead",
-        "Use CUDA Graphs only for stable execution",
-        "Keep the input pipeline ahead of the GPU",
-        "Optimize memory layout and intermediate traffic",
-        "Manage allocator lifetime and peak memory",
-        "Select shapes and precision for efficient libraries",
-        "Find load imbalance and tail waves",
-        "Qualify GPU networking and tune NCCL with evidence",
-        "Diagnose distributed scaling and collective overlap",
-        "Decide between framework, library, compiler, and custom kernel paths",
+        "Controlled GPU optimization",
+        "Asynchronous performance measurement",
+        "Performance evidence and profiling",
+        "Submission overhead and kernel fusion",
+        "Reusable GPU execution plans",
+        "Input readiness and transfer overlap",
+        "Tensor layout and memory traffic",
+        "Memory allocation and ownership",
+        "Efficient numerical-library execution",
+        "Parallel imbalance and completion tails",
+        "GPU communication paths and performance",
+        "Distributed scaling and communication overlap",
+        "Choosing an optimization layer",
     ],
     "llm-training": [
-        "Understand model training and its learning objective",
-        "Build causal batches with tokens, labels, masks, and packing",
-        "Trace a decoder-only transformer",
-        "Execute a correct training step",
-        "Evaluate, checkpoint, and resume exactly",
-        "Build a training memory ledger",
-        "Use BF16, FP16, and FP8 without losing the signal",
-        "Trade accumulation and recomputation for memory",
-        "Prevent input-pipeline starvation",
-        "Profile fused operations and CUDA Graphs in training",
-        "Choose DDP and FSDP2 from state placement",
-        "Understand TP, PP, CP, and EP mechanics",
-        "Overlap communication with useful backward work",
-        "Perform SFT and LoRA with explicit savings",
-        "Understand GRPO objective and system loop",
-        "Deliver a causal training optimization report",
+        "Model learning and training objectives",
+        "Causal training data",
+        "Decoder architecture and information flow",
+        "The parameter-update lifecycle",
+        "Training evaluation and recovery",
+        "Training memory and state lifetimes",
+        "Numerical precision in training",
+        "Memory savings through accumulation and recomputation",
+        "Training input readiness",
+        "Training execution optimization",
+        "Distributed training-state ownership",
+        "Model partitioning and communication",
+        "Gradient readiness and communication overlap",
+        "Parameter-efficient adaptation",
+        "Reward-guided policy optimization",
+        "Evidence-based training optimization",
     ],
     "llm-inference": [
-        "Understand inference and prepare a model safely",
-        "Follow tokenization, prefill, decode, and stopping",
-        "Keep sampling and quality semantics fixed",
-        "Calculate KV-cache capacity for MHA, GQA, and MQA",
-        "Define ISL × OSL × concurrency workloads",
-        "Operate vLLM and TensorRT-LLM with Triton",
-        "Measure TTFT, ITL, TPOT, throughput, and goodput",
-        "Allocate and recycle paged KV blocks",
-        "Use continuous batching and chunked prefill",
-        "Reuse prefix KV safely",
-        "Select SDPA and attention backends by phase",
-        "Quantize weights and KV with quality gates",
-        "Verify speculative decoding acceptance and recovery",
-        "Choose inference DP, TP, PP, and EP",
-        "Benchmark with AIPerf and bound disaggregation claims",
-        "Deliver a causal inference optimization report",
+        "Model inference and artifact preparation",
+        "Autoregressive generation",
+        "Decoding policy and output quality",
+        "Attention-cache capacity",
+        "Inference workload shape",
+        "Model-serving architecture",
+        "Serving latency and useful throughput",
+        "Attention-cache allocation and reclamation",
+        "Request scheduling and prompt chunking",
+        "Prefix reuse and cache retention",
+        "Efficient attention execution",
+        "Quantized inference representations",
+        "Speculative generation",
+        "Distributed inference placement",
+        "Serving workloads and phase separation",
+        "Evidence-based inference optimization",
     ],
     "custom-cuda-kernels": [
-        "Decide whether a custom kernel is justified",
-        "Build and inspect an SM90 CUDA program",
-        "Launch a correct vector kernel",
-        "Validate with sanitizers and focused profilers",
-        "Fuse elementwise work to remove HBM traffic",
-        "Coalesce global memory and tile a transpose",
-        "Reduce with warp, block, atomic, and CUB paths",
-        "Reuse halos in a shared-memory stencil",
-        "Balance blocks, registers, spills, and occupancy",
-        "Diagnose divergence, imbalance, and tail waves",
-        "Pipeline global-to-shared copies",
-        "Preserve library GEMM and customize the epilogue",
-        "Fuse residual addition and RMSNorm",
-        "Complete a production acceptance capstone",
-        "Gate H100 TMA and thread-block clusters",
-        "Optional appendix: Evaluate CUDA Tile C++",
+        "Custom kernel decision making",
+        "CUDA compilation and execution targets",
+        "Kernel indexing and execution safety",
+        "Kernel correctness and performance evidence",
+        "Elementwise kernel fusion",
+        "Memory layout and tiled transposition",
+        "Parallel reductions",
+        "Neighborhood reuse and boundary handling",
+        "Kernel resource use and occupancy",
+        "Parallel workload balance",
+        "Asynchronous memory pipelines",
+        "Matrix multiplication and output fusion",
+        "Residual connections and normalization",
+        "Kernel acceptance and integration",
+        "Advanced GPU data movement and cooperation",
+        "Tile-level kernel programming",
     ],
 }
 
@@ -144,17 +144,20 @@ def lesson(course, title):
 
 def test_foundations_teaches_basic_timing_before_first_benchmark():
     entry = lesson("gpu-fundamentals", EXPECTED_ORDER["gpu-fundamentals"][0])
-    assert "warm-up" in entry["Mechanism"]
+    assert "timing" in entry["How it works"]
+    concepts = lab_section("gpu-fundamentals", 1, "Concepts and code path").lower()
+    assert "warm-up" in concepts and "cuda events" in concepts
     assert "preflight" in lab_section("gpu-fundamentals", 1, "Practice").lower()
     assert "Lesson 10" in lab_section("gpu-fundamentals", 4, "Practice")
     assert "defer" in lab_section("gpu-fundamentals", 4, "Practice").lower()
 
 
 def test_training_previews_do_not_require_advanced_execution():
-    assert "read-only preview" in lab_section("llm-training", 32, "Practice")
-    assert "Do not run" in lab_section("llm-training", 32, "Practice")
+    practice = lab_section("llm-training", 32, "Practice")
+    assert "CPU example first" in practice
+    assert "leave SFT/LoRA and GRPO for Lessons 14–15" in practice
     batching = lesson("llm-training", EXPECTED_ORDER["llm-training"][1])
-    assert "logits" in batching["Prerequisite bridge"]
+    assert "logits" in batching["How it works"]
     assert "Lesson 4" in lab_section("llm-training", 25, "Practice")
     assert "Lab 25's packing-plan and causal-mask checks now" in lab_section(
         "llm-training", 25, "Practice"
@@ -162,17 +165,18 @@ def test_training_previews_do_not_require_advanced_execution():
     assert "does not execute transformer training" in lab_section(
         "llm-training", 25, "Practice"
     )
-    local = lesson(
-        "llm-training", "Profile fused operations and CUDA Graphs in training"
-    )
-    assert "Communication overlap shortens" not in local["Prerequisite bridge"]
+    local = lesson("llm-training", "Training execution optimization")
+    assert "Communication overlap shortens" not in local["How it works"]
 
 
 def test_inference_starts_with_basic_engine_then_advanced_work():
     assert "single-GPU" in lab_section("llm-inference", 30, "Practice")
     assert "advanced" in lab_section("llm-inference", 30, "Practice").lower()
     metrics = lesson("llm-inference", EXPECTED_ORDER["llm-inference"][6])
-    assert "AIPerf" in metrics["Mechanism"]
+    # Both metrics belong here; the explanation should distinguish them.
+    assert all(term in metrics["How it works"] for term in ("ITL", "TPOT"))
+    practice = lab_section("llm-inference", 15, "Practice")
+    assert "AIPerf" in practice and "slurm/aiperf.sbatch" in practice
 
 
 def test_cuda_safety_practice_uses_completed_vector_lab():
@@ -183,7 +187,7 @@ def test_cuda_safety_practice_uses_completed_vector_lab():
     safety = next(
         i
         for i, row in enumerate(lessons, 1)
-        if row["title"] == "Validate with sanitizers and focused profilers"
+        if row["title"] == "Kernel correctness and performance evidence"
     )
     vector = next(row for row in data["labs"] if row["path"] == "labs/01_vector_add.cu")
     capstone = next(row for row in data["labs"] if row["path"] == "labs/12_capstone.cu")
@@ -225,44 +229,44 @@ def test_two_node_preflight_is_assigned_only_after_local_foundations(
         (
             "gpu-fundamentals",
             "04_layout_and_coalescing",
-            "Make global memory accesses coalesced",
+            "Memory access efficiency",
         ),
         (
             "gpu-fundamentals",
             "05_roofline_microbench",
-            "Classify workloads with arithmetic intensity and roofline",
+            "Arithmetic intensity and performance limits",
         ),
         (
             "gpu-optimizations",
             "15_tail_load_balance",
-            "Find load imbalance and tail waves",
+            "Parallel imbalance and completion tails",
         ),
         (
             "gpu-optimizations",
             "13_collective_overlap",
-            "Diagnose distributed scaling and collective overlap",
+            "Distributed scaling and communication overlap",
         ),
-        ("llm-training", "05_lora_sft", "Perform SFT and LoRA with explicit savings"),
+        ("llm-training", "05_lora_sft", "Parameter-efficient adaptation"),
         (
             "llm-training",
             "27_fused_graph_trace",
-            "Profile fused operations and CUDA Graphs in training",
+            "Training execution optimization",
         ),
-        ("llm-inference", "20_prefix_cache_client", "Reuse prefix KV safely"),
+        ("llm-inference", "20_prefix_cache_client", "Prefix reuse and cache retention"),
         (
             "llm-inference",
             "30_engine_profile",
-            "Operate vLLM and TensorRT-LLM with Triton",
+            "Model-serving architecture",
         ),
         (
             "custom-cuda-kernels",
             "07_resource_sweep",
-            "Balance blocks, registers, spills, and occupancy",
+            "Kernel resource use and occupancy",
         ),
         (
             "custom-cuda-kernels",
             "10_hopper_cluster",
-            "Gate H100 TMA and thread-block clusters",
+            "Advanced GPU data movement and cooperation",
         ),
     ),
 )

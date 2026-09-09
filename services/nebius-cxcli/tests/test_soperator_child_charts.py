@@ -147,7 +147,10 @@ def test_soperator_child_chart_warnings_flag_activechecks_training_impact() -> N
 
     assert len(warnings) == 1
     assert "ActiveChecks are enabled for target cluster1" in warnings[0]
-    assert "not production training clusters" in warnings[0]
+    assert "validated before customer handoff" in warnings[0]
+    assert "reviewed passive diagnostics pause during isolated" in warnings[0]
+    assert "selected job policy are preserved" in warnings[0]
+    assert "Unreviewed passive checks remain enabled" in warnings[0]
 
 
 def test_soperator_child_chart_warnings_flag_checks_controller_without_activechecks() -> None:
@@ -170,14 +173,7 @@ def test_soperator_child_chart_warnings_flag_checks_controller_without_activeche
 
     warnings = soperator_child_chart_warnings(payload)
 
-    assert len(warnings) == 1
-    assert "checks controller is enabled for target cluster1" in warnings[0]
-    assert "does not run GPU benchmarks by itself" in warnings[0]
-    assert "SlurmNodeDrain" in warnings[0]
-    assert "NebiusMaintenanceScheduled" in warnings[0]
-    assert "graceful maintenance drain/node handoff" in warnings[0]
-    assert "actual host reboot signal" in warnings[0]
-    assert "Soperator-managed node maintenance automation" in warnings[0]
+    assert warnings == ()
 
 
 def test_soperator_child_chart_warnings_flag_rebooter_host_maintenance() -> None:

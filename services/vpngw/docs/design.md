@@ -4027,6 +4027,726 @@ false status, and the focused and repository quality gates pass.
   failback operation was performed.
 
 <!-- /FEATURE: FEAT-016 -->
+<!-- FEATURE: FEAT-017 reqs=REQ-018 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-017: Compatible, serialized, agent-confirmed apply
+
+#### Requirements Covered
+
+- REQ-018: Apply compatible gateway updates with exact confirmation.
+
+#### Context Evidence
+
+Issue 190 identified a facade request passed to a raw gRPC serializer. PR 179
+also identified FRR account ordering and ordinary apply false success; its
+pagination and disk-discovery changes were superseded by current code. The
+baseline apply reinstalled packages and could finish after SSH failures.
+
+#### Design Details
+
+Use the generated raw metadata request at the raw stub. Stage FRR daemons as
+root outside `/etc/frr`, install from the existing channel, then install the
+final file with FRR ownership before startup. Generated required shell steps
+propagate failure; ESP4 deferred startup and optional maintenance remain.
+
+Ordinary deployment has inspect, plan, approve, execute, and verify boundaries.
+Bind a canonical digest to exact targets, predecessor observations, config and
+wheel bytes, dependency decisions, and service/network effects. A healthy
+no-op verifies without mutation. Unknown or changed runtime is potentially
+disruptive. Interactive approval defaults to No; automation supplies
+`apply --approve-disruption DIGEST`. Recheck under a process-lifetime deployment
+lock before installation or publication. Preserve compatible dependencies.
+Install only selected dependency wheels with the shared distro-aware installer:
+shadow a distribution lacking an uninstall record only when it is outside pip's
+destination directories; replace pip-owned distributions normally. HA package
+preflight uses a typed HA-specific package contract, omits fresh/replaced members
+using the existing lifecycle enrollment set, and retains exact immutable predecessor
+checks on every retained member independently of ordinary runtime admission. Fresh/recovery
+HA installation without a preflight plan retains its existing package path.
+
+Use one synchronous private `--ordinary-apply` action, with a fresh request ID,
+raw config SHA256 and boot ID. Under the routing lock, validate one snapshot,
+reject HA, reconcile ordinary owned state strictly, verify it, then save the
+existing state format. Emit one bounded terminal JSON receipt; suppress helper
+output and expose safe stages/codes, never command or config bytes.
+Previous agents first take the approved package upgrade path. A management
+service being active is insufficient confirmation.
+
+The serialized remote transaction stages and validates inputs, quiesces the
+management agent when mutation is necessary, publishes atomically under the
+routing lock, invokes reconciliation, starts the agent, and verifies again.
+Reconciliation has a 300-second budget within a 600-second transaction and
+630-second client deadline; terminate descendants before releasing locks.
+Failures stop later targets and report completed/failed/unattempted work.
+HA retains its staged-receipt and controller-owned activation branches, with
+disruption approval composed with existing effect-bound lifecycle approval.
+
+#### Selected Option
+
+Extend existing artifact, SSH, renderer and lock owners. Add synchronous
+ordinary confirmation without a persistent request queue or config migration.
+
+#### Alternatives Considered
+
+Service-active or upload-only success cannot prove configuration acceptance.
+A daemon mailbox adds another persisted protocol. Blind package reinstall
+breaks idempotency. Merging the old PR would restore obsolete paths.
+
+#### Implementation Boundaries
+
+Deploy owns artifact planning, approval, transaction and receipt validation.
+Agent owns local ordinary reconciliation and observation. Existing HA owners
+retain all promotion, fencing, routing and lifecycle authority.
+
+#### Test-First Success Criteria
+
+- Reproduce serializer and bootstrap failures, and ordinary false success, before
+fixing them. Prove no gateway effects on no-op or absent, declined or stale
+approval; prove exact request/boot/config receipts and timeout cleanup.
+
+#### Validation Plan
+
+Focused regressions precede full unit/integration, Ruff, mypy, packaging, CLI
+help and documentation alignment. Install built wheels outside the checkout
+with SDK 0.3.18, 0.3.40 and 0.3.101. Preserve composed HA tests.
+
+#### Test Plan
+
+Use shell command stubs, real protobuf serialization and bounded subprocess
+and SSH fakes. Include runtime drift, partial multi-target failure, prior-agent
+capability absence, unchanged dependencies and stale approval races.
+
+#### Evaluation Plan
+
+Record source and wheel evidence separately; live ordinary and HA upgrades
+need separate authorization and cannot be claimed from offline evidence.
+
+#### Rollout And Rollback
+
+Upgrade existing agents through the approved in-place path. Do not rerun
+cloud-init or recreate failed gateways automatically. On failure stop, report
+the failed stage, preserve state for inspection, and require a fresh plan.
+No automatic rollback or downgrade is included.
+
+#### Done Definition
+
+Required local and wheel gates pass, docs agree with behavior, and all remaining
+live validation limits are reported explicitly.
+
+#### Implementation Evidence
+
+Implemented raw protobuf lookup and required bootstrap/provisioning gates in
+the existing managers. Ordinary deployment uses `ordinary_apply.py` for artifact
+and dependency planning, `ordinary_remote.py` for the serialized transaction,
+and `agent/ordinary.py` with `local_commands.py` for exact local confirmation.
+The standalone binary includes the runner source needed for previous-agent
+upgrades. Existing renderer entry points retain HA activation behavior. CLI approval and
+no-op paths preserve existing identities and state schemas; HA continues through
+its existing lifecycle/controller owners. README and Unreleased notes document
+upgrade approval, unchanged verification, partial failures, and bootstrap recovery.
+
+#### Verification Evidence
+
+Offline unit tests cover real raw-stub serialization, generated bootstrap failures,
+release 0.6.0 state/capability compatibility, approved upgrade and no-op transactions,
+stale approval, artifact/permission/dependency races, local invariants, descendant
+cleanup, and HA no-op/authority regressions. All 2,357 unit tests passed, as did 83
+integration checks; the remaining frozen-binary check passed separately in an
+isolated environment with the declared PyInstaller dependency. Ruff, mypy,
+shell checks and Markdown checks passed. The built wheel passed installed-origin
+serializer, exact package-byte, capability and CLI-help checks with SDK 0.3.18,
+0.3.40 and 0.3.101. Linux-target dependency resolution and wheel integrity were
+checked with the real resolver. These are local/offline and installed-package
+results; CI and live ordinary/HA gateway upgrade trials have not been run.
+
+The subsequent alignment review repaired HA retired-member predecessor binding
+(`ALIGN-HA-001`) and distro dependency installation (`ALIGN-DEP-001`). An isolated
+pip regression reproduces the missing-RECORD failure and verifies effective
+imports, preservation of distro files, and removal of obsolete pip metadata.
+The alignment pass passed all 2,364 unit tests and 84 integration tests, including
+wheel construction and isolated dependency installation. Ruff, mypy across 66
+source files, shell and Markdown checks, and specification validation passed.
+The current wheel matches the alignment-changed runtime files. Frozen-binary
+and SDK-matrix checks were not repeated in this pass; their earlier results
+remain separate historical evidence.
+
+The approved `ALIGN-JOB-001` remediation is implemented. The shared standard-library
+`ordinary_operations.py` owns durable admission, typed systemd calls, process and
+job records, action-specific success checks, and networkd convergence. Both the
+streamed transaction and installed agent use it. Ordinary management units and
+known bootstrap overrides remove implicit dataplane starts; old writers are
+stopped before package publication. Root-only startup admission additionally
+prevents an old or partial package from ignoring a pending journal after reboot.
+The exact guard-aware package may start and wait. During an HA handoff, canonical
+HA startup requires both the marker and the journal's activation phase; package
+installation and publication phases keep controller and rearm startup excluded.
+
+`ordinary_handoff.py` reserves the retained ordinary host over pinned SSH before
+credential/lifecycle effects. Its typed journal purpose cannot be recovered by an
+ordinary apply. It retains the deployment lock and durable exclusion until the
+existing exact-generation, exact-operation locked-passive status and matching
+remote HA apply-lock record prove takeover. A disconnected holder never clears
+admission. Existing migration recovery can reobserve accepted management stops;
+unbound same-boot submissions remain blocked. This barrier creates no HA authority.
+
+Current local evidence: 2,398 unit tests, 85 integration tests including wheel and
+frozen-binary checks, and 10 real Ubuntu 24.04 systemd/networkd tests in an isolated
+native ARM64 container. The current wheel passed installed-origin, exact-byte,
+serializer, streamed-helper, CLI-help and capability checks with SDK 0.3.18,
+0.3.40 and 0.3.101. The first fresh-container Netplan trial exposed a fixture-only
+Docker/default-route overlap; the fixture was corrected before a clean passing
+trial. A separate locked environment repaired local build-tool drift without
+changing runtime dependencies. These are local evidence, not CI or live gateway
+results. The new unconditional PR job gates release publication; its AMD64 CI
+execution and live ordinary/HA upgrade canaries remain unperformed.
+
+#### Accepted P1 Remediation
+
+Use one standard-library ordinary operation module, streamed with the transaction
+runner before an old guest package is imported and bundled with the standalone
+binary. Persist root-only, atomic/fsynced operation identity, exact boot/owner and
+child identities, artifact/predecessor bindings, phase and effects before submission.
+Before the first reservation, durably install an inert root-owned startup helper
+and management service ExecConditions; these change no running service. They
+prevent previous-release services from bypassing a pending journal on reboot.
+Reserved condition contents and ownership/modes are validated, and these exact
+owned additions are excluded from predecessor dependency-file comparison so lazy
+unit loading cannot invalidate the operation's own plan. Preserve comparison of
+all unrelated unit files. Keep deployment-before-routing lock order.
+Reconciliation children join only the
+current live parent, matching operation/config/artifact and allowed phase. Uncertain
+or malformed records block every ordinary mutation; observation remains read-only.
+
+Use typed bounded busctl systemd calls, recording intent and returned job references,
+then observe jobs, unit/control states and stopped management cgroups. Record enable
+and daemon-reload as manager effects too. Never cancel foreign jobs or blindly
+resubmit a lost reply. Retain native netplan apply; preflight merged inputs, networkd
+links and effective unit dependency scope, then verify networkd configuration and
+runtime convergence as well as systemd settlement. Empty jobs or active services
+alone do not prove settlement. Probe required capabilities before disruption;
+there is no forced OS/version upgrade or custom-networking expansion.
+
+Preserve inclusive 300/600/630-second budgets with 30/60-second inner/outer reserves.
+Stop further submissions on failure, join direct child groups and retain durable
+admission when delegated work is unresolved. Guard ordinary reload, private apply,
+periodic route repair, health-monitor repair and guest CLI tunnel mutations under
+routing serialization; HA continues using its existing authority. Daemon startup
+under another operation waits without mutation, false success or restart looping.
+
+Before publishing an old-agent upgrade, quiesce the agent, health monitor, routing
+timer and active oneshot; do not hold the routing lock while waiting for stops.
+Ordinary-specific packaged management units remove implicit dataplane Wants, and
+ordinary asset planning replaces the exact known product-generated agent override
+while preserving unrelated drop-ins. Bootstrap chooses mode explicitly. Both
+conversion directions select their correct product override, with ordinary-to-HA
+admission before lifecycle effects. Older external CLI/manual writes must not run
+concurrently with upgrade; a new journal cannot retrofit an old process.
+
+Final success requires settled delegated work, exact local configuration/artifact
+verification and management startup, followed by durable journal retirement under
+the routing lock. Existing state/config/public CLI formats remain unchanged.
+Recovery uses current dry-run and disruption approval, bound to old journal and
+fresh predecessor after all former writers/effects are conclusively settled.
+Unknown ownership stays blocked; age, dead PID, absent jobs or reboot alone never
+clears it. No automatic replay, rollback, downgrade, recreation or reboot is added.
+
+Add real isolated Ubuntu/systemd job and networkd regression gates, lost-reply and
+crash negative controls, every-writer admission, prior-release upgrades and unit
+overrides, child ownership, persistence failure, frozen-source bundling and HA
+regressions. Preserve source, installed-package, CI and separately authorized live
+canary evidence as distinct lanes. The fixed Python/systemd/Netplan stack remains;
+no new runtime dependency, service or AI subsystem is introduced.
+
+#### Accepted Migration Handoff Remediation
+
+ALIGN-WIRING-001 is confirmed: ordinary handoff reservation changes service and
+journal observations, making the old full package predecessor comparison reject
+its own approved transition. Ordinary recovery also rejects this HA-owned journal.
+The expanded remediation is implemented. The earlier verification counts above
+are historical; the composed handoff evidence below covers this implementation.
+
+Use a private typed HA package plan, binding pinned target/Compute identity, boot,
+Python/dependency environment, exact installed files and raw/logical configuration,
+HA asset contents/modes and desired wheel/dependency digests. Runtime admission
+belongs to the ordinary, handoff or HA owner; never globally relax ordinary checks.
+The existing pinned handoff holder executes named package actions under deployment
+exclusion with a root-owned staged manifest bound to its approval and journal.
+Accept only exact declared owned asset transitions; other drift needs fresh approval.
+Record intent before processes, prove whole process-group settlement independently,
+and retain unresolved exclusion on timeout, disconnect or uncertain effects.
+
+Select recovery using actual marker/configuration/journal/lifecycle evidence.
+SSH migration history is transport provenance only. Recover a settled pre-marker
+handoff through its owner, recognizing approved partial assets; marker-bearing
+recovery uses canonical HA authority. Completed journals are never resurrected.
+Pending handoff recovery is required even when package effects are empty. Settled
+historical stop and daemon-reload effects do not invalidate subsequent canonical
+startup. A same-boot reload with a lost acknowledgement remains unresolved. Completed
+handoffs with released apply locks continue through normal HA convergence; repair
+alone requires both exact locks. Foreign, corrupt or unresolved authority stays blocked.
+
+Before marker publication, retain dependency-free ordinary management variants.
+Durably publish exact apply lock, configuration/credentials and all HA fencing
+prerequisites; verify package/dependency bytes and directory/file durability; publish
+the marker; restore HA management units and obtain exact locked-passive completion.
+Before first startup admission, durably seed the canonical initial controller
+checkpoint under HA writer locks, only with proven startup exclusion and no prior
+checkpoint/status. Never replace an existing checkpoint or synthesize readiness.
+Rehash private staged product and dependency wheels immediately before installation;
+verify and sync the staged configuration, credential and exact apply lock before
+marker publication. Do not hold routing serialization while waiting for service
+stop/start hooks.
+Established ordinary and HA update paths and public formats remain compatible.
+
+HA repair is limited to the retained host of unfinished conversion. A streamed
+stdlib helper shares canonical cold-guard and authority validation and works without
+importing a damaged installed product. Both members retain exact operation/generation
+apply locks and current-boot forwarding exclusion. Inspect raw controller checkpoints,
+accepted/rearm cloud operations and lifecycle/restoration records; projected status
+alone can hide old-boot pending effects and is insufficient. Reuse canonical
+checkpoint and mTLS readers through a streamed standard-library source bundle;
+canonical pruned mTLS state needs no transaction reference, while conflicting
+transactions remain blocking. Stop target writers with
+bounded typed jobs and prove PID/control/job/cgroup settlement. Use deployment, rearm,
+mTLS-writer, routing lock order. Recheck untouched locked-passive peer evidence before
+package writes and activation. Persist target startup exclusion selected by journal
+install phase and retain an independently executable canonical cold-start guard.
+Preserve approved root-only staged artifacts until completion. Verify installed bytes,
+dependency closure and durability, then advance to activation and canonical locked-
+passive proof. Repair never changes cloud ownership, credentials, configuration or
+peer packages, releases apply locks, fabricates readiness or clears ambiguous effects.
+
+Add real-inspector composed migration/retry regressions, every publication boundary,
+damaged-import repair, stale/raw-effect and peer-drift negatives, process-group
+settlement and isolated systemd startup exclusion. Preserve 0.6.0 ordinary and HA
+upgrade/no-op, enrollment/replacement and reverse-conversion checks. Run full local
+gates and installed-wheel SDK matrix, then align. CI and authorized live upgrade,
+migration and reboot evidence remain separate; no zero-interruption claim is made.
+
+#### Migration Handoff Delivery Evidence
+
+`vm_ha_package.py` owns stable package approval; `handoff_remote.py` executes the
+bounded package/publication protocol. `ha_repair.py` shares the canonical cold guard
+and reads durable HA authority independently of damaged installed imports.
+`handoff_bootstrap.py` streams the exact reader closure over stdin; the wheel and
+frozen binary include every required source file. CLI repairs an eligible retained
+host before credential or peer-package work and reuses its verified result later.
+The existing PR safety gate now includes the composed migration regression.
+
+Final local validation passed 2,423 unit tests, 100 host integration/build checks
+and 12 isolated Ubuntu systemd/networkd checks. Fifteen composed protocol cases
+exercise real inspection, package planning, journaling and holder dispatch with
+simulated OS/package boundaries, including first marker/startup, damaged package,
+zero-effects retry, post-start disconnect, released locks, peer/credential drift
+and staged artifact tampering. Real systemd tests cover startup exclusion, the
+independent guard and process-group survivors. Each of SDK 0.3.18, 0.3.40 and
+0.3.101 passed 87 checks against the same installed wheel outside the checkout,
+plus dependency, origin, canonical-reader, CLI-help and capability checks.
+Ruff, mypy, Markdown, workflow parsing and paired specification validation passed.
+These are source, installed-package and isolated-runtime results. Remote CI and
+live gateway compatibility, migration and reboot trials remain unverified.
+
+#### Post-Handoff Alignment Evidence
+
+`ALIGN-PROCESS-001` is repaired at the ordinary command owner: cleanup bounds the
+leader wait and requires canonical whole-process-group proof before recording
+settlement. Missing identity or surviving writers retain unresolved admission.
+Real-journal negatives cover lost identity, a stuck leader and surviving descendants;
+real Linux processes cover both normal leader exit and command timeout.
+
+`ALIGN-VERIFY-001` rejects unexpected main-table unicast routes through currently
+configured static XFRM interfaces, including multipath entries. Desired prefixes
+and the configured inner connected subnet remain valid; learned BGP routes and
+unrelated interfaces/tables retain their existing behavior. `ALIGN-ROUTE-001`
+skips an empty table-220 flush when only its policy rule remains, preserving strict
+command failure accounting and final observation.
+
+That alignment deferred `ALIGN-ROUTE-002`: removing an entire static tunnel could leave its
+retired interface and non-APIPA routes outside current-endpoint verification.
+The additive route behavior predates these changes. Safe cleanup or negative
+verification needs the verified predecessor configuration, old interface identity
+and exact route tuple; an XFRM name alone is insufficient ownership evidence.
+That earlier alignment introduced no automatic retired-interface or stale-prefix deletion.
+
+Fresh alignment passed 2,536 host tests, including wheel and frozen-binary builds,
+and all 14 isolated Ubuntu systemd/networkd tests. Ruff, mypy, Markdown and paired
+specification validation passed. The earlier SDK matrix is separate evidence;
+it was not repeated for these command/route fixes. No public interface, persisted
+format, SDK bound or HA authority changed. Remote CI and live compatibility trials
+remain unverified, and REQ-018 remains active.
+
+#### Accepted Static Route Retirement Remediation
+
+ALIGN-ROUTE-002 uses verified route-only cleanup within the existing ordinary
+apply transaction. A shared pure canonical tunnel projection preserves positional
+names and if_id values and is bundled for current and previous-release inspection.
+A typed immutable plan binds safe/hash-validated last-applied ownership, desired
+projection, current boot/interface/parent identity and exact supported route tuples.
+Current configuration never substitutes for historical ownership. Missing state
+permits healthy unchanged/route-equivalent upgrades, but cannot authorize retirement.
+
+Preview lists exact removals and binds the deterministic plan payload into existing
+disruption approval. Its runtime operation ID is added only in an execution envelope,
+never into a circular approval hash. Revalidate before reservation and after ordinary
+management quiescence. Preserve the operation-journal schema; persist root-only,
+bounded, atomic/fsynced plan sidecars and absence obligations before effects.
+Retain predecessor and prospective successor projections for partial-apply recovery.
+
+Under the existing routing lock and bounded command ledger, clean before interface
+repurposing. Delete only exact obsolete IPv4 main-table direct static remote routes
+matching product shape; preserve desired successor, kernel-connected, foreign-table,
+management and FRR routes. Ambiguous multipath/gateway/custom routes block. No link
+deletion, interface flushing, new service, dependency or HA owner is introduced.
+
+Before last-applied replacement, durably save the private retirement ledger and bind
+its digest into additive private verification metadata. Final confirmation and later
+no-op checks require retained absence proof. Missing adopted evidence blocks. History
+alone never authorizes future deletion; renewed routes require fresh approval/current
+ownership proof. Supersede obligations only for legitimate desired successors or
+independently proven retired interface incarnations. Bound/deduplicate history; never
+silently discard evidence. Interrupted retries carry old and partially installed
+successor obligations after writer settlement and fresh approval; boot/ifindex changes
+require fresh observation. Daemon reconciliation cannot retire or repurpose affected
+interfaces without an approved operation-bound sidecar.
+
+Add renderer-based transition, state/hash/identity/shape, missing-evidence compatibility,
+sidecar and save/proof/receipt fault, successor reinstatement and daemon no-approval
+regressions. Extend disposable Ubuntu tests with private network namespaces and real
+XFRM/kernel routes. Run ordinary/HA gates, wheel/frozen source checks, Ruff/mypy,
+documentation and paired-spec checks, then align. Remote CI/live compatibility remain
+separate. Earlier delivery evidence above is historical.
+
+#### Static Route Retirement Delivery Evidence
+
+Implemented shared `tunnel_state.py` projection and the stdlib `ordinary_routes.py`
+ownership boundary. The CLI, streamed guest runner and synchronous agent consume
+one plan. Selected ordinary wheels must match the CLI's projection and reconciliation
+sources; the frozen binary bundles those readable sources and build tests compare
+exact bytes. Existing HA handoff inspection also receives its required stdlib sources.
+
+Private sidecars validate full binding, projection, link and route schemas and are
+immutable for an operation. Preparing a durable successor prunes only unreferenced
+sidecars, retaining the journal and ledger owners. The ledger deduplicates and bounds
+absence obligations; a malformed obligation cannot disappear through incarnation
+pruning. Recovery accepts only the exact predecessor ledger or a current operation's
+validated obligation subset. Final confirmation independently checks approved absence
+obligations and the committed ledger/proof digest before completing the journal.
+
+Regressions cover first/middle/last/all tunnel removal, disable/reorder/prefix/BGP
+transitions, ambiguous routes, identity/boot/rename drift, lost deletion replies,
+missing or corrupt authority, daemon approval exclusion, state/proof interruption,
+partially installed successors, reinstatement, selected-wheel mismatch and missing
+final commit evidence. The full host suite passed 2,578 tests with 16 dedicated Linux
+cases skipped there. A disposable native ARM64 Ubuntu 24.04 VM ran all 16 isolated
+systemd/networkd tests successfully, including real XFRM removal/reindexing and
+preservation of kernel-connected, FRR-protocol and foreign-table routes. The local
+Docker Desktop kernel lacked XFRM interface support; its fixture failure is not
+runtime acceptance evidence. Ubuntu fixture setup failures were resolved before the
+successful test trial; no gateway or cloud resources were used.
+
+Ruff, mypy (72 source files), changed-file formatting, Markdown, paired-spec and diff
+checks passed. The earlier three-version SDK matrix was not repeated for this
+stdlib-only route change; SDK dependency bounds remain unchanged. Remote CI, live
+ordinary/HA upgrades, connectivity and reboot behavior remain separate and unverified.
+REQ-018 stays active pending its live compatibility criteria.
+
+#### Post-Retirement Alignment Evidence
+
+`ALIGN-TRANSPORT-001` (P1) is resolved. The complete operations, route and remote
+runner bundle exceeded Linux's per-argument bound when placed in `python -c`.
+`ordinary_bootstrap.py` now supplies a short constant command and a bounded base64
+source line followed by the existing JSON request on binary stdin. Both reads share
+the binary stream, avoiding text read-ahead loss. The initial 600-second deadline
+starts before source upload and is carried into the runner without resetting the
+timer; the existing client upload and response bounds remain in force.
+
+`ALIGN-RECOVERY-001` (P1) is resolved. After state and proof were saved but the final
+reply was lost, a fresh operation previously returned unchanged and retained the
+old ledger binding. An active mutating operation now follows canonical reconciliation
+and publishes its own bound ledger/proof before final confirmation. Verified no-op
+and verify-only requests remain read-only. The new composed regression reproduced
+the old early return, then passed through final confirmation with the repair and
+without repeated route deletion.
+
+Fresh validation passed 2,581 host tests, including installed-wheel bootstrap and
+frozen-source reconstruction/dispatch. Those package probes use an invalid manifest
+to reach the complete loaded runner without guest prerequisites. Three disposable
+Linux tests separately execute successful package inspection with the actual full
+sudo/Python command, source frame and normal/large JSON requests, and reproduce
+E2BIG for the former argument transport. The fixture supplies pip and sudo; the
+existing CI/release fixture runner includes these cases. No production dependency
+or public format changed. The earlier 16 systemd/networkd/XFRM cases were not rerun
+for this follow-up; Docker Desktop's missing XFRM support remains a fixture limit.
+
+Nested read-only code/wiring reviews found no remaining blocker in the changed
+paths. Ruff, configured mypy (76 source files), changed-file formatting, Markdown,
+paired-spec and diff checks passed. Existing APIPA/table-220 hygiene retains its
+own authority after the static-route retirement step. Remote CI and live gateway
+compatibility, connectivity and reboot behavior remain unverified.
+
+#### Retained HA Observation and Attached-Disk Planning Evidence
+
+The disk-planning boundary previously conflated an existing Compute instance with
+an unresolved boot disk and a missing instance. It produced a safe creation diff
+while retained-instance provisioning subsequently skipped creation. Ordinary
+planning also relied on the original disk name, unlike HA attachment-based reads.
+`VMManager.check_changes` now follows the Compute boot attachment for both modes.
+The single bounded disk reader verifies the returned disk ID and project; missing
+attachments, missing disks and uncertain reads stop planning before deployment.
+Renaming a valid attached disk remains supported. No public configuration, persisted
+format, credential, SDK constraint or HA activation authority changes.
+
+The regression failed against both former ordinary and HA paths with typed
+`NOT_FOUND`: each returned a creation plan instead of raising. Sixteen focused
+cases now cover renamed disks, genuinely absent Compute, missing attachments,
+missing/inexact disks and denied/unavailable reads. A composed CLI regression
+confirms that disk failure prevents provisioning, SSH deployment, trust publication
+and the success banner. Fresh full-host validation with SDK 0.3.101 passed 2,598
+tests, including installed-wheel and frozen-build checks; 19 dedicated Linux tests
+were skipped. A separate SDK 0.3.18 environment passed 76 focused disk, bootstrap,
+pagination and route-serializer checks. Ruff, formatting and configured mypy passed.
+
+Read-only inspection of an operator-updated retained HA pair matched all 90 checked
+source/service files to the pre-disk-repair candidate, confirmed the desired
+generation, four established IPsec tunnels and BGP sessions, and independently
+matched the cloud allocation owner to the sole forwarding VM. The standby remained
+fenced and ready; neither node retained an apply lock or pending operation. Both
+guests reported cloud-init complete without errors, synchronized clocks and active
+controller/guard/rearm services. Bounded rollout and post-apply journals contained
+transient tunnel observations followed by recovery, without monitor-triggered
+restarts; kernel warnings in that window were firewall-denial records. No table-220
+routes/rules or broad APIPA route remained. This observation made no live changes.
+
+The exact issue-190 route lookup resolved both members through the real Compute
+API with SDK 0.3.101, while the former facade request failed its raw serializer
+locally. The repaired disk planner also inspected both real attached disks without
+reporting an infrastructure change. Public `status`, `vm-ha --dry-run` and
+`apply --dry-run` completed successfully. This establishes the named read boundaries
+and current retained-HA health; source parity does not prove that an older
+long-running health-monitor process reloaded its Python modules. The operator's
+successful apply was not independently replayed. Fresh ordinary provisioning,
+recreation, interrupted-apply recovery, forwarded workload traffic and reboot or
+failover trials remain open. No remote CI run or blanket absence of technical debt
+is claimed; REQ-018 remains active.
+
+#### Fresh Ordinary Environment Admission
+
+Fresh bootstrap enables the management agent before the first apply installs its
+package and configuration. Both agent unit assets and the bootstrap fallback use
+`ConditionPathExists` for the resolved configuration, preventing premature restart
+loops. For an existing gateway already waiting between management restart attempts,
+planning accepts only `activating/auto-restart` with no main/control process or
+queued job. This exception applies only to preflight. Settlement, recovery and
+completion keep strict quiet checks, and approved execution must journal and prove
+the management stop before package installation or configuration publication.
+
+Systemd `LoadUnit` reads definitions without starting services, so an unloaded
+handler is not mistaken for an absent one. FRR's optional `OnFailure` handler is
+admitted only when its loaded metadata is exactly not-found, inactive/dead, with
+no process, job, fragment, drop-in or cgroup. The sorted absent-handler identities
+join the existing environment observation and are revalidated before effects.
+Executable, masked, erroneous or unsettled handlers, `OnSuccess`, and `Upholds`
+remain blocking. No handler is disabled and no existing operation is cleared.
+
+The live preflight failure reproduced both rejected conditions. Three new host
+regressions failed against the original reader; all 135 focused checks passed
+after repair. The repaired streamed reader accepted the unchanged failed VM while
+strict management settlement stayed false. Real systemd tests cover journaled
+stopping of a restart wait, a missing handler becoming installed but inactive, and
+both agent units waiting for their first configuration. Product-supported apply
+and migration replay completed; their final evidence is recorded below.
+
+Ordinary dependency traversal evaluates each requirement's environment and extra
+markers before applying the direct URL policy. Installed packages can advertise
+URL dependencies for unselected documentation extras without blocking reapply.
+Selected or unconditional URL dependencies remain rejected; no URL installer or
+new dependency source is introduced. The live installed metadata exposed this
+ordering defect after fresh apply. Two regression cases failed before repair;
+five marker/policy cases and all 94 affected host checks pass after repair.
+
+The live conversion then reached a valid typed `migration` plan with managed SSH
+action `migrate`, but the command result adapter incorrectly classified every
+trust publication outside standby replacement as an external prerequisite.
+The adapter now admits only this additional exact pair. The existing apply owner
+still imports and verifies the ordinary pin, provisions the new member identity,
+binds the trust approval evidence to the public digest, revalidates under the lock
+and before effects, and publishes trust through its original execution path.
+No trust publication is performed by the wizard or observer. Other managed-trust
+actions and destructive plans keep their prior gates. Four admission/composed-CLI
+regressions failed against the former adapter. The actual migration then passed
+this admission boundary from the retained ordinary gateway and completed candidate.
+
+#### Stable Fresh-Member Trust Approval
+
+Two unchanged migration plans differed only in the desired SSH receipt hash:
+read-only planning generated a new ephemeral standby key each time. Approving a
+random prospective pin cannot survive replanning or a separate `--approve`
+invocation. Persisting keys during dry-run would violate its no-write contract;
+dropping all trust evidence from approval would lose retained-member protection.
+
+Use a separate private approval binding for prospective product-generated
+identities on authoritatively absent members. It includes the deployment scope,
+transport targets, predecessor receipt/projection hashes, exact retained member
+pins and authority, and an Ed25519 generation intent for each eligible fresh
+member. Only default product-owned identity generation is eligible; explicit
+operator keys and existing receipt pins remain exact. The binding applies only
+to ordinary migration approval. The actual receipt and SSH snapshot continue to
+contain exact keys, and their publication/verification paths remain unchanged.
+
+Implementation sequence: add the private binding at SSH policy resolution;
+consume it in the migration approval digest; prove stable dry-run/replan/execute
+bindings plus predecessor, target and retained-pin drift rejection; then replay
+the unchanged live candidate. After approval the existing apply engine generates
+or reuses the private key, checks the exact plan, publishes exact trust, provisions
+the matching cloud-init key, and verifies it on SSH. No new persisted format,
+public flag, compatibility reader, or trust writer is introduced. The initial
+regression reproduced the missing stable binding. The implemented private binding
+passes 263 focused SSH, command, wizard and conversion checks, including exact
+retained-pin, Compute binding, predecessor and endpoint drift rejection. Two
+unchanged live plans had identical approval digests, and approved execution
+subsequently published the exact identity and completed migration.
+
+#### Admission Evidence At Durable Intent
+
+The next live boundary stopped after guarded ordinary reservation and managed
+credential/trust publication, before lifecycle intent or HA provisioning. Initial
+approval included `ordinary_admission`; the final digest rebuilt cloud and
+credential state without that field. A composed apply regression reproduces this
+stale-approval failure with and without a removed lifecycle tombstone.
+
+The canonical approval-state composer now accepts the ordinary admission evidence
+for both planning and final checks. The reservation has revalidated that evidence
+and owns durable exclusion, so its expected journal transition is not reread as
+external drift. Cloud observations remain fresh. Composed tests stop at the real
+durable-intent entry point and reject cloud revision changes introduced after
+reservation. Product-supported retry completed the migration and retired the
+ordinary operation; no manual journal or service recovery was performed.
+
+#### Authorized Key YAML Integrity
+
+The PR-179 multi-key extension conflicts with the existing single-record client
+identity contract, which rejects that input before provisioning. Keep that
+admission unchanged. A supported single key can still have YAML-sensitive comments:
+unquoted interpolation can change it into a mapping or truncate its contents.
+Encode the already-validated complete record as a quoted JSON/YAML string. Four
+ordinary and HA renderer regressions failed before repair. Existing VM metadata
+and authorized keys are not rewritten.
+
+Bootstrap health also requires a successful service check whose final output is
+exactly `active`; substring matching previously treated `inactive` as running.
+Negative controls cover inactive services and failed SSH results containing an
+active line. This changes the diagnostic only; configuration readiness retains
+its existing cloud-init, package and ESP4 checks.
+
+#### Classic Lifecycle Replay Evidence
+
+The isolated live trial used the actual guided `create-config`, `validate-config`,
+ordinary `apply`, `status`, `vm-ha` conversion and final `status` commands. GCP
+Classic peer tunnels, return routes and a narrow ICMP rule were separate fixtures.
+The existing gateway pair and original configuration remained untouched. No guest
+journal, service or HA authority was manually repaired; failed checkpoints were
+retained and resumed through the product after source repairs.
+
+Both newly provisioned VMs completed cloud-init without errors. Ordinary apply
+established the static tunnel and completed its operation journal. Real
+`add-routes-local` with SDK 0.3.101 created the isolated workload route, exercising
+the issue-190 lookup and route effect. Conversion completed exact trust and mTLS
+publication, non-owner-first activation, owner forwarding, standby release and
+the durable ACTIVE lifecycle. Its two fresh health samples and final public
+status reported healthy redundancy and verified runtime identities.
+
+Independent Compute and VPC reads agreed on one shared-allocation owner and a
+workload route to that allocation; the gateway table retained only default egress.
+Guest evidence showed forwarding enabled only on the owner, the standby ready
+with its expected cold static tunnel, no apply locks or pending operations, and
+the retained ordinary journal complete. Four gateway-originated private-peer
+pings passed with no loss before and after conversion. The preexisting HA pair
+also remained healthy with four established IPsec/BGP sessions.
+
+The final SDK 0.3.101 host suite passed 2,652 tests with 23 dedicated Linux cases
+skipped, including the final health parsing and single-key integrity regressions.
+The separate real Linux fixture passed 21 systemd/transport cases. Its two XFRM
+cases could not run because fixture link creation returned `Unknown device type`.
+Formatting, Ruff, mypy, Markdown, paired-spec and diff checks passed. PR-179's
+missing-disk, incomplete-target, pagination and multi-key cases have regression
+coverage, with multi-key input deliberately rejected before provisioning;
+destructive recreation was not replayed. No remote CI, forced failover,
+post-deployment reboot or workload-originated forwarding campaign was run. These
+limits prevent a blanket compatibility or zero-technical-debt claim.
+
+#### Missing Environment Admission Diagnostic
+
+The apply serialization decorator loads configuration before entering its normal
+command error boundary. An unset PSK environment reference therefore escapes as
+a traceback before any writer lock or cloud operation. Keep resolution strict
+and introduce a typed `ValueError` for missing environment names. Handle only
+that type at decorator admission, emit the existing safe variable-name message
+plus a same-shell setup hint, and exit nonzero without invoking apply. Other
+exceptions and valid configurations keep their current paths. Verify ordinary,
+HA and dry-run entry points with real unresolved placeholders, no-lock/no-effect
+assertions and a secret-redaction control before replaying the operator config.
+
+The typed error and narrow admission handler are implemented. Four public-command
+regressions failed against the uncaught exception, while the resolved-input
+control already passed. After repair, 433 loader/admission/CLI checks and 149
+facade/admission checks passed. The real missing-variable command now exits 1
+with only variable names and a shell setup hint. No placeholder bypass, credential
+lookup fallback or change to supported configuration formats was introduced.
+
+For the operator's private config, explicitly approved reuse of the existing PSKs
+as literal YAML values removed the external shell prerequisite. Only those scalar
+values changed; mode `0600`, Git exclusion and the resolved generation remained
+exact. Actual `apply` with both environment variables unset passed configuration
+admission. Its first run encountered a separate bounded Nebius API timeout during
+staging; fresh authoritative inspection then produced an exact resume plan. The
+normal apply retry resumed that transaction and completed successfully without
+manual guest recovery or changing the peer credentials.
+
+#### Ordinary Shared Static Destination Verification
+
+ORD-REVIEW-001 is caused by requiring each configured static claim in the kernel,
+while sequential `ip route replace` commands retain only the last enabled tunnel
+for an identical destination. Preserve that writer and its per-VM ordering. Derive
+an effective destination-to-interface map from the current ordered projection in
+`ordinary_routes.py`; use it only for ordinary runtime verification. Normalize
+equal IPv4 destinations without collapsing distinct overlapping networks.
+
+Keep projection, keys, historical claims, retirement calculations, sidecar and
+ledger formats unchanged. In particular, sorted/deduplicated recovery history is
+never a source of forwarding precedence. The verifier requires selected owners
+and rejects remote routes through superseded static interfaces. Keep connected
+inner-subnet allowances separate and require a direct kernel-protocol, link-scope
+route on the configured interface without gateway or multipath. Preserve existing
+BGP, APIPA, interface and service checks and all HA authority.
+
+Implemented in `effective_static_routes` and ordinary `observe_local`, with the
+shipped two-static-tunnel failure reproduced before the repair. Regressions cover
+selection, wrong-owner/multipath rejection, connected-route disguises, reordering,
+removal/disablement, mode switches, fixed existing v1 records, interrupted recovery,
+operation completion and unchanged reapply. Host tests invoke the real route writer
+against modeled kernel replacement; the isolated Linux tests use real XFRM routes.
+No public flags, schemas, dependencies or migration paths are added.
+
+Verification: all 2,580 unit tests, the frozen-binary source/transport check, two
+wheel checks, scoped Ruff/Markdown checks and the 76-file type check pass. The local
+Docker fixture failed with `Unknown device type` during XFRM creation, before route
+verification. A subsequent isolated trial on each of two existing HA test gateway
+standbys, both using kernel `6.11.0-1016-nvidia`, passed all four shared-static cases
+(eight executions, no skips): selected-owner success, wrong-owner rejection, extra
+loser-route rejection and multipath rejection.
+
+The trials used current source and exact extracted test/fixture bodies with
+synthetic ordinary configuration. Private mount, network and PID namespaces plus
+temporary filesystems isolated the test state; no gateway packages were installed.
+The real route writer and IP observations ran against XFRM interfaces; unrelated
+service, firewall and rendered-file observations retained the existing test mocks.
+Independent before/after snapshots of gateway boot and namespace identities,
+network state, configuration/unit files and service PIDs/state were unchanged.
+Test namespaces were removed, and fresh status showed both deployments healthy
+with redundancy ready. This closes the shared-static kernel verification gap;
+it does not establish complete systemd-suite, ordinary-deployment or HA-failover
+acceptance.
+
+<!-- /FEATURE: FEAT-017 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 

@@ -37,7 +37,7 @@ def _completed_process(
     )
 
 
-def test_restart_tunnel_reloads_swanctl_and_falls_back_to_ike_terminate() -> None:
+def test_restart_tunnel_reloads_swanctl_and_falls_back_to_ike_terminate(ordinary_operation_guest) -> None:
     monitor = TunnelHealthMonitor()
     tunnel_name = "tunnel-1"
 
@@ -76,7 +76,7 @@ def test_restart_tunnel_reloads_swanctl_and_falls_back_to_ike_terminate() -> Non
     ]
 
 
-def test_restart_tunnel_accepts_recovered_tunnel_after_failed_initiate() -> None:
+def test_restart_tunnel_accepts_recovered_tunnel_after_failed_initiate(ordinary_operation_guest) -> None:
     monitor = TunnelHealthMonitor()
     tunnel_name = "tunnel-1"
 

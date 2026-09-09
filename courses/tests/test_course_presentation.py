@@ -125,7 +125,7 @@ def test_every_detailed_visual_has_one_destination_and_reachable_lessons() -> No
                     assert f'id="{target}"' in lesson
                 else:
                     assert f'href="#{target}"' in lesson
-    assert len(diagrams) == 54
+    assert len(diagrams) == 56
 
 
 def test_generated_launch_recipes_use_owned_runtime_and_actual_build_directory() -> (

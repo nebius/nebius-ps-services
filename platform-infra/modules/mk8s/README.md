@@ -189,6 +189,11 @@ attachments with the selected filesystem ID and mount tag.
 - `service_account_ids`
 - `sfs_filesystem_keys_by_node_group`
 
+`service_account_ids` includes only enabled node groups with a configured
+service-account name or ID. Its keys are known during the initial plan even
+when the account IDs are created during apply, so callers can use the map in
+`for_each` for IAM grants.
+
 Node-group outputs are keyed by the canonical `node_groups` map key.
 
 ## nebius-cxcli Contract

@@ -269,7 +269,14 @@ class SoperatorInstallRemoteLease:
         metadata = response.get("Metadata")
         if not etag or not isinstance(metadata, Mapping):
             raise RuntimeError("Soperator install lease HEAD omitted its ETag or metadata")
-        return etag, metadata
+        # S3 user metadata arrives through case-insensitive HTTP headers.
+        # Providers may preserve header casing in the CLI's Metadata map.
+        normalized_metadata: dict[str, Any] = {}
+        for key, value in metadata.items():
+            if not isinstance(key, str) or key.lower() in normalized_metadata:
+                raise RuntimeError("Soperator install lease HEAD returned ambiguous metadata")
+            normalized_metadata[key.lower()] = value
+        return etag, normalized_metadata
 
     def _acquire(self) -> str:
         for _attempt in range(4):

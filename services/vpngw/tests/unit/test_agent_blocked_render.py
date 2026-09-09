@@ -434,6 +434,7 @@ def test_blocked_vm_ha_preparation_installs_required_deny_all_exports(
 def test_force_reconcile_bypasses_unchanged_config_short_circuit(
     tmp_path: Path,
     monkeypatch,
+    ordinary_operation_guest,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
@@ -443,7 +444,7 @@ def test_force_reconcile_bypasses_unchanged_config_short_circuit(
         def build_interface_endpoints(self, _cfg):
             return []
 
-        def render_and_apply(self, _cfg):
+        def render_and_apply(self, _cfg, **_kwargs):
             calls.append("strongswan")
             return []
 
@@ -451,7 +452,7 @@ def test_force_reconcile_bypasses_unchanged_config_short_circuit(
         def ensure_local_prefix_routes(self, _cfg):
             return None
 
-        def render_and_apply(self, _cfg):
+        def render_and_apply(self, _cfg, **_kwargs):
             calls.append("frr")
 
     monkeypatch.setattr(agent_main, "CONFIG_PATH", config_path)
@@ -468,6 +469,20 @@ def test_force_reconcile_bypasses_unchanged_config_short_circuit(
     agent = agent_main.Agent()
     agent.ss = StrongSwan()
     agent.frr = FRR()
+    from nebius_vpngw.agent import ordinary
+
+    monkeypatch.setattr(ordinary, "CONFIG", config_path)
+    monkeypatch.setattr(ordinary, "STATE", tmp_path / "state.json")
+    monkeypatch.setattr(ordinary, "PROOF", tmp_path / "ordinary-proof.json")
+    monkeypatch.setattr(ordinary, "BOOT", tmp_path / "boot")
+    ordinary.BOOT.write_text("boot-test")
+    monkeypatch.setattr(ordinary, "StrongSwanRenderer", lambda: agent.ss)
+    monkeypatch.setattr(ordinary, "FRRRenderer", lambda: agent.frr)
+    monkeypatch.setattr(
+        ordinary.firewall, "update_firewall_from_config", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(ordinary, "enforce_routing_invariants_locked", lambda cfg: None)
+    monkeypatch.setattr(ordinary, "observe_local", lambda cfg: "verified-runtime")
     agent.state.is_changed = lambda _cfg: False
     agent.reload(force_reconcile=True)
 
@@ -604,24 +619,30 @@ def test_force_reconcile_authority_rejects_live_writer_inhibition(
 def test_failed_frr_activation_does_not_advance_last_applied_state(
     tmp_path: Path,
     monkeypatch,
+    ordinary_operation_guest,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     state_path = tmp_path / "last-applied.json"
     config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
-    state_path.write_text('{"config_hash":"previous"}\n', encoding="utf-8")
+    from nebius_vpngw.agent.state_store import StateStore
+
+    StateStore(state_path).save_last_applied(
+        {"version": 1, "connections": [], "gateway": {"local_prefixes": []}}
+    )
+    previous_state = state_path.read_bytes()
 
     class StrongSwan:
         def build_interface_endpoints(self, _cfg):
             return []
 
-        def render_and_apply(self, _cfg):
+        def render_and_apply(self, _cfg, **_kwargs):
             return []
 
     class FRR:
         def ensure_local_prefix_routes(self, _cfg):
             return None
 
-        def render_and_apply(self, _cfg):
+        def render_and_apply(self, _cfg, **_kwargs):
             raise RuntimeError("FRR configuration reload failed")
 
     monkeypatch.setattr(agent_main, "CONFIG_PATH", config_path)
@@ -636,11 +657,25 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
     agent = agent_main.Agent()
     agent.ss = StrongSwan()
     agent.frr = FRR()
+    from nebius_vpngw.agent import ordinary
+
+    monkeypatch.setattr(ordinary, "CONFIG", config_path)
+    monkeypatch.setattr(ordinary, "STATE", state_path)
+    monkeypatch.setattr(ordinary, "PROOF", tmp_path / "ordinary-proof.json")
+    monkeypatch.setattr(ordinary, "BOOT", tmp_path / "boot")
+    ordinary.BOOT.write_text("boot-test")
+    monkeypatch.setattr(ordinary, "StrongSwanRenderer", lambda: agent.ss)
+    monkeypatch.setattr(ordinary, "FRRRenderer", lambda: agent.frr)
+    monkeypatch.setattr(
+        ordinary.firewall, "update_firewall_from_config", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(ordinary, "enforce_routing_invariants_locked", lambda cfg: None)
+    monkeypatch.setattr(ordinary, "observe_local", lambda cfg: "verified-runtime")
 
     with pytest.raises(RuntimeError, match="FRR configuration reload failed"):
         agent.reload()
 
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"config_hash": "previous"}
+    assert state_path.read_bytes() == previous_state
     assert agent.state.is_changed({"version": 1, "connections": []})
 
 

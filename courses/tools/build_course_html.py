@@ -38,7 +38,7 @@ CATALOG_COPY = {
         "Turn measurements into decisions",
         "Learn a repeatable approach to improving PyTorch workloads: establish a baseline, find the limiter, make one change and measure again.",
         (
-            "Measure asynchronous GPU work correctly",
+            "Asynchronous performance measurement",
             "Use profiler evidence to find bottlenecks",
             "Evaluate changes with equivalent work",
         ),
@@ -88,27 +88,12 @@ COMMON_GUIDES = (
 )
 SUPPORTING_GUIDES = {"gpu-optimizations": ("reference/tooling-setup.md",)}
 FIELD_CLASSES = {
-    "Start here": "start-here",
-    "What it is": "concept-introduction",
     "Objective": "lesson-outcome",
-    "Prerequisite bridge": "prerequisite-bridge",
-    "Recall": "recall",
-    "Why it matters": "why-it-matters",
-    "Mental model": "mental-model",
-    "Mechanism": "mechanism",
+    "How it works": "how-it-works",
     "Practice labs": "practice-links",
+    "Mental model": "mental-model",
 }
-LESSON_FIELDS = (
-    "Start here",
-    "What it is",
-    "Objective",
-    "Prerequisite bridge",
-    "Recall",
-    "Why it matters",
-    "Mental model",
-    "Mechanism",
-    "Practice labs",
-)
+LESSON_FIELDS = tuple(FIELD_CLASSES)
 LAB_SECTIONS = (
     "Before you start",
     "Concepts and code path",
@@ -343,7 +328,7 @@ def valid_visual_section(home: str, section: str) -> bool:
         return False
     """A figure declares a theory field or an existing practical-guide section."""
     if home == "lesson":
-        return section in LESSON_FIELDS and section != "Practice labs"
+        return section == "How it works"
     return bool(re.fullmatch(r"lab:\d+_[a-z0-9_]+", home)) and section in LAB_SECTIONS
 
 
@@ -388,66 +373,105 @@ def diagram(row: OverviewDiagram, index: int) -> str:
     kind = row.layout
     if kind not in DIAGRAM_LAYOUTS:
         raise ValueError("invalid overview diagram layout")
-    if kind in {"comparison", "flow", "cycle"}:
-        label_y = 138 if kind == "comparison" else 130
-        labels = (
-            svg_label(first, 165, label_y),
-            svg_label(second, 480, label_y),
-            svg_label(third, 795, label_y),
+    width, height = 360, 430
+    marker = f"url(#arrow-{index})"
+
+    def card(value: str, y: int) -> str:
+        return f'<rect x="35" y="{y}" width="290" height="90" rx="12"/>' + svg_label(
+            value, 180, y + 45, width=26
         )
-    if kind == "comparison":
-        body = f"""<g text-anchor="middle"><rect x="45" y="80" width="240" height="115" rx="14"/><rect x="360" y="80" width="240" height="115" rx="14"/><rect x="675" y="80" width="240" height="115" rx="14"/>
-{labels[0]}{labels[1]}{labels[2]}</g>
-<text x="480" y="260" text-anchor="middle" class="diagram-note">Compare distinct concepts — no causal sequence implied</text>"""
+
+    def arrow(path: str, *, both: bool = False) -> str:
+        start = f' marker-start="{marker}"' if both else ""
+        return (
+            f'<path class="arrows" d="{path}" fill="none" '
+            f'marker-end="{marker}"{start}/>'
+        )
+
+    if kind in {"flow", "cycle", "comparison", "timeline", "decision", "topology"}:
+        body = card(first, 20) + card(second, 165) + card(third, 310)
+        if kind != "comparison":
+            body += arrow("M180 114 V157", both=kind == "topology")
+            body += arrow("M180 259 V302", both=kind == "topology")
+        if kind == "cycle":
+            body += arrow("M328 355 H345 V65 H328")
+        # Stage order is not a measured duration or an invented decision branch.
     elif kind == "hierarchy":
-        body = f"""<rect x="55" y="30" width="850" height="230" rx="18"/><rect x="180" y="75" width="600" height="155" rx="16"/><rect x="325" y="120" width="310" height="80" rx="14"/>
-{svg_label(first, 90, 58, anchor="start")}{svg_label(second, 480, 105, width=40)}{svg_label(third, 480, 158)}"""
+        height = 380
+        body = (
+            '<rect x="10" y="15" width="340" height="345" rx="16"/>'
+            '<rect x="30" y="110" width="300" height="230" rx="14"/>'
+            '<rect x="50" y="215" width="260" height="105" rx="12"/>'
+            + svg_label(first, 180, 60, width=28)
+            + svg_label(second, 180, 155, width=26)
+            + svg_label(third, 180, 267, width=24)
+        )
     elif kind == "matrix":
-        body = f"""<text x="420" y="35" text-anchor="middle">Short OSL</text><text x="710" y="35" text-anchor="middle">Long OSL</text>
-<rect x="275" y="55" width="285" height="95"/><rect x="560" y="55" width="310" height="95"/><rect x="275" y="150" width="285" height="95"/><rect x="560" y="150" width="310" height="95"/>
-{svg_label(first, 145, 105)}{svg_label(second, 145, 195)}
-{svg_label("Small prompt, short generation", 417, 92)}{svg_label("Small prompt, long generation", 715, 92)}
-{svg_label("Large prompt, short generation", 417, 187)}{svg_label("Large prompt, long generation", 715, 187)}
-<text x="480" y="282" text-anchor="middle" class="diagram-note">{html.escape(third)}</text>"""
+        width, height = 460, 400
+        body = (
+            svg_label("Short OSL", 197, 30)
+            + svg_label("Long OSL", 362, 30)
+            + svg_label(first, 55, 120, width=9)
+            + svg_label(second, 55, 250, width=9)
+        )
+        for x, y, label in (
+            (115, 60, "Small prompt, short generation"),
+            (280, 60, "Small prompt, long generation"),
+            (115, 190, "Large prompt, short generation"),
+            (280, 190, "Large prompt, long generation"),
+        ):
+            body += f'<rect x="{x}" y="{y}" width="165" height="130"/>'
+            body += svg_label(label, x + 82, y + 65, width=15)
+        body += svg_label(third, 230, 365, width=38)
     elif kind == "roofline":
-        body = f"""<g class="axes"><line x1="120" y1="240" x2="870" y2="240"/><line x1="120" y1="240" x2="120" y2="35"/></g><polyline class="roofline" points="120,230 500,75 850,75"/>
-{svg_label(first, 290, 205)}{svg_label(second, 480, 125)}{svg_label(third, 730, 28)}
-<text x="490" y="280" text-anchor="middle" class="diagram-note">Arithmetic intensity (operations / byte) →</text><text x="45" y="140" transform="rotate(-90 45 140)" text-anchor="middle" class="diagram-note">Attainable operations / second</text>"""
-    elif kind == "topology":
-        body = f"""<rect x="45" y="75" width="250" height="130" rx="16"/><ellipse class="diagram-shape" cx="480" cy="140" rx="100" ry="65"/><rect x="665" y="75" width="250" height="130" rx="16"/>
-{svg_label(first, 170, 135)}{svg_label(second, 480, 135)}{svg_label(third, 790, 135)}
-<g class="arrows" marker-end="url(#arrow-{index})"><line x1="305" y1="140" x2="370" y2="140" marker-start="url(#arrow-{index})"/><line x1="590" y1="140" x2="655" y2="140" marker-start="url(#arrow-{index})"/></g>"""
+        height = 380
+        body = (
+            '<g class="axes"><line x1="65" y1="295" x2="345" y2="295"/>'
+            '<line x1="65" y1="295" x2="65" y2="40"/></g>'
+            '<polyline class="roofline" points="65,280 205,105 340,105"/>'
+            + svg_label(first, 200, 250, width=17)
+            + svg_label(second, 270, 190, width=14)
+            + svg_label(third, 268, 55, width=17)
+            + arrow("M240 165 L209 112")
+            + '<text x="200" y="345" text-anchor="middle">Operations / byte →</text>'
+            + '<text x="22" y="175" transform="rotate(-90 22 175)" '
+            'text-anchor="middle">Operations / second</text>'
+        )
     elif kind == "overlap":
-        body = f"""<text x="100" y="85" text-anchor="middle">Compute</text><text x="100" y="170" text-anchor="middle">Collective</text>
-<rect x="230" y="45" width="400" height="65" rx="8"/><rect x="390" y="135" width="460" height="65" rx="8"/>
-<rect class="exposed" x="630" y="135" width="220" height="65" rx="8"/>
-{svg_label(first, 430, 73)}{svg_label(second, 510, 162)}{svg_label(third, 740, 224)}
-<line class="timeline" x1="630" y1="35" x2="630" y2="215" stroke-dasharray="5 5"/>
-<text x="390" y="125" text-anchor="middle" class="diagram-note">Bucket ready</text>
-<text x="480" y="283" text-anchor="middle" class="diagram-note">Schematic: an earlier ready bucket overlaps remaining backward; only its tail extends the step</text>"""
+        height = 490
+        body = (
+            svg_label("Compute", 100, 30)
+            + svg_label("Collective", 280, 30)
+            + '<rect x="35" y="70" width="130" height="260" rx="8"/>'
+            '<rect x="215" y="195" width="130" height="260" rx="8"/>'
+            '<rect class="exposed" x="215" y="330" width="130" height="125" rx="8"/>'
+            + svg_label(first, 100, 190, width=13)
+            + svg_label(second, 280, 262, width=13)
+            + svg_label(third, 280, 392, width=13)
+            + svg_label("Bucket ready", 280, 154, width=13)
+            + '<line class="timeline" x1="25" y1="330" x2="350" y2="330" stroke-dasharray="5 5"/>'
+            + svg_label("Compute ends", 100, 357, width=13)
+            + arrow("M190 80 V450")
+            + svg_label("Time ↓", 100, 450)
+        )
     elif kind == "pipeline":
-        body = f"""<text x="100" y="85" text-anchor="middle">Compute</text><text x="100" y="170" text-anchor="middle">Async copy</text>
-<rect x="230" y="45" width="300" height="65" rx="8"/><rect x="570" y="45" width="300" height="65" rx="8"/>
-<rect x="300" y="135" width="220" height="65" rx="8"/>
-{svg_label("Compute tile i", 380, 75)}{svg_label("Compute tile i+1", 720, 75)}{svg_label("Load tile i+1", 410, 163)}
-<path d="M520 170 H550 V77 H570" fill="none" stroke="#206757" stroke-width="3" marker-end="url(#arrow-{index})"/>
-<text x="480" y="250" text-anchor="middle" class="diagram-note">Wait for tile readiness before its consumer starts; wait for consumers before buffer reuse</text>
-<text x="480" y="280" text-anchor="middle" class="diagram-note">Schematic steady state: prime tile i before this interval; drain after the final tile</text>"""
-    elif kind == "timeline":
-        body = f"""<line class="timeline" x1="135" y1="140" x2="825" y2="140"/><circle class="diagram-shape" cx="165" cy="140" r="38"/><circle class="diagram-shape" cx="480" cy="140" r="38"/><circle class="diagram-shape" cx="795" cy="140" r="38"/>
-{svg_label(first, 165, 215)}{svg_label(second, 480, 215)}{svg_label(third, 795, 215)}"""
-    elif kind == "decision":
-        body = f"""<path class="diagram-shape" d="M80 55 H880 L790 115 H170 Z"/><path class="diagram-shape" d="M170 125 H790 L690 185 H270 Z"/><path class="diagram-shape" d="M270 195 H690 L585 255 H375 Z"/>
-{svg_label(first, 480, 85, width=24, max_lines=2)}{svg_label(second, 480, 155, width=24, max_lines=2)}{svg_label(third, 480, 225, width=24, max_lines=2)}"""
-    else:
-        body = f"""<g text-anchor="middle"><rect x="45" y="80" width="240" height="100" rx="14"/><rect x="360" y="80" width="240" height="100" rx="14"/><rect x="675" y="80" width="240" height="100" rx="14"/>
-{labels[0]}{labels[1]}{labels[2]}</g>
-<g class="arrows" marker-end="url(#arrow-{index})"><line x1="285" y1="130" x2="350" y2="130"/><line x1="600" y1="130" x2="665" y2="130"/></g>"""
-    if kind == "cycle":
-        body += f'<path d="M795 185 V260 H165 V185" fill="none" stroke="#206757" stroke-width="3" marker-end="url(#arrow-{index})"/>'
+        height = 465
+        body = (
+            svg_label("Compute", 95, 30)
+            + svg_label("Async copy", 280, 30)
+            + '<rect x="30" y="70" width="130" height="120" rx="8"/>'
+            '<rect x="30" y="270" width="130" height="120" rx="8"/>'
+            '<rect x="215" y="110" width="130" height="110" rx="8"/>'
+            + svg_label("Compute tile i", 95, 130, width=13)
+            + svg_label("Compute tile i+1", 95, 330, width=13)
+            + svg_label("Load tile i+1", 280, 165, width=13)
+            + arrow("M280 224 V242 H95 V262")
+            + svg_label("Copy ready", 280, 257, width=13)
+            + svg_label("Time runs downward", 180, 430, width=28)
+        )
     description = f"{explanation} Diagram concepts: {first}; {second}; {third}."
     return f"""
-<figure class="overview-diagram" id="{diagram_id}" data-after="{html.escape(row.after)}" data-diagram-kind="{kind}"><svg viewBox="0 0 960 300" role="img" aria-labelledby="{diagram_id}-title {diagram_id}-desc">
+<figure class="overview-diagram" id="{diagram_id}" data-after="{html.escape(row.after)}" data-diagram-kind="{kind}"><svg viewBox="0 0 {width} {height}" style="max-width: {width + 60}px; margin-inline: auto" role="img" aria-labelledby="{diagram_id}-title {diagram_id}-desc">
 <title id="{diagram_id}-title">{html.escape(title)}</title>
 <desc id="{diagram_id}-desc">{html.escape(description)}</desc>
 <defs><marker id="arrow-{index}" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" orient="auto-start-reverse"><path d="M0,0 L0,8 L8,4 z" fill="#206757"/></marker></defs>
@@ -469,40 +493,43 @@ def lesson_markup(
         f"<h2>{number}. {html.escape(title)}</h2>",
     ]
     for field in LESSON_FIELDS:
-        if field == "Practice labs":
-            continue
         content = lesson.get(field)
-        if not content:
+        if field == "Practice labs" and practice_labs is not None:
+            expected = "\n".join(
+                f"- [{guide['title']}](reference/labs/{guide['source'].stem}.md)"
+                for guide in practice_labs
+            )
+            if not expected or (content or "").strip() != expected:
+                raise ValueError(
+                    f"{title}: Practice labs must match its assigned guides"
+                )
+            body = (
+                "<ul>"
+                + "".join(
+                    f'<li><a href="#lab-{slug(guide["source"].stem)}">{html.escape(guide["title"])}</a></li>'
+                    for guide in practice_labs
+                )
+                + "</ul>"
+            )
+        elif content:
+            body = block(content, links)
+        else:
             continue
         class_name = FIELD_CLASSES[field]
         parts.append(
-            f'<div class="{class_name}"><strong>{html.escape(field)}</strong> {block(content, links)}</div>'
+            f'<div class="{class_name}"><strong>{html.escape(field)}</strong> {body}'
         )
         parts.extend((figures or {}).get(field, []))
-    if related:
-        parts.append(
-            '<div class="lesson-visuals"><strong>Related diagram</strong><ul>'
-            + "".join(
-                f'<li><a href="#{target}">{html.escape(label)}</a></li>'
-                for label, target in related
+        if field == "How it works" and related:
+            parts.append(
+                '<aside class="lesson-visuals"><strong>Related diagram</strong><ul>'
+                + "".join(
+                    f'<li><a href="#{target}">{html.escape(label)}</a></li>'
+                    for label, target in related
+                )
+                + "</ul></aside>"
             )
-            + "</ul></div>"
-        )
-    if practice_labs is not None:
-        expected = "\n".join(
-            f"- [{guide['title']}](reference/labs/{guide['source'].stem}.md)"
-            for guide in practice_labs
-        )
-        if not expected or lesson.get("Practice labs", "").strip() != expected:
-            raise ValueError(f"{title}: Practice labs must match its assigned guides")
-        parts.append(
-            '<div class="practice-links"><strong>Practice labs</strong><ul>'
-            + "".join(
-                f'<li><a href="#lab-{slug(guide["source"].stem)}">{html.escape(guide["title"])}</a></li>'
-                for guide in practice_labs
-            )
-            + "</ul></div>"
-        )
+        parts.append("</div>")
     parts.append("</section>")
     return "\n".join(parts)
 
@@ -852,12 +879,10 @@ def render_catalog() -> str:
 def render_course(course_name: str) -> str:
     course = ROOT / course_name
     canonical_title, preamble, lessons = parse_course(course / "COURSE.md")
-    for number, lesson in enumerate(lessons, 1):
-        opening = "Start here" if number == 1 else "What it is"
-        expected_fields = {"title", *LESSON_FIELDS} - {"Start here", "What it is"}
-        if set(lesson) != expected_fields | {opening}:
+    for lesson in lessons:
+        if list(lesson) != ["title", *LESSON_FIELDS]:
             raise ValueError(
-                "every lesson needs its definition, theory and Practice labs links"
+                "every lesson needs Objective, How it works, Practice labs and Mental model in order"
             )
     metadata = course_metadata(course)
     title = metadata["title"]
@@ -940,6 +965,11 @@ def render_course(course_name: str) -> str:
             entry["after"],
             detailed_diagram_markup(entry),
         )
+    for number in range(1, len(lessons) + 1):
+        if not inline_figures.get(number, {}).get("How it works"):
+            raise ValueError(
+                f"Lesson {number} needs a core diagram inside How it works"
+            )
     lesson_html = "\n".join(
         lesson_markup(
             item,

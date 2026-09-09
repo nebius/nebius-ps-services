@@ -6,7 +6,7 @@
       "lessons": [
         1
       ],
-      "after": "Start here",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -15,7 +15,7 @@
       "lessons": [
         2
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -24,7 +24,7 @@
       "lessons": [
         3
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -33,7 +33,7 @@
       "lessons": [
         3
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -42,7 +42,7 @@
       "lessons": [
         4
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -51,7 +51,7 @@
       "lessons": [
         15
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -69,7 +69,16 @@
       "lessons": [
         13
       ],
-      "after": "Mechanism",
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/adapter-paths.svg",
+      "title": "Frozen base and trainable adapter paths",
+      "lessons": [
+        14
+      ],
+      "after": "How it works",
       "home": "lesson"
     }
   ]

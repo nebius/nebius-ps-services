@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from nebius_cxcli.paths import ProjectPaths
+from nebius_cxcli.soperator_checks_policy import freeze_checks_proposal
 from nebius_cxcli.soperator_destroy import (
     build_soperator_destroy_receipt,
     write_soperator_destroy_receipt,
@@ -59,6 +60,10 @@ def _write_private(path: Path, payload: object) -> None:
 
 def _campaign_intent():
     return build_campaign_intent(
+        checks_policy_proposal=freeze_checks_proposal(
+            {"soperator-checks": {"enabled": True}, "soperator-activechecks": {"enabled": True}}
+        ),
+        checks_release_snapshot_sha256="sha256:" + "d" * 64,
         target_ref="cluster-a",
         ownership="managed",
         backend="terraform",
@@ -293,7 +298,7 @@ def test_status_reports_upgrade_safety_pause_and_frozen_resume(tmp_path: Path) -
     _write_private(
         reconcile_path,
         {
-            "schema": "nebius-cxcli.soperator-reconcile-receipt.v6",
+            "schema": "nebius-cxcli.soperator-reconcile-receipt.v7",
             "target": {"ref": "cluster-a"},
             "status": "safety-paused",
             "supervisor": {
@@ -322,7 +327,7 @@ def test_status_projects_upgrade_transition_failure_classification(tmp_path: Pat
     _write_private(
         reconcile_path,
         {
-            "schema": "nebius-cxcli.soperator-reconcile-receipt.v6",
+            "schema": "nebius-cxcli.soperator-reconcile-receipt.v7",
             "target": {"ref": "cluster-a"},
             "status": "failed",
             "transitions": [
@@ -359,7 +364,7 @@ def test_status_does_not_reflect_unknown_upgrade_classification(
     paths = _paths(tmp_path)
     reconcile_path = paths.reports_dir / "soperator-release-reconcile-cluster-a-operation.json"
     payload: dict[str, object] = {
-        "schema": "nebius-cxcli.soperator-reconcile-receipt.v6",
+        "schema": "nebius-cxcli.soperator-reconcile-receipt.v7",
         "target": {"ref": "cluster-a"},
         "status": "recovery-required",
         "transitions": [],

@@ -152,16 +152,6 @@ def _install_fake_compute_module(
     presets_by_platform: dict[str, list[dict[str, Any]]] | None = None,
     public_images: list[dict[str, Any]] | None = None,
 ) -> None:
-    common_module = cast(Any, ModuleType("nebius.api.nebius.common.v1"))
-
-    class GetByNameRequest:
-        def __init__(self, *, parent_id: str, name: str) -> None:
-            self.parent_id = parent_id
-            self.name = name
-
-    common_module.GetByNameRequest = GetByNameRequest
-    _install_module(monkeypatch, "nebius.api.nebius.common.v1", common_module)
-
     compute_module = cast(Any, ModuleType("nebius.api.nebius.compute.v1"))
 
     class ListPlatformsRequest:
@@ -186,32 +176,30 @@ def _install_fake_compute_module(
                 items=[
                     SimpleNamespace(
                         metadata=SimpleNamespace(name=name),
-                        spec=SimpleNamespace(short_human_readable_name=short_name),
+                        spec=SimpleNamespace(
+                            short_human_readable_name=short_name,
+                            presets=[
+                                SimpleNamespace(
+                                    name=item.get("name"),
+                                    resources=SimpleNamespace(
+                                        vcpu_count=item.get("vcpu_count"),
+                                        memory_gibibytes=item.get("memory_gibibytes"),
+                                        gpu_count=item.get("gpu_count"),
+                                    ),
+                                    allow_gpu_clustering=bool(
+                                        item.get("allow_gpu_clustering", False)
+                                    ),
+                                )
+                                for item in (presets_by_platform or {}).get(name, [])
+                            ],
+                        ),
                     )
-                    for name, short_name in platforms
+                    for name, short_name in {
+                        **{name: "" for name in (presets_by_platform or {})},
+                        **dict(platforms),
+                    }.items()
                 ],
                 next_page_token="",
-            )
-            return SimpleNamespace(wait=lambda: response)
-
-        def get_by_name(self, request: Any, **_kwargs: object) -> SimpleNamespace:
-            platform_name = getattr(request, "name", "")
-            presets = [
-                SimpleNamespace(
-                    name=item.get("name"),
-                    resources=SimpleNamespace(
-                        vcpu_count=item.get("vcpu_count"),
-                        memory_gibibytes=item.get("memory_gibibytes"),
-                        gpu_count=item.get("gpu_count"),
-                    ),
-                    allow_gpu_clustering=bool(item.get("allow_gpu_clustering", False)),
-                )
-                for item in (presets_by_platform or {}).get(platform_name, [])
-            ]
-            response = SimpleNamespace(
-                spec=SimpleNamespace(
-                    presets=presets,
-                )
             )
             return SimpleNamespace(wait=lambda: response)
 
@@ -336,7 +324,9 @@ def _install_fake_vpc_module(
                             ),
                         ),
                         status=SimpleNamespace(
-                            ipv4_private_cidrs=list(item.get("ipv4_private_cidrs", []))
+                            ipv4_private_pools=[
+                                SimpleNamespace(cidrs=list(item.get("ipv4_private_cidrs", [])))
+                            ]
                         ),
                     )
                     for item in subnets

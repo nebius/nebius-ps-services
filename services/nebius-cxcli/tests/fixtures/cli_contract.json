@@ -188,7 +188,7 @@
           "a fresh --no-interactive install requires this option",
           "--resume rejects it and reuses the frozen release",
           "fresh-install identity, profile, network, subnet, release, and overwrite options are rejected",
-          "stale, never-executed saved plan"
+          "never-executed or failed infrastructure plan"
         ],
         "option_help": {
           "--approval-fingerprint": "Exact fingerprint printed by the preceding --dry-run; required for automated resume.",
@@ -205,11 +205,12 @@
           "--project-id": "Nebius project identifier for the new Soperator cluster.",
           "--region-id": "Nebius region identifier; defaults to eu-north1 for a fresh install.",
           "--release": "Official stable Soperator release selector: latest or exact X.Y.Z. Interactive omission prompts with latest(<resolved-version>); a fresh --no-interactive install requires this option, while --resume rejects it and reuses the frozen release.",
-          "--replan": "With --resume --dry-run, replace a stale, never-executed saved plan and approval fingerprint.",
+          "--replan": "With --resume --dry-run, refresh a never-executed or failed infrastructure plan and approval fingerprint.",
           "--resume": "Resume the exact previously saved config/plan/receipt; fresh-install identity, profile, network, subnet, release, and overwrite options are rejected.",
           "--subnet-id": "Existing VPC subnet binding; repeatable.",
           "--subnet-ref": "Planned VPC subnet ref; repeatable.",
-          "--tenant-id": "Nebius tenant identifier for the new project."
+          "--tenant-id": "Nebius tenant identifier for the new project.",
+          "--values-file": "Values-only YAML for fresh Soperator install; wizard answers may override it. Not accepted with --resume."
         },
         "option_order": [
           "--client-name",
@@ -218,6 +219,7 @@
           "--region-id",
           "--email",
           "--profile",
+          "--values-file",
           "--release",
           "--network-id",
           "--subnet-id",
@@ -253,7 +255,8 @@
           "--resume",
           "--subnet-id",
           "--subnet-ref",
-          "--tenant-id"
+          "--tenant-id",
+          "--values-file"
         ],
         "paired": {
           "--interactive": [
@@ -527,19 +530,19 @@
     "acceptance-test": "a0ccc4ab3719fbf0cb449cbf6b5d312c3c7ae3d6d8d6c6cf67409299c328e800",
     "acceptance-test benchmark": "2e7589b20e59de8d04cd9589d4ab8deec1cfa69fc114418788e81f8f36e53b1e",
     "acceptance-test smoke": "263c7ef3bac13489349086a15ec55d20be6f9261d51207879b616c1b03b94bb3",
-    "auth": "5c2916950014be3de99c2dd6969fa8a8068c4f719e7e7a0a7593e64fb053fd41",
+    "auth": "2643301fc3c0fe70ec4249b44886eeae659750ce185933fb77ef294b8ba35e5f",
     "bootstrap-ci": "3265db5909759cd3730298c2241f9b54a01f2c753f0762db678dbeec6e0e7f84",
     "component": "c3b76dbf3e438557e49d295c2eb4b1c2698872b59a6142f929821b04df80017f",
     "component add": "52766188cd19f7ab47ae98d0f4b9620b3513fde4498eda14e44413fb728e7bf1",
     "component list": "c0a4ea13d5b2b9b7aec32f002df479c735f831cc4f51a8ea57650b646c843032",
     "component remove": "89542ceeaba0d6b48373318b3948f5b82382d8f4645c202ef4015144d49bd536",
     "create": "e47f74997d6b2222578c9e96ba806ba0b622db7c68c06d16eac5ecefeb93b210",
-    "deploy": "7259c7ded40439dffd74ca55cd6693e3d788f03526409df62ec0b3de1c213b5d",
+    "deploy": "4c00860a4313910a91ba102c31faa8aa1aa6ed915e5f0527a3bf725b4692e5d3",
     "destroy": "90df8eb96c4c29fa8b9f616efc628f0a5cfde2a153ea346f081ca39ae748abc7",
     "discover": "b548e4cad18d6f95a362288d585a97234f51c6cd8b6e6b756c9424082e73a098",
     "email": "d00ca7d645185f7b7cb48d01e9649fd98262cfb5317146fc33835745615efb8c",
     "flux": "5c9678f4f729cdf79cdb3470d9eabb5ad225abb09648250160bdaeed8e54afe5",
-    "flux apply": "471d9c12423b6c02823dcd621365bfe186a83a5a1ac99912d62c98b8e75db34b",
+    "flux apply": "37bb345b89a31a2facd821da7529653a722f261a756118b4740c08446f524d53",
     "flux bootstrap": "76f5d57522f3e8c9f08863a35461548bad5a178649ca0d0815cc6a1bec936f6f",
     "flux destroy": "b716466a68fcf5f5d6427ff5a33c01d19dc5c119fbd26282dcde046535d79f00",
     "grafana": "0ff02a3df5676bde29cb010556509f97fb77e8baecc299d2e9b4a63e73b0f56e",
@@ -548,11 +551,11 @@
     "mk8s-token": "c81de4d40869095daf28c31b008ab4342cccb6177c3154d6ae23fd1723762729",
     "quota-check": "19a2c88de13e80fa8998374506f32e26f89c703d483f7203626b85e8b9ba4ef5",
     "quota-request": "3188cfb0f98f7cdf7b695ec59905bb5f970f20e62abb70f167f9d262879f3910",
-    "render": "a4037386888c6055caabd68b8aa48586a94dbaf48866d4e5f5c5afebfc95ea14",
+    "render": "ed24d2f4277e596ed0aa54919e68cd282639ffc21540c0526232bceee24fe31e",
     "soperator": "9218b3ac1a03c35226976d2f8d440f42d1cced7d835d8b788e8d534c7b295c9c",
     "soperator destroy": "74cf9589cb447ac38df707368e95af2b95123f9e2b8dba53060dd7a80f279eca",
     "soperator discover": "81fc0b3a5c735fceb2034613b55b0a99436eaab520d071f44bbcf837222e8926",
-    "soperator install": "9b167836ff479fdd285e3414b9700bb4c9513cd88fa4c454b935f3ea7221d0ec",
+    "soperator install": "6f98fb8c102d0a145f824c83e6c1c3fa578d34d6969cea38f028ab64287eee72",
     "soperator onboard": "0c0d797c6fe887e6c1bd653d917fd40fef6e3900baa22c7b759866fb250597d7",
     "soperator status": "ddedafe3e35a4cad77d0636065bcccaa003d0a273d0024d3598dfdd2b42e881b",
     "soperator upgrade": "831f6ad9a8c0e8303ce9ef1d0ab8e3ece0f945ac490af0d9190603ff4f5652bf",

@@ -4,13 +4,13 @@ Fully Sharded Data Parallel reduces persistent state per rank by distributing pa
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 6–7 and 11 for persistent/transient state, mixed-precision policy, FSDP2 sharding, all-gather/reduce-scatter and optimizer construction after sharding. Reuse Lesson 4’s update and normalization rules and complete distributed preflight.
+**Theory preparation:** Read Lessons 6–7 and 11 for persistent and transient state, mixed precision, sharding, all-gather and reduce-scatter. Reuse Lesson 4's update rules and complete distributed preflight.
 
 Pass distributed preflight and qualify the Training environment's FSDP2 API. Review DDP first. The example is intentionally small enough for mechanics; it is not a production-scale memory or network benchmark.
 
 ## Concepts and code path
 
-The code constructs the model, applies FSDP2's composable sharding to the configured modules, creates the optimizer for that state, and runs the training loop. Parameter materialization and gradient reduction occur around computation. Reporting uses the slowest rank and maximum peak allocation. Transient activations, gathered parameters, and communication buffers still consume memory.
+The code constructs the model, applies `fully_shard` to each transformer block and then the root, and creates AdamW afterward. `MixedPrecisionPolicy` sets computation and reduction formats separately. Parameters materialize for computation and gradients reduce to their owners; gathered parameters, activations and communication buffers still contribute to peak memory. Reporting uses the slowest rank and maximum allocation.
 
 ## Practice
 

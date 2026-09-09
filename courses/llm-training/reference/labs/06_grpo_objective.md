@@ -4,7 +4,7 @@ GRPO uses rewards from multiple completions of the same prompt to construct a re
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 15 for grouped rewards, advantages, old/reference policies, log-probability ratios, the clipped surrogate and the sampled KL penalty. Lessons 3–4 supply loss differentiation. Lesson 1 is a preview; run this objective calculation before the trainer in Lab 07.
+**Theory preparation:** Read Lesson 15 for grouped rewards, advantages, old and reference policies, probability ratios and the clipped surrogate. Lessons 3–4 supply differentiation. Complete this objective exercise before Lab 07.
 
 Use one H100 and review log probabilities, gradients, and the GRPO calculation in Practice below. A group must contain enough completions to define a useful relative signal; `--group-size` controls this dimension.
 
@@ -12,7 +12,7 @@ H100 accelerates policy inference and training differently. Variable decode leng
 
 ## Concepts and code path
 
-The code creates reward groups and old, new, and reference log-probability tensors. It normalizes rewards within each group, forms the new-to-old probability ratio, applies a clipped surrogate, adds an approximate KL-related penalty, and differentiates the loss with respect to new log probabilities. There is no rollout engine, tokenizer, language model, or optimizer update here.
+The code generates reward groups and old, new and reference log probabilities. It normalizes each group's rewards, forms the clipped new-to-old surrogate and minimizes its negative plus `0.02 * (exp(d)-d-1)`, where `d = reference_log_probability - new_log_probability`. Backward differentiates this toy loss with respect to new log probabilities. There is no language model, rollout engine or optimizer update, and the sampled penalty is not a full-policy KL measurement.
 
 ## Practice
 

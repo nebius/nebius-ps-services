@@ -200,9 +200,7 @@ def _enabled_mysterybox_secret_refs(payload: Mapping[str, Any]) -> list[dict[str
             secret_payload = secret.get("payload")
             if isinstance(secret_payload, Mapping):
                 ref["payload_keys"] = [
-                    _as_text(payload_key)
-                    for payload_key in secret_payload
-                    if _as_text(payload_key)
+                    _as_text(payload_key) for payload_key in secret_payload if _as_text(payload_key)
                 ]
             kubernetes_secret_name = _as_text(secret.get("kubernetes_secret_name"))
             if kubernetes_secret_name:
@@ -220,9 +218,7 @@ def _enabled_mysterybox_secret_names_by_instance(
 ) -> dict[str, set[str]]:
     names_by_instance: dict[str, set[str]] = {}
     for ref in _enabled_mysterybox_secret_refs(payload):
-        names_by_instance.setdefault(ref["mysterybox_instance_id"], set()).add(
-            ref["secret_name"]
-        )
+        names_by_instance.setdefault(ref["mysterybox_instance_id"], set()).add(ref["secret_name"])
     return names_by_instance
 
 
@@ -263,6 +259,7 @@ def _generated_external_secrets(
     config: Mapping[str, Any],
     *,
     target_ref: str = "",
+    scope: str = "all",
 ) -> list[dict[str, Any]]:
     refs = _enabled_mysterybox_secret_refs(payload)
     sync_namespaces = _sync_namespaces(config)
@@ -270,6 +267,7 @@ def _generated_external_secrets(
         return []
     include_instance_prefix = len({item["mysterybox_instance_id"] for item in refs}) > 1
     external_secrets: list[dict[str, Any]] = []
+    protected_targets: set[tuple[str, str]] = set()
     if refs:
         for namespace in sync_namespaces:
             seen_names: set[str] = set()
@@ -289,8 +287,7 @@ def _generated_external_secrets(
                 }
                 version = _as_text(ref.get("version"))
                 if (
-                    _as_text(ref.get("eso_version_policy"))
-                    == MYSTERYBOX_ESO_MANUAL_VERSION_POLICY
+                    _as_text(ref.get("eso_version_policy")) == MYSTERYBOX_ESO_MANUAL_VERSION_POLICY
                     and version
                 ):
                     remote_ref_base["version"] = version
@@ -322,6 +319,7 @@ def _generated_external_secrets(
         if not namespace or not name or not secret_id or not secret_key:
             continue
         rendered_key = (namespace, _as_text(ref.get("target_name")) or name, secret_key)
+        protected_targets.add(rendered_key[:2])
         direct_data = {
             "secret_key": secret_key,
             "secret_id": secret_id,
@@ -362,7 +360,16 @@ def _generated_external_secrets(
                 "data": [copy.deepcopy(direct_data)],
             }
         )
-    return external_secrets
+    if scope == "all":
+        return external_secrets
+    if scope not in {"protected", "ordinary"}:
+        raise ValueError("Unknown MysteryBox resource ownership scope")
+    return [
+        item
+        for item in external_secrets
+        if ((str(item["namespace"]), str(item["target"]["name"])) in protected_targets)
+        == (scope == "protected")
+    ]
 
 
 def _append_unique(items: list[str], value: str, seen: set[str]) -> None:
@@ -569,11 +576,7 @@ def ensure_mysterybox_eso_app_rows(
     charts = _ensure_app_charts(payload)
     changed = False
     rows = _app_chart_rows(payload, EXTERNAL_SECRETS_APP_ID)
-    rows_by_target = {
-        component_instance_id(row): row
-        for row in rows
-        if isinstance(row, dict)
-    }
+    rows_by_target = {component_instance_id(row): row for row in rows if isinstance(row, dict)}
     for target_ref in enabled_targets:
         existing = rows_by_target.get(target_ref)
         if existing is None:
@@ -908,6 +911,7 @@ def mysterybox_eso_extra_objects_for_target(
     payload_or_config: Any,
     *,
     target_ref: str,
+    scope: str = "all",
     component_output_values: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     payload = _payload(payload_or_config)
@@ -928,9 +932,12 @@ def mysterybox_eso_extra_objects_for_target(
         for namespace in _managed_namespaces(config)
         if _should_render_namespace_doc(namespace)
     ]
-    objects = [_namespace_doc(namespace) for namespace in namespaces]
-    objects.append(_cluster_secret_store_doc(config))
-    for item in _generated_external_secrets(payload, config, target_ref=normalized_target_ref):
+    objects = [] if scope == "ordinary" else [_namespace_doc(namespace) for namespace in namespaces]
+    if scope != "ordinary":
+        objects.append(_cluster_secret_store_doc(config))
+    for item in _generated_external_secrets(
+        payload, config, target_ref=normalized_target_ref, scope=scope
+    ):
         if _as_text(item.get("name")) and _as_text(item.get("namespace")):
             external_secret = _external_secret_doc(
                 payload,
@@ -966,9 +973,7 @@ def strip_mysterybox_eso_app_values(payload_or_config: Any) -> bool:
         existing = values.get("extraObjects")
         if not isinstance(existing, list):
             continue
-        preserved = [
-            copy.deepcopy(item) for item in existing if not _is_managed_extra_object(item)
-        ]
+        preserved = [copy.deepcopy(item) for item in existing if not _is_managed_extra_object(item)]
         if preserved == existing:
             continue
         if preserved:

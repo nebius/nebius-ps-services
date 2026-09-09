@@ -196,6 +196,108 @@ def test_recent_release_snapshot_rejects_stale_adapter_mount_image(tmp_path: Pat
     )
 
 
+@pytest.mark.parametrize("cached_selector", ["latest", "4.1.7"])
+def test_frozen_digest_survives_selector_expiry_and_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cached_selector: str
+) -> None:
+    original = resolver.seal_soperator_release_snapshot(_snapshot_with_current_mount_image())
+    cache_root = tmp_path / "cache"
+    path = resolver._write_recent_release_snapshot(
+        original, selector=cached_selector, cache_root=cache_root
+    )
+    os.utime(path, (1, 1))
+    changed = replace(original, archive_sha256="sha256:" + "a" * 64, snapshot_sha256="")
+    resolver._write_recent_release_snapshot(changed, selector="4.1.7", cache_root=cache_root)
+    observed = []
+
+    class _Ledger:
+        def __init__(self, _root):
+            pass
+
+        def locked(self, metadata):
+            observed.append(metadata)
+            return nullcontext()
+
+    def rehydrate(snapshot, **_kwargs):
+        assert snapshot == original
+        return SimpleNamespace(metadata="verified", snapshot=snapshot)
+
+    monkeypatch.setattr(resolver, "SoperatorReleaseIdentityLedger", _Ledger)
+    monkeypatch.setattr(resolver, "frozen_soperator_release_from_snapshot", rehydrate)
+    monkeypatch.setattr(
+        resolver,
+        "resolve_soperator_release",
+        lambda *_a, **_k: pytest.fail("frozen authority must not resolve mutable tags"),
+    )
+    frozen = resolver.freeze_soperator_release(
+        "4.1.7", cache_root=cache_root, snapshot_sha256=original.snapshot_sha256
+    )
+    assert frozen.snapshot == original
+    assert observed == ["verified"]
+
+
+@pytest.mark.parametrize("digest", ["bad", "sha256:" + "f" * 64])
+def test_frozen_digest_missing_or_invalid_never_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, digest: str
+) -> None:
+    monkeypatch.setattr(
+        resolver,
+        "resolve_soperator_release",
+        lambda *_a, **_k: pytest.fail("missing frozen content must stop"),
+    )
+    with pytest.raises((ValueError, RuntimeError), match="snapshot"):
+        resolver.freeze_soperator_release("4.1.7", cache_root=tmp_path, snapshot_sha256=digest)
+
+
+def test_frozen_digest_accepts_only_matching_sealed_selector_content(tmp_path: Path) -> None:
+    original = resolver.seal_soperator_release_snapshot(_snapshot_with_current_mount_image())
+    path = resolver._recent_release_snapshot_path("latest", cache_root=tmp_path)
+    resolver.write_soperator_release_snapshot(
+        path,
+        resolver.seal_soperator_release_snapshot(
+            replace(original, selector="latest", snapshot_sha256="")
+        ),
+    )
+    os.utime(path, (1, 1))
+    assert (
+        resolver._load_frozen_release_snapshot(
+            "4.1.7", original.snapshot_sha256, cache_root=tmp_path
+        )
+        == original
+    )
+    with pytest.raises(ValueError, match="snapshot digest differs"):
+        resolver._load_frozen_release_snapshot(
+            "4.1.5", original.snapshot_sha256, cache_root=tmp_path
+        )
+
+
+@pytest.mark.parametrize("corruption", ["symlink", "different-content", "changed-digest"])
+def test_retained_snapshot_corruption_stops_before_selector_lookup(
+    tmp_path: Path, corruption: str
+) -> None:
+    original = resolver.seal_soperator_release_snapshot(_snapshot_with_current_mount_image())
+    selector = resolver._write_recent_release_snapshot(
+        original, selector="4.1.7", cache_root=tmp_path
+    )
+    path = selector.parent / "by-digest" / f"{original.snapshot_sha256[7:]}.json"
+    if corruption == "symlink":
+        path.unlink()
+        path.symlink_to(selector)
+    else:
+        changed = replace(original, archive_sha256="sha256:" + "a" * 64, snapshot_sha256="")
+        resolver.write_soperator_release_snapshot(
+            path, resolver.seal_soperator_release_snapshot(changed)
+        )
+        if corruption == "changed-digest":
+            path.write_text(
+                path.read_text().replace(changed.archive_sha256, original.archive_sha256)
+            )
+    with pytest.raises((ValueError, RuntimeError)):
+        resolver._load_frozen_release_snapshot(
+            "4.1.7", original.snapshot_sha256, cache_root=tmp_path
+        )
+
+
 @pytest.mark.parametrize(
     "repository",
     (

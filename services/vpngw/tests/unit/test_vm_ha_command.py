@@ -131,6 +131,7 @@ def _write_vm_ha_agent_wheel(wheel: Path) -> None:
     }
     for asset_name in (
         "nebius-vpngw-agent.service",
+        "nebius-vpngw-agent-ordering.conf",
         "nebius-vpngw-esp4-preflight.sh",
         "nebius-vpngw-fix-routes.service",
         "nebius-vpngw-fix-routes.timer",
@@ -5486,10 +5487,15 @@ def test_vm_ha_json_approval_required_never_prompts_and_keeps_stdout_pure(
 
 
 @pytest.mark.parametrize("extra_args", ((), ("--output-format", "json")))
+@pytest.mark.parametrize(
+    ("plan_kind", "ssh_action"), (("apply-convergence", None), ("migration", "migrate"))
+)
 def test_vm_ha_exact_apply_approval_replans_under_lock_and_never_prompts(
     monkeypatch,
     tmp_path: Path,
     extra_args: tuple[str, ...],
+    plan_kind: str,
+    ssh_action: str | None,
 ) -> None:
     config_path = tmp_path / "gateway.vm-ha.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -5503,12 +5509,12 @@ def test_vm_ha_exact_apply_approval_replans_under_lock_and_never_prompts(
     healthy = _inspection(_snapshot(overall="HEALTHY", action="none", digest="b" * 64))
     inspect = Mock(side_effect=(drift, healthy, healthy))
     report = _VMHAApplyPlanReport(
-        kind="apply-convergence",
+        kind=plan_kind,
         digest="d" * 64,
         engine_digest="e" * 64,
         effects=("reconcile-managed-routes-through-apply-owner",),
         has_destructive_changes=False,
-        managed_ssh_action=None,
+        managed_ssh_action=ssh_action,
     )
     planner = Mock(side_effect=(report, report))
     effect = Mock()

@@ -38,6 +38,8 @@ Kernels.
 | LLM Inference | [Read the course](llm-inference/index.html) | 47 |
 | Custom CUDA Kernels for GPU Optimization | [Read the course](custom-cuda-kernels/index.html) | 36 |
 
+Lesson 1 of Fundamentals starts with an H100 SXM overview before enlarging one SM. Across the catalog, lessons explain concepts; the linked labs define their setup, supplied code and result checks where students use them.
+
 Each self-contained page uses a light digital-textbook layout: a persistent
 side-panel TOC, a wide responsive content frame, soft blue and mint callouts,
 and complete source listings. Diagrams sit directly beside their lesson or lab
@@ -98,24 +100,28 @@ travels with each saved HTML file.
 
 ## Educational approach
 
-Every course begins with an authored **Start here** introduction that defines
-the subject, explains its value and workflow, introduces essential vocabulary
-and includes a small worked example. Introductory diagrams stay beside those explanations. Newcomers
-follow the prerequisite route; experienced readers use the readiness checkpoint.
+Every lesson has a concise title naming its central subject and uses four
+sections: **Objective**, **How it works**, **Practice labs**, then **Mental model**.
+The objective states the capability to learn. How it works starts with a
+plain-English definition, integrates useful prerequisite connections and
+purpose, and follows the causal steps through to their consequences. It contains
+at least one accessible diagram explaining the core concept. Unfamiliar terms
+such as Parallel Thread Execution (PTX) are expanded in context; common CPU/GPU
+names do not need repeated expansions. The closing mental model summarizes
+concepts already explained.
+
+Each course preserves its substantial introductory explanation of the subject,
+workflow and vocabulary, plus a small worked example, inside How it works.
 Training Lab 32 and Inference Lab 35 teach learning versus fixed-parameter
 prediction on CPU or an explicitly selected H100 without model downloads.
+The linked guides own H100 scope, integrated **Practice** examples and commands,
+trade-offs, evidence interpretation, failure analysis and review. Read the
+explanation, use its summary to check the relationships, then follow the lab.
 
-Every lesson defines its concept and connects prerequisites, purpose, mental
-model and mechanism. It ends with **Practice labs** links. The linked guides
-own H100 scope, integrated **Practice** examples and commands, trade-offs,
-evidence interpretation, failure analysis and review. Read the theory first,
-then make a prediction, run the lab and explain the result.
-
-Beyond the course entry, every lesson begins with **What it is**: a plain-English
-definition of its core concept, its basic operation and essential distinctions
-before objectives or optimization advice. Acronyms and first-use vocabulary
-are explained in context. These primers supplement the detailed mechanisms
-and worked examples; they do not replace them with summaries.
+Longer explanations use meaningful subheadings. Examples retain assumptions,
+intermediate reasoning and limits. The renderer embeds diagrams within the
+explanation and validators check every lesson's order, diagram coverage and
+complete source-to-HTML narrative parity.
 
 The same sequence applies when a new topic starts inside a lesson, practical
 guide or optional study entry. First explain what kind of thing it is and how
@@ -283,7 +289,10 @@ Overview diagrams apply label-fit limits to the slots their selected layout
 actually uses. Full-width captions retain their complete text. After editing
 diagram metadata, SVGs, or shared styles, rebuild every page and run the
 diagram and source-parity checks; helper-level text checks alone do not prove
-that labels fit the rendered layout.
+that labels fit the rendered layout. Compact overview layouts keep labels
+readable when the article narrows. Arrows identify order, transfer or dependence;
+captions explain which relationship to follow. Comparisons have no causal
+arrows, timelines state their time direction, and decisions label their branches.
 
 Keep multiline labels vertically centered, wrap long wording without removing
 its meaning, and enlarge cards before reducing font size. Leave clear space

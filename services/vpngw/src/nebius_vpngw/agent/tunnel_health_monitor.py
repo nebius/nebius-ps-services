@@ -344,6 +344,18 @@ class TunnelHealthMonitor:
         )
 
     def restart_tunnel(self, tunnel_name: str) -> bool:
+        from ..ordinary_operations import OperationBlocked, mutation_lock
+
+        if self.observer_only:
+            return False
+        try:
+            with mutation_lock():
+                return self._restart_tunnel_locked(tunnel_name)
+        except (OperationBlocked, BlockingIOError):
+            print("[TunnelMonitor] Ordinary operation pending; skipping tunnel repair")
+            return False
+
+    def _restart_tunnel_locked(self, tunnel_name: str) -> bool:
         """Restart a specific IPsec tunnel connection.
 
         Args:

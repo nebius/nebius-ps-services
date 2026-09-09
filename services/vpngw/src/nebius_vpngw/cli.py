@@ -54,6 +54,7 @@ from .agent.vm_ha.progress import planned_request_fingerprint, validate_transfer
 from .agent.vm_ha.restoration import STANDBY_RESTORATION_CAPABILITY
 from .config_loader import (
     GatewayGroupSpec,
+    MissingEnvironmentVariablesError,
     ResolvedDeploymentPlan,
     build_config_from_peer_files,
     has_unresolved_tunnel_psk_placeholders,
@@ -1169,7 +1170,9 @@ def _build_remote_tunnel_restart_script() -> str:
     installed on the gateway VM. This inline helper is executed over SSH so the
     local CLI always uses the latest restart logic.
     """
-    return (
+    from .ordinary_operations import streamed_bootstrap
+
+    script = (
         textwrap.dedent(
             """
         from __future__ import annotations
@@ -1419,6 +1422,36 @@ def _build_remote_tunnel_restart_script() -> str:
         ).strip()
         + "\n"
     )
+    script = script.replace(
+        "from __future__ import annotations",
+        "from __future__ import annotations\n" + streamed_bootstrap(),
+        1,
+    )
+    return script.replace(
+        "    raise SystemExit(main())",
+        "    with _ops.mutation_lock():\n        raise SystemExit(main())",
+    )
+
+
+def _ordinary_vtysh_command(local_asn: t.Any, statements: list[str]) -> str:
+    """Serialize the entire guest mutation, including both halves of a reset."""
+    from .ordinary_operations import streamed_bootstrap
+
+    script = streamed_bootstrap() + "\nimport time\nwith _ops.mutation_lock():\n"
+    for index, statement in enumerate(statements):
+        args = [
+            "vtysh",
+            "-c",
+            "configure terminal",
+            "-c",
+            f"router bgp {local_asn}",
+            "-c",
+            statement,
+        ]
+        if index:
+            script += "    time.sleep(1)\n"
+        script += f"    result = _ops.bounded({args!r}, timeout=15)\n    if result.returncode:\n        raise SystemExit(result.returncode)\n"
+    return "sudo -n /usr/bin/python3 -B -c " + shlex.quote(script)
 
 
 def _normalize_config_value(value: t.Any, fallback: str = "") -> str:
@@ -1777,11 +1810,15 @@ def _vm_ha_approval_state_with_credentials(
 def _vm_ha_approval_state_with_managed_credential_plan(
     observation: t.Mapping[str, object],
     credential_plan: VMHAManagedCredentialPlan,
+    *,
+    ordinary_admission: t.Mapping[str, dict] | None = None,
 ) -> dict[str, object]:
     """Bind approval to secret-free managed credential reuse or creation intent."""
 
     result = dict(observation)
     result["managed_runtime_credentials"] = credential_plan.approval_record()
+    if ordinary_admission:
+        result["ordinary_admission"] = dict(ordinary_admission)
     return result
 
 
@@ -4770,7 +4807,15 @@ def _serialize_explicit_vm_ha_apply(function: t.Callable[..., t.Any]):
             create_if_missing=True,
             exit_after_create=True,
         )
-        config = load_local_config(config_path)
+        try:
+            config = load_local_config(config_path)
+        except MissingEnvironmentVariablesError as error:
+            print(f"[red]Configuration error: {error}[/red]")
+            print(
+                "[yellow]Load or export the listed variables in the shell that runs "
+                "nebius-vpngw, then retry apply.[/yellow]"
+            )
+            raise typer.Exit(code=1) from None
         plan = merge_with_peer_configs(config, [])
         project_override = arguments.arguments.get("project_id")
         canonical_project = project_override or str(config.get("project_id") or "").strip()
@@ -5606,6 +5651,180 @@ def _default(
         )
 
 
+def _approve_disruption(digest: str, *, supplied: str | None, dry_run: bool) -> bool:
+    print(f"[bold]Disruption plan digest: {digest}[/bold]")
+    if dry_run:
+        return False
+    if supplied is not None:
+        if supplied != digest:
+            raise RuntimeError("Disruption approval is stale; inspect a fresh dry-run plan")
+        return True
+    if not sys.stdin.isatty():
+        raise RuntimeError("Potential VPN interruption requires --approve-disruption DIGEST")
+    if not typer.confirm(
+        "Proceed with these changes, which may interrupt VPN traffic?", default=False
+    ):
+        raise RuntimeError("Disruption declined; no gateway changes were made")
+    return True
+
+
+def _unchanged_vm_ha_apply(
+    config_path: Path,
+    *,
+    instances: tuple,
+    local: dict,
+    targets: dict,
+    ssh_policy: SSHTrustPolicy | None,
+    artifact: VMHAAgentArtifact,
+    region: str | None,
+) -> bool:
+    """Prove an HA no-op without assuming package version implies installed parity."""
+    from .deploy.ordinary_apply import artifact as describe_artifact
+    from .deploy.ordinary_apply import dependencies_satisfied, digest, remote, sha
+    from .deploy.ssh_push import _VM_HA_SERVICE_ASSET_DESTINATIONS
+
+    if len(targets) != len(instances):
+        return False
+    ssh = SSHPush(ssh_policy=ssh_policy)
+    import zipfile
+
+    artifact.verify_current()
+    observations = []
+    with zipfile.ZipFile(artifact.path) as wheel:
+        for instance in instances:
+            manifest = describe_artifact(artifact.path, instance.config_yaml)
+            manifest["assets"] = {
+                path: {
+                    "member": f"nebius_vpngw/systemd/{name}",
+                    "sha256": sha(wheel.read(f"nebius_vpngw/systemd/{name}")),
+                    "mode": mode,
+                }
+                for name, path, mode in _VM_HA_SERVICE_ASSET_DESTINATIONS
+            }
+            observed = remote(
+                ssh,
+                targets[instance.hostname],
+                instance,
+                local,
+                {"action": "inspect", "manifest": manifest},
+            )["observation"]
+            desired = yaml.safe_load(instance.config_yaml)
+            desired["vm_ha"].pop("runtime_binding", None)
+            if (
+                observed["files"] != manifest["files"]
+                or observed["assets"]
+                != {path: item["sha256"] for path, item in manifest["assets"].items()}
+                or observed["asset_modes"]
+                != {path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()}
+                or observed["ha_config_digest"] != digest(desired)
+                or not dependencies_satisfied(manifest["requirements"], observed)
+            ):
+                return False
+            observations.append((instance, manifest, observed))
+    # Existing strict status owns cloud allocation, generation, fencing, local
+    # readiness and peer agreement. Require two agreeing fresh observations.
+    first = _inspect_vm_ha_status_with_region(config_path, region=region)
+    if first.snapshot.view.overall != "HEALTHY":
+        return False
+    _confirm_vm_ha_healthy(config_path, first, region=region)
+    for instance, manifest, previous in observations:
+        current = remote(
+            ssh,
+            targets[instance.hostname],
+            instance,
+            local,
+            {"action": "inspect", "manifest": manifest},
+        )["observation"]
+        if digest(current) != digest(previous):
+            return False
+    artifact.verify_current()
+    return True
+
+
+def _plan_vm_ha_package_dependencies(
+    artifact: VMHAAgentArtifact,
+    *,
+    instances: tuple,
+    targets: dict,
+    enrollment_hosts: set[str],
+    local: dict,
+    ssh_policy: SSHTrustPolicy | None,
+    target_identities: dict[str, str] | None = None,
+) -> VMHAAgentArtifact:
+    from .deploy.vm_ha_package import inspect_plan
+
+    # Enrollment belongs to fresh Compute, including intentional replacements.
+    # Its predecessor is not the guest being retired by the approved lifecycle.
+    targets = {name: target for name, target in targets.items() if name not in enrollment_hosts}
+    if not targets:
+        return artifact
+    ssh = SSHPush(ssh_policy=ssh_policy)
+    ssh._wheel_path = artifact.path
+    prepared = []
+    for instance in instances:
+        target = targets.get(instance.hostname)
+        if target is None:
+            continue
+        item = inspect_plan(
+            ssh,
+            target,
+            instance,
+            local,
+            target_identity=(target_identities or {}).get(instance.hostname, instance.hostname),
+        )
+        lifetimes = _VM_MANAGER_LIFETIMES.get()
+        assert lifetimes is not None
+        lifetimes.callback(item.close)
+        prepared.append((instance.hostname, item))
+        for dependency in item.dependency_paths:
+            print(f"  - {instance.hostname}: required dependency {dependency.name}")
+    return replace(artifact, dependency_plans=tuple(prepared))
+
+
+def _prepare_ordinary_apply(
+    manager: VMManager,
+    ssh: SSHPush,
+    instances: tuple,
+    local: dict,
+    *,
+    supplied: str | None,
+    dry_run: bool,
+    recreate: bool,
+) -> tuple[dict, dict, bool]:
+    from .deploy.ordinary_apply import digest, inspect_plan
+
+    targets = manager.inspect_ordinary_targets(item.hostname for item in instances)
+    plans = {}
+    for instance in instances:
+        if instance.hostname not in targets or recreate:
+            continue
+        identity, target = targets[instance.hostname]
+        prepared = inspect_plan(ssh, target, instance, local, target_identity=identity)
+        lifetimes = _VM_MANAGER_LIFETIMES.get()
+        assert lifetimes is not None
+        lifetimes.callback(prepared.close)
+        plans[instance.hostname] = prepared
+        print(f"[bold]{instance.hostname}:[/bold]")
+        for effect in prepared.effects or [
+            "verify unchanged local configuration; no deployment effects"
+        ]:
+            print(f"  - {effect}")
+    approved = False
+    if any(not item.noop for item in plans.values()):
+        plan_digest = digest(
+            {
+                "targets": targets,
+                "plans": {name: item.digest for name, item in plans.items()},
+                "desired": local,
+                "recreate": recreate,
+            }
+        )
+        approved = _approve_disruption(plan_digest, supplied=supplied, dry_run=dry_run)
+    elif supplied is not None and not recreate:
+        raise RuntimeError("No matching disruption plan requires this approval")
+    return plans, targets, approved
+
+
 @_with_vm_manager_lifetimes
 def _apply_impl(
     local_config_file: Path | None = typer.Option(
@@ -5651,6 +5870,7 @@ def _apply_impl(
         ),
     ),
     *,
+    approve_disruption: str | None = None,
     replace_missing_vm_ha_standby: str | None = None,
     vm_ha_plan_sink: t.Callable[[_VMHAApplyPlanReport], None] | None = None,
     vm_ha_progress_sink: _VMHAProgressSink | None = None,
@@ -6437,6 +6657,23 @@ def _apply_impl(
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
 
+    # Observe the retained ordinary host before approval; reserve it only after
+    # approval and before credentials, lifecycle or cloud mutation.
+    ordinary_handoff_observations: dict[str, dict] = {}
+    ordinary_handoffs: dict[str, t.Any] = {}
+    handoff_repair_peers: dict[str, tuple[t.Any, str, dict, dict]] = {}
+    if plan.vm_ha is not None:
+        from .deploy import ordinary_handoff
+
+        for instance in planned_instances:
+            if instance.hostname in ordinary_migration_import_hosts:
+                ordinary_handoff_observations[instance.hostname] = ordinary_handoff.inspect(
+                    SSHPush(ssh_policy=ssh_policy),
+                    vm_ha_existing_members[instance.hostname],
+                    instance,
+                    local_cfg,
+                )
+
     migration_plan_digest: str | None = None
     vm_ha_approval_observation: dict[str, object] | None = None
     vm_ha_approval_current_state: dict[str, object] | None = None
@@ -6510,6 +6747,7 @@ def _apply_impl(
             _vm_ha_approval_state_with_managed_credential_plan(
                 vm_ha_approval_current_state,
                 vm_ha_credential_plan,
+                ordinary_admission=ordinary_handoff_observations,
             ),
             approval_kind=vm_ha_approval_kind,
         )
@@ -6648,6 +6886,80 @@ def _apply_impl(
             f"{vm_ha_credential_plan.action}-managed-vm-ha-runtime-credential",
         )
         artifact = _resolve_vm_ha_agent_artifact(ssh_policy)
+        if (
+            plan_kind == "apply-convergence"
+            and has_no_change
+            and not recreate_gw
+            and not stop_after_vm_ha_plan
+            and expected_vm_ha_plan is None
+            and managed_ssh_action is None
+            and vm_ha_credential_plan.action == "reuse"
+            and _unchanged_vm_ha_apply(
+                local_config_file,
+                instances=planned_instances,
+                local=local_cfg,
+                targets=vm_ha_existing_members,
+                ssh_policy=ssh_policy,
+                artifact=artifact,
+                region=effective_region,
+            )
+        ):
+            print("[green]Both HA gateways are verified unchanged; no deployment effects.[/green]")
+            return
+        artifact = _plan_vm_ha_package_dependencies(
+            artifact,
+            instances=planned_instances,
+            targets=vm_ha_existing_members,
+            enrollment_hosts=enrollment_hosts,
+            local=local_cfg,
+            ssh_policy=ssh_policy,
+            target_identities={
+                str(member["instance_name"]): str(member["compute_id"])
+                for member in t.cast(
+                    list[dict], (vm_ha_approval_observation or {}).get("members", [])
+                )
+                if member.get("compute_id")
+            },
+        )
+        if any(observed.get("mode") == "ha" for observed in ordinary_handoff_observations.values()):
+            from .deploy import ordinary_handoff
+
+            package_plans = dict(artifact.dependency_plans)
+            for hostname, observed in ordinary_handoff_observations.items():
+                if observed.get("mode") != "ha":
+                    continue
+                target_plan = package_plans[hostname]
+                if not target_plan.effects and not observed.get("pending"):
+                    continue
+                if observed.get("lock") is None:
+                    raise RuntimeError(
+                        "HA package repair requires both exact migration apply locks"
+                    )
+                peer_instance = next(
+                    item for item in planned_instances if item.hostname != hostname
+                )
+                peer_plan = package_plans.get(peer_instance.hostname)
+                if peer_plan is None:
+                    raise RuntimeError("HA package repair requires both existing migration members")
+                expected_peer = dict(
+                    ordinary_handoff._ha_identity(peer_instance),
+                    compute_id=peer_plan.target_identity,
+                    operation_id=observed["lock"]["operation_id"],
+                )
+                peer_target = vm_ha_existing_members[peer_instance.hostname]
+                peer_evidence = ordinary_handoff.inspect_repair(
+                    SSHPush(ssh_policy=ssh_policy),
+                    peer_target,
+                    peer_instance,
+                    local_cfg,
+                    expected=expected_peer,
+                )
+                handoff_repair_peers[hostname] = (
+                    peer_instance,
+                    peer_target,
+                    expected_peer,
+                    peer_evidence,
+                )
         impact = _vm_ha_apply_plan_impact(
             plan_kind,
             has_destructive_changes=has_destructive,
@@ -6661,14 +6973,19 @@ def _apply_impl(
                 "effects": plan_effects,
                 "has_destructive_changes": has_destructive,
                 "managed_ssh_action": managed_ssh_action,
-                "managed_ssh_receipt_sha256": getattr(
-                    ssh_policy,
-                    "managed_receipt_sha256",
-                    None,
-                ),
+                "managed_ssh_approval_sha256": (
+                    getattr(ssh_policy, "fresh_identity_approval_sha256", None)
+                    if plan_kind == "migration"
+                    else None
+                )
+                or getattr(ssh_policy, "managed_receipt_sha256", None),
                 "managed_credential": vm_ha_credential_plan.approval_record(),
                 "owner_refresh_required": owner_refresh_required,
                 "artifact_sha256": artifact.sha256,
+                "dependency_plans": {name: item.digest for name, item in artifact.dependency_plans},
+                "handoff_repair_peers": {
+                    name: item[3] for name, item in handoff_repair_peers.items()
+                },
                 "impact": impact.to_dict(),
             }
         )
@@ -6704,6 +7021,34 @@ def _apply_impl(
             _VMHAProgressPhase.VERIFY_ENGINE_PLAN,
         ):
             _validate_vm_ha_expected_apply_plan(None, expected_vm_ha_plan)
+
+    ordinary_plans: dict = {}
+    ordinary_targets: dict = {}
+    ordinary_approved = False
+    ordinary_ssh: SSHPush | None = None
+    if plan.vm_ha is None and not former_vm_ha_members:
+        ordinary_ssh = SSHPush(ssh_policy=ssh_policy)
+        ordinary_plans, ordinary_targets, ordinary_approved = _prepare_ordinary_apply(
+            discovery_manager,
+            ordinary_ssh,
+            planned_instances,
+            local_cfg,
+            supplied=approve_disruption,
+            dry_run=dry_run,
+            recreate=recreate_gw,
+        )
+    elif plan.vm_ha is not None and apply_report is not None:
+        # The vm-ha facade already approved this exact artifact/effect digest.
+        # Direct apply must present the same impact before package/service effects.
+        if (
+            expected_vm_ha_plan is None
+            and not apply_report.authorization_persisted
+            and apply_report.impact.vpn_traffic_interruption is not False
+        ):
+            print(f"[yellow]{apply_report.impact.summary}[/yellow]")
+            for effect in apply_report.effects:
+                print(f"  - {effect}")
+            _approve_disruption(apply_report.digest, supplied=approve_disruption, dry_run=dry_run)
 
     if dry_run:
         if ssh_policy is not None and getattr(ssh_policy, "managed_action", None):
@@ -6845,6 +7190,59 @@ def _apply_impl(
             f"[bold]{vm_ha_credential_plan.action.title()} managed VM-HA runtime "
             "credentials...[/bold]"
         )
+        if ordinary_handoff_observations:
+            from .deploy import ordinary_handoff
+
+            assert (
+                migration_plan_digest is not None
+                and apply_report is not None
+                and apply_report.artifact is not None
+            )
+            lifetimes = _VM_MANAGER_LIFETIMES.get()
+            assert lifetimes is not None
+            for instance in planned_instances:
+                admission_observed = ordinary_handoff_observations.get(instance.hostname)
+                if admission_observed is not None:
+                    package = dict(apply_report.artifact.dependency_plans).get(instance.hostname)
+                    if (
+                        admission_observed.get("mode") == "ha"
+                        and instance.hostname not in handoff_repair_peers
+                    ):
+                        continue
+                    peer_context = handoff_repair_peers.get(instance.hostname)
+                    peer_observer = None
+                    if peer_context is not None:
+
+                        def peer_observer(context=peer_context):
+                            peer_instance, peer_target, expected, _previous = context
+                            return ordinary_handoff.inspect_repair(
+                                SSHPush(ssh_policy=ssh_policy),
+                                peer_target,
+                                peer_instance,
+                                local_cfg,
+                                expected=expected,
+                            )
+
+                    ordinary_handoffs[instance.hostname] = lifetimes.enter_context(
+                        ordinary_handoff.reserve(
+                            SSHPush(ssh_policy=ssh_policy),
+                            vm_ha_existing_members[instance.hostname],
+                            instance,
+                            local_cfg,
+                            observed=admission_observed,
+                            approval=migration_plan_digest,
+                            artifact=apply_report.artifact.sha256,
+                            package=package,
+                            peer_observer=peer_observer,
+                            peer=None if peer_context is None else peer_context[3],
+                        )
+                    )
+                    if peer_context is not None:
+                        repair_holder = ordinary_handoffs[instance.hostname]
+                        repair_holder.prepare_package(package)
+                        repair_holder.finish_repair(
+                            operation_id=admission_observed["lock"]["operation_id"]
+                        )
         try:
             managed_result = ensure_managed_vm_ha_credentials(
                 vm_ha_credential_plan,
@@ -7174,6 +7572,7 @@ def _apply_impl(
                 _vm_ha_approval_state_with_managed_credential_plan(
                     fresh_recovery_state,
                     vm_ha_credential_plan,
+                    ordinary_admission=ordinary_handoff_observations,
                 ),
                 approval_kind="recovery",
             )
@@ -7248,11 +7647,15 @@ def _apply_impl(
                 raise typer.Exit(code=1)
             activating_resume = lifecycle_state.status is VMHALifecycleStatus.ACTIVATING
         else:
+            # Reservation already revalidated and exclusively holds the approved
+            # ordinary evidence. Keep it in the digest while rereading cloud
+            # authority; the holder's own journal transition is expected.
             fresh_digest = _vm_ha_migration_plan_digest(
                 plan,
                 _vm_ha_approval_state_with_managed_credential_plan(
                     fresh_observation,
                     vm_ha_credential_plan,
+                    ordinary_admission=ordinary_handoff_observations,
                 ),
                 approval_kind=vm_ha_approval_kind,
             )
@@ -7494,7 +7897,7 @@ def _apply_impl(
             raise RuntimeError("VM-HA manager has no lifecycle journal interface")
         setter(lifecycle_journal)
     ssh_client_auth = _gateway_ssh_client_auth(local_cfg) if plan.vm_ha is not None else None
-    ssh = SSHPush(ssh_policy=ssh_policy)
+    ssh = ordinary_ssh if ordinary_ssh is not None else SSHPush(ssh_policy=ssh_policy)
     standby_replacement_inhibition: dict[str, t.Any] | None = None
 
     show_add_routes_hint = _should_prompt_add_routes_after_apply(
@@ -7555,6 +7958,14 @@ def _apply_impl(
                 plan.gateway_group,
                 plan.gateway.get("local_prefixes"),
             )
+        elif (
+            plan.vm_ha is None
+            and not recreate_gw
+            and has_no_change
+            and len(ordinary_targets) == len(planned_instances)
+        ):
+            # Existing unchanged infrastructure needs no ensure/create/update call.
+            vm_ips = {name: target for name, (_identity, target) in ordinary_targets.items()}
         else:
             vm_ips = vm_mgr.ensure_group(
                 plan.gateway_group,
@@ -7579,6 +7990,10 @@ def _apply_impl(
             lifecycle_snapshot_loader=lifecycle_snapshot_loader,
         )
         ssh = SSHPush(ssh_policy=ssh_policy)
+
+    # Resolve the whole set before any host receives a configuration.
+    if plan.vm_ha is None and set(vm_ips) != {item.hostname for item in planned_instances}:
+        raise RuntimeError("Ordinary provisioning returned an incomplete gateway target set")
 
     # Wait for VMs to be network-reachable and verify bootstrap
     if vm_ips:
@@ -7730,6 +8145,7 @@ def _apply_impl(
                 _VMHAProgressState.FAILED,
             )
             print("[yellow]Some VMs did not become reachable within timeout[/yellow]")
+            raise typer.Exit(code=1)
 
     def _config_target(inst_cfg: t.Any) -> str:
         # Use discovered IP from vm_ips first, then fall back to config
@@ -7778,21 +8194,74 @@ def _apply_impl(
                 lifecycle_journal.transition(lifecycle_state)
 
     if plan.vm_ha is None:
-        print("[bold]Pushing per-VM resolved configs and reloading agent...[/bold]")
-        for inst_cfg in plan.iter_instance_configs():
+        from .deploy.ordinary_apply import execute_plan, inspect_plan
+
+        print("[bold]Applying and verifying per-VM configurations...[/bold]")
+        completed: list[str] = []
+        ready_plans = []
+        for inst_cfg in planned_instances:
             target = _config_target(inst_cfg)
             if not target:
-                print(
-                    f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]"
-                )
-                continue
-            stale_vm_ha_removed = bool(former_vm_ha_members)
-            ssh.push_config_and_reload(
-                target,
-                inst_cfg,
-                local_cfg,
-                fail_closed=stale_vm_ha_removed,
-            )
+                raise RuntimeError("Ordinary deployment is missing a gateway target")
+            try:
+                identities = vm_mgr.inspect_ordinary_targets([inst_cfg.hostname])
+                identity, exact_target = identities[inst_cfg.hostname]
+                prepared = ordinary_plans.get(inst_cfg.hostname)
+                approved = ordinary_approved
+                if prepared is None:
+                    prepared = inspect_plan(
+                        ssh, target, inst_cfg, local_cfg, target_identity=identity
+                    )
+                    lifetimes = _VM_MANAGER_LIFETIMES.get()
+                    assert lifetimes is not None
+                    lifetimes.callback(prepared.close)
+                    # A newly provisioned host with no config has no deployed VPN
+                    # to interrupt. Retained or converted hosts need exact approval.
+                    fresh = (
+                        not prepared.observation["config_sha256"]
+                        and inst_cfg.hostname not in ordinary_targets
+                    )
+                    if not prepared.noop and not fresh:
+                        for effect in prepared.effects:
+                            print(f"  - {effect}")
+                        approved = _approve_disruption(
+                            prepared.digest, supplied=approve_disruption, dry_run=False
+                        )
+                    else:
+                        approved = fresh
+                if prepared.target_identity != identity or exact_target != prepared.target:
+                    raise RuntimeError("Gateway identity changed after disruption planning")
+                ready_plans.append((prepared, approved))
+            except Exception:
+                unattempted = [
+                    item.hostname
+                    for item in planned_instances
+                    if item.hostname not in completed and item.hostname != inst_cfg.hostname
+                ]
+                print(f"[red]Apply failed at {inst_cfg.hostname}.[/red]")
+                print(f"Completed: {', '.join(completed) or 'none'}")
+                print(f"Unattempted: {', '.join(unattempted) or 'none'}")
+                raise
+        # Every planned host passed readiness and artifact/dependency planning
+        # before the first guest transaction can perform effects.
+        for prepared, approved in ready_plans:
+            hostname = prepared.instance.hostname
+            try:
+                exact = vm_mgr.inspect_ordinary_targets([hostname]).get(hostname)
+                if exact != (prepared.target_identity, prepared.target):
+                    raise RuntimeError("Gateway identity changed before deployment")
+                execute_plan(ssh, prepared, local_cfg, approved=approved)
+                completed.append(hostname)
+            except Exception:
+                unattempted = [
+                    item.hostname
+                    for item in planned_instances
+                    if item.hostname not in completed and item.hostname != hostname
+                ]
+                print(f"[red]Apply failed at {hostname}.[/red]")
+                print(f"Completed: {', '.join(completed) or 'none'}")
+                print(f"Unattempted: {', '.join(unattempted) or 'none'}")
+                raise
     else:
         assert vm_ha_runtime_binding is not None
         assert lifecycle_journal is not None
@@ -7975,6 +8444,11 @@ def _apply_impl(
                         inst_cfg,
                         local_cfg,
                         artifact=approved_agent_artifact,
+                        **(
+                            {"handoff": ordinary_handoffs[inst_cfg.hostname]}
+                            if inst_cfg.hostname in ordinary_handoffs
+                            else {}
+                        ),
                     )
                     print(f"[green]✓ Prepared {inst_cfg.vm_ha_node.node_id} agent package[/green]")
         except (OSError, RuntimeError, ValueError) as error:
@@ -8146,6 +8620,14 @@ def _apply_impl(
                         "runtime_binding": vm_ha_runtime_binding,
                     }
                     if (
+                        inst_cfg.hostname in ordinary_handoffs
+                        and not ordinary_handoffs[inst_cfg.hostname].finished
+                    ):
+                        activation_kwargs.update(
+                            handoff=ordinary_handoffs[inst_cfg.hostname],
+                            apply_operation_id=operation_id,
+                        )
+                    if (
                         replacement_policy_request is not None
                         and receipt.node_id != current_owner_node_id
                     ):
@@ -8214,6 +8696,11 @@ def _apply_impl(
                         expected_operation_id=operation_id,
                         progress_callback=wait_fenced_progress.update,
                     )
+                    handoff = ordinary_handoffs.get(inst_cfg.hostname)
+                    if handoff is not None and not handoff.finished:
+                        handoff.complete(
+                            activated_agent_statuses[node_id], operation_id=operation_id
+                        )
                 if vm_ha_missing_standby_replacement is not None:
                     owner_cfg, owner_target, _owner_receipt = next(
                         item
@@ -8742,6 +9229,12 @@ def apply(
     project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
     region: str | None = typer.Option(None, help=_NEBIUS_REGION_HELP),
     dry_run: bool = typer.Option(False, "--dry-run", help="Inspect actions without applying"),
+    approve_disruption: str | None = typer.Option(
+        None,
+        "--approve-disruption",
+        metavar="DIGEST",
+        help="Approve the exact dry-run plan that may interrupt VPN traffic",
+    ),
     prepare_vm_ha_peer_rotation: bool = typer.Option(
         False,
         "--prepare-vm-ha-peer-rotation",
@@ -8785,6 +9278,7 @@ def apply(
         project_id=project_id,
         region=region,
         dry_run=dry_run,
+        approve_disruption=approve_disruption,
         prepare_vm_ha_peer_rotation=prepare_vm_ha_peer_rotation,
         approve_vm_ha_migration=approve_vm_ha_migration,
         recover_vm_ha_migration=recover_vm_ha_migration,
@@ -13600,48 +14094,18 @@ def restart_tunnel(
                         )
                         bgp_reset_failed = False
                         for peer_ip in bgp_peers:
-                            shutdown_cmd = (
-                                f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
-                                f"-c 'neighbor {peer_ip} shutdown'"
+                            reset_cmd = _ordinary_vtysh_command(
+                                local_asn,
+                                [f"neighbor {peer_ip} shutdown", f"no neighbor {peer_ip} shutdown"],
                             )
-                            no_shutdown_cmd = (
-                                f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
-                                f"-c 'no neighbor {peer_ip} shutdown'"
-                            )
-
-                            shutdown_result = subprocess.run(
-                                ssh_cmd[:-1] + [shutdown_cmd],
+                            reset_result = subprocess.run(
+                                ssh_cmd[:-1] + [reset_cmd],
                                 capture_output=True,
                                 text=True,
-                                timeout=20,
+                                timeout=40,
                             )
-                            if shutdown_result.returncode != 0:
-                                print(
-                                    f"[red]✗ Failed to administratively shut BGP neighbor {peer_ip}[/red]"
-                                )
-                                if shutdown_result.stdout.strip():
-                                    print(f"[dim]{shutdown_result.stdout.strip()}[/dim]")
-                                if shutdown_result.stderr.strip():
-                                    print(f"[dim]{shutdown_result.stderr.strip()}[/dim]")
-                                bgp_reset_failed = True
-                                break
-
-                            time.sleep(1)
-
-                            no_shutdown_result = subprocess.run(
-                                ssh_cmd[:-1] + [no_shutdown_cmd],
-                                capture_output=True,
-                                text=True,
-                                timeout=20,
-                            )
-                            if no_shutdown_result.returncode != 0:
-                                print(
-                                    f"[red]✗ Failed to re-enable BGP neighbor {peer_ip} on {hostname}[/red]"
-                                )
-                                if no_shutdown_result.stdout.strip():
-                                    print(f"[dim]{no_shutdown_result.stdout.strip()}[/dim]")
-                                if no_shutdown_result.stderr.strip():
-                                    print(f"[dim]{no_shutdown_result.stderr.strip()}[/dim]")
+                            if reset_result.returncode != 0:
+                                print(f"[red]✗ Failed to reset BGP neighbor {peer_ip}[/red]")
                                 bgp_reset_failed = True
                                 break
 
@@ -13859,10 +14323,7 @@ def tunnel_failover(
             f"{active.get('name')} → {target.get('name')}"
         )
 
-        cmd = (
-            f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
-            f"-c 'neighbor {active_peer_ip} shutdown'"
-        )
+        cmd = _ordinary_vtysh_command(local_asn, [f"neighbor {active_peer_ip} shutdown"])
         ssh_policy = _existing_gateway_ssh_policy(
             local_cfg,
             plan,
@@ -14126,10 +14587,7 @@ def tunnel_failback(
             f"restore {target.get('name')}"
         )
 
-        cmd = (
-            f"sudo vtysh -c 'configure terminal' -c 'router bgp {local_asn}' "
-            f"-c 'no neighbor {active_peer_ip} shutdown'"
-        )
+        cmd = _ordinary_vtysh_command(local_asn, [f"no neighbor {active_peer_ip} shutdown"])
         ssh_policy = _existing_gateway_ssh_policy(
             local_cfg,
             plan,
@@ -17692,7 +18150,11 @@ def _vm_ha_apply_plan_result(
             actions=prior.actions,
             impact=report.impact,
         )
-    if report.managed_ssh_action is not None and report.kind != "active-standby-replacement":
+    if (
+        report.managed_ssh_action is not None
+        and report.kind != "active-standby-replacement"
+        and (report.kind, report.managed_ssh_action) != ("migration", "migrate")
+    ):
         return _vm_ha_action_required(
             config_path=config_path,
             classification=VMHACommandClassification.EXTERNAL_PREREQUISITE,

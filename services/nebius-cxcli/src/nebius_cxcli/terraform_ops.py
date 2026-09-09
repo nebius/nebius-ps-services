@@ -78,9 +78,7 @@ def _saved_plan_identity(
         or plan_stat.st_uid != os.geteuid()
         or stat.S_IMODE(plan_stat.st_mode) != 0o600
     ):
-        raise ValueError(
-            "Terraform saved plan must be an owner-only, single-link regular file"
-        )
+        raise ValueError("Terraform saved plan must be an owner-only, single-link regular file")
     return absolute_plan, (plan_stat.st_dev, plan_stat.st_ino)
 
 
@@ -508,8 +506,10 @@ def terraform_plan(
         cmd.append("-destroy")
     for target in targets:
         normalized = str(target).strip()
-        if not normalized or normalized.startswith("-") or any(
-            char.isspace() for char in normalized
+        if (
+            not normalized
+            or normalized.startswith("-")
+            or any(char.isspace() for char in normalized)
         ):
             raise ValueError("Terraform target address is invalid")
         cmd.append(f"-target={normalized}")
@@ -777,6 +777,29 @@ def terraform_output_json(
         ) from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"Terraform output -json returned a non-mapping payload in {infra_dir}")
+    return payload
+
+
+def terraform_provider_schema_json(
+    infra_dir: Path, *, extra_env: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Read schemas from the initialized, locked provider installation."""
+    stdout, _stderr = _run_capture(
+        [_require_terraform(), "providers", "schema", "-json"],
+        cwd=infra_dir,
+        timeout=120,
+        extra_env=extra_env,
+    )
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Terraform provider schema returned invalid JSON") from exc
+    if (
+        not isinstance(payload, dict)
+        or str(payload.get("format_version", "")).split(".")[0] != "1"
+        or not isinstance(payload.get("provider_schemas"), dict)
+    ):
+        raise RuntimeError("Terraform provider schema has an unsupported format")
     return payload
 
 

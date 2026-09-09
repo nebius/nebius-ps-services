@@ -1,10 +1,10 @@
-# Lab 16: Decide whether a custom kernel is justified
+# Lab 16: Custom kernel decision making
 
 Before maintaining custom GPU code, check whether a supported framework or library primitive already expresses the computation efficiently. This lab compares a composed matrix expression with a maintained PyTorch primitive. You will use the result to write an escalation decision based on a measured remaining problem rather than on the assumption that lower-level code must be faster.
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 9 and 13 for matrix arithmetic, the addmm/library decision, ReLU, FP64 references, cancellation and the BF16 intermediate-rounding budget. Apply Lessons 1–2’s correctness and timing contract; agreement between two candidates alone is not the independent reference check.
+**Theory preparation:** Read Lessons 9 and 13 for precision, cancellation and the framework-versus-library decision. Apply Lessons 1–2's correctness and timing contract. This fixture's BF16 error budget is derived below.
 
 Use one H100 and complete the measurement and correctness lessons. Prepare a decision record containing required semantics, supported shapes/dtypes, end-to-end importance, and the maintenance cost you are willing to accept.
 

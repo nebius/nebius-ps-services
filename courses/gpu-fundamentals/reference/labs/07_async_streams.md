@@ -4,7 +4,7 @@ GPU work is normally queued asynchronously, so a short Python call does not mean
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 2 for the matrix product and Lesson 8 for independent streams, event dependencies, buffer lifetime and a joined completion boundary. Distinguish overlapping resident arithmetic from host-to-device transfer overlap before comparing paths.
+**Theory preparation:** Read Lab 08 for the matrix product and Lesson 8 for independent streams, event dependencies, buffer lifetime and a joined completion boundary. Distinguish overlapping resident arithmetic from host-to-device transfer overlap before comparing paths.
 
 Use one H100 after the timing and transfer lessons. Inputs are resident on the device. This is a compute-stream experiment, not a demonstration of a complete host-input pipeline.
 

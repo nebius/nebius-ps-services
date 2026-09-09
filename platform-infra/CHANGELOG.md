@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep MK8s `service_account_ids` keys known during the initial plan by
+  selecting configured accounts instead of filtering their apply-time IDs.
+  Caller-owned IAM grants can use this output in `for_each` without a targeted
+  bootstrap apply.
+
 ### Added
 
 - Added `modules/vpc`, a reusable Nebius VPC module that can create a new

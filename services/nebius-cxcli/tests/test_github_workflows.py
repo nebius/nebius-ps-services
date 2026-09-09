@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-_SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+_SETUP_UV_ACTION = "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
 _SETUP_UV_INPUTS = {
     "version": "0.12.9",
     "enable-cache": "true",
@@ -143,7 +143,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     assert wheel_checkout["with"] == {"fetch-depth": "0"}
     _assert_pinned_uv(wheel_steps)
     serialized_wheel_steps = "\n".join(str(step) for step in wheel_steps)
-    download_step = _uses_step(wheel_steps, "actions/download-artifact@v7")
+    download_step = _uses_step(wheel_steps, "actions/download-artifact@v8")
     assert download_step["with"] == {
         "name": "nebius-cxcli-wheel",
         "path": "services/nebius-cxcli/dist",

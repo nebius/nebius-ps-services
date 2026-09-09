@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -1295,3 +1296,118 @@ def test_observability_endpoint_summary_managed_service_buckets_follow_catalog()
     )
     assert summary["service_provider_metric_buckets"] == ["sp_storage", "msp"]
     assert summary["service_log_buckets"] == ["sp_postgres"]
+
+
+@pytest.mark.parametrize(
+    "extra_apps,expected",
+    [
+        ((), {"soperator"}),
+        (("grafana",), {"soperator", "grafana", "gateway-helm"}),
+        (("nebius-observability-agent",), {"soperator", "nebius-observability-agent"}),
+        (
+            ("grafana", "nebius-observability-agent"),
+            {"soperator", "grafana", "gateway-helm", "nebius-observability-agent"},
+        ),
+    ],
+)
+def test_soperator_optional_observability_apps_are_independent(extra_apps, expected) -> None:
+    payload = _base_payload(enabled_apps=("soperator", *extra_apps))
+    selection = resolve_observability_app_selection(
+        payload,
+        selected_app_ids={"soperator", *extra_apps},
+    )
+    assert not selection.issues
+    assert set(selection.selected_app_ids) == expected
+    ensure_observability_app_rows(payload)
+    assert {row["id"] for row in payload["apps"]["charts"] if row["enabled"]} == expected
+    materialize_observability_app_values(payload)
+    if "grafana" in expected:
+        assert _chart_row(payload, "grafana")["values"].get("datasources")
+
+
+def test_soperator_upstream_signals_without_additional_agent() -> None:
+    payload = _base_payload(enabled_apps=("soperator",))
+    summary = observability_endpoint_summary(
+        payload, project_id="project-example", region_id="eu-north2"
+    )
+    assert summary["signals"]["metrics"]
+    assert summary["signals"]["logs"]
+    assert not summary["signals"]["traces"]
+    assert (
+        summary["read"]["metrics_user_read"]
+        == "https://read.monitoring.api.nebius.cloud/projects/project-example/prometheus"
+    )
+
+
+@pytest.mark.parametrize("grafana", [False, True])
+def test_soperator_target_switch_cannot_select_additional_collector(grafana: bool) -> None:
+    payload = _base_payload(
+        observability_enabled=True,
+        enabled_apps=("soperator", "grafana") if grafana else ("soperator",),
+    )
+    before = copy.deepcopy(payload)
+    selection = resolve_observability_app_selection(payload)
+    assert not selection.kubernetes_agent_required
+    assert any(
+        "component add nebius-observability-agent@mk8s" in issue for issue in selection.issues
+    )
+    assert not ensure_observability_app_rows(payload)
+    assert payload == before
+    signals = observability_endpoint_summary(payload)["signals"]
+    assert signals["soperator_logs"] and signals["soperator_metrics"]
+    assert not signals["kubernetes_logs"] and not signals["kubernetes_metrics"]
+    assert not signals["traces"]
+
+
+@pytest.mark.parametrize("target_switch", [False, True])
+@pytest.mark.parametrize("traces_enabled", [False, True])
+def test_explicit_soperator_collector_drives_materialization_and_signal_summary(
+    target_switch, traces_enabled
+):
+    payload = _base_payload(
+        observability_enabled=target_switch,
+        enabled_apps=("soperator", "nebius-observability-agent"),
+    )
+    settings = payload["deploy"]["targets"][0]["observability"]["kubernetes"]
+    settings["logs"]["enabled"] = False
+    settings["metrics"]["enabled"] = False
+    settings["traces"]["enabled"] = traces_enabled
+    assert not observability_dependency_issues(payload)
+    materialize_observability_app_values(payload)
+    config = _chart_row(payload, "nebius-observability-agent")["values"]["config"]
+    assert config["logs"]["enabled"] is False
+    assert config["metrics"]["enabled"] is False
+    assert config["traces"]["enabled"] is traces_enabled
+    signals = observability_endpoint_summary(payload)["signals"]
+    assert signals["traces"] is traces_enabled
+    assert signals["soperator_metrics"] and signals["soperator_logs"]
+    assert not signals["kubernetes_logs"] and not signals["kubernetes_metrics"]
+    assert not _chart_rows(payload, "grafana")
+
+
+@pytest.mark.parametrize("existing_collector", [False, True])
+def test_mixed_targets_never_fan_out_ordinary_collector_to_soperator(existing_collector):
+    payload = _base_payload(enabled_apps=("soperator",))
+    ordinary = copy.deepcopy(payload["infra"]["components"][0])
+    ordinary["instance_id"] = "ordinary"
+    payload["infra"]["components"].append(ordinary)
+    _set_observability_targets(payload, "mk8s", "ordinary")
+    payload["deploy"]["targets"][0]["observability"]["enabled"] = False
+    if existing_collector:
+        collector = _base_payload(enabled_apps=("nebius-observability-agent",))["apps"]["charts"][0]
+        collector.update(instance_id="ordinary", target_ref="ordinary")
+        payload["apps"]["charts"].append(collector)
+    protected = copy.deepcopy(_chart_row(payload, "soperator"))
+    assert not resolve_observability_app_selection(payload).issues
+    ensure_observability_app_rows(payload)
+    materialize_observability_app_values(payload)
+    assert not observability_dependency_issues(payload)
+    for app_id in ("nebius-observability-agent", "grafana", "gateway-helm"):
+        assert {row["target_ref"] for row in _chart_rows(payload, app_id)} == {"ordinary"}
+    assert _chart_row(payload, "soperator") == protected
+    # An app selected on another target is not explicit Soperator collector intent.
+    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    assert any(
+        "component add nebius-observability-agent@mk8s" in issue
+        for issue in observability_dependency_issues(payload)
+    )

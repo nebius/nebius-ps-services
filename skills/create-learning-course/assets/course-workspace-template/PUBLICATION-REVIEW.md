@@ -17,7 +17,13 @@ open. This author review is not learner-facing banner content.
 
 ## Completeness And Alignment
 
+- [ ] Conceptual titles match the syllabus, TOC and lesson body.
+- [ ] Every lesson follows Objective, How it works, Practice, Mental model.
+- [ ] How it works connects definitions, prerequisites, purpose and mechanism.
+- [ ] Unfamiliar abbreviations are expanded and explained in context.
 - [ ] Definitions precede use cases, notation and practical work.
+- [ ] Each How it works includes a meaningful core diagram and worked example.
+- [ ] Mental model ends the lesson without adding new teaching.
 - [ ] Outcomes, prerequisites, syllabus order and assessment agree.
 - [ ] Unique material is preserved; purposeful refreshers are distinguished.
 - [ ] Every practical guide follows the seven sections and exact lab identity.

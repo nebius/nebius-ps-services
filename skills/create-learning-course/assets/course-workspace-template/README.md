@@ -5,8 +5,11 @@ brace-delimited instruction with substantive content. Do not publish unresolved
 placeholders or treat the illustrative metadata as a runtime API.
 
 1. Establish the mission, outcomes, prerequisites and course profile.
-2. Author the complete syllabus and COURSE.md, preserving the teaching roles.
-3. Add purposeful guides under reference/labs and original contextual diagrams.
+2. Author conceptual lesson titles and the complete COURSE.md using Objective,
+   How it works, Practice and final Mental model. Keep explanations connected,
+   define unfamiliar terms and preserve useful teaching when consolidating.
+3. Add purposeful guides under reference/labs and at least one original core
+   diagram inside each lesson's How it works, beside its explanation.
 4. Reuse the skill's assets/textbook-shell.html and assets/styles.css.
 5. Adapt or implement a course-owned deterministic builder: canonical prose,
    inline CSS/SVG, full escaped source, unique TOC/anchors, atomic index.html

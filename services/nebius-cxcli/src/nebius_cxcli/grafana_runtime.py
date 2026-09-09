@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 import yaml
 
+from .app_mutation import assert_app_mutation_authority, guarded_app_manifest
 from .component_instances import component_type_id
 from .component_sources import (
     GrafanaCliSettings,
@@ -241,6 +242,7 @@ def _run_kubectl(
     timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
     command = _kubectl_command(args, extra_env=extra_env)
+    assert_app_mutation_authority()
     completed = subprocess.run(
         command,
         env=_kubectl_env(extra_env),
@@ -281,7 +283,10 @@ def _apply_manifest(
     *,
     extra_env: Mapping[str, str] | None,
 ) -> None:
-    rendered = yaml.safe_dump(dict(manifest), sort_keys=False)
+    candidate = guarded_app_manifest(manifest)
+    if candidate is None:
+        return
+    rendered = yaml.safe_dump(candidate, sort_keys=False)
     _run_kubectl(["apply", "-f", "-"], extra_env=extra_env, input_text=rendered)
 
 
@@ -1423,6 +1428,7 @@ def _create_grafana_short_url(
     username: str,
     password: str,
 ) -> str:
+    assert_app_mutation_authority()
     payload = _post_grafana_short_url(
         base_url,
         _grafana_relative_path(url),

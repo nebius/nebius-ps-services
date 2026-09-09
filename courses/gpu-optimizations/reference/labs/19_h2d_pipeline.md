@@ -4,7 +4,7 @@ A nonblocking copy can free the CPU while the GPU still executes copies and kern
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 6 for pinned input slots, DataLoader versus stream prefetch, inference mode, ready/completion events and safe ring reuse. Lessons 1–2 supply exact-output and joined-loop checks; Fundamentals Lesson 8 supplies stream ordering. Predict fill, overlap and drain before running.
+**Theory preparation:** Read Lessons 2, 3 and 6 for timing, profiling, pinning and producer readiness versus device overlap. Fundamentals Lesson 8 supplies stream ordering. Predict pipeline fill and drain before running.
 
 Read Lessons 2, 3 and 6, and complete Fundamentals' transfer/pinning exercise. Use one full H100 with the course's qualified PyTorch environment. No datasets, model downloads or storage access are required. The smoke profile uses 512-square FP32 matrices; h100 uses 2048-square matrices. The defaults use two slots and sixteen batches. Keep CPU and pinned-memory consumption within your allocation; eight slots is an explicit upper bound, not a recommended setting.
 
@@ -12,7 +12,7 @@ Read Lessons 2, 3 and 6, and complete Fundamentals' transfer/pinning exercise. U
 
 `run_pipeline` allocates one pinned host matrix, device input and output per slot, plus a shared dense weight matrix. Each batch has a different exactly representable value. A matrix filled with 1/width preserves that value after multiplication because the width is a power of two. Every output element must match, catching stale or incompletely transferred data. This is a deliberately controlled dense-compute workload, not a representative neural network.
 
-A used slot cannot be filled again until its compute-complete event has finished. The copy stream records readiness after H2D. The compute stream waits for readiness, performs `--work` GEMMs, records the exact check and then records completion. Serial mode uses the compute stream for copies too; pipeline mode changes only copy-stream placement. Initial device setup is synchronized before timing. See Lesson 6's input-slot diagram for the ownership cycle.
+Before filling a used slot, the host waits for its previous compute-complete event. H2D records readiness; the compute stream waits for it, performs the GEMMs and exact check, then records completion. Serial mode also copies on the compute stream; pipeline mode changes only copy-stream placement. Initial setup is synchronized before timing. The forward-only loop uses `torch.inference_mode()` to avoid autograd recording; explicit events and output checks still establish completion and correctness. PyTorch `record_stream()` protects allocator reuse, not application overwrites or producer-consumer ordering. See Lesson 6's diagram for the ownership cycle.
 
 ## Practice
 

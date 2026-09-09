@@ -24,6 +24,19 @@ def _agent(*keys: paramiko.PKey) -> SimpleNamespace:
     return SimpleNamespace(Agent=lambda: SimpleNamespace(get_keys=lambda: keys))
 
 
+def test_multiple_management_keys_fail_before_identity_discovery(tmp_path: Path) -> None:
+    def unexpected_agent():
+        pytest.fail("multi-key input must fail before identity discovery")
+
+    with pytest.raises(ValueError, match="one OpenSSH public-key record"):
+        resolve_ssh_client_auth(
+            "ssh-ed25519 AAAAfirst first\nssh-ed25519 AAAAsecond second",
+            home=tmp_path,
+            paramiko_module=SimpleNamespace(Agent=unexpected_agent),
+        )
+    assert not list(tmp_path.iterdir())
+
+
 def test_explicit_private_key_must_match_configured_public_key(tmp_path: Path) -> None:
     configured = _private_key(tmp_path / "configured")
     wrong = _private_key(tmp_path / "wrong")

@@ -53,7 +53,7 @@ def test_token_weighting_distinguishes_batch_and_per_token_weights() -> None:
 
 
 def test_ddp_normalization_derivation_matches_global_token_mean() -> None:
-    mechanism = lesson("llm-training", "Execute a correct training step")["Mechanism"]
+    mechanism = lesson("llm-training", "The parameter-update lifecycle")["How it works"]
     assert "R × local_loss_sum / global_valid_tokens" in mechanism
     assert "entire intended accumulation window" in mechanism
     # Unequal ranks and unequal accumulation microbatches; these are scalar
@@ -76,9 +76,7 @@ def test_ddp_normalization_derivation_matches_global_token_mean() -> None:
 
 
 def test_packing_requires_real_attention_boundaries() -> None:
-    mechanism = lesson(
-        "llm-training", "Build causal batches with tokens, labels, masks, and packing"
-    )["Mechanism"].lower()
+    mechanism = lesson("llm-training", "Causal training data")["How it works"].lower()
     assert "block-diagonal" in mechanism
     assert "position" in mechanism and "alone" in mechanism
     assert "boundar" in mechanism
@@ -106,9 +104,9 @@ def test_inference_capstone_separates_mechanics_from_serving() -> None:
     assert "Lab 32" in practice and "mechanics" in practice.lower()
     assert "vllm_chunked_prefill_ab.sbatch" in practice
     assert "three" in practice
-    first_token = lesson(
-        "llm-inference", "Follow tokenization, prefill, decode, and stopping"
-    )["Mental model"].lower()
+    first_token = lesson("llm-inference", "Autoregressive generation")[
+        "Mental model"
+    ].lower()
     assert "prefill" in first_token and "first" in first_token
     assert "last sampled token" in first_token
 
@@ -116,12 +114,15 @@ def test_inference_capstone_separates_mechanics_from_serving() -> None:
 def test_custom_lessons_match_supplied_implementation_scope() -> None:
     cutlass = " ".join(
         lesson(
-            "custom-cuda-kernels", "Preserve library GEMM and customize the epilogue"
+            "custom-cuda-kernels", "Matrix multiplication and output fusion"
         ).values()
     )
     rmsnorm = " ".join(
-        lesson("custom-cuda-kernels", "Fuse residual addition and RMSNorm").values()
+        lesson("custom-cuda-kernels", "Residual connections and normalization").values()
     )
+    cutlass += (
+        ROOT / "custom-cuda-kernels/reference/labs/09_library_epilogue.md"
+    ).read_text()
     assert "OpClassSimt" in cutlass and "LinearCombinationRelu" in cutlass
     assert "expanded" in cutlass and "extension" in cutlass.lower()
     rmsnorm += " " + lab_section("custom-cuda-kernels", 11, "Practice")

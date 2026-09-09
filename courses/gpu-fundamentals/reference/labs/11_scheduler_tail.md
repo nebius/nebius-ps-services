@@ -4,7 +4,7 @@ Uneven work can waste execution capacity at more than one level. This lab delibe
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 3, 5 and 6 for the execution hierarchy, lane-mask work, occupancy, partial grid waves and output-sentinel validation. Earlier visits inspect code and the lane model only. Run the combined script after Lesson 6 so its separate GPU-tail experiment has a theoretical basis.
+**Theory preparation:** Read Lessons 3, 5 and 6 for the execution hierarchy, lane-mask work, occupancy, partial grid waves. The output-sentinel validation is explained below. Earlier visits inspect code and the lane model only. Run the combined script after Lesson 6 so its separate GPU-tail experiment has a theoretical basis.
 
 Use the Fundamentals environment with Triton on one H100. In Lesson 5, inspect the lane-work model and work through its arithmetic; the supplied launch runs both parts, not a lane-only mode. After Lesson 6 explains SM residency, run the full lab. Review warp width, SM residency, and the [worked mechanism guide](../lab-mechanisms.md). The two parts answer different questions and must not be combined into one speedup claim.
 
@@ -30,7 +30,9 @@ sbatch slurm/single_gpu.sbatch labs/11_scheduler_tail.py --profile h100
 
 ## Check your results
 
-Require matching grid outputs and conserved useful work in the lane comparison. The NaN prefill explained in Lesson 6 must be replaced at every expected output; finite checks detect surviving sentinels, and the independent reference checks the values written. Inspect `lane_work_model`, `resident_block_slots`, each case's `model`, and timing. `profiler_confirmation_required` explicitly limits claims about actual residency and scheduling.
+An output sentinel is a recognizable initial value that reveals a missing write. The grid-tail probe fills outputs with NaN outside timing, then runs and synchronizes the kernel. NaN means “not a number”; NaN and infinity are non-finite. Require every expected output to be finite and to match the independent reference: a surviving sentinel detects an omitted write, while the reference detects a wrong value.
+
+Require matching grid outputs and conserved useful work in the lane comparison. The NaN prefill described above must be replaced at every expected output; finite checks detect surviving sentinels, and the independent reference checks the values written. Inspect `lane_work_model`, `resident_block_slots`, each case's `model`, and timing. `profiler_confirmation_required` explicitly limits claims about actual residency and scheduling.
 
 Retain modeled lane utilization separately from measured kernel timing and the grid-wave calculation. Actual branch efficiency or active-thread counters require profiling a real divergent kernel; the uniform Triton tail probe cannot establish that result.
 

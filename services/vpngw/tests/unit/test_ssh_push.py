@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import zipfile
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,6 +89,7 @@ def _write_vm_ha_agent_wheel(
     }
     for asset_name in (
         "nebius-vpngw-agent.service",
+        "nebius-vpngw-agent-ordering.conf",
         "nebius-vpngw-esp4-preflight.sh",
         "nebius-vpngw-fix-routes.service",
         "nebius-vpngw-fix-routes.timer",
@@ -874,16 +876,82 @@ def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkey
         "/tmp/nebius-vpngw-agent.ABCDEFGHIJ/nebius_vpngw-1.2.3-py3-none-any.whl"
     )
     assert "sha256sum --check --status" in client.commands[1]
-    assert "--force-reinstall" in client.commands[2]
+    assert "--force-reinstall" not in client.commands[2]
+    # Fresh/recovery package preparation retains the existing distro-safe path.
     assert "--ignore-installed" in client.commands[2]
+    assert "--upgrade" not in client.commands[2]
     assert remote_wheel in client.commands[2]
-    assert "import cffi,cryptography" in client.commands[3]
-    assert "--agent-capabilities" in client.commands[4]
-    assert "nebius_vpngw/systemd/" in client.commands[5]
-    assert remote_wheel in client.commands[5]
-    assert client.commands[6] == (
-        f"rm -f {remote_wheel} && rmdir /tmp/nebius-vpngw-agent.ABCDEFGHIJ"
+    assert "--no-deps --force-reinstall" in client.commands[3]
+    assert "import cffi,cryptography" in client.commands[4]
+    assert "--agent-capabilities" in client.commands[5]
+    assert "nebius_vpngw/systemd/" in client.commands[6]
+    assert remote_wheel in client.commands[6]
+    assert client.commands[7] == (
+        f"rm -f -- {remote_wheel} && rmdir /tmp/nebius-vpngw-agent.ABCDEFGHIJ"
     )
+    assert client.closed
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_vm_ha_frozen_dependencies_preserve_predecessor_and_distro_install_policy(
+    tmp_path, monkeypatch, drift
+):
+    from nebius_vpngw.deploy import ordinary_apply, ordinary_remote, vm_ha_package
+
+    manifest, _binding = _vm_ha_manifest_and_binding()
+    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    _write_vm_ha_agent_wheel(wheel)
+    dependency = tmp_path / "fixture_dependency-2.0-py3-none-any.whl"
+    dependency.write_bytes(b"approved dependency")
+    plan = SimpleNamespace(
+        observation={
+            key: ("retained-boot" if key == "boot_id" else None)
+            for key in vm_ha_package.PACKAGE_FIELDS
+        },
+        manifest={
+            "dependency_wheels": {
+                dependency.name: hashlib.sha256(dependency.read_bytes()).hexdigest()
+            }
+        },
+        dependency_paths=[dependency],
+    )
+    artifact = replace(
+        VMHAAgentArtifact.from_wheel(wheel, source="test"),
+        dependency_plans=((manifest.hostname, plan),),
+    )
+    client = _ManagedMTLSClient()
+    client.sftp.put = lambda source, target: client.sftp.uploads.append(
+        (Path(source).read_bytes(), target)
+    )
+    push = SSHPush(ssh_policy=object())
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
+    monkeypatch.setattr(
+        ordinary_apply,
+        "remote",
+        lambda *args: {
+            "observation": dict(
+                plan.observation, boot_id="unexpected-boot" if drift else "retained-boot"
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification",
+        lambda *args, **kwargs: None,
+    )
+    if drift:
+        with pytest.raises(RuntimeError, match="predecessor changed"):
+            push.ensure_vm_ha_agent_package("203.0.113.10", manifest, {}, artifact=artifact)
+        assert not client.commands and not client.sftp.uploads
+        return
+    push.ensure_vm_ha_agent_package("203.0.113.10", manifest, {}, artifact=artifact)
+    commands = [
+        item
+        for item in client.commands
+        if shlex.quote(ordinary_remote.DEPENDENCY_INSTALL_SCRIPT) in item
+    ]
+    assert len(commands) == 1
+    assert dependency.name in commands[0]
+    assert "&& sudo /usr/bin/python3 -m pip install --no-index --no-deps" in commands[0]
     assert client.closed
 
 
@@ -2282,7 +2350,7 @@ def test_ha_to_non_ha_push_fails_closed_after_deactivation() -> None:
     )
     ordinary = SimpleNamespace(instance_index=0)
 
-    with pytest.raises(RuntimeError, match="required SSH connection failed"):
+    with pytest.raises(RuntimeError, match="requires a reviewed exact apply plan"):
         push.push_config_and_reload(
             "203.0.113.10",
             ordinary,
@@ -2291,52 +2359,13 @@ def test_ha_to_non_ha_push_fails_closed_after_deactivation() -> None:
         )
 
 
-def test_ordinary_push_installs_only_ordinary_assets(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
-    wheel.write_bytes(b"ordinary-wheel")
-    client = _StageClient()
-    push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(push, "_build_wheel", lambda: wheel)
-    sleeps: list[float] = []
-    monkeypatch.setattr("nebius_vpngw.deploy.ssh_push.time.sleep", sleeps.append)
+def test_ordinary_plan_installs_only_ordinary_assets() -> None:
+    from nebius_vpngw.deploy.ordinary_apply import ASSETS
 
-    push.push_config_and_reload(
-        "203.0.113.10",
-        SimpleNamespace(
-            instance_index=0,
-            hostname="gateway-0",
-            config_yaml="gateway: {}\n",
-        ),
-        {"gateway_group": {"vm_spec": {}}},
-    )
-
-    staged_paths = {path for path, _mode in client.paths}
-    commands = "\n".join(client.commands)
-    assert {
-        "/tmp/nebius-vpngw-agent.service",
-        "/tmp/nebius-vpngw-fix-routes.service",
-        "/tmp/nebius-vpngw-fix-routes.timer",
-        "/tmp/nebius-vpngw-health-monitor.service",
-        "/tmp/setup-vpngw-firewall.sh",
-        "/tmp/nebius-vpngw-esp4-preflight.sh",
-    }.issubset(staged_paths)
-    forbidden = (
-        "vm-ha",
-        "30-vm-ha.conf",
-        "ufw-lock",
-        "/etc/nebius-vpngw/vm-ha-enabled",
-    )
-    assert all(not any(marker in path for marker in forbidden) for path in staged_paths)
-    assert all(marker not in commands for marker in forbidden)
-    assert sleeps == [5.0, 5.0, 5.0]
+    paths = [path for _name, path, _mode in ASSETS]
+    assert "/etc/systemd/system/nebius-vpngw-agent.service" in paths
+    assert "/usr/local/bin/setup-vpngw-firewall.sh" in paths
+    assert all("vm-ha" not in path and "ufw-lock" not in path for path in paths)
 
 
 def test_configured_public_key_disables_paramiko_authentication_fallback(

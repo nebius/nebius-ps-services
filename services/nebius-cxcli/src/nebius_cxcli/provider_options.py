@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
+from operator import attrgetter
 from pathlib import Path
 from typing import Any, cast
 
@@ -26,6 +27,7 @@ from .capacity_dashboard import (
 )
 from .deploy_targets import deploy_target_is_external_mk8s
 from .sdk_auth import init_nebius_sdk
+from .soperator_install_progress import install_phase, install_progress_step
 from .soperator_wizard import soperator_wizard_settings
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
@@ -862,6 +864,9 @@ class ProviderOptionLookup:
             platform_name=normalized_platform_name,
         )
 
+    @install_progress_step(
+        "provider-lookup", "Validating the Nebius project", succeeded=attrgetter("valid")
+    )
     def validate_tenant_project_scope(
         self,
         *,
@@ -974,26 +979,28 @@ class ProviderOptionLookup:
         tenant_name = ""
         project_name = ""
         try:
-            tenant = (
-                TenantServiceClient(sdk)
-                .get(
-                    GetTenantRequest(id=normalized_tenant_id),
-                    **_provider_request_kwargs(),
+            with install_phase("provider-lookup", "Resolving the Nebius tenant name"):
+                tenant = (
+                    TenantServiceClient(sdk)
+                    .get(
+                        GetTenantRequest(id=normalized_tenant_id),
+                        **_provider_request_kwargs(),
+                    )
+                    .wait()
                 )
-                .wait()
-            )
             tenant_name = _as_str(getattr(getattr(tenant, "metadata", None), "name", None))
         except Exception:
             tenant_name = ""
         try:
-            project = (
-                ProjectServiceClient(sdk)
-                .get(
-                    GetProjectRequest(id=normalized_project_id),
-                    **_provider_request_kwargs(),
+            with install_phase("provider-lookup", "Resolving the Nebius project name"):
+                project = (
+                    ProjectServiceClient(sdk)
+                    .get(
+                        GetProjectRequest(id=normalized_project_id),
+                        **_provider_request_kwargs(),
+                    )
+                    .wait()
                 )
-                .wait()
-            )
             project_name = _as_str(getattr(getattr(project, "metadata", None), "name", None))
         except Exception:
             project_name = ""
@@ -1089,16 +1096,18 @@ class ProviderOptionLookup:
         from nebius.api.nebius.compute.v1 import ListPlatformsRequest, PlatformServiceClient
 
         client = PlatformServiceClient(sdk)
-        items = self._paged_list(
-            request_factory=lambda page_token: ListPlatformsRequest(
-                parent_id=project_id,
-                page_size=_NEBIUS_LIST_PAGE_SIZE,
-                page_token=page_token,
-            ),
-            request_call=client.list,
-        )
+        with install_phase("provider-lookup", "Looking up project compute platforms and sizes"):
+            items = self._paged_list(
+                request_factory=lambda page_token: ListPlatformsRequest(
+                    parent_id=project_id,
+                    page_size=_NEBIUS_LIST_PAGE_SIZE,
+                    page_token=page_token,
+                ),
+                request_call=client.list,
+            )
 
         options: list[OptionChoice] = []
+        presets: dict[tuple[str, str], tuple[_ComputePlatformPreset, ...]] = {}
         for item in items:
             metadata = getattr(item, "metadata", None)
             spec = getattr(item, "spec", None)
@@ -1108,9 +1117,22 @@ class ProviderOptionLookup:
             short_name = _as_str(getattr(spec, "short_human_readable_name", None))
             label = f"{name}  ({short_name})" if short_name else name
             options.append(OptionChoice(value=name, label=label))
+            presets[(project_id, name)] = tuple(
+                _ComputePlatformPreset(
+                    name=preset_name,
+                    vcpu_count=getattr(resources, "vcpu_count", None),
+                    memory_gibibytes=getattr(resources, "memory_gibibytes", None),
+                    gpu_count=getattr(resources, "gpu_count", None),
+                    allow_gpu_clustering=bool(getattr(preset, "allow_gpu_clustering", False)),
+                )
+                for preset in list(getattr(spec, "presets", []))
+                if (preset_name := _as_str(getattr(preset, "name", None)))
+                for resources in (getattr(preset, "resources", None),)
+            )
 
         options.sort(key=lambda item: item.value)
         resolved = tuple(options)
+        self._compute_platform_preset_cache.update(presets)
         self._cache[cache_key] = resolved
         return resolved
 
@@ -2109,10 +2131,13 @@ class ProviderOptionLookup:
 
         options: list[OptionChoice] = []
         preset_by_name: dict[str, _ComputePlatformPreset] = {}
-        for preset in self._resolve_compute_platform_preset_inventory(
+        presets = self._resolve_compute_platform_preset_inventory(
             project_id=project_id,
             platform_name=platform_name,
-        ):
+        )
+        if (project_id, platform_name) not in self._compute_platform_preset_cache:
+            return ()
+        for preset in presets:
             preset_name = preset.name
             allow_gpu_clustering = preset.allow_gpu_clustering
             if require_gpu_clustering and not allow_gpu_clustering:
@@ -2280,7 +2305,8 @@ class ProviderOptionLookup:
         if sdk is None:
             return ()
         try:
-            cached = list_capacity_resource_advice(sdk, parent_id=tenant_id)
+            with install_phase("provider-lookup", "Checking available compute capacity"):
+                cached = list_capacity_resource_advice(sdk, parent_id=tenant_id)
         except Exception as exc:
             self._last_error = f"capacity resource advice lookup failed: {exc}"
             return ()
@@ -2297,36 +2323,18 @@ class ProviderOptionLookup:
         if cache_key in self._compute_platform_preset_cache:
             return self._compute_platform_preset_cache[cache_key]
 
-        sdk = self._sdk_or_none()
-        if sdk is None:
-            return ()
-        from nebius.api.nebius.common.v1 import GetByNameRequest
-        from nebius.api.nebius.compute.v1 import PlatformServiceClient
-
-        client = PlatformServiceClient(sdk)
         try:
-            platform = client.get_by_name(
-                GetByNameRequest(parent_id=project_id, name=platform_name),
-                **_provider_request_kwargs(),
-            ).wait()
+            self._resolve_project_compute_platform_inventory(project_id)
         except Exception as exc:
-            self._last_error = f"compute platform lookup failed for {platform_name}: {exc}"
+            self._last_error = f"compute platform inventory lookup failed: {exc}"
             return ()
-
-        resolved = tuple(
-            _ComputePlatformPreset(
-                name=preset_name,
-                vcpu_count=getattr(resources, "vcpu_count", None),
-                memory_gibibytes=getattr(resources, "memory_gibibytes", None),
-                gpu_count=getattr(resources, "gpu_count", None),
-                allow_gpu_clustering=bool(getattr(preset, "allow_gpu_clustering", False)),
-            )
-            for preset in list(getattr(getattr(platform, "spec", None), "presets", []))
-            if (preset_name := _as_str(getattr(preset, "name", None)))
-            for resources in (getattr(preset, "resources", None),)
-        )
-        self._compute_platform_preset_cache[cache_key] = resolved
-        return resolved
+        if cache_key not in self._compute_platform_preset_cache:
+            if ("compute_platform_inventory", project_id) in self._cache:
+                self._last_error = (
+                    f"Compute platform '{platform_name}' is not available in the selected project."
+                )
+            return ()
+        return self._compute_platform_preset_cache[cache_key]
 
     def _resolve_compute_public_image_families(
         self,
@@ -2379,14 +2387,15 @@ class ProviderOptionLookup:
         from nebius.api.nebius.compute.v1 import ImageServiceClient, ListPublicRequest
 
         client = ImageServiceClient(sdk)
-        items = self._paged_list(
-            request_factory=lambda page_token: ListPublicRequest(
-                region=region_id,
-                page_size=_NEBIUS_LIST_PAGE_SIZE,
-                page_token=page_token,
-            ),
-            request_call=client.list_public,
-        )
+        with install_phase("provider-lookup", "Looking up node images"):
+            items = self._paged_list(
+                request_factory=lambda page_token: ListPublicRequest(
+                    region=region_id,
+                    page_size=_NEBIUS_LIST_PAGE_SIZE,
+                    page_token=page_token,
+                ),
+                request_call=client.list_public,
+            )
 
         families: dict[str, _ComputePublicImageFamily] = {}
         for item in items:
@@ -2444,14 +2453,15 @@ class ProviderOptionLookup:
             NodeGroupServiceClient,
         )
 
-        response = (
-            NodeGroupServiceClient(sdk)
-            .get_compatibility_matrix(
-                GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version),
-                **_provider_request_kwargs(),
+        with install_phase("provider-lookup", "Looking up Kubernetes and GPU compatibility"):
+            response = (
+                NodeGroupServiceClient(sdk)
+                .get_compatibility_matrix(
+                    GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version),
+                    **_provider_request_kwargs(),
+                )
+                .wait()
             )
-            .wait()
-        )
 
         response_items = list(getattr(response, "items", []) or [])
         if not response_items:
@@ -2500,14 +2510,15 @@ class ProviderOptionLookup:
         from nebius.api.nebius.vpc.v1 import ListSubnetsRequest, SubnetServiceClient
 
         client = SubnetServiceClient(sdk)
-        items = self._paged_list(
-            request_factory=lambda page_token: ListSubnetsRequest(
-                parent_id=project_id,
-                page_size=_NEBIUS_LIST_PAGE_SIZE,
-                page_token=page_token,
-            ),
-            request_call=client.list,
-        )
+        with install_phase("provider-lookup", "Looking up project subnets"):
+            items = self._paged_list(
+                request_factory=lambda page_token: ListSubnetsRequest(
+                    parent_id=project_id,
+                    page_size=_NEBIUS_LIST_PAGE_SIZE,
+                    page_token=page_token,
+                ),
+                request_call=client.list,
+            )
 
         options: list[OptionChoice] = []
         for item in items:
@@ -2523,14 +2534,16 @@ class ProviderOptionLookup:
             name = _as_str(getattr(metadata, "name", None))
             status_private_cidrs = tuple(
                 str(cidr).strip()
-                for cidr in (
-                    list(getattr(status, "ipv4_private_cidrs", [])) if status is not None else []
-                )
+                for pool in list(getattr(status, "ipv4_private_pools", []) or [])
+                for cidr in list(getattr(pool, "cidrs", []) or [])
                 if str(cidr).strip()
             )
             cidr_suffix = f" ({', '.join(status_private_cidrs)})" if status_private_cidrs else ""
             label = f"{subnet_id}  ({name}){cidr_suffix}" if name else f"{subnet_id}{cidr_suffix}"
             private_pools = getattr(spec, "ipv4_private_pools", None)
+            check_presence = getattr(spec, "check_presence", None)
+            if callable(check_presence) and not check_presence("ipv4_private_pools"):
+                private_pools = None
             use_network_private_pools = (
                 True
                 if private_pools is None
@@ -2586,14 +2599,15 @@ class ProviderOptionLookup:
         from nebius.api.nebius.compute.v1 import FilesystemServiceClient, ListFilesystemsRequest
 
         client = FilesystemServiceClient(sdk)
-        items = self._paged_list(
-            request_factory=lambda page_token: ListFilesystemsRequest(
-                parent_id=project_id,
-                page_size=_NEBIUS_LIST_PAGE_SIZE,
-                page_token=page_token,
-            ),
-            request_call=client.list,
-        )
+        with install_phase("provider-lookup", "Looking up shared filesystems"):
+            items = self._paged_list(
+                request_factory=lambda page_token: ListFilesystemsRequest(
+                    parent_id=project_id,
+                    page_size=_NEBIUS_LIST_PAGE_SIZE,
+                    page_token=page_token,
+                ),
+                request_call=client.list,
+            )
 
         options: list[OptionChoice] = []
         for item in items:
@@ -2805,14 +2819,15 @@ class ProviderOptionLookup:
 
         client = NetworkServiceClient(sdk)
         pool_client = PoolServiceClient(sdk)
-        items = self._paged_list(
-            request_factory=lambda page_token: ListNetworksRequest(
-                parent_id=project_id,
-                page_size=_NEBIUS_LIST_PAGE_SIZE,
-                page_token=page_token,
-            ),
-            request_call=client.list,
-        )
+        with install_phase("provider-lookup", "Looking up project networks"):
+            items = self._paged_list(
+                request_factory=lambda page_token: ListNetworksRequest(
+                    parent_id=project_id,
+                    page_size=_NEBIUS_LIST_PAGE_SIZE,
+                    page_token=page_token,
+                ),
+                request_call=client.list,
+            )
 
         pool_cidr_cache: dict[str, tuple[str, ...]] = {}
 
@@ -2820,10 +2835,11 @@ class ProviderOptionLookup:
             if pool_id in pool_cidr_cache:
                 return pool_cidr_cache[pool_id]
             try:
-                pool = pool_client.get(
-                    GetPoolRequest(id=pool_id),
-                    **_provider_request_kwargs(),
-                ).wait()
+                with install_phase("provider-lookup", "Looking up network address pools"):
+                    pool = pool_client.get(
+                        GetPoolRequest(id=pool_id),
+                        **_provider_request_kwargs(),
+                    ).wait()
             except Exception:
                 pool_cidr_cache[pool_id] = ()
                 return ()

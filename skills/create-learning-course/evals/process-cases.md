@@ -14,9 +14,16 @@ python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
 
 Tests construct a small local fixture from the HTML/CSS/SVG assets and exercise
 negative cases, including nonliteral source markup and malformed reference URLs.
-Escaped source and valid HTTPS links provide positive controls. The fixture
-tests mechanics, not complete course pedagogy.
-No test launches a browser, fetches a resource, runs a lab or installs packages.
+Escaped source and valid HTTPS links provide positive controls. Tests also
+reject bare, empty, valued and mixed-case `attributionsrc` attributes;
+the CLI reports attribution markup as a format failure without a traceback.
+These controls enforce the existing no-tracking rule without following links.
+The fixture uses the real four-section fragment and tests local diagram
+ownership, visible labels/order, nested explanation containers and nonempty
+prose outside figure text. Negative controls cover missing, reordered and duplicate sections,
+caption-only or misplaced diagrams, cross-lesson coverage and trailing content.
+These test mechanics, not complete course pedagogy.
+No deterministic test launches a browser, fetches a resource, runs a lab or installs packages.
 The source checker is read-only and does not render Markdown.
 
 ## Fresh Routing Lane
@@ -44,6 +51,13 @@ comparable evidence.
 For the revision case, stage the synthetic fixture as course input; do not
 pretend its inline snippet is a complete runnable course. The agent should
 create canonical files and correct unsupported claims within the request.
+
+The lesson-only waiting-line case can run as a bounded clean-context writing
+comparison without a full package or browser. Apply the same request and
+references to baseline and revised source; score conceptual titles, causal
+completeness, local abbreviations, diagram meaning and summary ownership.
+State exactly which cases ran. An output comparison is not a fresh installed
+routing test and does not prove the quality of every future course.
 
 ## Reporting
 

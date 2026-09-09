@@ -6,6 +6,19 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Closed a tracking gap in the `create-learning-course` HTML checker:
+  `attributionsrc` is rejected alongside hyperlink `ping`, including empty and
+  valueless attributes. Added parser and CLI regression controls while keeping
+  ordinary HTTPS reference links valid.
+
+- Standardized `create-learning-course` lessons across subjects: conceptual
+  titles; Objective, How it works, Practice and final Mental model; integrated
+  definitions, prerequisite connections, purpose, mechanism and worked examples;
+  contextual abbreviation explanations; and a core diagram inside every How
+  it works. Aligned Markdown/HTML templates, styles, review guidance and evals.
+  Added lesson-local section/diagram validation with malformed-layout controls;
+  preserved complete teaching, seven-section practical guides and safety gates.
+
 - Aligned `nebius` partial-operation recovery: group membership failures retain
   both the completed group and pending membership identities with the original
   sanitized error code. Provisioning rejects invalid readiness budgets and
