@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.1] - 2026-09-09
+
 - Separate strongSwan secret output from ordinary file rendering, preserving
   atomic mode-`0600` writes and in-memory previews with explicit regression coverage.
 - Fixed ordinary apply rejecting multiple static tunnels sharing a remote prefix.
