@@ -4423,6 +4423,10 @@ one plan. Selected ordinary wheels must match the CLI's projection and reconcili
 sources; the frozen binary bundles those readable sources and build tests compare
 exact bytes. Existing HA handoff inspection also receives its required stdlib sources.
 
+StrongSwan PSK output calls the atomic mode-`0600` secret writer directly;
+ordinary file writes never receive that content. Preview rendering retains the
+secret-bearing content in memory and performs no file writes.
+
 Private sidecars validate full binding, projection, link and route schemas and are
 immutable for an operation. Preparing a durable successor prunes only unreferenced
 sidecars, retaining the journal and ledger owners. The ledger deduplicates and bounds

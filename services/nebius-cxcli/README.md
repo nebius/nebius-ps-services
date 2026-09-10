@@ -4349,6 +4349,8 @@ markdownlint README.md docs/design.md
 ```
 
 During iteration, run the individual test files owned by the changed module.
+CLI admission regressions cover both colored and plain output while checking
+the same error text, exit status, and absence of side effects.
 Use the Soperator glob above for the complete offline Soperator lane so new test
 modules are included automatically instead of extending a manual file list.
 

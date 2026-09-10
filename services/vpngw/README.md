@@ -3353,6 +3353,9 @@ ps aux | grep "python3 -m nebius_vpngw.agent.main"
 
 ### Agent Development
 
+The renderer writes PSK-bearing `swanctl.conf` through the atomic mode-`0600`
+secret writer. Preview rendering retains those bytes in memory without writing files.
+
 **Modify agent code:**
 
 ```bash

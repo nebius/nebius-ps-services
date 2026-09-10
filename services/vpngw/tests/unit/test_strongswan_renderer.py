@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from nebius_vpngw.agent import strongswan_renderer
 from nebius_vpngw.agent.strongswan_renderer import (
     StrongSwanRenderer,
@@ -87,6 +89,34 @@ def test_write_secret_file_uses_secure_permissions(tmp_path) -> None:
 
     assert output_path.read_text(encoding="utf-8") == "secret = test\n"
     assert os.stat(output_path).st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_render_keeps_psks_out_of_ordinary_file_writes(
+    tmp_path, monkeypatch, sample_config, preview
+) -> None:
+    secret = sample_config["connections"][0]["tunnels"][0]["psk"]
+    swanctl_path = tmp_path / "swanctl.conf"
+    monkeypatch.setattr(strongswan_renderer, "STRONGSWAN_CONF_DIR", tmp_path / "strongswan.d")
+    monkeypatch.setattr(strongswan_renderer, "IPSEC_CONF", tmp_path / "ipsec.conf")
+    monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", swanctl_path)
+    monkeypatch.setattr(strongswan_renderer, "NETPLAN_DIR", tmp_path / "netplan")
+    original_write_text = Path.write_text
+
+    def write_public(path, content, *args, **kwargs):
+        assert secret not in content
+        return original_write_text(path, content, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write_public)
+    rendered = {} if preview else None
+    StrongSwanRenderer().render_and_apply(sample_config, activate=False, rendered_files=rendered)
+
+    if rendered is not None:
+        assert secret in rendered[swanctl_path]
+        assert not list(tmp_path.iterdir())
+    else:
+        assert secret in swanctl_path.read_text(encoding="utf-8")
+        assert swanctl_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_wait_for_vici_socket_uses_configured_path(tmp_path, monkeypatch) -> None:

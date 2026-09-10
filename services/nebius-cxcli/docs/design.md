@@ -68,6 +68,9 @@ target-wins jail/rootfs transition and its retained storage boundary.
 
 ## Public Lifecycle
 
+Post-Flux ExternalSecret readiness uses the exact `external-secrets.io` API
+group from `apiVersion`; this field is a Kubernetes group/version, not a URL.
+
 ```text
 new target -------- soperator install [--release latest|X.Y.Z] ----> managed
 existing target --- soperator discover [raw scope] ----------------> information report

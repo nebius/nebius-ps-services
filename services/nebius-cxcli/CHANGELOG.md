@@ -6,6 +6,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Match ExternalSecret readiness by its exact Kubernetes API group and verify
+  removed install options in both colored and plain CLI output.
 - Reject FIFO/device inputs for Soperator values and SSSD runtime files before
   reading, and reject malformed feature enablement or disabled required checks
   during input validation.

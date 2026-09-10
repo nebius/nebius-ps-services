@@ -46372,7 +46372,8 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
                     retry_stderr_markers=_KUBECTL_TRANSIENT_FAILURE_MARKERS,
                 )
                 for doc in custom_docs_by_priority[priority]:
-                    if str(doc.get("apiVersion", "")).startswith("external-secrets.io/"):
+                    api_group, separator, _ = str(doc.get("apiVersion", "")).partition("/")
+                    if api_group == "external-secrets.io" and separator:
                         metadata = doc["metadata"]
                         command = [
                             "kubectl",

@@ -172,6 +172,55 @@ def test_apply_post_flux_manifest_skips_helm_oci_status_output(
     assert applied_docs == [[configmap]]
 
 
+@pytest.mark.parametrize(
+    ("api_version", "waits"),
+    [
+        ("external-secrets.io/v1", True),
+        ("external-secrets.io/v1beta1", True),
+        ("external-secrets.io.example.test/v1", False),
+        ("example.test/external-secrets.io/v1", False),
+        ("external-secrets.io", False),
+    ],
+)
+def test_apply_post_flux_manifest_waits_for_exact_external_secrets_group(
+    tmp_path, monkeypatch, api_version, waits
+):
+    manifest_path = tmp_path / "post-flux-secrets.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": api_version,
+                "kind": "ExternalSecret",
+                "metadata": {"name": "example", "namespace": "example"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(
+        cli_module, "_run_post_flux_kubectl", lambda command, **_kwargs: calls.append(command)
+    )
+
+    cli_module._apply_post_flux_manifest(manifest_path, env={})
+
+    wait_commands = [command for command in calls if command[:2] == ["kubectl", "wait"]]
+    assert wait_commands == (
+        [
+            [
+                "kubectl",
+                "wait",
+                "--for=condition=Ready",
+                "--timeout=180s",
+                "ExternalSecret/example",
+                "-n",
+                "example",
+            ]
+        ]
+        if waits
+        else []
+    )
+
+
 def _empty_quota_report() -> cli_module.QuotaReport:
     return cli_module.QuotaReport(
         tenant_id="tenant-123",
@@ -8632,9 +8681,13 @@ def test_soperator_real_component_add_remove_render_keeps_protected_contract(mon
 
 
 @pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("force_color", [False, True])
 def test_soperator_install_rejects_removed_app_option_before_side_effects(
-    monkeypatch, tmp_path, resume
+    monkeypatch, tmp_path, resume, force_color
 ):
+    monkeypatch.setattr("typer.rich_utils.FORCE_TERMINAL", force_color)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.setattr(
         cli_module, "freeze_soperator_release", lambda *_a, **_k: pytest.fail("release read")
     )
@@ -8649,9 +8702,11 @@ def test_soperator_install_rejects_removed_app_option_before_side_effects(
             "grafana",
             *(["--resume"] if resume else []),
         ],
+        color=force_color,
     )
     assert result.exit_code == 2
-    assert "No such option: --app" in result.output
+    assert "No such option: --app" in _normalized_cli_output(result.output)
+    assert ("\x1b[" in result.output) is force_color
     assert not list(tmp_path.iterdir())
 
 

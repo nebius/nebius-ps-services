@@ -85,11 +85,9 @@ class StrongSwanRenderer:
         """
         preview = rendered_files is not None
 
-        def write(path: Path, content: str, *, secret: bool = False) -> None:
+        def write(path: Path, content: str) -> None:
             if rendered_files is not None:
                 rendered_files[path] = content
-            elif secret:
-                _write_secret_file(path, content)
             else:
                 path.write_text(content, encoding="utf-8")
 
@@ -262,7 +260,10 @@ network:
             swanctl_lines.append("}")
 
         swanctl_content = "\n".join(swanctl_lines) + "\n"
-        write(SWANCTL_CONF, swanctl_content, secret=True)
+        if rendered_files is not None:
+            rendered_files[SWANCTL_CONF] = swanctl_content
+        else:
+            _write_secret_file(SWANCTL_CONF, swanctl_content)
         print(f"[StrongSwan] Wrote {SWANCTL_CONF} (permissions: 0600)")
 
         # Enable VICI plugin so swanctl can talk to charon
