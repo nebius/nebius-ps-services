@@ -7,9 +7,10 @@ This module manages UFW firewall rules to ensure:
 - XFRM interfaces are not filtered (BGP traffic flows freely)
 """
 
-import subprocess
 from pathlib import Path
 from typing import Any
+
+from .local_commands import run
 
 PEER_IPS_FILE = Path("/etc/vpngw_peer_ips")
 MGMT_CIDRS_FILE = Path("/etc/vpngw_mgmt_cidrs")
@@ -134,9 +135,7 @@ def reload_firewall() -> bool:
 
     print("[FirewallMgr] Reloading UFW firewall rules...")
 
-    result = subprocess.run(
-        ["bash", str(FIREWALL_SETUP_SCRIPT)], capture_output=True, text=True, timeout=30
-    )
+    result = run(["bash", str(FIREWALL_SETUP_SCRIPT)], capture_output=True, text=True, timeout=30)
 
     if result.returncode == 0:
         print("[FirewallMgr] ✓ Firewall rules reloaded successfully")

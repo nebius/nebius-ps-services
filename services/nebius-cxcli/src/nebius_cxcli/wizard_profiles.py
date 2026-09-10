@@ -404,9 +404,10 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                     "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
                 },
                 "auto_select_first": True,
-                "skip_prompt_if_no_choices": True,
+                "skip_prompt_if_no_choices": False,
             },
-            "prompt": False,
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.node_group_defaults.gpu.gpu_stack_preset": {
             "options": {

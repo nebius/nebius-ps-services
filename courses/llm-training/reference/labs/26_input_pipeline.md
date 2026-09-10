@@ -4,7 +4,7 @@ A training accelerator can wait because its next batch is not ready, even when t
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 9 for dataset/collator ownership, worker prefetch, pinning, batch readiness and ordered-content digests. Reuse Optimizations Lessons 2 and 6 for phase timing and transfer lifetimes before changing one producer setting.
+**Theory preparation:** Read Lesson 9 for sample ownership, prefetch, pinning and batch readiness. Reuse Optimizations Lessons 2 and 6 for timing boundaries and transfer lifetimes.
 
 Use one H100 and enough allocated CPUs for worker processes. The dataset is synthetic and deterministic. This lab exposes worker, prefetch, batch-count, and producer-delay options; it does not benchmark real storage.
 
@@ -12,7 +12,7 @@ A single H100 can expose CPU or storage tails quickly; two nodes may increase sh
 
 ## Concepts and code path
 
-Dataset samples include IDs and deterministic token content. A collator builds batches and producer-time metadata. The consumer transfers tokens, executes bounded GPU work, and records batch readiness and step durations. Digests verify sample order/content between serial and prefetched paths. Queue observations are diagnostic snapshots, not a scheduling guarantee.
+Samples contain deterministic IDs and token content; the collator adds producer-time metadata. DataLoader uses prefetch only with positive worker counts. The consumer transfers tokens, executes bounded GPU work and records readiness and step durations. SHA-256 digests fingerprint ordered sample IDs and token bytes: matching digests support unchanged content and order for that serialization, not data quality. Queue-depth samples are snapshots; actual consumer waits show whether preparation delays progress.
 
 ## Practice
 

@@ -48,6 +48,8 @@ defaults:
     mode: "static"
 
 connections:
+  # On one ordinary VM, identical static destinations use the last enabled tunnel
+  # in configuration order; active/passive labels do not assign route metrics.
   - name: "onprem-static"
     vendor: "generic"
     routing_mode: "static"

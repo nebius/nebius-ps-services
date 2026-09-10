@@ -11,7 +11,12 @@
         "The syllabus and TOC follow the same two-lesson prerequisite sequence.",
         "The lab has a purpose introduction and seven substantive sections whose commands and results match source.",
         "The page embeds full prose, CSS, contextual accessible SVG and complete escaped lab source; the course builder has a stale/parity check.",
-        "No GPU, Slurm, cloud, private identifiers or unrequested installation is introduced."
+        "No GPU, Slurm, cloud, private identifiers or unrequested installation is introduced.",
+        "Every lesson title names a concept or relationship rather than listing technologies; syllabus, TOC and body titles match.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
+        "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
+        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism."
       ]
     },
     {
@@ -24,7 +29,12 @@
         "A worked example prepares learners for guided comparison and independent transfer, with reasoned feedback.",
         "The practical guide follows the seven roles without pretending code or a runtime exists.",
         "The light layout, side TOC and contextual diagram pattern are preserved.",
-        "Runtime lanes are marked not applicable with reasons; semantic/browser gates are not automatically approved."
+        "Runtime lanes are marked not applicable with reasons; semantic/browser gates are not automatically approved.",
+        "Every lesson title names a concept or relationship rather than listing technologies; syllabus, TOC and body titles match.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
+        "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
+        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism."
       ]
     },
     {
@@ -39,7 +49,12 @@
         "The fixed-size runnable baseline is distinguished from a learner-implemented size-sweep extension.",
         "No useful worked assumptions, invalidation warning or correctness check disappears.",
         "No learner-facing history, source-coverage table, time formula or research-reviewed date appears.",
-        "A change in source is reflected in rebuilt HTML and a stale/parity test."
+        "A change in source is reflected in rebuilt HTML and a stale/parity test.",
+        "Every lesson title names a concept or relationship rather than listing technologies; syllabus, TOC and body titles match.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
+        "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
+        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism."
       ]
     },
     {
@@ -54,6 +69,22 @@
         "The fixed-size code is identified as insufficient evidence for a supported size-sweep capability.",
         "The response proposes focused improvements without claiming an executed lab or validated course outcome.",
         "No course files, HTML publication, skill sources or learner-code execution are produced by the review."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use $create-learning-course to draft two complete lessons for beginners on managing a waiting line in a small workshop. Lesson one should explain how arrivals, waiting work, service and departures relate. Lesson two should explain first-in, first-out (FIFO) service and work in progress (WIP), comparing a steady arrival rate of two jobs per minute with service capacity of three jobs per minute and showing what changes when arrivals reach four per minute. Assume learners know ordinary arithmetic but no queue terminology. Deliver lesson-only Markdown with original inline SVG diagrams and a short guided non-code exercise with feedback for each lesson; do not create a full course package or use external services. All examples are synthetic. Follow the selected skill's lesson format.",
+      "expected_output": "Two complete subject-neutral lesson drafts with clear causal teaching, local terminology and meaningful diagrams, preserving lesson-only scope.",
+      "files": [],
+      "assertions": [
+        "Every lesson title names a concept or relationship rather than listing technologies; no unrequested syllabus or TOC is added for this lesson-only scope.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
+        "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
+        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism.",
+        "FIFO and WIP are expanded and explained in the lesson that uses them; waiting work is distinguished from all unfinished work.",
+        "The numerical example distinguishes actual departures from service capacity and explains backlog growth of one job per minute when arrivals exceed capacity.",
+        "Practice includes guided non-code work and reasoned feedback; no files, dependencies, full course package or external services are required."
       ]
     }
   ]

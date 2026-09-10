@@ -4,13 +4,15 @@ Speculative decoding proposes several tokens with a cheaper draft and asks the t
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 13 for first-order target transitions, draft acceptance, rejection recovery, bonus tokens and greedy sequence equivalence. Lessons 1 and 3 supply fixed-parameter generation and sampling, while Fundamentals Lesson 2 defines matrix/GELU operations. Measure all speculative work, not acceptance alone.
+**Theory preparation:** Read Lesson 13 for proposals, greedy verification, rejection recovery and bonus tokens. The synthetic first-order target and complete timing boundary are explained below.
 
 Use one H100 in the mechanics environment. No external target/draft model is required. The example is a first-order synthetic greedy process, not a transformer engine or proof of stochastic speculative-distribution equivalence.
 
 The target H100 may already batch decode efficiently. A weak draft can consume GPU capacity or host orchestration and reduce throughput at higher concurrency, so real-engine A/B trials are required.
 
 ## Concepts and code path
+
+This synthetic target is first-order: current-token input determines next-token scores through embedding, linear and GELU operations. That shortcut is not a full-transformer causal-history assumption.
 
 The code builds a target-only sequence and two speculative cases with deliberately high and low acceptance. It proposes a draft block, verifies the accepted prefix, emits a target recovery token at the first rejection, or emits a target bonus token after full acceptance. It records target calls, proposed/accepted tokens, timing, and memory while requiring the same final greedy sequence.
 

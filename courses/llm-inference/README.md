@@ -126,8 +126,6 @@ before timings or successful results are recorded.
 
 ## Begin with the concepts
 
-Start with the first lesson's **Start here** section and its inline workflow diagram. It defines the subject and essential vocabulary, explains why it is useful, and walks through a small example before advanced engineering details. Follow the syllabus checkpoints for the beginner route; experienced readers can use those checkpoints to identify what they already understand.
-
 Lab 35 is a download-free CPU introduction to fixed-parameter token generation; use `python3 labs/35_inference_basics.py --device cpu` in the mechanics environment. Its explicit `--device cuda` path is for an allocated H100. This is not an attention or serving benchmark.
 
 ## Continue learning

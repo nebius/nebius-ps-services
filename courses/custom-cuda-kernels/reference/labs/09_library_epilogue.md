@@ -4,7 +4,7 @@ The matrix multiplication itself may already be well served by a library, while 
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 12 for cuBLAS/CUTLASS, row/column-major conversion, leading dimensions, alpha/beta, SIMT arithmetic and the expanded-bias ReLU epilogue. Reuse Lessons 2–5 for the qualified build, numerical policy and traffic/timing boundary.
+**Theory preparation:** Read Lesson 12 for GEMM layout, leading dimensions, alpha/beta, numerical policy and epilogues. The supplied expanded-bias SIMT implementation is explained below.
 
 Build with the required reviewed CUTLASS 4.6.1 source and `COURSE_ENABLE_CUTLASS=ON`. Use the declared SM90 image and one H100. Missing CUTLASS is a blocked lab, not an accepted cuBLAS-only substitute.
 
@@ -12,7 +12,7 @@ Hopper Tensor Core instructions used by CUTLASS may require `sm_90a`; the course
 
 ## Concepts and code path
 
-The host builds a CPU reference that exercises positive and clamped ReLU outputs. cuBLAS computes row-major GEMM through the equivalent column-major call, followed by a bias/ReLU kernel. The CUTLASS path is pedagogical FP32 SIMT, not a Hopper Tensor Core collective-builder example. It expands the bias into a full source matrix and applies `LinearCombinationRelu` with both alpha and beta set to one; expansion occurs outside timing.
+The host builds a CPU reference that exercises positive and clamped ReLU outputs. cuBLAS computes row-major GEMM through the equivalent column-major call, followed by a bias/ReLU kernel. The CUTLASS path uses `OpClassSimt` and an `Sm80` template specialization compiled for the course target. It is FP32 SIMT, not a Hopper Tensor Core collective-builder example. The cuBLAS baseline pins pedantic math mode. It expands the bias into a full source matrix and applies `LinearCombinationRelu` with both alpha and beta set to one; expansion occurs outside timing.
 
 ## Practice
 

@@ -4,7 +4,7 @@ Several pointwise operations can repeatedly read and write intermediate tensors.
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 4 for eager execution, SiLU/tanh composition, fusion, full-graph compilation and separate startup timing, after Lessons 1–3’s correctness/measurement/profiling foundation. Revisit the same code in Lesson 7 for its intermediate-traffic ledger.
+**Theory preparation:** Read Lessons 1–4 for correctness, timing, profiling, eager execution, activation functions and compilation. Revisit the same code in Lesson 7 to count intermediate reads and writes.
 
 Use the qualified Optimizations environment on one H100 with a working compiler backend. Compilation can take longer than the measured steady-state operations; preserve that cost rather than hiding it in warm-up.
 
@@ -14,7 +14,7 @@ H100 HBM bandwidth is high, but low-intensity chains can still saturate it. Effi
 
 ## Concepts and code path
 
-The program constructs resident inputs, defines one pointwise function, wraps it with compilation, and checks eager/compiled output agreement. It records the first-call wall duration separately, then uses repeated CUDA events for both warmed paths. The source does not contain a memory-layout sweep, and compiler fusion is an outcome to inspect, not assume.
+The pointwise function combines multiplication, addition, SiLU and tanh on resident inputs. The program compiles that same function and compares complete eager and compiled outputs. It records first-call wall time separately, then measures both warmed paths with CUDA events. Inspect generated execution before claiming fusion; this experiment does not include a memory-layout sweep.
 
 ## Practice
 

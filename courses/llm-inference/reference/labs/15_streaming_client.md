@@ -4,7 +4,7 @@ Users experience streamed generation as a wait for first content followed by a s
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 6–7 for the service lifecycle, concurrent clients, SSE event parsing, first-content timing, chunk gaps and token-aware metric limits. Keep Lesson 3’s stopping/sampling and Lesson 5’s workload fixed before interpreting arrivals.
+**Theory preparation:** Read Lessons 6–7 for the service lifecycle, concurrent clients, SSE and chunk-versus-token timing, first-content timing, chunk gaps and token-aware metric limits. Keep Lesson 3’s stopping/sampling and Lesson 5’s workload fixed before interpreting arrivals.
 
 Qualify the engine and client environments and use the supplied streaming launcher. It owns the local server lifecycle. Keep prompts, responses, and raw streaming logs private and preserve the immutable model revision.
 
@@ -12,7 +12,7 @@ H100 throughput can keep rising with batching after TTFT/ITL become unacceptable
 
 ## Concepts and code path
 
-Concurrent client tasks open streaming completion requests, parse arriving content, and timestamp the first nonempty content and subsequent chunks. The client aggregates first-content and completion metrics over the campaign. It counts received characters but does not tokenize each arrival, so its gap statistic cannot be relabeled ITL or TPOT.
+Concurrent client tasks open streaming completion requests, parse `data:` events containing generated content, and timestamp the first nonempty content and subsequent chunks. The client aggregates first-content and completion metrics over the campaign. It counts received characters but does not tokenize each arrival, so its gap statistic cannot be relabeled ITL or TPOT.
 
 ## Practice
 
@@ -26,6 +26,14 @@ Inspect request-count and concurrency options before changing load. The baseline
 umask 077
 bash slurm/vllm_streaming_benchmark.sbatch --help
 sbatch slurm/vllm_streaming_benchmark.sbatch
+```
+
+For the initial token-aware AIPerf exercise, qualify the image/model prerequisites and use the supplied `slurm/aiperf.sbatch` launcher. It owns the bounded loopback server, readiness, workload and cleanup. Compare requested and observed token counts, denominators and errors before broadening the workload in Lesson 15. Set `VLLM_IMAGE_DIGEST` and `AIPERF_IMAGE_DIGEST` to the qualified images, and `COURSE_CONTAINER_RUNNER` to the reviewed executable runner. These are the same image and runner prerequisites used by the engine exercises.
+
+```bash
+umask 077
+bash slurm/aiperf.sbatch --help
+sbatch slurm/aiperf.sbatch
 ```
 
 ## Check your results

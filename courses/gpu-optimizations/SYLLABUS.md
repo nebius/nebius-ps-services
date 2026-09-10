@@ -25,19 +25,19 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 | Lesson | Topic | Competency to build | Practice at this stage |
 | --- | --- | --- | --- |
-| 1 | Freeze the workload and correctness contract | Freeze workload, correctness tolerance and the outcome that matters | Baseline worksheet; two-node preflight belongs to Lesson 11 |
-| 2 | Measure asynchronous GPU work correctly | Separate elapsed device intervals from synchronized application timing | Labs 01, 02 |
-| 3 | Select Nsight Systems, PyTorch Profiler, or Nsight Compute | Choose a timeline or counter tool to test one hypothesis | Lab 07, then Lab 14 synchronization case; other cases are previews |
-| 4 | Reduce launch and Python overhead | Reduce dispatch and intermediate work without changing the operation | Lab 03 |
-| 5 | Use CUDA Graphs only for stable execution | Identify stable addresses and execution needed for graph replay | Lab 04 |
-| 6 | Keep the input pipeline ahead of the GPU | Keep valid input batches ready while preserving sample ownership | Lab 05, then Lab 19 input overlap |
-| 7 | Optimize memory layout and intermediate traffic | Reduce unnecessary copies and improve physical access patterns | Reuse Lab 03 for a traffic ledger; preview Lab 10; pipeline-layout extension |
-| 8 | Manage allocator lifetime and peak memory | Separate live tensor memory from allocator reserve and lifetime | Lab 12, then Lab 20 output ownership |
-| 9 | Select shapes and precision for efficient libraries | Compare library-friendly shapes and precision with explicit correctness gates | Lab 10 |
-| 10 | Find load imbalance and tail waves | Locate whether completion is limited by lanes, blocks or tail waves | Lab 15 |
-| 11 | Qualify GPU networking and tune NCCL with evidence | Verify the transport, read message-size curves and test one job-local change | Preflight, Labs 17, 18 |
-| 12 | Diagnose distributed scaling and collective overlap | Hold global work fixed and identify exposed collective time | Labs 00, 08, 13 |
-| 13 | Decide between framework, library, compiler, and custom kernel paths | Select a maintained optimization layer and justify a keep/reject decision | Labs 09, 16 |
+| 1 | Controlled GPU optimization | Freeze workload, correctness tolerance and the outcome that matters | Baseline worksheet; two-node preflight belongs to Lesson 11 |
+| 2 | Asynchronous performance measurement | Separate elapsed device intervals from synchronized application timing | Labs 01, 02 |
+| 3 | Performance evidence and profiling | Choose a timeline or counter tool to test one hypothesis | Lab 07, then Lab 14 synchronization case; other cases are previews |
+| 4 | Submission overhead and kernel fusion | Reduce dispatch and intermediate work without changing the operation | Lab 03 |
+| 5 | Reusable GPU execution plans | Identify stable addresses and execution needed for graph replay | Lab 04 |
+| 6 | Input readiness and transfer overlap | Keep valid input batches ready while preserving sample ownership | Lab 05, then Lab 19 input overlap |
+| 7 | Tensor layout and memory traffic | Reduce unnecessary copies and improve physical access patterns | Reuse Lab 03 for a traffic ledger; preview Lab 10; pipeline-layout extension |
+| 8 | Memory allocation and ownership | Separate live tensor memory from allocator reserve and lifetime | Lab 12, then Lab 20 output ownership |
+| 9 | Efficient numerical-library execution | Compare library-friendly shapes and precision with explicit correctness gates | Lab 10 |
+| 10 | Parallel imbalance and completion tails | Locate whether completion is limited by lanes, blocks or tail waves | Lab 15 |
+| 11 | GPU communication paths and performance | Verify the transport, read message-size curves and test one job-local change | Preflight, Labs 17, 18 |
+| 12 | Distributed scaling and communication overlap | Hold global work fixed and identify exposed collective time | Labs 00, 08, 13 |
+| 13 | Choosing an optimization layer | Select a maintained optimization layer and justify a keep/reject decision | Labs 09, 16 |
 
 ## Readiness checkpoints
 

@@ -4,13 +4,13 @@ This exercise shows how repeated predictions create a token sequence while the m
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 1 for tokens, embedding-table logits, softmax, greedy selection, stopping, evaluation/inference modes and the unchanged-parameter check. Start with the fixed CPU example before loading an external model.
+**Theory preparation:** Read the opening fixed-weight generation example for scores, token selection and stopping. The fixed score table, inference mode and parameter checks are explained below.
 
 Use the inference mechanics PyTorch environment. CPU mode is the default; CUDA mode requires an explicitly selected full H100. No tokenizer package, external dataset, remote code or model weights are fetched. Read the opening definitions of inference, token, logit, greedy decoding and end-of-sequence. The supplied vocabulary is already tokenized: a real application must additionally format and tokenize text. Shared profile and seed metadata do not change this fixed example.
 
 ## Concepts and code path
 
-`run_experiment` constructs a four-by-four embedding table, overwrites every score with a declared constant, and snapshots the parameters. Each row represents scores for the next token given one current token. Starting with I, the forward call selects its row; softmax converts scores into probabilities; argmax chooses a highest-probability token. That token becomes the next input unless it is the end marker. `main` validates the output budget, selects the device and writes the standard private result.
+`run_experiment` constructs a four-by-four embedding table, uses `torch.no_grad()` to initialize every score to a declared constant, and snapshots the parameters. Each row represents scores for the next token given one current token. Starting with I, the forward call selects its row; softmax converts scores into probabilities; argmax chooses a highest-probability token. That token becomes the next input unless it is the end marker. `main` validates the output budget, selects the device and writes the standard private result.
 
 The model is in evaluation mode and the loop uses inference mode. Evaluation mode changes the behavior of certain modules such as dropout; it does not itself disable gradient tracking. Inference mode avoids graph recording here, and explicit equality checks prove this program did not change its table. No backward pass or optimizer is present. Per-step transfers to CPU make the trace easy to read and intentionally unsuitable for performance benchmarking.
 

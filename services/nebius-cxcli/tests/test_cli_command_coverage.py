@@ -4420,6 +4420,7 @@ def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workd
 
 
 def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     calls: dict[str, Any] = {}
 
@@ -4538,6 +4539,7 @@ def test_internal_render_command_suppresses_deploy_hint_context(
 def test_render_command_persists_quota_report_and_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
     report = QuotaReport(
@@ -4656,6 +4658,7 @@ def test_render_command_persists_quota_report_and_warns(
 def test_render_command_accepts_local_source_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     calls: dict[str, Any] = {}
 
@@ -5992,6 +5995,7 @@ def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafa
 def test_render_command_requires_force_in_noninteractive_overwrite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
@@ -6016,6 +6020,7 @@ def test_render_command_requires_force_in_noninteractive_overwrite(
 def test_render_command_force_allows_noninteractive_overwrite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
@@ -6093,6 +6098,7 @@ def test_render_command_force_allows_noninteractive_overwrite(
 def test_render_command_prompts_before_overwrite_when_interactive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
@@ -6130,6 +6136,7 @@ def test_render_command_prompts_before_overwrite_when_interactive(
 def test_render_command_decline_is_clean_cancel_not_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
@@ -6156,6 +6163,7 @@ def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     preserved = fake_paths.generated_dir / "existing.txt"
@@ -10114,7 +10122,7 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(
-        cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None
+        cli, "_ensure_soperator_runtime_before_flux", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(
         cli,
@@ -17665,6 +17673,7 @@ def test_top_level_help_has_single_auth_command_surface() -> None:
 def test_render_command_fails_before_render_when_active_source_validation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", _fake_paths(tmp_path)))
     monkeypatch.setattr(
         cli,
@@ -17957,6 +17966,7 @@ def test_auth_target_ensures_profile_automatically(monkeypatch: pytest.MonkeyPat
         lambda **_kwargs: (material, False),
     )
     monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
 
     result = runner.invoke(
@@ -17985,6 +17995,7 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
         lambda **_kwargs: (material, True),
     )
     monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
 
     result = runner.invoke(
@@ -19388,6 +19399,7 @@ def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     fake_config = SimpleNamespace(
@@ -19496,6 +19508,7 @@ def test_ensure_runtime_auth_material_replaces_inherited_snapshot_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     key_file = tmp_path / "canonical.pem"
@@ -19586,6 +19599,7 @@ def test_ensure_runtime_auth_material_issues_s3_only_for_terraform(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     key_file = tmp_path / "key.pem"
@@ -19638,6 +19652,7 @@ def test_ensure_runtime_auth_material_preserves_operator_auth_until_s3_bootstrap
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     key_file = tmp_path / "key.pem"
@@ -19869,6 +19884,7 @@ def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch
         lambda **_kwargs: (material, False),
     )
     monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
     monkeypatch.setattr(cli, "_ensure_runtime_auth_s3_material", lambda _material: synced_material)
     monkeypatch.setattr(

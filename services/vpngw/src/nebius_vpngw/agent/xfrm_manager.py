@@ -14,10 +14,12 @@ Key advantages over VTI:
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
+
+from .local_commands import CURRENT, run
 
 IPSEC_OVERHEAD_BYTES = 64  # NAT-T ESP overhead for IPv4 (bytes)
 
@@ -91,11 +93,11 @@ class XFRMManager:
         """
         for name in interface_names:
             print(f"[XFRM] Deleting interface {name}")
-            subprocess.run(["ip", "link", "del", name], capture_output=True, check=False)
+            run(["ip", "link", "del", name], capture_output=True, check=False)
 
     def _create_xfrm_device(self, name: str, parent_dev: str, if_id: int) -> None:
         """Create XFRM network device bound to if_id."""
-        result = subprocess.run(
+        result = run(
             [
                 "ip",
                 "link",
@@ -113,6 +115,41 @@ class XFRMManager:
         )
         if result.returncode != 0:
             if "File exists" in result.stderr:
+                if CURRENT.get() is not None:
+                    observed = run(
+                        ["ip", "-d", "-j", "link", "show", "dev", name],
+                        capture_output=True,
+                        text=True,
+                    )
+                    parent = run(
+                        ["ip", "-j", "link", "show", "dev", parent_dev],
+                        capture_output=True,
+                        text=True,
+                    )
+                    links = json.loads(observed.stdout)
+                    parents = json.loads(parent.stdout)
+                    if (
+                        observed.returncode
+                        or parent.returncode
+                        or len(links) != 1
+                        or len(parents) != 1
+                    ):
+                        raise RuntimeError("existing XFRM identity is unavailable")
+                    info = links[0].get("linkinfo") or {}
+                    observed_id = (info.get("info_data") or {}).get("if_id")
+                    if isinstance(observed_id, str):
+                        observed_id = int(observed_id, 0)
+                    if (
+                        info.get("info_kind") != "xfrm"
+                        or observed_id != if_id
+                        or not (
+                            links[0].get("link_index") == parents[0].get("ifindex")
+                            or links[0].get("link") == parent_dev
+                        )
+                    ):
+                        raise RuntimeError(
+                            "existing interface conflicts with required XFRM identity"
+                        )
                 print(f"[XFRM] Interface {name} already exists, reusing")
             else:
                 print(f"[XFRM] ERROR creating {name}: {result.stderr}")
@@ -128,7 +165,7 @@ class XFRMManager:
             prefix = net.prefixlen
             addr_with_prefix = f"{local_ip}/{prefix}"
 
-            result = subprocess.run(
+            result = run(
                 ["ip", "addr", "replace", addr_with_prefix, "dev", name],
                 capture_output=True,
                 text=True,
@@ -142,7 +179,7 @@ class XFRMManager:
 
     def _bring_up(self, name: str) -> None:
         """Bring XFRM interface up."""
-        result = subprocess.run(["ip", "link", "set", name, "up"], capture_output=True, text=True)
+        result = run(["ip", "link", "set", name, "up"], capture_output=True, text=True)
         if result.returncode == 0:
             print(f"[XFRM] ✓ Interface {name} is UP")
         else:
@@ -150,7 +187,7 @@ class XFRMManager:
 
     def _set_mtu(self, name: str, mtu: int) -> None:
         """Set MTU on XFRM interface."""
-        result = subprocess.run(
+        result = run(
             ["ip", "link", "set", "dev", name, "mtu", str(mtu)],
             capture_output=True,
             text=True,
@@ -162,7 +199,7 @@ class XFRMManager:
 
     def _get_interface_mtu(self, name: str) -> int | None:
         """Read MTU for a given interface."""
-        result = subprocess.run(
+        result = run(
             ["ip", "-o", "link", "show", "dev", name],
             capture_output=True,
             text=True,
@@ -191,7 +228,7 @@ class XFRMManager:
 
     def _add_peer_route(self, name: str, remote_ip: str) -> None:
         """Add host route to BGP peer via XFRM interface."""
-        result = subprocess.run(
+        result = run(
             ["ip", "route", "replace", f"{remote_ip}/32", "dev", name],
             capture_output=True,
             text=True,
@@ -217,7 +254,7 @@ class XFRMManager:
         We use a null MAC address (00:00:00:00:00:00) since XFRM interfaces
         don't have real link-layer addresses - they operate at layer 3.
         """
-        result = subprocess.run(
+        result = run(
             [
                 "ip",
                 "neigh",
@@ -238,7 +275,7 @@ class XFRMManager:
             print(f"[XFRM] ✓ Added permanent neighbor {remote_ip} on {name}")
         elif "File exists" in result.stderr:
             # Neighbor already exists, try to replace it instead
-            result = subprocess.run(
+            result = run(
                 [
                     "ip",
                     "neigh",
@@ -267,7 +304,7 @@ class XFRMManager:
     def _add_static_routes(self, name: str, remote_prefixes: list[str]) -> None:
         """Add static routes for remote prefixes via XFRM interface."""
         for prefix in remote_prefixes:
-            result = subprocess.run(
+            result = run(
                 ["ip", "route", "replace", prefix, "dev", name],
                 capture_output=True,
                 text=True,
@@ -293,7 +330,7 @@ class XFRMManager:
 
         for iface, value in settings.items():
             key = f"net.ipv4.conf.{iface}.rp_filter"
-            result = subprocess.run(
+            result = run(
                 ["sysctl", "-w", f"{key}={value}"],
                 capture_output=True,
                 text=True,

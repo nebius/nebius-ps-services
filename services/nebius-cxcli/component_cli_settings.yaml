@@ -96,6 +96,7 @@ observability:
         template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
         include_when:
           - kubernetes_metrics
+          - soperator_metrics
       metrics_federate_read:
         label: Metrics read (federate)
         template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate

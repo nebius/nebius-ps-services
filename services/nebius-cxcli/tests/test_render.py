@@ -45,6 +45,7 @@ from nebius_cxcli.nfs_csi import ensure_nfs_csi_app_rows
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.render import (
     build_project_generation_plan,
+    project_generation_snapshot_sha256,
     promote_staged_generated_paths,
     render_project,
     staged_generated_paths,
@@ -59,6 +60,116 @@ from soperator_fixtures import sample_snapshot
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
+
+
+@pytest.mark.parametrize(
+    "runtime_name",
+    [
+        ".terraform/providers/example/plugin",
+        ".terraform/terraform.tfstate",
+        "terraform.tfstate",
+        "terraform.tfstate.backup",
+        "terraform.tfstate.d/lab/terraform.tfstate",
+        ".terraform.tfstate.lock.info",
+    ],
+)
+def test_terraform_runtime_survives_render_without_changing_configuration(tmp_path, runtime_name):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("cluster: lab\n")
+    paths = resolve_project_paths(config_path)
+    paths.infra_dir.mkdir(parents=True)
+    lock = paths.infra_dir / ".terraform.lock.hcl"
+    lock.write_text("provider-lock\n")
+    before = project_generation_snapshot_sha256(paths)
+    runtime = paths.infra_dir / runtime_name
+    runtime.parent.mkdir(parents=True, exist_ok=True)
+    runtime.write_text("runtime-before\n")
+    assert project_generation_snapshot_sha256(paths) == before
+    staged = staged_generated_paths(paths)
+    staged.infra_dir.mkdir(parents=True)
+    (staged.infra_dir / ".terraform.lock.hcl").write_text(lock.read_text())
+    plan = build_project_generation_plan(
+        final_paths=paths,
+        staged_paths=staged,
+        config_path=config_path,
+        config_content=config_path.read_text(),
+    )
+    assert runtime not in plan.writes and runtime not in plan.removals
+    runtime.write_text("runtime-after\n")
+    promote_staged_generated_paths(staged, paths)
+    assert runtime.read_text() == "runtime-after\n"
+    assert project_generation_snapshot_sha256(paths) == before
+    lock.write_text("changed-provider-lock\n")
+    assert project_generation_snapshot_sha256(paths) != before
+
+
+def test_terraform_runtime_promotion_preserves_provider_symlink(tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text("cluster: lab\n")
+    paths = resolve_project_paths(config)
+    provider = tmp_path / "provider-cache" / "plugin"
+    provider.parent.mkdir()
+    provider.write_text("cached-provider\n")
+    link = paths.infra_dir / ".terraform" / "provider"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(provider)
+    staged = staged_generated_paths(paths)
+    staged.infra_dir.mkdir(parents=True)
+    promote_staged_generated_paths(staged, paths)
+    assert link.is_symlink() and link.readlink() == provider
+    assert provider.read_text() == "cached-provider\n"
+
+
+def test_terraform_runtime_promotion_rejects_conflicting_staged_state(tmp_path):
+    paths = resolve_project_paths(tmp_path / "config.yaml")
+    paths.infra_dir.mkdir(parents=True)
+    state = paths.infra_dir / "terraform.tfstate"
+    state.write_text("current-state\n")
+    staged = staged_generated_paths(paths)
+    staged.infra_dir.mkdir(parents=True)
+    (staged.infra_dir / "terraform.tfstate").write_text("foreign-state\n")
+    with pytest.raises(RuntimeError, match="conflicting Terraform runtime"):
+        promote_staged_generated_paths(staged, paths)
+    assert state.read_text() == "current-state\n"
+
+
+@pytest.mark.parametrize(
+    "receipt_name",
+    [
+        "soperator-campaign-checks-0123456789abcdef-source.json",
+        "soperator-campaign-checks-0123456789abcdef-target.json",
+        "soperator-campaign-checks-0123456789abcdef-target-schedule-catchup.json",
+        "soperator-checks-0123456789abcdef.json",
+    ],
+)
+def test_check_receipts_do_not_change_render_authority_and_survive_promotion(
+    tmp_path, receipt_name
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("cluster: lab\n")
+    paths = resolve_project_paths(config_path)
+    paths.reports_dir.mkdir(parents=True)
+    before = project_generation_snapshot_sha256(paths)
+    receipt = paths.reports_dir / receipt_name
+    receipt.write_text('{"phase":"planned"}\n')
+    assert project_generation_snapshot_sha256(paths) == before
+    receipt.write_text('{"phase":"accepted"}\n')
+    assert project_generation_snapshot_sha256(paths) == before
+    staged = staged_generated_paths(paths)
+    staged.infra_dir.mkdir(parents=True)
+    (staged.infra_dir / "main.tf").write_text("terraform {}\n")
+    plan = build_project_generation_plan(
+        final_paths=paths,
+        staged_paths=staged,
+        config_path=config_path,
+        config_content=config_path.read_text(),
+    )
+    assert receipt not in plan.removals and receipt not in plan.writes
+    promote_staged_generated_paths(staged, paths)
+    assert receipt.read_text() == '{"phase":"accepted"}\n'
+    current = project_generation_snapshot_sha256(paths)
+    (paths.infra_dir / "main.tf").write_text("terraform { changed = true }\n")
+    assert project_generation_snapshot_sha256(paths) != current
 
 
 def test_project_generation_plan_writes_full_postimage_and_preserves_lifecycle_reports(
@@ -77,6 +188,8 @@ def test_project_generation_plan_writes_full_postimage_and_preserves_lifecycle_r
         final_paths.reports_dir / "soperator-observability-cluster-a-verification.json"
     )
     observability_receipt.write_text("{}\n", encoding="utf-8")
+    repair_receipt = final_paths.reports_dir / "soperator-install-render-repair-cluster-a.json"
+    repair_receipt.write_text("{}\n", encoding="utf-8")
     staged_paths = staged_generated_paths(final_paths)
     staged_paths.infra_dir.mkdir(parents=True)
     replacement = staged_paths.infra_dir / "main.tf"
@@ -94,6 +207,7 @@ def test_project_generation_plan_writes_full_postimage_and_preserves_lifecycle_r
     assert obsolete in plan.removals
     assert preserved not in plan.removals
     assert observability_receipt not in plan.removals
+    assert repair_receipt not in plan.removals
     assert plan.sha256.startswith("sha256:")
     assert plan.preimage_sha256.startswith("sha256:")
 
@@ -255,7 +369,13 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _freeze_soperator_release_for_render_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+def _freeze_soperator_release_for_render_tests(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_root = tmp_path / "render-source"
+    chart = source_root / "helm/soperator-activechecks"
+    chart.mkdir(parents=True)
+    (chart / "values.yaml").write_text("checks: {}\n")
     release_names = tuple(
         sorted(
             expected_soperator_release_names(
@@ -302,11 +422,12 @@ def _freeze_soperator_release_for_render_tests(monkeypatch: pytest.MonkeyPatch) 
 
     def _freeze(selector: str) -> SimpleNamespace:
         return SimpleNamespace(
+            source=SimpleNamespace(source_dir=str(source_root)),
             snapshot=sample_snapshot(
                 release=selector,
                 release_names=release_names,
                 third_party_release_chart_keys=third_party,
-            )
+            ),
         )
 
     monkeypatch.setattr(flux_render_module, "freeze_soperator_release", _freeze)
@@ -1297,6 +1418,8 @@ def test_render_soperator_uses_upstream_umbrella_graph_and_thin_adapter(tmp_path
         "name": "helm-soperator",
         "namespace": "flux-system",
     }
+    assert release["spec"]["install"]["disableWait"] is True
+    assert release["spec"]["upgrade"]["disableWait"] is True
     repositories = list(
         yaml.safe_load_all((flux_dir / "helm-repositories.yaml").read_text(encoding="utf-8"))
     )
@@ -1393,6 +1516,9 @@ def test_render_soperator_externalizes_the_known_broken_dashboard_chart(
         )
     )
     source_root = tmp_path / "official-source"
+    checks_dir = source_root / "helm/soperator-activechecks"
+    checks_dir.mkdir(parents=True)
+    (checks_dir / "values.yaml").write_text("checks: {}\n")
     dashboard_dir = source_root / monitoring_chart.source_path / "dashboards"
     dashboard_dir.mkdir(parents=True)
     dashboard_names = (
@@ -1456,11 +1582,15 @@ def test_render_soperator_externalizes_the_known_broken_dashboard_chart(
     assert "./post-flux-soperator-monitoring-dashboards.yaml" not in kustomization["resources"]
 
 
-def test_soperator_post_terraform_render_uses_immutable_cluster_id(tmp_path: Path) -> None:
+@pytest.mark.parametrize("region", ["eu-north1", "eu-north2", "eu-west1"])
+def test_soperator_post_terraform_render_uses_immutable_cluster_id(
+    tmp_path: Path, region: str
+) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
     payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    payload["client_info"]["nebius"]["region_id"] = region
     soperator_config._materialize_soperator_component_defaults(payload)
 
     render_flux(
@@ -1472,6 +1602,10 @@ def test_soperator_post_terraform_render_uses_immutable_cluster_id(tmp_path: Pat
     values = _load_soperator_upstream_values(paths)
     observability = values["observability"]
     assert observability["clusterId"] == "mk8scluster-immutable"
+    assert (
+        observability["opentelemetry"]["publicEndpoint"]
+        == f"dns:///write.logging.{region}.nebius.cloud.:443"
+    )
     assert (
         observability["vmStack"]["values"]["vmagent"]["spec"]["externalLabels"]["mk8s_cluster_id"]
         == "mk8scluster-immutable"
@@ -1513,7 +1647,7 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
     assert soperator_values["clusterName"] == "mk8s"
     assert soperator_values["soperator-checks"]["enabled"] is True
     assert soperator_values["soperator-activechecks"]["slurmClusterRefName"] == "mk8s"
-    assert soperator_values["soperator-activechecks"]["srunReadyPartition"] == "hidden"
+    assert "srunReadyPartition" not in soperator_values["soperator-activechecks"]
     mk8s_inputs = next(
         row["inputs"]
         for row in config["infra"]["components"]
@@ -1541,13 +1675,11 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
     assert 'resource "nebius_iam_v1_group" "mk8s_soperator_observability" {' in main_tf
     assert "for_each = module.mk8s.service_account_ids" in main_tf
     assert 'resource "nebius_iam_v1_group_membership" "mk8s_soperator_observability" {' in main_tf
-    assert (
-        'resource "nebius_iam_v1_access_permit" "mk8s_soperator_observability_metrics" {' in main_tf
-    )
-    assert 'resource "nebius_iam_v1_access_permit" "mk8s_soperator_observability_logs" {' in main_tf
-    assert 'role        = "monitoring.metrics.writer"' in main_tf
-    assert 'role        = "logging.logs.writer"' in main_tf
-    assert 'role        = "editor"' not in main_tf
+    assert 'resource "nebius_iam_v1_access_permit" "mk8s_soperator_observability" {' in main_tf
+    assert 'role        = "editor"' in main_tf
+    assert "monitoring.metrics.writer" not in main_tf
+    assert "logging.logs.writer" not in main_tf
+    assert main_tf.count('resource "nebius_iam_v1_access_permit"') == 1
     assert "resource_id = var.nebius_provider_parent_id" in main_tf
 
 

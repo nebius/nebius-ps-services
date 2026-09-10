@@ -17,15 +17,7 @@ COURSES = (
     "llm-inference",
     "custom-cuda-kernels",
 )
-REQUIRED_FIELDS = (
-    "Objective",
-    "Prerequisite bridge",
-    "Recall",
-    "Why it matters",
-    "Mental model",
-    "Mechanism",
-    "Practice labs",
-)
+REQUIRED_FIELDS = ("Objective", "How it works", "Practice labs", "Mental model")
 CORE_CONCEPTS = {
     "gpu-fundamentals": (
         "PTX",
@@ -100,8 +92,8 @@ def test_every_lesson_is_long_form_and_structured(course: str) -> None:
     for lesson in lessons:
         assert set(REQUIRED_FIELDS).issubset(lesson), lesson["title"]
         assert word_count(" ".join(lesson.values())) >= 300, lesson["title"]
-        assert word_count(lesson["Mechanism"]) >= 60, lesson["title"]
-        assert word_count(lesson["Why it matters"]) >= 20, lesson["title"]
+        assert word_count(lesson["How it works"]) >= 180, lesson["title"]
+        assert list(lesson) == ["title", *REQUIRED_FIELDS]
     metadata = builder.course_metadata(ROOT / course)
     guides = builder.lab_guides(ROOT / course, metadata, len(lessons))
     for number, lesson in enumerate(lessons, 1):
@@ -126,7 +118,7 @@ def test_mechanism_explanations_are_not_repeated_boilerplate(course: str) -> Non
     builder = load_builder()
     _title, _preamble, lessons = builder.parse_course(ROOT / course / "COURSE.md")
     fingerprints = {
-        " ".join(re.findall(r"[a-z0-9]+", lesson["Mechanism"].lower())[:18])
+        " ".join(re.findall(r"[a-z0-9]+", lesson["How it works"].lower())[:18])
         for lesson in lessons
     }
     assert len(fingerprints) == len(lessons)
@@ -214,15 +206,15 @@ def test_multiline_lesson_content_is_preserved_by_the_renderer(tmp_path: Path) -
     source.write_text(
         "# Example\n\n"
         "## 1. Multiline\n\n"
-        "**Mechanism** First paragraph.\n\n"
+        "**How it works** First paragraph.\n\n"
         "- first retained point\n"
         "- second retained point\n\n"
-        "**Recall** Explain both points.\n",
+        "**Mental model** Explain both points.\n",
         encoding="utf-8",
     )
     _title, preamble, lessons = builder.parse_course(source)
     assert preamble == ""
-    mechanism = lessons[0]["Mechanism"]
+    mechanism = lessons[0]["How it works"]
     assert "First paragraph." in mechanism
     assert "- first retained point\n- second retained point" in mechanism
     rendered = builder.block(mechanism)

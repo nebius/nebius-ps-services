@@ -20,7 +20,7 @@ from .soperator_release_artifacts import SoperatorArtifactReceipt
 from .soperator_release_source import SOPERATOR_SOURCE_CACHE_SCHEMA, SoperatorSourceReceipt
 from .soperator_strategy import SoperatorStrategy, SoperatorStrategyPlan, plan_soperator_strategy
 
-SOPERATOR_RECONCILE_RECEIPT_SCHEMA = "nebius-cxcli.soperator-reconcile-receipt.v6"
+SOPERATOR_RECONCILE_RECEIPT_SCHEMA = "nebius-cxcli.soperator-reconcile-receipt.v7"
 SOPERATOR_RECONCILE_RECEIPT_FILENAME = "soperator-release-reconcile.json"
 SOPERATOR_RECONCILE_MAX_FAILURES = 3
 SOPERATOR_RECONCILE_REPAIR_LINEAGE_SCHEMA = "nebius-cxcli.soperator-reconcile-repair-lineage.v1"
@@ -40,6 +40,18 @@ _ADMITTED_RENDER_REPAIR_REASONS = frozenset(
         "registered-static-worker-rollout-v1",
         "registered-topology-disable-repair-v1",
         "victoria-metrics-install-retry-v1",
+        "install-dashboard-source-delivery-v1",
+        "install-checks-jail-binding-v1",
+        "install-rest-dependency-v1",
+        "install-checks-login-binding-v1",
+        "install-jail-collector-binding-v1",
+        "install-gpu-maintenance-binding-v1",
+        "install-nodeset-runtime-binding-v1",
+        "install-worker-scratch-binding-v1",
+        "install-enroot-userns-binding-v1",
+        "install-worker-docker-binding-v1",
+        "install-worker-topology-binding-v1",
+        "install-worker-cpu-mask-binding-v1",
     }
 )
 
@@ -79,6 +91,8 @@ class SoperatorReconcileCallbacks:
     restore_infrastructure: Callable[[], object]
     wait_infrastructure: Callable[[], object]
     wait_restored_product: Callable[[], object]
+    accept_checks: Callable[[], object]
+    restore_checks: Callable[[], object]
     release_requeued_jobs: Callable[[], object]
     wait_requeued_product: Callable[[], object]
     release_held_jobs: Callable[[], object]
@@ -161,6 +175,8 @@ _FULL_TRANSITION_PLAN = (
         "wait_infrastructure",
         False,
     ),
+    ("validate-target-active-checks", TransitionMode.RECONCILE_FORWARD, "accept_checks", False),
+    ("restore-steady-check-policy", TransitionMode.RECONCILE_FORWARD, "restore_checks", False),
     (
         "wait-restored-product-readiness",
         TransitionMode.OBSERVE,
@@ -296,6 +312,8 @@ _PROTECTED_DATA_PLANE_TRANSITION_PLAN = (
         "verify_rootfs_consumers",
         False,
     ),
+    ("validate-target-active-checks", TransitionMode.RECONCILE_FORWARD, "accept_checks", False),
+    ("restore-steady-check-policy", TransitionMode.RECONCILE_FORWARD, "restore_checks", False),
     (
         "wait-restored-product-readiness",
         TransitionMode.OBSERVE,
@@ -386,6 +404,7 @@ def resolve_soperator_reconcile_strategy(
     target_release: str,
     source_contract: str | None,
     target_contract: str,
+    desired_state_changed: bool = False,
 ) -> SoperatorStrategyPlan:
     """Resolve one reviewed capability transition; reject unknown contracts."""
 
@@ -394,6 +413,7 @@ def resolve_soperator_reconcile_strategy(
         target_release=target_release,
         source_contract=source_contract,
         target_contract=target_contract,
+        desired_state_changed=desired_state_changed,
     )
 
 
@@ -518,6 +538,124 @@ def _validate_existing_transition_chain(transitions: list[object], *, operation_
         predecessor_receipt = receipt_sha or _transition_receipt_sha256(item)
 
 
+def validate_install_gpu_acceptance_frontier(predecessor: Mapping[str, object]) -> None:
+    """Authenticate the complete failed initial acceptance prefix, without importing it."""
+    operation = predecessor.get("operation")
+    spec = operation.get("spec") if isinstance(operation, Mapping) else None
+    transitions = predecessor.get("transitions")
+    operation_id = str(predecessor.get("operationId") or "")
+    if (
+        predecessor.get("schema") != SOPERATOR_RECONCILE_RECEIPT_SCHEMA
+        or predecessor.get("status") != "recovery-required"
+        or not isinstance(spec, Mapping)
+        or spec.get("strategy") != "install"
+        or spec.get("current_release") != ""
+        or not operation_id
+        or not isinstance(transitions, list)
+        or len(transitions) != 9
+    ):
+        raise ValueError("GPU maintenance repair requires the failed initial acceptance frontier")
+    _validate_existing_transition_chain(transitions, operation_id=operation_id)
+    for index, (item, (phase, mode, _, _)) in enumerate(
+        zip(transitions, _FULL_TRANSITION_PLAN[:9], strict=True)
+    ):
+        expected_status = "failed" if index == 8 else "complete"
+        if (
+            not isinstance(item, Mapping)
+            or item.get("id")
+            != hashlib.sha256(f"{operation_id}|{index}|{phase}|{mode.value}".encode()).hexdigest()
+            or item.get("phase") != phase
+            or item.get("mode") != mode.value
+            or item.get("status") != expected_status
+            or (index < 8 and item.get("receiptSha256") != _transition_receipt_sha256(item))
+            or (
+                index == 8
+                and (
+                    item.get("receiptSha256") is not None
+                    or item.get("failureType") != "operation-error"
+                    or type(item.get("failureAttempts")) is not int
+                    or item["failureAttempts"] < 1
+                )
+            )
+        ):
+            raise ValueError("GPU maintenance repair transition evidence changed")
+    applied = transitions[2]
+    if (
+        predecessor.get("irreversibleIntent") is not None
+        or predecessor.get("irreversibleFrontier")
+        != {
+            "phase": "apply-declarative-release",
+            "disposition": "forward-only",
+            "transitionId": applied["id"],
+            "transitionReceiptSha256": applied["receiptSha256"],
+        }
+        or transitions[6].get("evidence") != {"namespaceCount": 0, "status": "restored"}
+    ):
+        raise ValueError("GPU maintenance repair lost its invalid restoration boundary")
+
+
+def validate_install_runtime_frontier(predecessor: Mapping[str, object]) -> None:
+    """Admit only initial acceptance interrupted after complete maintenance restore."""
+    operation = predecessor.get("operation")
+    spec = operation.get("spec") if isinstance(operation, Mapping) else None
+    transitions = predecessor.get("transitions")
+    operation_id = str(predecessor.get("operationId") or "")
+    if (
+        predecessor.get("schema") != SOPERATOR_RECONCILE_RECEIPT_SCHEMA
+        or predecessor.get("status") not in {"running", "recovery-required"}
+        or not isinstance(spec, Mapping)
+        or spec.get("strategy") != "install"
+        or spec.get("current_release") != ""
+        or not operation_id
+        or not isinstance(transitions, list)
+        or len(transitions) != 9
+    ):
+        raise ValueError("runtime repair requires interrupted initial acceptance")
+    _validate_existing_transition_chain(transitions, operation_id=operation_id)
+    for index, (item, (phase, mode, _, _)) in enumerate(
+        zip(transitions, _FULL_TRANSITION_PLAN[:9], strict=True)
+    ):
+        final_status = "running" if predecessor["status"] == "running" else "failed"
+        if (
+            not isinstance(item, Mapping)
+            or item.get("id")
+            != hashlib.sha256(f"{operation_id}|{index}|{phase}|{mode.value}".encode()).hexdigest()
+            or item.get("phase") != phase
+            or item.get("mode") != mode.value
+            or item.get("status") != (final_status if index == 8 else "complete")
+            or (index < 8 and item.get("receiptSha256") != _transition_receipt_sha256(item))
+            or (index == 8 and item.get("receiptSha256") is not None)
+            or (
+                index == 8
+                and final_status == "failed"
+                and (
+                    item.get("failureType") != "operation-error"
+                    or type(item.get("failureAttempts")) is not int
+                    or item["failureAttempts"] < 1
+                )
+            )
+        ):
+            raise ValueError("runtime repair predecessor transition evidence changed")
+    applied = transitions[2]
+    restored = transitions[6].get("evidence", {})
+    if (
+        predecessor.get("irreversibleIntent") is not None
+        or predecessor.get("irreversibleFrontier")
+        != {
+            "phase": "apply-declarative-release",
+            "disposition": "forward-only",
+            "transitionId": applied["id"],
+            "transitionReceiptSha256": applied["receiptSha256"],
+        }
+        or not isinstance(restored, Mapping)
+        or restored.get("infrastructure") != {"namespaceCount": 0, "status": "restored"}
+        or not isinstance(restored.get("checks"), Mapping)
+        or not restored["checks"].get("partitions")
+        or not restored["checks"].get("reservation", {}).get("fingerprint")
+    ):
+        raise ValueError("runtime repair requires proven full maintenance restoration")
+
+
 def _repair_successor_seed(
     *,
     repair: SoperatorReconcileRepairLineage,
@@ -634,7 +772,20 @@ def _repair_successor_seed(
             and isinstance(predecessor_transitions[-1], Mapping)
             and predecessor_transitions[-1].get("status") == "failed"
         )
-    if predecessor_status == "running" and not running_failed_adoption_frontier:
+    if repair.reason in {
+        "install-nodeset-runtime-binding-v1",
+        "install-worker-scratch-binding-v1",
+        "install-enroot-userns-binding-v1",
+        "install-worker-docker-binding-v1",
+        "install-worker-topology-binding-v1",
+        "install-worker-cpu-mask-binding-v1",
+    }:
+        validate_install_runtime_frontier(predecessor)
+        predecessor_frontier = "interrupted-initial-acceptance-after-maintenance-restoration"
+    elif repair.reason == "install-gpu-maintenance-binding-v1":
+        validate_install_gpu_acceptance_frontier(predecessor)
+        predecessor_frontier = "failed-initial-acceptance-after-incomplete-restoration"
+    elif predecessor_status == "running" and not running_failed_adoption_frontier:
         wait_flux_index = next(
             index for index, step in enumerate(steps) if step.phase == "wait-flux-graph"
         )
@@ -1092,8 +1243,25 @@ def _reconcile_soperator_release_once(
         )
 
     if repair_lineage is not None:
-        if strategy.strategy is not SoperatorStrategy.PROTECTED_DATA_PLANE:
-            raise ValueError("Soperator repair lineage requires protected-data-plane strategy")
+        if strategy.strategy is not SoperatorStrategy.PROTECTED_DATA_PLANE and not (
+            strategy.strategy is SoperatorStrategy.INSTALL
+            and repair_lineage.reason
+            in {
+                "install-dashboard-source-delivery-v1",
+                "install-checks-jail-binding-v1",
+                "install-rest-dependency-v1",
+                "install-checks-login-binding-v1",
+                "install-jail-collector-binding-v1",
+                "install-gpu-maintenance-binding-v1",
+                "install-nodeset-runtime-binding-v1",
+                "install-worker-scratch-binding-v1",
+                "install-enroot-userns-binding-v1",
+                "install-worker-docker-binding-v1",
+                "install-worker-topology-binding-v1",
+                "install-worker-cpu-mask-binding-v1",
+            }
+        ):
+            raise ValueError("Soperator repair lineage requires an admitted strategy and reason")
         lineage_payload, imported_transitions = _repair_successor_seed(
             repair=repair_lineage,
             payload=payload,

@@ -27,6 +27,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ordinary-job-settlement:
+    name: Ordinary systemd and networkd settlement
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify delegated work in isolated systemd
+        working-directory: services/vpngw
+        run: python3 tests/systemd/run.py
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -109,6 +121,7 @@ jobs:
         run: |
           python -m pytest -n auto \
             tests/integration/test_vm_ha_runtime_composed.py \
+            tests/integration/test_vm_ha_migration_package.py \
             tests/integration/test_vm_ha_failover.py \
             tests/unit/test_cli_helpers.py::test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key \
             tests/unit/test_cli_helpers.py::test_vm_ha_apply_ssh_recovery_is_shared_across_routing_modes \
@@ -209,6 +222,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs:
+      - ordinary-job-settlement
       - integration-tests
       - coverage
     defaults:

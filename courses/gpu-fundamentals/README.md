@@ -1,5 +1,7 @@
 # GPU Fundamentals
 
+Start Lesson 1 with the whole H100 SXM 80 GB: SMs, L2 cache and HBM, then distinguish physical hardware from grids, blocks, warps and threads, including how block size limits residency. Open Lab 10 for readiness checks and Lab 01 for its formula, timing procedure and numerical acceptance.
+
 ## Course guide
 
 [Read the complete course](index.html) ·
@@ -73,10 +75,6 @@ sbatch slurm/two_node.sbatch labs/06_distributed_collectives.py --profile smoke
 
 Cluster creation, credentials, drivers, scheduler administration, and GPU
 configuration are outside the course.
-
-## Begin with the concepts
-
-Start with the first lesson's **Start here** section and its inline workflow diagram. It defines the subject and essential vocabulary, explains why it is useful, and walks through a small example before advanced engineering details. Follow the syllabus checkpoints for the beginner route; experienced readers can use those checkpoints to identify what they already understand.
 
 ## Continue learning
 

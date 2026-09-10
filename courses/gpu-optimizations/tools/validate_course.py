@@ -24,6 +24,7 @@ COURSE_NAVIGATION_LINKS = {"../index.html"} | {
     f"../{name}/index.html" for name in COURSE_NAMES
 }
 ALLOWED_HOSTS = {
+    "arxiv.org",
     "docs.nvidia.com",
     "developer.nvidia.com",
     "www.nvidia.com",
@@ -65,30 +66,9 @@ REQUIRED_FILES = {
     "reference/course.json",
     "reference/visual-manifest.json",
 }
-LESSON_CLASSES = {
-    "lesson-outcome",
-    "prerequisite-bridge",
-    "recall",
-    "why-it-matters",
-    "mental-model",
-    "mechanism",
-    "practice-links",
-}
-REQUIRED_LESSON_FIELDS = (
-    "Objective",
-    "Prerequisite bridge",
-    "Recall",
-    "Why it matters",
-    "Mental model",
-    "Mechanism",
-    "Practice labs",
-)
-FIELD_MINIMUM_WORDS = {
-    "Prerequisite bridge": 20,
-    "Why it matters": 20,
-    "Mental model": 15,
-    "Mechanism": 60,
-}
+LESSON_CLASSES = {"lesson-outcome", "how-it-works", "practice-links", "mental-model"}
+REQUIRED_LESSON_FIELDS = ("Objective", "How it works", "Practice labs", "Mental model")
+FIELD_MINIMUM_WORDS = {"How it works": 180, "Mental model": 15}
 
 
 def fail(message: str) -> None:
@@ -96,14 +76,24 @@ def fail(message: str) -> None:
 
 
 def validate_concept_opening(title: str, fields: dict[str, str]) -> None:
-    """Require a real opening before application; depth still needs editorial review."""
-    openings = set(fields) & {"Start here", "What it is"}
-    if len(openings) != 1 or next(iter(fields), None) not in openings:
-        fail(f"{title} needs one definition-led opening before its other fields")
-    field = next(iter(openings))
-    minimum = 350 if field == "Start here" else 60
-    if len(words(fields[field])) < minimum:
-        fail(f"{title} opening is too short to introduce its concept")
+    """Require an objective then substantive teaching; semantic review checks meaning."""
+    if tuple(fields) != REQUIRED_LESSON_FIELDS:
+        fail(
+            f"{title} opening and fields must be Objective, How it works, Practice labs, Mental model in order"
+        )
+    if len(words(fields["How it works"])) < 180:
+        fail(f"{title} opening is too short to explain its concept")
+
+
+def validate_lesson_structure(parser: "Parser") -> None:
+    expected = ["lesson-outcome", "how-it-works", "practice-links", "mental-model"]
+    for number, (order, diagrams) in enumerate(
+        zip(parser.lesson_field_orders, parser.lesson_core_diagrams, strict=True), 1
+    ):
+        if order != expected:
+            fail(f"Lesson {number} must render Objective first and Mental model last")
+        if diagrams < 1:
+            fail(f"Lesson {number} needs a core diagram inside How it works")
 
 
 class Parser(html.parser.HTMLParser):
@@ -124,6 +114,10 @@ class Parser(html.parser.HTMLParser):
         self.lesson_features: set[str] = set()
         self.lessons: list[set[str]] = []
         self.lesson_first_fields: list[str] = []
+        self.lesson_field_orders: list[list[str]] = []
+        self.lesson_core_diagrams: list[int] = []
+        self.figure_depth = 0
+        self.related_depth = 0
         self.lesson_openings: list[list[str]] = []
         self.opening_depth = 0
         self.opening_parts: list[str] = []
@@ -248,6 +242,8 @@ class Parser(html.parser.HTMLParser):
             self.last_field_class = ""
             self.lesson_features = set()
             self.lesson_first_fields.append("")
+            self.lesson_field_orders.append([])
+            self.lesson_core_diagrams.append(0)
             self.lesson_openings.append([])
         elif tag == "section" and self.lesson_depth:
             self.lesson_depth += 1
@@ -265,20 +261,24 @@ class Parser(html.parser.HTMLParser):
             }:
                 self.errors.append("applied teaching sections belong in labs")
             self.lesson_features.update(classes & LESSON_CLASSES)
-            placement_classes = classes & (
-                LESSON_CLASSES | {"start-here", "concept-introduction"}
-            )
+            placement_classes = classes & (LESSON_CLASSES)
             if placement_classes:
                 self.last_field_class = next(iter(placement_classes))
+                self.lesson_field_orders[-1].append(self.last_field_class)
                 if not self.lesson_first_fields[-1]:
                     self.lesson_first_fields[-1] = self.last_field_class
         if tag == "div":
             if self.opening_depth:
                 self.opening_depth += 1
-            elif self.lesson_depth and classes & {"start-here", "concept-introduction"}:
+            elif self.lesson_depth and classes & {"how-it-works"}:
                 self.opening_depth = 1
                 self.opening_parts = []
+        if tag == "aside" and self.opening_depth:
+            self.related_depth += 1
         if tag == "figure":
+            self.figure_depth += 1
+            if self.lesson_depth and not self.opening_depth:
+                self.errors.append("lesson diagram must be inside How it works")
             if not (self.lesson_depth or self.lab_depth) or not element_id:
                 self.errors.append(
                     "every figure needs a lesson or lab home and unique ID"
@@ -306,6 +306,8 @@ class Parser(html.parser.HTMLParser):
             self.capture_source = self.details_source
             self.capture = []
         if tag == "svg":
+            if self.lesson_depth and self.opening_depth and self.figure_depth:
+                self.lesson_core_diagrams[-1] += 1
             self.svg_depth = 1
             self.svg_has_title = False
             self.svg_has_desc = False
@@ -321,7 +323,7 @@ class Parser(html.parser.HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.lab_heading is not None:
             self.lab_heading.append(data)
-        if self.opening_depth:
+        if self.opening_depth and not self.figure_depth and not self.related_depth:
             self.opening_parts.append(data)
         if self.style_parts is not None:
             self.style_parts.append(data)
@@ -331,6 +333,10 @@ class Parser(html.parser.HTMLParser):
             self.lab_text.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "figure" and self.figure_depth:
+            self.figure_depth -= 1
+        if tag == "aside" and self.related_depth:
+            self.related_depth -= 1
         if tag == "div" and self.catalog_navigation_depth:
             self.catalog_navigation_depth -= 1
         if tag == "nav" and self.course_nav_depth:
@@ -423,6 +429,39 @@ class VisibleText(html.parser.HTMLParser):
             self.parts.append("\n")
 
 
+def prose_paragraphs(markdown: str):
+    """Normalize contiguous table rows, preserving prose and fenced literals."""
+    lines = markdown.splitlines()
+    normalized = []
+    in_code = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip().startswith("```"):
+            in_code = not in_code
+        if (
+            not in_code
+            and line.strip().startswith("|")
+            and index + 1 < len(lines)
+            and re.fullmatch(r"\|[\s:|\-]+\|", lines[index + 1].strip())
+        ):
+            rows = [line]
+            index += 2
+            while index < len(lines) and lines[index].strip().startswith("|"):
+                rows.append(lines[index])
+                index += 1
+            normalized.extend(
+                " ".join(cell.strip() for cell in row.strip().strip("|").split("|"))
+                for row in rows
+            )
+            continue
+        if not in_code:
+            line = re.sub(r"^\s*(?:[-*] |\d+\. )", "", line)
+        normalized.append(line)
+        index += 1
+    yield from re.split(r"\n\s*\n", "\n".join(normalized))
+
+
 def validate_rendered_openings(parser: Parser, lessons: list) -> None:
     """Bind complete introductory prose to its lesson, not a page-wide occurrence."""
     if len(parser.lesson_openings) != len(lessons):
@@ -430,10 +469,11 @@ def validate_rendered_openings(parser: Parser, lessons: list) -> None:
     for (title, fields, _), openings in zip(
         lessons, parser.lesson_openings, strict=True
     ):
-        field = "Start here" if "Start here" in fields else "What it is"
+        field = "How it works"
         if field not in fields or len(openings) != 1:
             fail(f"{title} opening narrative is missing or duplicated")
-        plain = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", fields[field])
+        plain = "\n\n".join(prose_paragraphs(fields[field]))
+        plain = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", plain)
         plain = re.sub(r"(?m)^#{1,6} |^```[^\n]*\n?|^```$", "", plain)
         plain = plain.replace("**", "").replace("`", "")
         expected = " ".join(f"{field} {plain}".split())
@@ -535,16 +575,12 @@ def validate_lab_guides(
         if not assigned or fields.get("Practice labs") != "\n".join(links):
             fail(f"{title} Practice labs must match its assigned guides")
         expected_links = (
-            '<div class="practice-links"><strong>Practice labs</strong><ul>'
+            '<div class="practice-links"><strong>Practice labs</strong> <ul>'
             + "".join(html_links)
-            + "</ul></div>"
+            + "</ul>\n</div>"
         )
-        if (
-            not lesson_html[number - 1]
-            .rstrip()
-            .endswith(expected_links + "\n</section>")
-        ):
-            fail(f"{title} must end with its exact Practice labs links")
+        if lesson_html[number - 1].count(expected_links) != 1:
+            fail(f"{title} must contain its exact Practice labs links")
     for item in metadata["labs"]:
         source = ROOT / item["path"]
         membership = item["lessons"]
@@ -586,27 +622,7 @@ def validate_lab_guides(
         visible = VisibleText()
         visible.feed(article.split('<details class="lab-source"', 1)[0])
         rendered_text = " ".join("".join(visible.parts).split())
-        in_code = False
-        for paragraph in re.split(r"\n\s*\n", markdown):
-            lines = paragraph.splitlines()
-            if (
-                not in_code
-                and len(lines) >= 2
-                and lines[0].strip().startswith("|")
-                and re.fullmatch(r"\|[\s:|\-]+\|", lines[1].strip())
-            ):
-                # Match the renderer's table subset without dropping cell text
-                # or treating literal pipes in prose and code as delimiters.
-                paragraph = "\n".join(
-                    " ".join(
-                        cell.strip() for cell in line.strip().strip("|").split("|")
-                    )
-                    if line.strip().startswith("|")
-                    else line
-                    for line in [lines[0], *lines[2:]]
-                )
-            if len(re.findall(r"(?m)^\s*```", paragraph)) % 2:
-                in_code = not in_code
+        for paragraph in prose_paragraphs(markdown):
             plain = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", paragraph)
             plain = re.sub(r"(?m)^#{1,6} |^```[^\n]*\n?|^```$", "", plain)
             plain = plain.replace("**", "").replace("`", "")
@@ -706,8 +722,6 @@ def validate_figures(
     }
     fields.update(
         {
-            "Start here": "start-here",
-            "What it is": "concept-introduction",
             "Objective": "lesson-outcome",
         }
     )
@@ -718,7 +732,7 @@ def validate_figures(
         if type(lesson) is not int or not 1 <= lesson <= len(lessons):
             fail("diagram points to a missing lesson")
         if home == "lesson":
-            if after not in fields or after not in lessons[lesson - 1][1]:
+            if after != "How it works" or after not in lessons[lesson - 1][1]:
                 fail("diagram points to an invalid lesson field")
             return f"lesson:{lesson}", fields[after]
         if not isinstance(home, str) or not home.startswith("lab:"):
@@ -836,24 +850,18 @@ def main() -> None:
         fail("canonical lesson count does not match generated HTML")
     validate_rendered_openings(parser, canonical_lessons)
     validate_next_steps(document)
-    entry = canonical_lessons[0][1].get("Start here", "")
+    entry = canonical_lessons[0][1].get("How it works", "")
     if len(words(entry)) < 350:
-        fail("first lesson requires a substantive beginner Start here explanation")
-    entry_position = document.find('<div class="start-here">')
-    objective_position = document.find('<div class="lesson-outcome">')
-    if entry_position < 0 or entry_position > objective_position:
-        fail("beginner explanation must precede advanced objectives")
+        fail("first lesson requires a substantive beginner How it works explanation")
+    validate_lesson_structure(parser)
     for lesson_index, (title, fields, lesson_words) in enumerate(canonical_lessons):
         validate_concept_opening(title, fields)
-        opening_class = (
-            "start-here" if "Start here" in fields else "concept-introduction"
-        )
-        if parser.lesson_first_fields[lesson_index] != opening_class:
-            fail(f"{title} rendered opening must precede application fields")
+        if parser.lesson_first_fields[lesson_index] != "lesson-outcome":
+            fail(f"{title} rendered Objective must precede its explanation")
         missing_fields = sorted(set(REQUIRED_LESSON_FIELDS) - fields.keys())
         if missing_fields:
             fail(f"{title} is missing teaching fields: {missing_fields}")
-        unknown = set(fields) - {*REQUIRED_LESSON_FIELDS, "Start here", "What it is"}
+        unknown = set(fields) - set(REQUIRED_LESSON_FIELDS)
         if unknown:
             fail(f"{title} has obsolete or unknown fields: {sorted(unknown)}")
         if lesson_words < 300:

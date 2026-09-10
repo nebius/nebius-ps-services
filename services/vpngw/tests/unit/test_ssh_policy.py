@@ -1720,6 +1720,55 @@ def test_fresh_managed_trust_dry_run_uses_ephemeral_identity_without_writes(
     assert not (tmp_path / ".ssh").exists()
 
 
+def test_migration_fresh_identity_approval_is_stable_until_exact_publication(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    key_type, key_data = _ed25519_public_key(tmp_path)
+    imported = TrustedSSHMemberImport(
+        hostname="gateway-0",
+        pins={key_type: key_data},
+        predecessor_receipt_sha256="a" * 64,
+        compute_binding_sha256="b" * 64,
+        assert_current=lambda: None,
+    )
+
+    def resolve(*, persist=False, predecessor=imported, target="203.0.113.11"):
+        return require_vm_ha_ssh_policy(
+            (("gateway-0", "203.0.113.10"), ("gateway-1", target)),
+            {},
+            enrollment_hosts={"gateway-1"},
+            retained_hosts={"gateway-0"},
+            trust_scope=_trust_scope(),
+            allow_managed_repair=True,
+            persist_default_host_keys=persist,
+            trusted_member_imports={"gateway-0": predecessor},
+        )
+
+    first, second = resolve(), resolve()
+    assert first.managed_receipt_sha256 != second.managed_receipt_sha256
+    binding = getattr(first, "fresh_identity_approval_sha256", None)
+    assert binding is not None
+    assert binding == second.fresh_identity_approval_sha256
+    assert not (tmp_path / ".ssh").exists()
+    changed_predecessor = replace(imported, predecessor_receipt_sha256="c" * 64)
+    assert resolve(predecessor=changed_predecessor).fresh_identity_approval_sha256 != binding
+    changed_compute = replace(imported, compute_binding_sha256="d" * 64)
+    assert resolve(predecessor=changed_compute).fresh_identity_approval_sha256 != binding
+    _, other_type, other_key = ssh_policy_module._generate_ed25519_host_key("gateway-0")
+    changed_pin = replace(imported, pins={other_type: other_key})
+    assert resolve(predecessor=changed_pin).fresh_identity_approval_sha256 != binding
+    assert resolve(target="203.0.113.12").fresh_identity_approval_sha256 != binding
+
+    executing = resolve(persist=True)
+    assert executing.fresh_identity_approval_sha256 == binding
+    assert publish_vm_ha_ssh_trust(executing)
+    member = managed_ssh_trust_member(_trust_scope(), "gateway-1")
+    assert member is not None
+    exact = resolve(persist=True)
+    assert exact.fresh_identity_approval_sha256 is None
+    assert exact.managed_receipt_sha256 == executing.managed_receipt_sha256
+    assert exact.identity_for("gateway-1") == executing.identity_for("gateway-1")
+
+
 @pytest.mark.parametrize("unsafe", ["symlink", "hardlink", "mode"])
 def test_managed_trust_rejects_unsafe_projection(
     tmp_path: Path,

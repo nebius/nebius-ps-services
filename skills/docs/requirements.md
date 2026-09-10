@@ -2514,6 +2514,16 @@ guidance and apply them to new subjects without inheriting one domain's stack.
   source, installed skill, fresh routing and output-quality evidence remain
   distinct. The source update does not install or publish the skill.
 
+- AC-007: Every lesson uses a concise concept title and four sections in order:
+  Objective, How it works, Practice, Mental model. Objective states the outcome;
+  How it works defines and connects concepts, prerequisites, purpose, mechanism,
+  examples and limitations; Mental model ends with a concise synthesis.
+- AC-008: Every How it works contains at least one explanatory diagram of that
+  lesson's core relationships. Unfamiliar abbreviations are expanded at first
+  meaningful use and explained in context; common audience vocabulary need not
+  be mechanically expanded. Titles and explanation quality require semantic
+  review as well as structural checks.
+
 #### Negative Criteria
 
 - NC-001: Do not ship learning histories, source-coverage tables, removed

@@ -222,6 +222,12 @@ def sfs_filesystem_observations_from_node_groups(
     """Resolve protected physical-SFS identities from exact MK8s attachments."""
 
     bindings = kubernetes_bindings or {}
+    role_by_tag = {
+        str(bindings.get(role, {}).get("mount_tag") or role).strip(): role
+        for role in _PROTECTED_SFS_ROLES
+    }
+    if "" in role_by_tag or len(role_by_tag) != len(_PROTECTED_SFS_ROLES):
+        raise RuntimeError("protected SFS roles require unique non-empty mount tags")
     observations: dict[str, dict[str, object]] = {}
     for node_group in node_groups:
         node_group_id = _metadata_id(node_group)
@@ -238,7 +244,8 @@ def sfs_filesystem_observations_from_node_groups(
         )
         for attachment in filesystems:
             mount_tag = str(_resource_value(attachment, "mount_tag") or "").strip()
-            if mount_tag not in _PROTECTED_SFS_ROLES:
+            role = role_by_tag.get(mount_tag)
+            if role is None:
                 continue
             raw_attach_mode = _resource_value(attachment, "attach_mode")
             attach_mode = str(getattr(raw_attach_mode, "name", "") or raw_attach_mode or "").strip()
@@ -247,13 +254,11 @@ def sfs_filesystem_observations_from_node_groups(
             existing = _resource_value(attachment, "existing_filesystem")
             filesystem_id = str(_resource_value(existing, "id") or "").strip()
             if not filesystem_id:
-                raise RuntimeError(
-                    f"protected SFS role {mount_tag!r} has no existing filesystem ID"
-                )
+                raise RuntimeError(f"protected SFS role {role!r} has no existing filesystem ID")
             current = observations.setdefault(
-                mount_tag,
+                role,
                 {
-                    "role": mount_tag,
+                    "role": role,
                     "filesystem_id": filesystem_id,
                     "mount_tag": mount_tag,
                     "node_group_ids": [],

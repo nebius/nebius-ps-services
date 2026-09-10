@@ -1,22 +1,24 @@
-<svg viewBox="0 0 360 560" style="max-width: 420px; margin-inline: auto" role="img" aria-labelledby="d2h-output-ownership-title d2h-output-ownership-desc">
+<svg viewBox="0 0 400 600" style="max-width: 460px; margin-inline: auto" role="img" aria-labelledby="d2h-output-ownership-title d2h-output-ownership-desc">
 <title id="d2h-output-ownership-title">Output ownership lasts through consumption</title>
-<desc id="d2h-output-ownership-desc">The egress stream waits for production. A CPU consumer waits for copy completion. Only consumer completion releases the bounded slot. Arrows show required order.</desc>
+<desc id="d2h-output-ownership-desc">Follow one output slot downward. The copy stream waits for GPU production, then copies into pinned host storage. The CPU reads only after copy completion. The return arrow permits another output only after the CPU consumer finishes. Buffer lifetime and readiness are separate from submitting an event marker.</desc>
 <defs><marker id="d2h-output-ownership-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#206757"/></marker></defs>
-<g font-family="Arial, Helvetica, sans-serif" font-size="21" fill="#24343d">
+<g transform="translate(20 0)" font-family="Arial, Helvetica, sans-serif" font-size="21" fill="#24343d">
 <rect x="14" y="12" width="332" height="103" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
-<text x="180" y="56" text-anchor="middle">GPU produces;</text>
+<text x="180" y="56" text-anchor="middle">1. GPU produces;</text>
 <text x="180" y="85" text-anchor="middle">record ready</text>
 <path d="M180 116 V148" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#d2h-output-ownership-arrow)"/>
 <rect x="14" y="151" width="332" height="103" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
-<text x="180" y="195" text-anchor="middle">Egress waits;</text>
+<text x="180" y="195" text-anchor="middle">2. Copy stream waits;</text>
 <text x="180" y="224" text-anchor="middle">copy to pinned host</text>
 <path d="M180 255 V287" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#d2h-output-ownership-arrow)"/>
 <rect x="14" y="290" width="332" height="103" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
-<text x="180" y="334" text-anchor="middle">Copy event completes;</text>
+<text x="180" y="334" text-anchor="middle">3. Copy completes;</text>
 <text x="180" y="363" text-anchor="middle">CPU may read</text>
 <path d="M180 394 V426" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#d2h-output-ownership-arrow)"/>
 <rect x="14" y="429" width="332" height="103" rx="12" fill="#eef8f2" stroke="#245880" stroke-width="2"/>
-<text x="180" y="473" text-anchor="middle">Consumer finishes;</text>
+<text x="180" y="473" text-anchor="middle">4. Consumer finishes;</text>
 <text x="180" y="502" text-anchor="middle">slot may be reused</text>
 </g>
+<path d="M368 480 H382 V64 H368" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#d2h-output-ownership-arrow)"/>
+<text x="200" y="575" text-anchor="middle" font-size="20">Reuse for the next batch</text>
 </svg>

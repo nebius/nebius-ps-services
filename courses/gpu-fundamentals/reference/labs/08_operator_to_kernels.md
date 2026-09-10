@@ -4,15 +4,19 @@ One line of tensor code can trigger several framework operations and many GPU ke
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 2 for projection/GEMM, BF16 storage, LayerNorm, bias broadcasting, GELU, reductions and profiler self versus inclusive time. Use Lesson 1’s warm-up/completion rules. Run for operator attribution in Lesson 2; Lesson 3 adds the physical hierarchy interpretation.
+**Theory preparation:** Read Lesson 2 for framework, runtime and driver responsibilities. The operation chain and profiler vocabulary are defined below. Lab 01 explains warm-up and completed-work timing; Lesson 3 adds the physical hierarchy.
 
 Use one H100 and an environment in which PyTorch Profiler can capture CPU and CUDA activity. Keep profiler and scheduler output private. Run this before the deeper Nsight exercises in GPU Optimizations.
 
 ## Concepts and code path
 
-A matrix multiplication mixes input values using weights; this is the projection in the example. Bias adds an offset. Layer normalization recenters and rescales each feature vector using its mean and variance. GELU, the Gaussian error linear unit, is an elementwise nonlinear activation that smoothly attenuates values, especially negative ones. Here, activations are intermediate values, while an activation function is an operation applied to them. BF16 is a 16-bit floating-point representation; Lesson 9 studies its range and precision. You need only this operation map for the introductory profile, not prior model-training knowledge.
+A matrix multiplication combines rows and columns: shapes M×K and K×N produce M×N values. For example, `[1, 2]` times the column `[3, 4]` gives 11. The multiply-plus-add convention counts approximately `2*M*N*K` floating-point operations. GEMM names general matrix multiplication, often written `C = alpha*A*B + beta*C`. In this lab, Python `@` performs the projection; `*` multiplies corresponding elements. A projection changes feature coordinates; broadcasting applies the same bias vector to every output row.
+
+Layer normalization subtracts a feature vector's mean and divides by the square root of its variance plus a small epsilon. Learned scale and offset can follow. GELU, the Gaussian error linear unit, is the nonlinear activation `x*Phi(x)`, where Phi is the standard normal cumulative probability: it attenuates strongly negative inputs and approaches the identity for strongly positive ones. Activations are intermediate values; an activation function transforms them. BF16 is a 16-bit format with a wide exponent range and fewer precision bits than FP32. Lesson 9 develops that accuracy trade-off.
 
 A profiler records execution activity and groups related events. Self time excludes recorded child events; inclusive time includes them. For example, a parent with 10 microseconds of inclusive time and a 7-microsecond child has 3 microseconds of self time under that nesting. Adding parent-inclusive and child time would double-count the child. GPU overlap and framework event attribution also mean a table sum is not automatically application wall time.
+
+CPU and CUDA activity collection associates framework operations with the kernels they submit. Profiling adds overhead; use an unprofiled timer for a performance comparison.
 
 The workload multiplies BF16 activations by weights, applies layer normalization, adds bias, applies GELU, then squares and averages the output. Warm-up precedes the profiled loop. The profiler aggregates events and the program selects the ten largest self-CUDA-time entries. Although the scalar is named `loss`, this workload has no backward pass or optimizer step.
 

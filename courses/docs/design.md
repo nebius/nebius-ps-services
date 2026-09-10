@@ -116,7 +116,7 @@ One coherent authoring/presentation contract applies to every course.
 
 #### Implementation Evidence
 
-The five courses contain 73 lessons, 94 numbered labs and 108 diagrams. FEAT-011 supplies the publication UI; FEAT-019 and FEAT-020 supply the networking and transfer additions, and FEAT-021 defines the current lesson/lab boundary.
+The five courses contain 73 lessons, 94 numbered labs and 122 diagrams. FEAT-011 supplies the publication UI; FEAT-019 and FEAT-020 supply the networking and transfer additions, FEAT-021 defines the lesson/lab boundary, and FEAT-023 defines the current lesson presentation and diagram coverage.
 
 #### Verification Evidence
 
@@ -124,7 +124,7 @@ Source checks pass; fresh visual and H100 qualification remain separate.
 
 <!-- /FEATURE: FEAT-002 -->
 
-<!-- FEATURE: FEAT-003 reqs=REQ-003,REQ-004 status=ready delivery=implemented priority=P0 version=2 -->
+<!-- FEATURE: FEAT-003 reqs=REQ-003,REQ-004 status=ready delivery=implemented priority=P0 version=3 -->
 ### FEAT-003: General GPU curriculum boundary
 
 #### Requirements Covered
@@ -139,6 +139,23 @@ The existing Fundamentals and Optimizations courses have strong runnable foundat
 #### Design Details
 
 Expand Fundamentals with platform and operational mental models. Keep Optimizations framework-level and evidence-first; move training checkpointing and inference attention into their owning courses.
+
+The accepted Lesson 1 revision adds a simple SM/L2/HBM overview before the
+existing single-SM enlargement. Use H100 SXM 80 GB counts and explicitly
+distinguish the PCIe product and full GH100 die. Define the hardware hierarchy
+GPC/TPC/SM/SMSP separately from a grid's blocks and their threads grouped into
+warps. Derive a launch-size example and resident-thread upper bound. Explain
+that blocks have a program-selected size: 32 resident blocks is the hardware
+ceiling, while 1,024-thread blocks allow at most two per SM. Add a nearby
+block-size comparison from 32 to 1,024 threads; apply the thread, warp and block
+limits together and qualify the results by register and shared-memory use.
+Define a resident block as placed on an SM with register space and any needed
+shared memory reserved. Explain that its working values and progress remain
+tracked while a warp waits for data and another ready warp executes. Connect
+the resident-thread count to retained work, not instructions executed per cycle.
+Preserve the existing deterministic
+renderer, course identity, lab logic and target contract. This addition is implemented. Its source checks and SVG asset review pass;
+full-page browser and H100 evidence remain separate and pending.
 
 #### Selected Option
 
@@ -178,6 +195,24 @@ Both courses have clear non-overlapping missions and the required lessons, labs,
 
 #### Implementation Evidence
 
+Lesson 1 introduces an SM/L2/HBM SVG before the enlarged SM map. H100 SXM
+80 GB counts, GPC/TPC/SM/SMSP names, logical work grouping and a qualified
+launch/residency example use official NVIDIA references. The SVG was inspected
+at 900 and 320 pixels.
+
+The residency table now names the two-block limit for 1,024-thread blocks.
+An adjacent six-row comparison covers 32 through 1,024 threads per block,
+derives the thread/warp bounds and explains why 32 blocks of 32 threads reach
+the block ceiling with only half the thread capacity. Register and shared-memory
+constraints remain explicit; this is a capacity explanation, not a measured
+schedule or performance claim.
+
+The lesson and glossary now define residency using SM placement, retained
+register values and reserved shared memory where needed. A waiting warp and
+an executing warp can both remain resident; the explanation connects this
+example to the 2,048-thread capacity. The official hardware-multithreading
+reference is included in the end resources.
+
 Fundamentals now provides 13 H100-focused labs, including compatibility, tail
 scheduling, and read-only health evidence. Optimizations provides 15 general
 PyTorch performance labs, including tail/load diagnosis and a library-first
@@ -186,6 +221,23 @@ escalation capstone; training checkpointing and SDPA belong exclusively to their
 The individual-course alignment pass additionally preserves unknown MIG query values instead of classifying them as full-device evidence. General timing prose distinguishes host medians, event min/median/p90 summaries, elapsed marker intervals, and raw-sample extensions. Fusion examples use logical traffic and require profiler evidence for physical HBM claims. Onboarding names the required two-node preflight.
 
 #### Verification Evidence
+
+Residency clarification: all five standalone validators, source-to-HTML parity,
+57 focused content/opening tests and configured Markdown lint pass. Reviewed
+the six numerical rows against the NVIDIA limits verified for this revision.
+The concrete residency definition and waiting-warp example were checked against
+NVIDIA's hardware-multithreading description; the same 57 focused tests and
+five validators pass after the wording and glossary update.
+Browser and H100 evidence remain pending.
+
+Earlier revision verification: all five standalone validators and 742 offline tests
+pass. Negative controls cover altered/missing table cells and literal code
+pipes with and without a blank line before a fence. Independent read-only
+review closed preservation and prerequisite findings. Lab executables and
+launchers remain unchanged. Full-page browser review is pending after local-file
+access was denied. The installed bounded skill checker reports the same
+pre-existing catalog-markup incompatibilities on HEAD and revised pages;
+its gate is not claimed passed. No new target-runtime qualification is claimed.
 
 Course validators, ownership tests, pure helper tests, Python help checks, and
 HTML parity pass. CUDA execution, profiler evidence, NCCL, and one- or two-H100
@@ -692,6 +744,14 @@ Full narrative and all current educational assets are published.
 
 #### Implementation Evidence
 
+The 2026-09-08 mechanism revision reviews all 73 lessons across the five
+courses. Their Mechanism sections now explain the actors, sequence, state
+changes and completion conditions in connected prose, with descriptive
+subheadings for longer topics. Existing examples, formulas, numerical gates,
+prerequisite routes and practical capabilities remain. Clarifications include
+host/device timing, token-weighted accumulation, allocator accounting, shared
+KV ownership and the distinction between supplied experiments and extensions.
+
 The catalog-wide editorial pass reviewed all 73 lessons, 94 complete lab guides,
 front and back matter, supporting runbooks and 108 diagrams. Corrections clarify
 Amdahl latency/speedup arithmetic, transfer-lab scope, normalized error metrics,
@@ -707,6 +767,18 @@ All 72 lessons retain the 15-stage teaching sequence and all 87 numbered labs. C
 The individual-course alignment pass reconciles syllabuses, runbooks and lessons with actual tracked-parameter, recomputation, LoRA, phase-timing and capstone evidence. It preserves LoRA's bounded held-out token/digest observations while distinguishing adapter persistence and broader quality evaluation as extensions. Conditional live pipeline-parallel serving is identified accurately without production-scale claims.
 
 #### Verification Evidence
+
+Mechanism revision verification on 2026-09-08: all 748 offline tests, five
+standalone validators, exact generated-source parity, changed-source
+Markdown/Python lint and formatting, specification validation and whitespace
+checks pass. Independent read-only prose reviews cover all 73 mechanisms.
+The task-start comparison confirms unchanged lesson identities, all 94 lab
+guides and executables, commands, metadata, syllabi, dependencies and shared
+styles, with no original file removed. The installed course-skill checker
+reports identical publication-format failures on current and task-start pages;
+all five baseline rebuilds match their original HTML hashes. Its source
+allowlist and byte checks pass. Browser and target-runtime evidence remain
+pending.
 
 All 573 shared tests and all five standalone validators pass. All five rebuilt
 pages pass exact source parity and the course skill's bounded HTML/source
@@ -977,7 +1049,7 @@ Implemented shared light CSS and generation with 74ch reading width, sticky side
 Research: [PyData layout](https://pydata-sphinx-theme.readthedocs.io/en/stable/user_guide/layout.html), [GOV.UK layout](https://design-system.service.gov.uk/styles/layout/), [W3C page styling](https://www.w3.org/WAI/tutorials/page-structure/styling/), and [Diataxis](https://diataxis.fr/start-here/). These support sidebar/article separation, readable line length, responsive accessibility and distinct learning/reference needs. Visual preference is a project design judgment, not a universal best-style claim. Validation: 141 shared tests and all five course validators pass; exact HTML/source parity, Python help/compilation, Ruff/check and formatting (95 Python files), configured Markdown lint, shell syntax, ShellCheck, publication-safety scans and Git whitespace checks pass. Compared all 79 Python lab/helper files against the task-start recovery archive: unchanged. All 43 detailed SVGs preserve geometry and explanation aside from palette and the benchmark label. Contrast checks cover primary text/accent combinations against the light surfaces. Bounded read-only final review found an obsolete tool check, now removed and regression-tested. Desktop and 390-pixel browser rendering remain pending after unavailable/blocked browser access; no alternative access workaround was used. Installed-target environments, CUDA build/runtime, engines and live H100 qualification are unchanged and pending.
 
 <!-- /FEATURE: FEAT-011 -->
-<!-- FEATURE: FEAT-012 reqs=REQ-002,REQ-009 status=ready delivery=implemented priority=P0 version=3 -->
+<!-- FEATURE: FEAT-012 reqs=REQ-002,REQ-009 status=ready delivery=implemented priority=P0 version=4 -->
 ### FEAT-012: Contextual, accurate diagrams and uncluttered navigation
 
 #### Requirements Covered
@@ -1004,6 +1076,12 @@ containment only for nested entities, proper axes for workload matrices, and
 explicit concurrency for overlap. Review every overview and detailed SVG against
 its lesson and official technical sources; correct labels, arithmetic, arrows,
 boundaries and directly contradictory adjacent prose without deleting topics.
+
+For the Lesson 1 host/device timeline, separate CPU submission and waiting
+from execution in one GPU stream. Label submission and event completion
+distinctly. Place an explicit reading guide beside the drawing: arrows show
+order; box heights and gaps do not show how long operations take. Preserve
+the host-timer scope and distinguish event completion from copying results.
 
 #### Selected Option
 
@@ -1057,9 +1135,41 @@ courses. Evidence does not overclaim browser or H100 validation.
 
 #### Implementation Evidence
 
+The Lesson 1 host/device timeline now uses distinct submission and completion
+arrows, separate timer start/stop boxes and an explicit reading guide. It says
+that box heights and gaps do not show operation durations. The caption retains
+submission versus execution, one-stream order, host-timer scope and the need
+for a separate result copy. The existing figure identity and Lesson 8 link stay
+stable.
+
+The 2026-09-08 mechanism revision audits all 109 current figures and revises
+all 54 overview captions and layouts plus five detailed diagrams. Compact
+vertical flows, nested containers and explicit time axes retain readable label
+scale. The host/event timeline separates submission from completion; transfer
+cycles show when buffers can be reused; the DDP flow separates bucket readiness,
+communication and update; and the KV-tier tree labels reuse, restore and
+recompute branches. Disaggregation shows forward KV handoff, with separate
+coordination described in its caption. Native titles, descriptions, contextual
+homes and all figures remain.
+
 Removed repeated return links and both diagram-reading disclosure variants from all five generated pages and their shared renderer/styles. Native SVG title/description associations, visible captions, sidebar navigation, answer keys and source disclosures remain. All 54 overview diagrams declare a validated relationship layout rather than inferring one from the title. Reviewed all 43 detailed diagrams and corrected residual/data-flow arrows, cache and token boundaries, latency intervals, physical KV identity, workload axes, scheduling and topology relationships. Regenerated all five pages atomically; preserved 97 inline figures, 72 lessons and 87 labs.
 
 #### Verification Evidence
+
+The revised host/device SVG was rendered and inspected at 560- and 320-pixel
+widths: labels fit, connectors avoid text and the duration note is legible.
+The GPU Fundamentals page was rebuilt; all five validators and 45 focused
+contextual/diagram tests pass. This is source and asset-rendering evidence;
+full-page browser review remains pending under the existing URL restriction.
+
+Mechanism revision verification on 2026-09-08: all 59 changed SVG figures
+were directly rendered and inspected. Review corrected a roofline label
+collision and a copy-completion label placed after dependent computation;
+the latter has a failing-before/passing-after regression. Overview scale,
+semantic direction, accessibility and figure/source parity checks pass within
+the 748-test offline suite. Full-page browser inspection was blocked by URL
+policy; no alternate route was used. Asset-level inspection does not establish
+page reflow, keyboard behavior or target-runtime qualification.
 
 On 2026-09-04, all five validators, 195 shared tests, exact source parity, Ruff/format, Markdown, Python compilation/help, launcher syntax and publication-safety checks pass. All 97 SVG assets were rasterized locally and visually reviewed; final label/connector repairs were rendered and inspected again. Report-only final review found no remaining actionable issues in the repaired surfaces. Desktop/390px browser rendering was not performed because browser access was unavailable; no alternate browser or serving route was used. Browser and live H100 qualification remain pending.
 
@@ -1339,13 +1449,13 @@ remain separate and pending. Delivery is implemented, not target verified.
 
 <!-- /FEATURE: FEAT-014 -->
 <!-- FEATURE: FEAT-015 reqs=REQ-002,REQ-007,REQ-009,REQ-010 status=ready delivery=implemented priority=P0 version=1 -->
-### FEAT-015: Beginner-first course entry and complete conceptual bridges
+### FEAT-015: Definition-first course entry and complete conceptual bridges
 
 #### Requirements Covered
 
 - REQ-002: Consistent accessible inline teaching and public-safe references.
 - REQ-007: Kernel identity, dispatch, library reuse and distribution guidance.
-- REQ-009: Complete beginner-to-advanced explanations and topic coverage.
+- REQ-009: Complete prerequisite-based explanations and topic coverage.
 - REQ-010: Accurate introductory lab guides and implementation boundaries.
 
 #### Context Evidence
@@ -1357,12 +1467,15 @@ subtopics and beginner transitions too terse.
 
 #### Design Details
 
-Add an authored Start here field at the beginning of each first lesson, before
+Retain an authored course entry inside How it works, after Objective as specified
+by FEAT-023, before
 the existing teaching fields. Define subject, purpose, vocabulary, workflow,
-CPU/GPU responsibility, worked reasoning and readiness. Keep 72 substantive
+CPU/GPU responsibility and worked reasoning. Keep 72 substantive
 lessons and all existing lab identities and explanations. Refine opening
-titles and synchronized syllabus routes where needed. Advanced readers may use
-the entry checkpoint; beginners follow the foundation courses first.
+titles and synchronized syllabus sequences where needed. Use one learning
+sequence with concrete prerequisites and recall questions. Remove audience
+splits, route-selection commentary and repeated descriptions of how to read
+the course from lessons, missions, READMEs and generated pages.
 
 Render the new field through the shared renderer and check its full HTML
 parity and inline diagram home. Add a compact H100 hierarchy diagram separating
@@ -1390,7 +1503,7 @@ do not publish packages or claim existing executables are installed libraries.
 #### Selected Option
 
 Keep the existing Markdown/SVG/HTML pipeline and lesson sequence, with one
-consistent beginner entry field and two minimal practical labs.
+consistent introductory field and two minimal practical labs.
 
 #### Alternatives Considered
 
@@ -1450,7 +1563,9 @@ Record source, CPU, browser and H100 evidence separately without overclaiming.
 #### Implementation Evidence
 
 All five first lessons now begin with substantial what/why/how explanations,
-worked reasoning and readiness guidance. The shared renderer preserves their
+worked reasoning and concrete prerequisites. Separate audience routes and
+repeated reading instructions are removed from all five courses, missions
+and READMEs. The shared renderer preserves their
 complete Start here content before advanced fields. Training and Inference
 first-lesson titles, syllabus routes and new Lab 32/Lab 35 guides agree.
 
@@ -1469,6 +1584,12 @@ no existing file was removed. Existing lesson fields are retained or extended
 apart from two opening titles and two bounded practice/prerequisite refinements.
 
 #### Verification Evidence
+
+The audience-routing editorial follow-up passes all five standalone validators,
+source-to-HTML parity, 103 focused content/publication/sequence tests and
+configured Markdown lint. Browser and H100 qualification remain pending.
+
+Original implementation evidence follows.
 
 Local source gate: 398 shared tests and all five standalone validators pass,
 including new introductory content, CPU mechanics and optional-field diagram
@@ -1662,17 +1783,16 @@ allocation, training parallelism, inference engines and CUDA primitives.
 
 #### Design Details
 
-Preserve the five substantive Start here entries. Add an authored What it is
-opening to each later lesson before Objective, explaining the named concept,
+Preserve the five substantive course entries within How it works. Following
+FEAT-023, place Objective first, then define the named concept in How it works,
 its basic operation and its main distinction from nearby ideas. Definitions
 are lesson-specific prose, not generated benefits or acronym lists. Expand
 essential first-use terms in those openings and the existing course entries;
 retain all advanced fields, worked examples, lab identities and diagrams.
 
-Extend the shared renderer with the optional What it is field in the opening
-position. Use the existing reading-width and light typography rules without
-redesigning the page. Standalone validators require either a substantive
-Start here opening or a nontrivial What it is primer before application, and
+Use the shared renderer's How it works field and the existing reading-width
+and light typography rules. Standalone validators require a substantive
+course entry and a nontrivial definition before application, and
 verify complete canonical-to-HTML narrative parity. Word counts catch missing
 or token primers, not semantic completeness; human editorial review remains
 necessary. Keep diagrams beside their existing mechanisms and preserve all
@@ -1723,7 +1843,7 @@ browser bypass. Existing course and lab numbering remains.
 
 #### Test-First Success Criteria
 
-- TDD-001: All 73 lessons have a definition-led opening before Objective in
+- TDD-001: All 73 lessons have Objective followed by definition-led How it works in
   canonical source and rendered HTML; incomplete openings fail validation.
 - TDD-002: The CUDA Graphs primer defines operations, dependencies, capture and
   replay and distinguishes replay from fusion and compilation.
@@ -2382,10 +2502,19 @@ after lesson theory. Worked examples and execution become one Practice flow.
 
 #### Design Details
 
-Retain Start here or What it is, Objective, Prerequisite bridge, Recall, Why it
-matters, Mental model and Mechanism in each lesson. Generate its final Practice
-labs links from explicit metadata. Remove the nine applied fields from the
+Use the lesson presentation in FEAT-023: Objective, How it works, Practice labs
+and final Mental model. Generate Practice labs links from explicit metadata.
+Remove the nine applied fields from the
 lesson schema and canonical lesson sources, without compatibility aliases.
+
+Apply the same boundary inside How it works prose:
+move lab-specific readiness checks, workload descriptions, commands and result
+recipes into the owning guide, merging existing explanations rather than
+appending duplicates. Keep conceptual definitions and useful hand-worked
+reasoning in lessons. Update Theory preparation pointers when their detailed
+explanation moves. The catalog-wide residual-prose revision is implemented. Read-only editorial
+review verified preservation and corrected prerequisite pointers; full-page
+browser review remains pending.
 
 Map every moved explanation to a meaningful existing lab before removing it.
 Place hardware/qualification context in Before you start; combine worked
@@ -2482,6 +2611,12 @@ Outstanding browser or target evidence remains explicit.
 
 #### Implementation Evidence
 
+Lab-specific readiness, fixture API details, validation recipes and procedures
+are consolidated into owning guides across all five courses. Definitions,
+mathematical examples and algorithms remain in theory; prerequisites are
+aligned. The canonical opening validator and its standalone copies preserve
+table cells and fenced code with one shared normalization path.
+
 All 73 lessons retain definition-led theory and finish with exact Practice labs
 links. All 94 authored guides use the unified Practice section. A private
 source-to-owner audit accounts for 669 fragments from 657 applied fields,
@@ -2513,6 +2648,15 @@ code blocks containing blank lines; literal pipes in prose and commands remain
 part of the expected content.
 
 #### Verification Evidence
+
+Revision verification: all five standalone validators and 742 offline tests
+pass. Negative controls cover altered/missing table cells and literal code
+pipes with and without a blank line before a fence. Independent read-only
+review closed preservation and prerequisite findings. Lab executables and
+launchers remain unchanged. Full-page browser review is pending after local-file
+access was denied. The installed bounded skill checker reports the same
+pre-existing catalog-markup incompatibilities on HEAD and revised pages;
+its gate is not claimed passed. No new target-runtime qualification is claimed.
 
 Passed after alignment: 703 shared tests, five standalone validators,
 source-to-HTML parity and five bounded HTML/source checks. The bounded checker
@@ -2609,6 +2753,124 @@ Implemented the catalog renderer and embedded stylesheet, root welcome page and 
 All 740 offline pytest tests passed. After the final favicon edit and rebuild, 78 focused publication/content tests, generated-source parity and all five standalone validators passed. Tests cover renamed standalone course copies, every local route, stale/missing catalog output, metadata escaping, navigation restrictions and license parity. Ruff, formatting, configured Markdown lint and whitespace checks passed. Browser checks covered desktop, tablet, 390px and 320px layouts; all five courses, root and catalog routes; keyboard switching and visible focus; embedded licensing; no horizontal overflow or external loaded resources. The final browser console had no errors. Existing GitHub CodeQL checks passed on the website implementation commit. Pages configuration and live deployed-revision verification remain pending the required approving review and merge.
 
 <!-- /FEATURE: FEAT-022 -->
+
+<!-- FEATURE: FEAT-023 reqs=REQ-002,REQ-009 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-023: Coherent conceptual lessons with integrated diagrams
+
+#### Requirements Covered
+
+- REQ-002: Consistent lesson structure and meaningful diagrams.
+- REQ-009: Conceptual titles, complete causal teaching and terminology.
+
+#### Context Evidence
+
+The 73 lessons contain useful explanations but repeat template labels and
+frequently enumerate components in their titles. Some summaries introduce
+new concepts and some lessons lack a diagram at their explanatory home.
+
+#### Design Details
+
+Use exactly Objective, How it works, Practice labs and Mental model in that
+order. Start How it works with the central definition; integrate prerequisite
+connections and purpose into connected teaching. Preserve course introductions,
+worked conceptual arithmetic and unique qualifications. Move substantial
+teaching out of summaries into the explanation and remove redundant recall
+prompts; practical guides retain retrieval and transfer activities.
+
+Give each lesson a concise subject title, updating syllabus and local links.
+Expand unfamiliar abbreviations in context, with CPU/GPU exempt from forced
+expansion. Preserve precise technology names in the explanatory prose.
+Use existing original diagrams where they teach the core concept, add authored
+diagrams for uncovered lessons, and embed each within How it works with a
+caption and accessible description. Preserve a single primary figure home.
+
+#### Selected Option
+
+Refine canonical Markdown and existing overview/manifest placement records;
+update the deterministic renderer and identical standalone validators.
+
+#### Alternatives Considered
+
+Renaming fields alone leaves disconnected teaching. Deleting unique prerequisite
+or summary content loses explanations. Duplicating lab figures changes their
+ownership; add a conceptual diagram where a lesson has no suitable primary one.
+
+#### Implementation Boundaries
+
+Courses only. Preserve pre-existing work, all 94 lab identities and executable
+behavior. No dependencies, installations, skill-source edits or publication.
+
+#### Test-First Success Criteria
+
+- TDD-001: All 73 lessons use the exact ordered fields; retired fields fail.
+- TDD-002: Every How it works contains an accessible core diagram; missing or
+  externally placed diagrams fail even when another lesson has extra figures.
+- TDD-003: Full canonical prose parity, title/link consistency and unchanged
+  executable sources hold throughout the five courses.
+
+#### Validation Plan
+
+Review all lessons semantically, check new terms against official references,
+run focused regression tests followed by catalog validation and the shared
+suite. Inspect desktop and narrow-screen publications where tools permit.
+
+#### Test Plan
+
+Retain meaningful content assertions under their new section ownership. Add
+negative tests for order, missing definitions and missing/escaped diagrams.
+
+#### Evaluation Plan
+
+Trace the central concept from definition through operation and consequence.
+Check every diagram against the prose and every summary for new terminology.
+
+#### Rollout And Rollback
+
+Build local HTML atomically; no external publishing. Preserve a task-start
+snapshot so the changed content can be compared without reverting other work.
+
+#### Done Definition
+
+The full catalog follows the selected lesson pattern with useful teaching
+preserved, source/static validation passed and other evidence lanes explicit.
+
+#### Implementation Evidence
+
+All 73 lessons use conceptual titles and the four ordered sections. Definitions,
+causal mechanisms, useful prerequisite connections and purpose are integrated
+within How it works; final summaries contain already-taught concepts. Added
+worked reasoning and unfamiliar-term definitions, corrected ambiguous L2 and
+product-name expansions, and reconciled attention, speculative sampling and
+parallelism explanations with primary references. Added 12 overview diagrams
+and one branching adapter diagram, giving 122 figures and core coverage for
+every lesson. All executable labs remain byte-identical to the task-start
+snapshot; one lab guide changes only its reference to a renamed lesson.
+
+The renderer places diagrams inside the explanation while retaining full figure
+width and readable prose. Identical standalone validators enforce field order,
+per-lesson diagram containment and full narrative parity. Syllabi, lesson links,
+README, references and focused regression tests follow the new contract.
+
+#### Verification Evidence
+
+All five course validators and generated-source parity pass. The complete
+shared suite reports 632 passed, 133 skipped and one missing-PyTorch failure;
+the identical failure was independently reproduced on the task-start snapshot.
+The final focused editorial/publication/diagram suite reports 261 passed and
+eight dependency skips. Missing/escaped diagrams, incorrect field order, retired fields, swapped
+or truncated explanations, and altered table/list literals have negative checks.
+Ruff, formatting, configured Markdown lint and whitespace checks pass.
+
+Independent read-only reviews cover all 73 lessons and changed rendering code.
+All 13 new diagram assets were rendered and visually inspected; full-page
+desktop/mobile browser review is pending because local-page access was blocked
+by browser security policy. The installed skill checker reports the same six
+format incompatibilities on baseline and current HTML, with embedded-source
+membership and bytes passing. No installed-environment, runtime activation or
+live H100 qualification is claimed. Delivery remains implemented while those
+publication/qualification lanes remain open.
+
+<!-- /FEATURE: FEAT-023 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

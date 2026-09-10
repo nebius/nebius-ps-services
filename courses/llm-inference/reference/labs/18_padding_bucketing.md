@@ -4,11 +4,13 @@ A single batch rectangle can waste substantial work when one prompt is much long
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 5 for padding, length bucketing, right-padded final-position selection and restored prompt order. Lessons 1–3 supply the pinned model, masks, inference mode and fixed semantics; Fundamentals Lesson 9 supplies aggregate error. Run in Lesson 5 and reuse the evidence in Lesson 9.
+**Theory preparation:** Read Lesson 5 for padding, attention masks, bucketing and the hand-worked position count. Read the implementation and per-prompt checks below before running.
 
 Use one H100 and the audited immutable Hugging Face artifact in the mechanics environment. Review padding, attention masks, and the difference between a real prompt token and an allocated rectangle position.
 
 ## Concepts and code path
+
+Inputs are right-padded, so each prompt's last real-position logits come from `length-1`; left-padded generation needs a different index rule.
 
 The code tokenizes the prompt set, measures true lengths, builds a single padded batch, and separately groups prompts by length. Both paths execute prefill with the appropriate masks. Results are restored to corresponding prompts before comparing final-position logits. This is a prefill batching experiment, not continuous online admission or a complete generation service.
 
@@ -24,7 +26,7 @@ sbatch slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile smoke
 
 ## Check your results
 
-Require `equivalent_last_token_logits`. Each prompt's compared logits, norm calculation and relative L2 error must be finite, with error no greater than `0.02`, before the maximum is reported. Lesson 5 explains this per-prompt check; NaN in either an early or a later prompt must fail rather than disappear during aggregation. Inspect true prompt tokens, single-batch and bucketed rectangle tokens, padding counts, and both timing distributions. Fewer padded positions do not guarantee lower elapsed time when launch or batching efficiency changes.
+Require `equivalent_last_token_logits`. Each prompt's compared logits, norm calculation and relative L2 error must be finite, with error no greater than `0.02`, before the maximum is reported. The checks below apply to each prompt; NaN in either an early or a later prompt must fail rather than disappear during aggregation. Inspect true prompt tokens, single-batch and bucketed rectangle tokens, padding counts, and both timing distributions. Fewer padded positions do not guarantee lower elapsed time when launch or batching efficiency changes.
 
 ## Investigate the behavior
 

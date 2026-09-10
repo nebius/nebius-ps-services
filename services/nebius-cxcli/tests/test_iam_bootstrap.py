@@ -57,6 +57,11 @@ class _FakeListAccessPermitRequest:
     page_token: str | None = None
 
 
+@dataclass
+class _FakeDeleteAccessPermitRequest:
+    id: str
+
+
 class _FakeAccessPermits:
     def __init__(self) -> None:
         self.list_requests: list[_FakeListAccessPermitRequest] = []
@@ -87,6 +92,7 @@ def _install_fake_access_permit_modules(monkeypatch: pytest.MonkeyPatch) -> None
     iam_module.AccessPermitSpec = _FakeAccessPermitSpec  # type: ignore[attr-defined]
     iam_module.CreateAccessPermitRequest = _FakeCreateAccessPermitRequest  # type: ignore[attr-defined]
     iam_module.ListAccessPermitRequest = _FakeListAccessPermitRequest  # type: ignore[attr-defined]
+    iam_module.DeleteAccessPermitRequest = _FakeDeleteAccessPermitRequest  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_module)
     monkeypatch.setattr(
@@ -678,6 +684,71 @@ def test_group_name_for_service_account_is_stable_and_bounded() -> None:
     )
     assert name.endswith("permits") or "-permits-" in name
     assert len(name) <= 63
+
+
+@pytest.mark.parametrize(
+    "foreign_scope,fail_create", [(False, False), (True, False), (False, True)]
+)
+def test_managed_role_reconciliation_is_scoped_ordered_and_idempotent(
+    monkeypatch, foreign_scope, fail_create
+):
+    _install_fake_access_permit_modules(monkeypatch)
+    events = []
+    rows = {"permit-old": ("project-other" if foreign_scope else "project-test", "editor")}
+
+    class Permits:
+        def list(self, _request):
+            return SimpleNamespace(
+                wait=lambda: SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            metadata=SimpleNamespace(id=key),
+                            spec=SimpleNamespace(resource_id=value[0], role=value[1]),
+                        )
+                        for key, value in rows.items()
+                    ],
+                    next_page_token="",
+                )
+            )
+
+        def create(self, request):
+            events.append("create-admin")
+            if fail_create:
+                raise RuntimeError("create failed")
+            assert request.metadata.parent_id == "group-test"
+            assert request.spec.resource_id == "project-test"
+            assert request.spec.role == "admin"
+            rows["permit-admin"] = ("project-test", "admin")
+            return SimpleNamespace(wait=lambda: None)
+
+        def delete(self, request):
+            events.append("delete-old")
+            assert request.id == "permit-old"
+            assert "permit-admin" in rows
+            del rows[request.id]
+            return SimpleNamespace(wait=lambda: None)
+
+    def reconcile():
+        return iam_bootstrap._ensure_project_role_permits(
+            access_permits=Permits(),
+            permit_parent_id="group-test",
+            principal_label="test",
+            project_id="project-test",
+            role_ids=["admin"],
+            reject_unexpected_role_ids=True,
+            reconcile_managed_roles=True,
+        )
+
+    if foreign_scope or fail_create:
+        with pytest.raises(RuntimeError):
+            reconcile()
+        assert events == ([] if foreign_scope else ["create-admin"])
+        assert "permit-old" in rows
+    else:
+        assert reconcile() == (["admin"], [])
+        assert events == ["create-admin", "delete-old"]
+        assert reconcile() == ([], ["admin"])
+        assert events == ["create-admin", "delete-old"]
 
 
 def test_generate_rsa_key_pair_returns_pem_material() -> None:

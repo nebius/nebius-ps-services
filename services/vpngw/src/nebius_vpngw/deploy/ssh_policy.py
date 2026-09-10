@@ -1065,6 +1065,7 @@ class SSHTrustPolicy:
     identities: tuple[SSHHostIdentity, ...] = ()
     managed_action: str | None = None
     managed_receipt_sha256: str | None = None
+    fresh_identity_approval_sha256: str | None = None
     _snapshot_owner: Any = field(default=None, repr=False, compare=False)
     _managed_update: _ManagedTrustUpdate | None = field(default=None, repr=False, compare=False)
     _recovered_host_keys_update: _RecoveredHostKeysUpdate | None = field(
@@ -2152,6 +2153,7 @@ def require_vm_ha_ssh_policy(
     recovered_update: _RecoveredHostKeysUpdate | None = None
     managed_action: str | None = None
     managed_receipt_sha256: str | None = None
+    fresh_identity_approval_sha256: str | None = None
     if recovered and persist_default_host_keys:
         assert directory is not None and not directory_is_explicit
         recovered_update = _RecoveredHostKeysUpdate(
@@ -2173,6 +2175,25 @@ def require_vm_ha_ssh_policy(
             )
         desired_receipt = _build_receipt(trust_scope, selected_pins, authorities)
         managed_receipt_sha256 = hashlib.sha256(desired_receipt).hexdigest()
+        prospective_hosts = generation_hosts if not directory_is_explicit else set()
+        if prospective_hosts and member_imports:
+            approval_receipt = json.loads(desired_receipt)
+            for member in approval_receipt["members"]:
+                if member["hostname"] in prospective_hosts:
+                    if member["authority"]["kind"] != "product-generated-v1":
+                        raise ValueError("Fresh SSH approval requires product-generated authority")
+                    member["keys"] = {"action": "generate-ed25519-for-absent-member"}
+            fresh_identity_approval_sha256 = hashlib.sha256(
+                _canonical_json(
+                    {
+                        "domain": "nebius-vpngw/fresh-ssh-approval-v1",
+                        "desired": approval_receipt,
+                        "targets": host_pairs,
+                        "predecessor_receipt_sha256": _content_sha256(existing_receipt),
+                        "predecessor_projection_sha256": _content_sha256(existing_projection),
+                    }
+                )
+            ).hexdigest()
         desired_projection = known_hosts_content
         if existing_receipt != desired_receipt or existing_projection != desired_projection:
             managed_action = (
@@ -2211,6 +2232,7 @@ def require_vm_ha_ssh_policy(
         identities=tuple(identities),
         managed_action=managed_action,
         managed_receipt_sha256=managed_receipt_sha256,
+        fresh_identity_approval_sha256=fresh_identity_approval_sha256,
         _snapshot_owner=snapshot_owner,
         _managed_update=managed_update,
         _recovered_host_keys_update=recovered_update,

@@ -285,7 +285,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     manager._begin_vm_ha_effect = Mock(side_effect=["disk-operation", "compute-operation"])
     manager._complete_vm_ha_effect = Mock()
     manager._get_ha_disk_by_name = Mock(side_effect=[None, disk])
-    manager._get_ha_disk_by_id = Mock()
+    manager._get_disk_by_id = Mock()
     manager._resolve_boot_image_id = Mock(return_value="image-1")
     manager._build_boot_disk_create_request = Mock(return_value=object())
 
@@ -330,7 +330,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     assert create_call.args[5] == ["public-1"]
     assert manager._private_alloc_ids["gateway-1"] == ["primary-1"]
     manager._require_ha_compute_absent.assert_called_once_with("compute-retired")
-    manager._get_ha_disk_by_id.assert_not_called()
+    manager._get_disk_by_id.assert_not_called()
     manager.set_ha_private_alias.assert_not_called()
     assert not disk_client.delete.called
     assert isinstance(result, VMProvisioningResult)

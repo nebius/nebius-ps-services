@@ -4,7 +4,7 @@ Launch geometry determines how a problem is divided among GPU programs and how m
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 3 for Triton program instances, logical element blocks, cooperating warps, ceiling division and masked tails, plus Lesson 1 for reference checks and timing. The first run studies geometry; revisit after Lesson 6 for residency and occupancy interpretation.
+**Theory preparation:** Read Lesson 3 for program instances, cooperating warps, ceiling division and masked tails. Lab 01 explains timing and reference checks. The first run studies geometry; revisit after Lesson 6 for residency and occupancy.
 
 Use one H100 with the course-qualified Triton package. This is Python learner code, distinct from the later CUDA C++ course. Allow first-use compilation to complete before interpreting warmed measurements.
 
@@ -13,6 +13,8 @@ Exact enabled GPC, SM, and memory-controller counts vary by H100 product and con
 Use the SM90 occupancy APIs and actual compiler resource report rather than a generic calculator with another architecture’s limits. Cluster kernels have an additional cluster-occupancy calculation.
 
 ## Concepts and code path
+
+In this kernel, `BLOCK_SIZE` selects logical elements per program and `num_warps=4` requests four cooperating warps (128 threads). One thread can handle several elements, so logical block size is not CUDA thread count. The JIT compiler specializes the kernel before warmed timing. Vary logical elements while keeping the four-warp setting fixed.
 
 Ceiling division rounds a quotient upward so the launch covers every element. For 1,003 elements and 256 logical elements per program, round 1003/256 upward to four programs. The last program considers indices 768 through 1023; a bounds mask permits loads and stores only for indices below 1,003, leaving 21 invalid positions masked out. This is a memory-validity rule, not by itself a measurement of branch divergence. These illustrative dimensions explain the calculation; each supplied profile reports its own dimensions.
 

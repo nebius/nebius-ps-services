@@ -9,14 +9,26 @@ from nebius_cxcli.component_sources import SourceProfile
 from nebius_cxcli.components import ComponentEntry, component_entries, soperator_install_entry
 
 
-def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> None:
-    def _unexpected_chart_metadata(
-        **kwargs: Any,
-    ) -> tuple[str | None, str | None, set[str], str | None]:
-        _ = kwargs
-        pytest.fail("release.install_after dependencies should not require Helm metadata lookup")
-
-    monkeypatch.setattr("nebius_cxcli.cli._helm_chart_metadata", _unexpected_chart_metadata)
+@pytest.mark.parametrize(
+    "app_targets,soperator_enabled,derived_ref,expected_ordering",
+    [
+        (["slurm"], True, None, False),
+        (["slurm"], True, "slurm", False),
+        (["slurm", "ordinary"], True, None, True),
+        (["ordinary"], True, None, True),
+        ([""], True, None, True),
+        (["slurm"], False, None, True),
+        (["slurm"], True, "ordinary", True),
+        ([], True, None, True),
+    ],
+)
+def test_apps_dependency_resolution_uses_release_install_after(
+    monkeypatch, app_targets, soperator_enabled, derived_ref, expected_ordering
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._helm_chart_metadata",
+        lambda **kwargs: (kwargs["chart_name_or_ref"], set(), None),
+    )
 
     app_entries = (
         ComponentEntry(
@@ -40,19 +52,42 @@ def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> N
         ),
     )
 
+    rows = [
+        {"id": "soperator", "instance_id": "slurm", "enabled": soperator_enabled},
+        *[{"id": "sample-app", "instance_id": target, "enabled": True} for target in app_targets],
+    ]
+    if derived_ref is not None:
+        rows[1]["target_ref"] = derived_ref
+    payload = {
+        "infra": {
+            "components": [
+                {"id": "mk8s", "instance_id": target, "enabled": True, "inputs": {}}
+                for target in ("slurm", "ordinary")
+            ]
+        },
+        "apps": {"charts": rows},
+    }
     selected, adjustments, warnings = _resolve_apps_chart_dependencies(
-        payload={},
+        payload=payload,
         selected_apps={"sample-app"},
         app_entries=app_entries,
         cache={},
         collect_warnings=True,
     )
 
-    assert selected == {"cert-manager", "external-secrets", "sample-app"}
-    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} == {
-        ("cert-manager", "install_after"),
-        ("external-secrets", "install_after"),
-    }
+    assert selected == (
+        {"cert-manager", "external-secrets", "sample-app"}
+        if expected_ordering
+        else {"sample-app", "external-secrets"}
+    )
+    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} == (
+        {
+            ("cert-manager", "install_after"),
+            ("external-secrets", "install_after"),
+        }
+        if expected_ordering
+        else {("external-secrets", "install_after")}
+    )
     assert warnings == ()
 
 

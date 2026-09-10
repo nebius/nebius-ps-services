@@ -4,13 +4,13 @@ An objective formula is only one part of reward-guided training: the system must
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 14–15 for Transformers/PEFT adapters, TRL’s GRPO trainer, rollouts, reward callbacks, gradient observation and update checks. Complete Lab 06’s objective mechanics first. The Lesson 1 mention is a preview, not an early trainer run.
+**Theory preparation:** Read Lessons 14–15 for LoRA, rollouts, grouped rewards and policy updates. Complete Lab 06 first. The callback and update checks are explained below.
 
 Qualify Transformers, PEFT, TRL, datasets, and the approved immutable model artifact in the Training environment. Use one H100 and private output storage. Complete Lab 06 before interpreting the trainer loss.
 
 ## Concepts and code path
 
-The trainer receives a small local prompt dataset and generates completion pairs. The reward callback alternates zero and one within each pair, independent of text quality. Adapter hooks observe gradients, saved parameter copies permit update checks, and trainer metrics record completion. This architecture checks that a nonzero reward signal can reach trainable parameters; it is not a meaningful reward model.
+TRL (Transformer Reinforcement Learning) supplies a GRPO trainer that connects generation, rewards and updates using the pinned model/tokenizer and LoRA configuration. A small local prompt dataset produces completion pairs. The callback assigns alternating zero and one rewards, regardless of text quality, to create a controlled within-group signal. Adapter hooks observe gradients and saved parameter copies reveal actual updates. Require finite nonzero gradients and a parameter change; these checks establish the update path, not reward quality.
 
 ## Practice
 

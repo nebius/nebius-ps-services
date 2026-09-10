@@ -39,6 +39,7 @@ def plan_soperator_strategy(
     target_release: str,
     source_contract: str | None,
     target_contract: str,
+    desired_state_changed: bool = False,
 ) -> SoperatorStrategyPlan:
     """Select a lifecycle strategy without dispatching on release numbers."""
 
@@ -52,7 +53,7 @@ def plan_soperator_strategy(
             raise ValueError(
                 f"Soperator downgrade {source_version} -> {target_version} is not supported"
             )
-        if target_version == source_version:
+        if target_version == source_version and not desired_state_changed:
             if normalized_source_contract != normalized_target_contract:
                 raise ValueError("equal Soperator versions produced different capability contracts")
             return SoperatorStrategyPlan(
@@ -65,6 +66,10 @@ def plan_soperator_strategy(
                 requires_slurm_maintenance=False,
             )
     strategy = _STRATEGY_GRAPH.get((normalized_source_contract, normalized_target_contract))
+    if normalized_source and source_version == target_version and desired_state_changed:
+        if normalized_source_contract != normalized_target_contract or strategy is None:
+            raise ValueError("changed Soperator policy has no reviewed capability edge")
+        strategy = SoperatorStrategy.IN_PLACE
     if strategy is None:
         raise ValueError(
             "no reviewed Soperator capability strategy exists for "

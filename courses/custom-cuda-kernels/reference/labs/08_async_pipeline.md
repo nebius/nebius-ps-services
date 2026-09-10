@@ -4,7 +4,7 @@ Asynchronous copies can prepare the next tile while the current tile is being pr
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 11 for Cooperative Groups, asynchronous global-to-shared copy, wait/synchronization, double buffering and safe reuse. Lessons 4–5 supply NaN sentinels, CPU references and FMA counting; Lessons 6 and 9 supply shared layout and resource costs. Read the pipeline walkthrough before the sweep.
+**Theory preparation:** Read Lessons 3–6 and 11 for buffer lifetime, bounds, sentinel validation, shared memory and producer-consumer ordering. The concrete Cooperative Groups calls and tail handling are explained below.
 
 Use the completed SM90 build and read the [pipeline walkthrough](../lab-mechanisms.md). Both variants use one block intentionally; this is a local pipeline mechanics experiment, not an HBM-saturating whole-GPU benchmark.
 
@@ -12,7 +12,7 @@ H100 supports advanced asynchronous movement, but extra shared stages consume ca
 
 ## Concepts and code path
 
-Cooperative Groups is CUDA's interface for naming collaborating groups of threads and performing coordinated operations within them. This lab uses the entire thread block as the group participating in asynchronous copies, waits and synchronization.
+Cooperative Groups is CUDA's interface for naming collaborating groups of threads and performing coordinated operations within them. This lab uses the entire thread block as the group participating in asynchronous copies, waits and synchronization. `this_thread_block()` names the group, `cooperative_groups::memcpy_async` issues its copies, and `wait` establishes readiness. Block synchronization protects reuse. Device `fmaf` computation is checked against a CPU `std::fma` reference, preserving single-rounding arithmetic.
 
 The serial kernel loads a tile, synchronizes, computes, and advances. The pipelined kernel primes one shared buffer, starts the next copy into the other buffer, computes the current tile, then waits and synchronizes before reuse. Tail loads are bounded. A sentinel is a deliberately recognizable initial value. Before each validation launch, this lab fills the output with NaN (Not a Number), a special floating-point value. An element the kernel fails to write retains that marker and fails the check that every output is finite. Independent CPU references also detect incorrect finite values in both variants.
 
@@ -32,6 +32,8 @@ sbatch slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/08_async_pipeline" 
 ```
 
 ## Check your results
+
+Validation initialization with the NaN sentinel is outside kernel-only timing. A missing write must fail even when the kernel appears faster.
 
 Require complete FP32 reference agreement in both variants and no relevant sanitizer errors. Inspect serial/pipelined distributions at each work point. With eight logical global bytes per element and two FLOPs per FMA, intensities are 0, 2, 8, and 32 FLOPs/byte.
 

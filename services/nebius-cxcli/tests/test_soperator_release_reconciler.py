@@ -113,6 +113,7 @@ def _artifacts(snapshot) -> SoperatorArtifactReceipt:
 
 def _spec(snapshot, strategy: SoperatorStrategyPlan, paths: ProjectPaths) -> SoperatorOperationSpec:
     return SoperatorOperationSpec(
+        checks_policy_sha256="sha256:" + "c" * 64,
         target_ref="cluster-a",
         ownership="managed",
         strategy=strategy.strategy.value,
@@ -161,6 +162,8 @@ def _callbacks(calls: list[str]) -> SoperatorReconcileCallbacks:
         wait_pre_restore_product=action("pre-product"),
         restore_infrastructure=action("restore"),
         wait_infrastructure=action("infrastructure"),
+        accept_checks=action("accept-checks"),
+        restore_checks=action("restore-checks"),
         wait_restored_product=action("restored-product"),
         release_requeued_jobs=action("requeued"),
         wait_requeued_product=action("post-requeue"),
@@ -178,6 +181,8 @@ def _callbacks(calls: list[str]) -> SoperatorReconcileCallbacks:
         retire_legacy_owners=action("retire-source"),
         rollback_before_frontier=action("rollback-source"),
         completed_postconditions={
+            "validate-target-active-checks": verify("verify-checks"),
+            "restore-steady-check-policy": verify("verify-checks-restored"),
             "establish-boot-storage-barrier": verify("verify-storage"),
             "enforce-protected-volume-retention": verify("verify-retention"),
             "populate-passive-jail-rootfs": verify("verify-passive-rootfs"),
@@ -367,15 +372,17 @@ def test_protected_apply_failure_requires_forward_recovery(tmp_path: Path) -> No
     assert payload["irreversibleIntent"]["phase"] == "apply-declarative-release"
 
 
+@pytest.mark.parametrize("install", [False, True, "checks"])
 def test_repair_successor_imports_completed_prefix_and_starts_at_apply(
     tmp_path: Path,
+    install: bool,
 ) -> None:
     snapshot = sample_snapshot()
     paths = _paths(tmp_path)
     strategy = resolve_soperator_reconcile_strategy(
-        current_release="1.22.0",
+        current_release=None if install else "1.22.0",
         target_release=snapshot.release,
-        source_contract="protected-data-plane-v1",
+        source_contract=None if install else "protected-data-plane-v1",
         target_contract=snapshot.capability_contract,
     )
     predecessor_spec = _spec(snapshot, strategy, paths)
@@ -426,18 +433,24 @@ def test_repair_successor_imports_completed_prefix_and_starts_at_apply(
             predecessor_receipt=predecessor,
             previous_operation_spec_sha256=soperator_sha256(asdict(predecessor_spec)),
             resume_phase="apply-declarative-release",
-            reason="victoria-metrics-install-retry-v1",
+            reason=(
+                "install-checks-jail-binding-v1"
+                if install == "checks"
+                else "install-dashboard-source-delivery-v1"
+                if install
+                else "victoria-metrics-install-retry-v1"
+            ),
         ),
     )
 
     assert "passive-rootfs" not in successor_calls
-    assert "verify-passive-rootfs" in successor_calls
+    assert ("verify-passive-rootfs" in successor_calls) is (not install)
     assert successor_calls.count("apply") == 1
     successor = json.loads(successor_path.read_text(encoding="utf-8"))
     assert successor["status"] == "complete"
     assert successor["repairLineage"]["resumePhase"] == "apply-declarative-release"
     assert successor["repairLineage"]["predecessorOperationId"] == predecessor["operationId"]
-    imported = successor["transitions"][:7]
+    imported = successor["transitions"][: 2 if install else 7]
     assert all(item["status"] == "complete" for item in imported)
     assert all("repairPredecessor" in item for item in imported)
 
@@ -1256,12 +1269,9 @@ def test_legacy_telemetry_stage_plan_fails_closed_without_rewriting_history(
     incomplete_path = paths.reports_dir / "legacy-telemetry-incomplete.json"
     completed_path = paths.reports_dir / "legacy-telemetry-complete.json"
     incomplete_bytes = (
-        b'{"status":"recovery-required","phase":'
-        b'"wait-final-authoritative-telemetry"}\n'
+        b'{"status":"recovery-required","phase":"wait-final-authoritative-telemetry"}\n'
     )
-    completed_bytes = (
-        b'{"status":"complete","phase":"wait-final-authoritative-telemetry"}\n'
-    )
+    completed_bytes = b'{"status":"complete","phase":"wait-final-authoritative-telemetry"}\n'
     incomplete_path.write_bytes(incomplete_bytes)
     completed_path.write_bytes(completed_bytes)
     legacy_stage_plan_sha256 = soperator_sha256(

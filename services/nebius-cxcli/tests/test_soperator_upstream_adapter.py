@@ -407,7 +407,7 @@ def test_rest_enabled_controller_waits_for_jwt_config_before_start() -> None:
     assert "AuthAltParameters=.*jwt_key=" in command
 
 
-def test_rest_disabled_controller_has_no_jwt_config_gate() -> None:
+def test_rest_dependency_is_enabled_with_jwt_gate_by_default() -> None:
     values = _values()
 
     umbrella, _contract = compile_upstream_soperator_values(values)
@@ -418,7 +418,10 @@ def test_rest_disabled_controller_has_no_jwt_config_gate() -> None:
         for item in controller["customInitContainers"]
         if item["name"] == "mount-gate-controller-jail"
     )
-    assert "Waiting for Slurm REST JWT configuration" not in controller_jail_gate["command"][-1]
+    assert "Waiting for Slurm REST JWT configuration" in controller_jail_gate["command"][-1]
+    nodes = umbrella["slurmCluster"]["overrideValues"]["slurmNodes"]
+    assert nodes["rest"]["enabled"] is True
+    assert nodes["controller"]["openMetrics"]["enabled"] is False
 
 
 def test_adapter_requires_optional_persistent_directory_to_preexist() -> None:
@@ -622,10 +625,10 @@ def test_adapter_does_not_enable_observability_from_disabled_dcgm_defaults() -> 
     assert umbrella["soperator"]["monitoringDashboards"] == {"enabled": False}
 
 
-def test_adapter_uses_post_flux_dashboards_only_for_the_known_broken_digest() -> None:
+@pytest.mark.parametrize("broken_digest", sorted(SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS))
+def test_adapter_uses_post_flux_dashboards_only_for_the_known_broken_digest(broken_digest) -> None:
     values = _values()
     values["observability"] = {"enabled": True}
-    broken_digest = next(iter(SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS))
     broken_release = _release_with_monitoring_chart(broken_digest)
     ordinary_release = _release_with_monitoring_chart("sha256:" + "d" * 64)
 
@@ -1014,3 +1017,10 @@ def test_external_nfs_is_statically_bound_without_default_storage_class() -> Non
     assert nfs_pv["spec"]["storageClassName"] == ""
     assert nfs_pvc["spec"]["storageClassName"] == ""
     assert nfs_pvc["spec"]["volumeName"] == nfs_pv["metadata"]["name"]
+
+
+def test_required_rest_cannot_be_explicitly_disabled() -> None:
+    values = _values()
+    values["slurmNodes"]["rest"] = {"enabled": False}
+    with pytest.raises(ValueError, match="REST is required"):
+        compile_upstream_soperator_values(values)

@@ -30,7 +30,7 @@ import urllib.request
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -65,6 +65,7 @@ from rich.progress import (
 from rich.table import Table
 
 from . import __version__, native_logs, runtime_introspection
+from .app_mutation import app_mutation_scope, assert_app_mutation_authority, guarded_app_manifest
 from .capacity_dashboard import CapacityResourceAdvice, capacity_vm_slots_text
 from .component_defaults import (
     default_target_paths,
@@ -258,6 +259,7 @@ from .infra_render import (
     is_portable_module_source,
     render_terraform_artifacts,
     rendered_module_sources,
+    rendered_soperator_observability_iam_instances,
 )
 from .inventory_ops import ssh_jump_access_hints, wireguard_access_command_hints, write_inventory
 from .managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
@@ -376,12 +378,15 @@ from .nfs_csi import (
 from .notify_ops import DeployReportEmailResult, send_deploy_report_email
 from .observability import (
     ensure_observability_app_rows,
+    kubernetes_observability_agent_selected,
     materialize_observability_app_values,
     materialize_observability_infra_values,
     observability_dependency_issues,
     observability_gpu_node_label_reconciliation,
     observability_validation_specs,
+    required_observability_app_target_refs,
     resolve_observability_app_selection,
+    soperator_target_refs,
 )
 from .observability_validation import (
     OBSERVABILITY_INGESTION_VALIDATION_KIND,
@@ -393,6 +398,17 @@ from .operation_config_authority import (
     assert_config_authority_current,
 )
 from .operation_maintenance import maintenance_reservation_recovery_action
+from .ordinary_apps import (
+    OrdinaryAppServices,
+    OrdinaryAppWorkflow,
+    ordinary_config,
+    preserve_ordinary_app_generation,
+    publish_ordinary_app_config,
+    render_ordinary_apps,
+    runtime_app_mutations,
+    validate_ordinary_app_scope,
+    validate_ordinary_bundle,
+)
 from .paths import (
     ProjectPaths,
     normalize_project_folder_name,
@@ -410,6 +426,7 @@ from .project_bundle_transaction import (
     ProjectBundleTransaction,
     recover_project_bundle,
 )
+from .project_creation import ProjectCreationServices, ProjectCreationWorkflow
 from .provider_options import (
     OptionChoice,
     ProviderOptionLookup,
@@ -440,6 +457,7 @@ from .render import (
     reset_generated_bundle,
     staged_generated_paths,
 )
+from .runtime_auth_identity import RuntimeIdentityVerifier
 from .runtime_config import read_path_with_catalog, to_plain_data
 from .runtime_introspection import (
     helm_chart_default_values,
@@ -510,9 +528,32 @@ from .soperator_artifacts import (
     soperator_cluster_artifact_identity_from_payload,
 )
 from .soperator_backup_runtime import (
-    ensure_soperator_backup_runtime_secrets,
-    soperator_backup_enabled_for_target,
+    preflight_soperator_backup_inputs,
 )
+from .soperator_checks import SoperatorChecksExecution
+from .soperator_checks_admission import diagnostic_partition_preimages
+from .soperator_checks_campaign import SoperatorCampaignChecks
+from .soperator_checks_campaign_release import CampaignChecksRelease
+from .soperator_checks_handoff import ChecksScheduleHandoff
+from .soperator_checks_lifecycle import ChecksLifecycle
+from .soperator_checks_maintenance import SoperatorChecksMaintenance
+from .soperator_checks_phase import ChecksPhaseContext
+from .soperator_checks_policy import (
+    apply_checks_proposal,
+    checks_proposal_changed,
+    compile_checks_policy,
+    freeze_checks_proposal,
+)
+from .soperator_checks_preflight import (
+    _preflight_soperator_checks,
+    _preflight_soperator_install_checks,
+    _preflight_soperator_upgrade_checks,
+    _rendered_soperator_upstream_values,
+    _soperator_checks_kubernetes_payload,
+    _soperator_checks_target_writers,
+    _soperator_upgrade_expected_static_slurm_nodes,
+)
+from .soperator_checks_source import SourceChecksMaintenance
 from .soperator_child_charts import (
     materialize_soperator_child_chart_values,
     soperator_child_chart_warnings,
@@ -530,7 +571,7 @@ from .soperator_config_materialization import (
     _external_mk8s_inputs_by_target,
     _mapping_path_value,
     _materialize_soperator_component_defaults,
-    _materialize_soperator_registered_runtime_mounts,
+    _materialize_soperator_nodeset_runtime_mounts,
     _materialize_soperator_render_only_values,
     _merge_replace_mapping,
     _non_empty_text,
@@ -587,6 +628,7 @@ from .soperator_flux_graph import target_soperator_release_name
 from .soperator_full_stack_upgrade import (
     CampaignConfigTransitionStore,
     CampaignControllerSpoolMigrationStore,
+    CampaignMainWorkloadAuthority,
     CampaignSegmentResult,
     FrozenCompatibilityRow,
     FrozenNodeGroupTarget,
@@ -596,8 +638,10 @@ from .soperator_full_stack_upgrade import (
     build_campaign_intent,
     campaign_intent_from_payload,
     campaign_receipt_path,
+    campaign_validation_target,
     final_node_group_capacity_snapshot,
     load_campaign_receipt,
+    record_campaign_maintenance_event,
     record_campaign_supervisor_state,
     resolve_kubernetes_upgrade_path,
     run_campaign,
@@ -614,7 +658,60 @@ from .soperator_infrastructure_identity import (
 from .soperator_infrastructure_identity import (
     soperator_local_sfs_kubernetes_bindings as _soperator_local_sfs_kubernetes_bindings,
 )
+from .soperator_install_checks_repair import (
+    prepare_install_input_repair,
+    terminate_admitted_wait_hook,
+)
+from .soperator_install_docker_drains import InstallDockerDrainRecovery
+from .soperator_install_docker_recovery import close_docker_repair_reservation
+from .soperator_install_docker_repair import docker_reservation_handoff
+from .soperator_install_gpu_repair import gpu_maintenance_reservation_handoff
 from .soperator_install_lease import SoperatorInstallLocalLock, SoperatorInstallRemoteLease
+from .soperator_install_policy import (
+    app_ids_on_soperator_targets,
+)
+from .soperator_install_progress import (
+    install_phase,
+    install_progress_active,
+    install_progress_scope,
+    install_progress_step,
+)
+from .soperator_install_recovery import (
+    archive_failed_receipt,
+    failed_infrastructure_receipt,
+    recovery_provenance,
+    refresh_install_terraform_root,
+    validate_recovery_archive,
+    validate_recovery_plan,
+)
+from .soperator_install_render_repair import (
+    CHECKS_REPAIR_REASON as INSTALL_CHECKS_REPAIR_REASON,
+)
+from .soperator_install_render_repair import (
+    COLLECTOR_REPAIR_REASON,
+    CPU_MASK_REPAIR_REASON,
+    DOCKER_REPAIR_REASON,
+    GPU_MAINTENANCE_REPAIR_REASON,
+    INPUT_REPAIR_EVIDENCE_KEYS,
+    INPUT_REPAIR_RELEASE_KEYS,
+    LOGIN_REPAIR_REASON,
+    RUNTIME_REPAIR_REASON,
+    STORAGE_REPAIR_REASON,
+    TOPOLOGY_REPAIR_REASON,
+    USERNS_REPAIR_REASON,
+)
+from .soperator_install_render_repair import (
+    REPAIR_REASON as INSTALL_DASHBOARD_REPAIR_REASON,
+)
+from .soperator_install_render_repair import (
+    REST_REPAIR_REASON as INSTALL_REST_REPAIR_REASON,
+)
+from .soperator_install_runtime_recovery import InstallRuntimeRecovery
+from .soperator_install_runtime_repair import runtime_reservation_handoff
+from .soperator_install_storage_recovery import InstallStorageRecovery
+from .soperator_install_storage_repair import storage_reservation_handoff
+from .soperator_install_userns_recovery import close_userns_repair_reservation
+from .soperator_install_userns_repair import userns_reservation_handoff
 from .soperator_jail_mounts import (
     JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS,
     apply_jail_persistent_mount_values,
@@ -709,10 +806,14 @@ from .soperator_release import (
     resolve_soperator_release,
     soperator_release_snapshot_path,
 )
-from .soperator_release_artifacts import verify_soperator_release_artifacts
+from .soperator_release_artifacts import (
+    verify_soperator_release_artifacts,
+)
 from .soperator_release_ownership import (
+    OwnershipCommandRunner,
     SourceParentWriter,
     SourceReleaseOwnership,
+    capture_source_parent_writer,
     capture_source_release_ownership,
     quiesce_source_release_ownership,
     restore_source_release_ownership,
@@ -741,6 +842,9 @@ from .soperator_release_resolver import (
 from .soperator_release_source import ensure_soperator_release_source
 from .soperator_rootfs_manifest import RootfsManifest
 from .soperator_rootfs_transition import plan_soperator_rootfs_transition
+from .soperator_runtime_prerequisites import (
+    ensure_soperator_runtime_before_flux as _ensure_soperator_runtime_before_flux,
+)
 from .soperator_slurm_recovery import (
     SOPERATOR_SLURM_RECOVERY_SCHEMA,
     SlurmRecoveryDisposition,
@@ -752,6 +856,7 @@ from .soperator_slurm_recovery import (
     validate_slurm_recovery_actions,
 )
 from .soperator_spool_migration import SoperatorControllerSpoolMigration
+from .soperator_sssd_runtime import preflight_soperator_sssd_inputs
 from .soperator_status import (
     SoperatorLiveStatusContext,
     read_soperator_completed_upgrade_evidence,
@@ -785,6 +890,16 @@ from .soperator_validation import (
     soperator_acceptance_smoke_specs,
     soperator_cluster_validation_specs,
 )
+from .soperator_values import (
+    EXPLICIT_VALUES_FIELD,
+    mark_explicit_value,
+    read_soperator_values_file,
+    validate_frozen_input,
+    value_pointer,
+)
+from .soperator_values import (
+    explicit_values as soperator_explicit_values,
+)
 from .ssh_jumphost import (
     SshJumphostAllowedCidrRequest,
     normalize_allowed_cidr_csv,
@@ -815,6 +930,7 @@ from .terraform_ops import (
     terraform_output_json,
     terraform_output_raw,
     terraform_plan,
+    terraform_provider_schema_json,
     terraform_show_json,
     terraform_state_list,
     terraform_state_show,
@@ -926,16 +1042,8 @@ _GENERIC_SOPERATOR_LIFECYCLE_COMMAND: ContextVar[str | None] = ContextVar(
     "generic_soperator_lifecycle_command",
     default=None,
 )
-_SOPERATOR_INSTALL_PROFILE_OVERRIDE: ContextVar[str | None] = ContextVar(
-    "soperator_install_profile_override",
-    default=None,
-)
 _SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE: ContextVar[Any | None] = ContextVar(
     "soperator_release_snapshot_override",
-    default=None,
-)
-_SOPERATOR_INSTALL_CONFIG_RESULT: ContextVar[Path | None] = ContextVar(
-    "soperator_install_config_result",
     default=None,
 )
 _SOPERATOR_UPGRADE_JOB_PROMPT_PAUSE: ContextVar[Callable[[], Any] | None] = ContextVar(
@@ -2111,6 +2219,7 @@ PayloadPath = tuple[str | int, ...]
 _MAX_COLLECT_LEAF_DEPTH = 128
 _TEMP_PRIVATE_KEY_FILES: list[Path] = []
 _RUNTIME_SERVICE_ACCOUNT_NAME = "nebius-cxcli-sa"
+_RUNTIME_SERVICE_ACCOUNT_ROLE = "admin"
 _MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME = "mysterybox-sa"
 _RUNTIME_AUTH_CACHE_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_DIR"
 _RUNTIME_AUTH_CACHE_FILE = "runtime-auth.json"
@@ -2172,6 +2281,7 @@ _SOPERATOR_WORKER_NODE_GROUP_CONTROL_PROMPT_FIELDS = (
     (("autoscaling", "enabled"), "bool"),
     (("autoscaling", "min_node_count"), "number"),
     (("autoscaling", "max_node_count"), "number"),
+    (("ephemeral_nodes", "enabled"), "bool"),
 )
 _SOPERATOR_WORKER_BULK_SCOPE_LABELS = {
     "all_cpu_worker_shards": "all CPU worker shards",
@@ -3473,6 +3583,10 @@ def _upgrade_node_group_blank_prompt_text(path_prefix: str) -> str:
 def _command_status(message: str, *, enabled: bool = True) -> Iterator[None]:
     if not enabled:
         yield
+        return
+    if install_progress_active():
+        with install_phase("configuration", message):
+            yield
         return
     if getattr(console, "is_terminal", False) and hasattr(console, "status"):
         with console.status(message, spinner="dots"):
@@ -6327,42 +6441,6 @@ def _soperator_upgrade_slurm_nodes_for_rollout(
     )
 
 
-def _soperator_upgrade_expected_static_slurm_nodes(
-    values: Mapping[str, Any],
-) -> tuple[str, ...]:
-    """Derive the exact Slurm node names rendered by upstream static NodeSets."""
-
-    nodesets_chart = values.get("nodesets")
-    nodesets_overrides = (
-        nodesets_chart.get("overrideValues") if isinstance(nodesets_chart, Mapping) else None
-    )
-    nodesets = (
-        nodesets_overrides.get("nodesets") if isinstance(nodesets_overrides, Mapping) else None
-    )
-    if not isinstance(nodesets, list):
-        return ()
-    expected: list[str] = []
-    for index, item in enumerate(nodesets):
-        if not isinstance(item, Mapping):
-            raise RuntimeError(f"Soperator NodeSet values[{index}] must be a mapping")
-        name = _non_empty_text(item.get("name"))
-        if not name:
-            raise RuntimeError(f"Soperator NodeSet values[{index}] has no name")
-        replicas = item.get("replicas")
-        if isinstance(replicas, bool):
-            raise RuntimeError(f"Soperator NodeSet {name!r} has an invalid replica count")
-        try:
-            replica_count = int(replicas)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"Soperator NodeSet {name!r} has an invalid replica count") from exc
-        if replica_count <= 0:
-            raise RuntimeError(f"Soperator NodeSet {name!r} must have at least one replica")
-        expected.extend(f"{name}-{ordinal}" for ordinal in range(replica_count))
-    if len(expected) != len(set(expected)):
-        raise RuntimeError("Soperator NodeSet values render duplicate Slurm node names")
-    return tuple(expected)
-
-
 def _verify_soperator_upgrade_slurm_worker_registration(
     *,
     namespace: str,
@@ -7928,7 +8006,16 @@ def _verify_helm_chart_upgrade_ready(
             f"Cannot verify Helm chart upgrade for {plan.target.selector}: "
             f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
         )
-    _ensure_terraform_backend_ready(config)
+    ordinary = _payload_has_soperator_lifecycle(config)
+    if ordinary:
+        baseline = validate_ordinary_bundle(paths, manifest)
+        identity = baseline.get("identities", {}).get(plan.target.target_ref, {})
+        if not identity.get("cluster_id") or not identity.get("kubernetes_uid"):
+            raise RuntimeError("Helm readiness target has no accepted cluster identity")
+        target = {**target, "cluster_id": identity["cluster_id"]}
+        target.pop("kube_context", None)
+    else:
+        _ensure_terraform_backend_ready(config)
     with ExitStack() as stack:
         kube_env = _prepare_cluster_handoff_kube_env(
             config,
@@ -7937,7 +8024,16 @@ def _verify_helm_chart_upgrade_ready(
             target=target,
             persist_local_kubeconfig=False,
             set_current_context=False,
+            allow_terraform_output=not ordinary,
         )
+        if ordinary and (
+            not kube_env
+            or _read_kube_system_namespace_uid(
+                kube_context=kube_env.get(GRAFANA_TARGET_KUBE_CONTEXT_ENV, ""), extra_env=kube_env
+            )
+            != identity["kubernetes_uid"]
+        ):
+            raise RuntimeError("Helm readiness handoff changed cluster identity")
         result = verify_helm_chart_ready(
             command_runner=SubprocessHelmCommandRunner(extra_env=kube_env),
             release_name=plan.release_name,
@@ -9232,6 +9328,17 @@ def _execute_node_template_upgrade(
                 skip_validations=skip_validations,
                 skip_kinds=skip_kinds,
             )
+            if (
+                campaign_validation_target(
+                    _SOPERATOR_PARENT_CONFIG_TRANSITION_STORE.get(),
+                    owner=_SOPERATOR_PARENT_CONFIG_TRANSITION_OWNER.get(),
+                )
+                == target.instance_id
+            ):
+                console.print(
+                    "Soperator graph readiness belongs to the parent campaign after its "
+                    "immutable source refresh; node and GPU validation runs for this group."
+                )
             if validations:
                 _run_deploy_validations(
                     validations,
@@ -9520,7 +9627,7 @@ def _run_target_upgrade_validations(
     target_ref: str,
     kube_env: Mapping[str, str],
     skip_kinds: set[str] | None = None,
-    gpu_node_groups: Mapping[str, Sequence[str]] | None = None,
+    gpu_node_groups: Mapping[str, str] | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     _generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
     validations = _filter_validations_for_target(
@@ -9535,13 +9642,18 @@ def _run_target_upgrade_validations(
     ]
     validation_run_id = secrets.token_hex(12)
     validations = []
-    scoped_gpu_groups = {
-        _non_empty_text(group): tuple(
-            dict.fromkeys(_non_empty_text(alias) for alias in aliases if _non_empty_text(alias))
-        )
-        for group, aliases in (gpu_node_groups or {}).items()
-        if _non_empty_text(group)
-    }
+    scoped_gpu_groups: dict[str, str] = {}
+    for group, provider_id in (gpu_node_groups or {}).items():
+        if (
+            not _non_empty_text(group)
+            or not isinstance(provider_id, str)
+            or not provider_id.strip()
+        ):
+            raise SoperatorSafetyPauseError(
+                "Soperator GPU validation requires each group's frozen provider ID.",
+                code="gpu-node-group-identity-missing",
+            )
+        scoped_gpu_groups[group.strip()] = provider_id.strip()
     visibility_specs = [
         validation
         for validation in selected_validations
@@ -9580,9 +9692,10 @@ def _run_target_upgrade_validations(
             attempt_validation["report_file"] = str(attempt_report)
             validations.append(attempt_validation)
             continue
-        for group, aliases in scoped_gpu_groups.items():
+        for group, provider_id in scoped_gpu_groups.items():
             scoped = dict(validation)
-            scoped["node_groups"] = list(aliases)
+            scoped.pop("node_groups", None)
+            scoped["node_group_ids"] = [provider_id]
             scoped["name"] = f"{_non_empty_text(validation.get('name'))} ({group})"
             token = hashlib.sha256(group.encode("utf-8")).hexdigest()[:10]
             scoped_report = attempt_report.with_name(
@@ -11659,6 +11772,7 @@ def _soperator_install_plan_material(
     terraform_plan_path: Path,
     target_ref: str,
     plan_generation: str | None = None,
+    recovery: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     material = _soperator_install_plan_authority(
         config_path=config_path,
@@ -11670,6 +11784,8 @@ def _soperator_install_plan_material(
     if not isinstance(inputs, dict):  # pragma: no cover - internal invariant
         raise RuntimeError("Soperator install plan inputs are invalid")
     inputs["terraformPlanSha256"] = _sha256_file(terraform_plan_path)
+    if recovery is not None:
+        inputs["recovery"] = dict(recovery)
     material["planGeneration"] = plan_generation or ("sha256:" + secrets.token_hex(32))
     material["status"] = "planned"
     material["approvalFingerprint"] = _soperator_install_approval_fingerprint(material)
@@ -11763,22 +11879,34 @@ def _plan_soperator_install(
     manifest: Mapping[str, Any],
     target_ref: str,
 ) -> tuple[Path, Path, dict[str, Any]]:
+    target = next(
+        item for item in _manifest_deploy_targets(manifest) if item["target_ref"] == target_ref
+    )
+    target_paths = _paths_for_target_flux_dir(paths, target)
+    snapshot = load_soperator_release_snapshot(
+        soperator_release_snapshot_path(paths.reports_dir, target_ref)
+    )
+    source = ensure_soperator_release_source(snapshot)
+    verify_soperator_release_artifacts(
+        snapshot, source, values=_rendered_soperator_upstream_values(target_paths.flux_dir)
+    )
     mysterybox_payload_env = _run_deploy_preflight(config, paths, manifest=manifest)
     runtime_env = _terraform_runtime_env(config)
     runtime_env.update(mysterybox_payload_env)
     terraform_plan_path, receipt_path = _soperator_install_plan_paths(paths)
-    terraform_plan(
-        paths.infra_dir,
-        extra_env=runtime_env,
-        initialize=False,
-        plan_file=terraform_plan_path,
-    )
-    plan_json = terraform_show_json(
-        paths.infra_dir,
-        extra_env=runtime_env,
-        initialize=False,
-        plan_file=terraform_plan_path,
-    )
+    with install_phase("terraform-plan", "Planning the Soperator infrastructure"):
+        terraform_plan(
+            paths.infra_dir,
+            extra_env=runtime_env,
+            initialize=False,
+            plan_file=terraform_plan_path,
+        )
+        plan_json = terraform_show_json(
+            paths.infra_dir,
+            extra_env=runtime_env,
+            initialize=False,
+            plan_file=terraform_plan_path,
+        )
     _validate_soperator_install_terraform_plan_scope(config, plan_json)
     receipt = _soperator_install_plan_material(
         config_path=paths.config_path,
@@ -11822,10 +11950,12 @@ def _validate_soperator_install_replan_receipt(
     execution_markers = tuple(
         marker for marker in _SOPERATOR_INSTALL_EXECUTION_MARKERS if marker in raw
     )
-    if raw.get("status") != "planned" or execution_markers:
+    failed_infra = failed_infrastructure_receipt(raw)
+    if not failed_infra and (raw.get("status") != "planned" or execution_markers):
         detail = ", ".join(execution_markers) or str(raw.get("status") or "unknown status")
         raise RuntimeError(
-            "Soperator install --replan is allowed only for a never-executed saved plan; "
+            "Soperator install --replan requires a never-executed saved plan or a failed "
+            "infrastructure apply without an infrastructure completion checkpoint; "
             f"the receipt contains execution evidence: {detail}."
         )
     plan_generation = _non_empty_text(raw.get("planGeneration"))
@@ -11838,7 +11968,8 @@ def _validate_soperator_install_replan_receipt(
             r"sha256:[0-9a-f]{64}",
             _non_empty_text(raw_inputs.get("terraformPlanSha256")),
         )
-        or raw.get("approvalFingerprint") != _soperator_install_approval_fingerprint(raw)
+        or raw.get("approvalFingerprint")
+        != _soperator_install_approval_fingerprint({**raw, "status": "planned"})
     ):
         raise RuntimeError("The saved Soperator install plan receipt is invalid.")
 
@@ -11862,6 +11993,17 @@ def _validate_soperator_install_replan_receipt(
             "The saved Soperator install plan authority no longer matches the saved "
             "project, target, configuration, generated manifest, or frozen release."
         )
+    if "recovery" in raw_inputs:
+        validate_recovery_archive(paths.reports_dir, raw_inputs["recovery"])
+    if failed_infra or "recovery" in raw_inputs:
+        _require_owner_only_soperator_install_plan(terraform_plan_path)
+        if (
+            not terraform_plan_path.exists()
+            or _sha256_file(terraform_plan_path) != raw_inputs["terraformPlanSha256"]
+        ):
+            raise RuntimeError(
+                "Failed install recovery requires the exact previously approved Terraform plan"
+            )
     return terraform_plan_path, receipt_path, raw
 
 
@@ -11999,9 +12141,30 @@ def _replan_soperator_install(
             "from the current saved authority."
         )
 
+    if failed_infrastructure_receipt(current_receipt):
+        archive_failed_receipt(paths.reports_dir, current_receipt)
+        with install_phase("render", "Refreshing failed-install Terraform root wiring"):
+            refresh_install_terraform_root(config, paths, manifest)
+        if (
+            _validate_soperator_install_replan_receipt(
+                config=config, paths=paths, manifest=manifest, target_ref=target_ref
+            )[2]
+            != current_receipt
+        ):
+            raise RuntimeError("Saved install authority changed during root refresh")
+
     mysterybox_payload_env = _run_deploy_preflight(config, paths, manifest=manifest)
     runtime_env = _terraform_runtime_env(config)
     runtime_env.update(mysterybox_payload_env)
+    previous_plan = None
+    recovery = current_receipt.get("inputs", {}).get("recovery")
+    if failed_infrastructure_receipt(current_receipt) or recovery is not None:
+        previous_plan = terraform_show_json(
+            paths.infra_dir,
+            extra_env=runtime_env,
+            initialize=False,
+            plan_file=terraform_plan_path,
+        )
     paths.infra_dir.mkdir(parents=True, exist_ok=True)
     descriptor, raw_candidate_path = tempfile.mkstemp(
         prefix=f".{terraform_plan_path.name}.",
@@ -12011,26 +12174,54 @@ def _replan_soperator_install(
     os.close(descriptor)
     candidate_plan_path = Path(raw_candidate_path)
     try:
-        terraform_plan(
-            paths.infra_dir,
-            extra_env=runtime_env,
-            initialize=False,
-            plan_file=candidate_plan_path,
+        with install_phase("plan", "Refreshing the saved Terraform install plan"):
+            terraform_plan(
+                paths.infra_dir,
+                extra_env=runtime_env,
+                initialize=False,
+                plan_file=candidate_plan_path,
+            )
+            plan_json = terraform_show_json(
+                paths.infra_dir,
+                extra_env=runtime_env,
+                initialize=False,
+                plan_file=candidate_plan_path,
+            )
+        if previous_plan is not None:
+            provider_schema = terraform_provider_schema_json(paths.infra_dir, extra_env=runtime_env)
+            if failed_infrastructure_receipt(current_receipt):
+                allowed_permits = frozenset(
+                    address
+                    for address in rendered_soperator_observability_iam_instances(
+                        config,
+                        rendered_module_sources(
+                            config, source_profile=resolve_component_sources_profile()
+                        ),
+                    )
+                    if address.startswith("nebius_iam_v1_access_permit.")
+                )
+                recovery = recovery_provenance(
+                    current_receipt,
+                    previous_plan,
+                    plan_json,
+                    allowed_new_access_permits=allowed_permits,
+                    provider_schema=provider_schema,
+                )
+            else:
+                validate_recovery_plan(previous_plan, plan_json, provider_schema=provider_schema)
+        _validate_soperator_install_terraform_plan_scope(
+            config, plan_json, allow_unchanged_infrastructure=recovery is not None
         )
-        plan_json = terraform_show_json(
-            paths.infra_dir,
-            extra_env=runtime_env,
-            initialize=False,
-            plan_file=candidate_plan_path,
-        )
-        _validate_soperator_install_terraform_plan_scope(config, plan_json)
         receipt = _soperator_install_plan_material(
             config_path=paths.config_path,
             paths=paths,
             manifest=manifest,
             terraform_plan_path=candidate_plan_path,
             target_ref=target_ref,
+            recovery=recovery,
         )
+        if failed_infrastructure_receipt(current_receipt):
+            archive_failed_receipt(paths.reports_dir, current_receipt)
         _publish_soperator_install_replan(
             candidate_plan_path=candidate_plan_path,
             terraform_plan_path=terraform_plan_path,
@@ -12046,6 +12237,8 @@ def _replan_soperator_install(
 def _validate_soperator_install_terraform_plan_scope(
     config: Any,
     plan: Mapping[str, Any],
+    *,
+    allow_unchanged_infrastructure: bool = False,
 ) -> None:
     module_sources = rendered_module_sources(
         config,
@@ -12076,6 +12269,7 @@ def _validate_soperator_install_terraform_plan_scope(
             "Soperator install Terraform scope is missing required infrastructure "
             "components: " + ", ".join(missing_components)
         )
+    allowed_root_instances = rendered_soperator_observability_iam_instances(config, module_sources)
     raw_changes = plan.get("resource_changes")
     if not isinstance(raw_changes, list):
         raise RuntimeError("Saved Soperator Terraform plan has no resource_changes inventory")
@@ -12094,7 +12288,7 @@ def _validate_soperator_install_terraform_plan_scope(
         module_match = re.match(r"^module\.([A-Za-z_][A-Za-z0-9_]*)\.", address)
         module_name = module_match.group(1) if module_match else ""
         component_id = allowed.get(module_name)
-        if not component_id:
+        if not component_id and address not in allowed_root_instances:
             raise RuntimeError(
                 "Soperator install Terraform plan would mutate an address outside its "
                 f"MK8s/SFS ownership closure: {address or '<missing>'}"
@@ -12109,14 +12303,16 @@ def _validate_soperator_install_terraform_plan_scope(
                 f"Soperator install Terraform plan has unsupported actions for {address}: "
                 + ", ".join(sorted(action_set))
             )
-        changed_components.add(component_id)
-    if not changed_components:
+        if component_id:
+            changed_components.add(component_id)
+    if not changed_components and not allow_unchanged_infrastructure:
         raise RuntimeError(
             "Soperator install Terraform plan contains no MK8s or SFS changes. Refusing "
             "to treat an existing infrastructure state as a fresh installation."
         )
 
 
+@install_progress_step("saved-plan", "Verifying the saved install plan")
 def _load_soperator_install_plan(
     *,
     config: Any,
@@ -12145,6 +12341,10 @@ def _load_soperator_install_plan(
     plan_generation = _non_empty_text(raw.get("planGeneration"))
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", plan_generation):
         raise RuntimeError("The saved Soperator install plan receipt is invalid.")
+    raw_inputs = raw.get("inputs")
+    recovery = None
+    if isinstance(raw_inputs, Mapping) and "recovery" in raw_inputs:
+        recovery = validate_recovery_archive(paths.reports_dir, raw_inputs["recovery"])
     expected = _soperator_install_plan_material(
         config_path=paths.config_path,
         paths=paths,
@@ -12152,6 +12352,7 @@ def _load_soperator_install_plan(
         terraform_plan_path=terraform_plan_path,
         target_ref=target_ref,
         plan_generation=plan_generation,
+        recovery=recovery,
     )
     for key in ("operationId", "target", "inputs", "release", "approvalFingerprint"):
         if raw.get(key) != expected.get(key):
@@ -12176,15 +12377,17 @@ def _soperator_install_execution_lease(
     _ensure_terraform_backend_ready(config)
     settings = backend_settings_from_config(config)
     local_lock = paths.project_dir / ".nebius-cxcli" / "soperator-install.lock"
-    with (
-        SoperatorInstallLocalLock(local_lock),
-        SoperatorInstallRemoteLease(
-            settings=settings,
-            target_ref=target_ref,
-            operation_id=operation_id,
-        ) as lease,
-    ):
-        lease.assert_held()
+    with ExitStack() as stack:
+        with install_phase("install-lease", "Acquiring the install execution lease"):
+            stack.enter_context(SoperatorInstallLocalLock(local_lock))
+            lease = stack.enter_context(
+                SoperatorInstallRemoteLease(
+                    settings=settings,
+                    target_ref=target_ref,
+                    operation_id=operation_id,
+                )
+            )
+            lease.assert_held()
         yield lease
 
 
@@ -12643,6 +12846,12 @@ def _register_existing_soperator_target(
             SoperatorOnboardConfigTarget.bootstrap_marker_path(config_path).unlink(missing_ok=True)
         load_config(config_path, persist_normalized=False)
         _run_internal_render_command(config_path, force=True)
+        accept_ordinary_app_baseline(
+            resolve_project_paths(config_path),
+            identities={
+                target_ref: {"cluster_id": normalized_cluster_id, "kubernetes_uid": kubernetes_uid}
+            },
+        )
 
     discovery_path = write_source_soperator_discovery_report(
         config_path.parent,
@@ -12984,14 +13193,22 @@ def _format_soperator_full_stack_campaign_plan(
         "- Partition Policy: pause-all-active (required)",
         f"- Slurm job policy: {intent.job_policy}",
         "- campaign segments: " + ", ".join(intent.segments),
-        "- maintenance: one durable all-active-partition pause from the first mutation "
-        "through final product readiness",
+        "- maintenance: retain the reservation through fresh acceptance; keep ordinary "
+        "scheduling closed until desired checks are restored and admission is authorized",
         "- hardware migration: excluded; use migrate node-group for platform, preset, "
         "GPU-cluster, reservation, or fabric changes",
         "- compatibility source: Nebius API (OS and Nebius drivers preset; the API does "
         "not report an exact NVIDIA driver build)",
         "- frozen provider compatibility:",
     ]
+    if intent.checks_policy_proposal:
+        lines[-1:-1] = [
+            "- upstream checks: pause active diagnostics and reviewed passive diagnostics "
+            "during isolated maintenance; preserve operational hooks and the selected job policy"
+        ]
+        lines[-1:-1] = [
+            "  - " + change for change in json.loads(intent.checks_policy_proposal)["changes"]
+        ]
     table_rows: list[tuple[str, ...]] = [
         (
             "group",
@@ -13194,6 +13411,13 @@ def soperator_install_command(
         str | None,
         typer.Option("--profile", help="Worker topology: cpu, gpu, or mixed."),
     ] = None,
+    values_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--values-file",
+            help="Values-only YAML for fresh Soperator install; wizard answers may override it. Not accepted with --resume.",
+        ),
+    ] = None,
     release: Annotated[
         str | None,
         typer.Option(
@@ -13256,7 +13480,7 @@ def soperator_install_command(
         typer.Option(
             "--replan",
             help=(
-                "With --resume --dry-run, replace a stale, never-executed saved plan and "
+                "With --resume --dry-run, refresh a never-executed or failed infrastructure plan and "
                 "approval fingerprint."
             ),
         ),
@@ -13285,6 +13509,7 @@ def soperator_install_command(
                 ("--region-id", region_id is not None),
                 ("--email", email is not None),
                 ("--profile", profile is not None),
+                ("--values-file", values_file is not None),
                 ("--network-id", network_ids is not None),
                 ("--subnet-id", subnet_ids is not None),
                 ("--network-ref", network_refs is not None),
@@ -13302,6 +13527,9 @@ def soperator_install_command(
             )
 
     try:
+        supplied_values = (
+            read_soperator_values_file(values_file) if values_file is not None else None
+        )
         resolved_profile_id = _soperator_install_profile_id(
             profile,
             non_interactive=not interactive and not resume,
@@ -13309,8 +13537,9 @@ def soperator_install_command(
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
     lifecycle_token = _SOPERATOR_LIFECYCLE_INTERNAL.set(True)
-    profile_token = _SOPERATOR_INSTALL_PROFILE_OVERRIDE.set(resolved_profile_id)
-    result_token = _SOPERATOR_INSTALL_CONFIG_RESULT.set(None)
+    install_progress = SoperatorUpgradeProgress(progress_console, prefix="Soperator install")
+    progress_context = install_progress_scope(install_progress)
+    progress_context.__enter__()
     snapshot_token = None
     frozen_context = None
     try:
@@ -13351,8 +13580,12 @@ def soperator_install_command(
                 interactive=interactive,
                 command_name="install",
                 option_name="--release",
+                progress=install_progress,
             )
-            frozen_release = freeze_soperator_release(normalized_release)
+            with install_phase("release", "Verifying the official Soperator release") as phase:
+                frozen_release = freeze_soperator_release(
+                    normalized_release, emit=phase.update if phase is not None else None
+                )
             frozen_context = use_frozen_soperator_release(frozen_release)
             frozen_context.__enter__()
             snapshot_token = _SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE.set(frozen_release.snapshot)
@@ -13361,7 +13594,7 @@ def soperator_install_command(
                     "A fresh Soperator install takes a deployments root. Use --resume with "
                     "an existing install-owned config.yaml."
                 )
-            create_command(
+            config_path = _create_project(
                 target_path=target_path,
                 client_name=client_name,
                 tenant_id=tenant_id,
@@ -13370,9 +13603,9 @@ def soperator_install_command(
                 email=email,
                 infra_components_opt=["mk8s", "sfs"],
                 apps_components_opt=[_SOPERATOR_APP_ID],
-                app_namespace_opt=None,
-                app_releasename_opt=None,
-                app_version_opt=frozen_release.snapshot.release,
+                soperator_release=frozen_release.snapshot,
+                soperator_profile=resolved_profile_id,
+                soperator_values=supplied_values,
                 network_ids_opt=network_ids,
                 subnet_ids_opt=subnet_ids,
                 network_refs_opt=network_refs,
@@ -13382,16 +13615,17 @@ def soperator_install_command(
                 no_interactive=not interactive,
                 force=force,
             )
-            config_path = _SOPERATOR_INSTALL_CONFIG_RESULT.get()
             if config_path is None:
-                raise RuntimeError("Soperator install did not produce a project config.yaml.")
+                return
 
         if not resume:
-            render_command(config_path=config_path, force=True)
+            with _suppress_render_deploy_hint():
+                render_command(config_path=config_path, force=True)
         config, paths, manifest = _load_deploy_context(config_path)
         if not _payload_has_enabled_soperator(config):
             raise RuntimeError("The install-owned config does not contain apps:soperator.")
         target_ref = _managed_soperator_install_target_ref(config, manifest)
+        _preflight_soperator_install_checks(paths, target_ref)
         replan_receipt: Mapping[str, Any] | None = None
         if replan:
             _terraform_plan_path, _receipt_path, replan_receipt = (
@@ -13463,6 +13697,12 @@ def soperator_install_command(
                     "bootstrapped, but no target infrastructure or Kubernetes resources were applied."
                 )
                 return
+            runtime_input_env: dict[str, str] = {}
+            if not plan.get("startedAt"):
+                preflight_soperator_backup_inputs(config, target_ref=target_ref, prompt=interactive)
+                runtime_input_env = preflight_soperator_sssd_inputs(
+                    config, target_ref=target_ref, prompt=interactive
+                )
             executing_plan = dict(plan)
             executing_plan["status"] = "executing"
             executing_plan["startedAt"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -13493,6 +13733,8 @@ def soperator_install_command(
                     on_terraform_complete=_mark_install_infrastructure_complete,
                     soperator_install_lease=install_lease,
                     soperator_install_approval_fingerprint=fingerprint,
+                    soperator_runtime_input_env=runtime_input_env,
+                    soperator_runtime_prompt=interactive,
                 )
                 install_lease.assert_held()
             except Exception as exc:
@@ -13502,6 +13744,7 @@ def soperator_install_command(
                 failed_plan["failureType"] = type(exc).__name__
                 _write_owner_only_json(receipt_path, failed_plan)
                 raise
+            accept_ordinary_app_baseline(paths, identities=summary.cluster_identities)
             completed_plan = dict(progress_plan)
             completed_plan["status"] = "complete"
             completed_plan["completedAt"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -13520,8 +13763,7 @@ def soperator_install_command(
             frozen_context.__exit__(None, None, None)
         if snapshot_token is not None:
             _SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE.reset(snapshot_token)
-        _SOPERATOR_INSTALL_CONFIG_RESULT.reset(result_token)
-        _SOPERATOR_INSTALL_PROFILE_OVERRIDE.reset(profile_token)
+        progress_context.__exit__(None, None, None)
         _SOPERATOR_LIFECYCLE_INTERNAL.reset(lifecycle_token)
 
 
@@ -14028,8 +14270,7 @@ def _apply_managed_soperator_destroy_plan(
     root_addresses = (
         f"nebius_iam_v1_group.{resource_name}",
         f"nebius_iam_v1_group_membership.{resource_name}",
-        f"nebius_iam_v1_access_permit.{resource_name}_metrics",
-        f"nebius_iam_v1_access_permit.{resource_name}_logs",
+        f"nebius_iam_v1_access_permit.{resource_name}",
     )
     targets = (f"module.{module_name}", *root_addresses)
     plan_path = paths.infra_dir / f".soperator-destroy-{target_ref}.tfplan"
@@ -15121,7 +15362,7 @@ def soperator_upgrade_command(
                         target=selected_target,
                         persist_local_kubeconfig=False,
                         set_current_context=False,
-                        allow_terraform_output=False,
+                        allow_terraform_output=not is_onboarded,
                         require_renewable_auth=True,
                     )
                     or {}
@@ -15398,6 +15639,9 @@ def soperator_upgrade_command(
                     provider_api_authorized=bool(execute and approve and is_onboarded),
                     require_mutation_authorization=execute,
                 )
+                checks_proposal = freeze_checks_proposal(
+                    _source_helm_chart_row(source_payload, target).get("values") or {}
+                )
                 intent = build_campaign_intent(
                     target_ref=target.target_ref,
                     ownership=infrastructure_authority.ownership,
@@ -15429,6 +15673,8 @@ def soperator_upgrade_command(
                     job_wait_timeout=job_wait_timeout,
                     job_refresh_interval=job_refresh_interval,
                     node_groups=node_groups,
+                    checks_policy_proposal=checks_proposal,
+                    checks_release_snapshot_sha256=frozen_release.snapshot.snapshot_sha256,
                     compatibility_rows=compatibility_rows,
                 )
 
@@ -15448,13 +15694,19 @@ def soperator_upgrade_command(
                     live_node_groups=raw_node_groups,
                 )
             )
-            if dry_run:
+            if dry_run or recovery_intent is None:
                 _run_common_soperator_release_upgrade(
                     config_path=config_path,
-                    source_payload=source_payload,
+                    source_payload=copy.deepcopy(source_payload),
                     target=target,
                     ownership=intent.ownership,
                     target_selector=intent.target_release,
+                    target_snapshot_sha256=intent.checks_release_snapshot_sha256,
+                    checks_policy_proposal=intent.checks_policy_proposal,
+                    external_scheduling_evidence={
+                        "mode": "parent-campaign",
+                        "requiresFreshChecks": intent.requires_fresh_checks,
+                    },
                     dry_run=True,
                     interactive=False,
                     job_policy=intent.job_policy,
@@ -15464,7 +15716,8 @@ def soperator_upgrade_command(
                     job_refresh_interval=intent.job_refresh_interval,
                     upgrade_progress=upgrade_progress,
                 )
-                return
+                if dry_run:
+                    return
             with ExitStack() as campaign_stack:
                 with upgrade_progress.phase(
                     "operation-authority",
@@ -15583,6 +15836,197 @@ def soperator_upgrade_command(
                             ) from exc
                     return lease_authority
 
+                campaign_checks: SoperatorCampaignChecks | None = None
+
+                def _campaign_checks() -> SoperatorCampaignChecks:
+                    nonlocal campaign_checks
+                    if campaign_checks is not None:
+                        return campaign_checks
+                    frozen = freeze_soperator_release(
+                        intent.target_release,
+                        snapshot_sha256=intent.checks_release_snapshot_sha256,
+                    )
+                    if frozen.snapshot.snapshot_sha256 != intent.checks_release_snapshot_sha256:
+                        raise RuntimeError(
+                            "campaign checks release snapshot changed after planning"
+                        )
+                    target_paths = _paths_for_target_flux_dir(paths, selected_target)
+
+                    def _kubernetes(
+                        args: list[str], document: Mapping[str, Any] | None
+                    ) -> Mapping[str, Any]:
+                        result = _run_soperator_upgrade_process(
+                            ["kubectl", "--context", kube_context, *args],
+                            input_text=json.dumps(document) if document is not None else None,
+                            extra_env=kube_env,
+                            timeout_seconds=120,
+                            check=True,
+                        )
+                        payload = _soperator_checks_kubernetes_payload(args, result.stdout)
+                        if not isinstance(payload, Mapping):
+                            raise RuntimeError("invalid campaign checks Kubernetes evidence")
+                        return payload
+
+                    def _slurm(command: str) -> str:
+                        return _run_soperator_upgrade_login_command(
+                            namespace,
+                            command,
+                            kube_context=kube_context,
+                            extra_env=kube_env,
+                            timeout_seconds=120,
+                        ).stdout
+
+                    def _load_target() -> Any:
+                        snapshot = load_soperator_release_snapshot(
+                            soperator_release_snapshot_path(paths.reports_dir, intent.target_ref)
+                        )
+                        if snapshot.snapshot_sha256 != frozen.snapshot.snapshot_sha256:
+                            raise RuntimeError("campaign checks target release identity changed")
+                        source = ensure_soperator_release_source(snapshot)
+                        values = _rendered_soperator_upstream_values(target_paths.flux_dir)
+                        policy = compile_checks_policy(Path(source.source_dir), values)
+                        workers = _soperator_upgrade_expected_static_slurm_nodes(values)
+                        gpu_workers = _soperator_upgrade_expected_static_slurm_nodes(
+                            {
+                                "nodesets": {
+                                    "overrideValues": {
+                                        "nodesets": [
+                                            row
+                                            for row in values.get("nodesets", {})
+                                            .get("overrideValues", {})
+                                            .get("nodesets", [])
+                                            if row.get("gpu", {}).get("enabled") is True
+                                        ]
+                                    }
+                                }
+                            }
+                        )
+                        return policy, workers, gpu_workers
+
+                    main_workload_authority = CampaignMainWorkloadAuthority(
+                        path=receipt_path,
+                        intent=intent,
+                        assert_authority=_assert_campaign_authority,
+                    )
+
+                    def _apply_target(policy: Any, context: ChecksPhaseContext) -> None:
+                        _assert_campaign_authority()
+                        apply_staged_soperator_release(
+                            target_paths,
+                            extra_env=kube_env,
+                            checks_policy=policy,
+                            checks_context=context,
+                            freeze_main_workload_authority=main_workload_authority.freeze,
+                            on_stage_progress=lambda current, total, names: console.print(
+                                f"Check policy stage {current}/{total}: " + ", ".join(names),
+                                markup=False,
+                            ),
+                        )
+
+                    def _recover_target_checks(target: SoperatorChecksExecution) -> object:
+                        from .soperator_checks_catchup_flux import recover_staged_checks
+
+                        return recover_staged_checks(
+                            target,
+                            paths=target_paths,
+                            source_dir=Path(frozen.source.source_dir),
+                            kube_context=kube_context,
+                            extra_env=kube_env,
+                            freeze_main_workload_authority=main_workload_authority.freeze,
+                            on_stage_progress=lambda current, total, names: console.print(
+                                f"Recovering check policy stage {current}/{total}: "
+                                + ", ".join(names),
+                                markup=False,
+                            ),
+                        )
+
+                    def _check_partition_preimages() -> tuple[SlurmPartitionPauseRecord, ...]:
+                        receipt = load_campaign_receipt(receipt_path)
+                        if receipt is None or receipt.intent_sha256 != intent.digest:
+                            raise RuntimeError("campaign checks maintenance receipt disappeared")
+                        snapshots = [
+                            row["partitions"]
+                            for row in receipt.maintenance_evidence.get("events", ())
+                            if row.get("action") == "partition-preimage"
+                        ]
+                        if len(snapshots) != 1:
+                            raise RuntimeError("campaign requires one complete partition preimage")
+                        return diagnostic_partition_preimages(snapshots[0])
+
+                    reservation_name = _soperator_upgrade_maintenance_reservation_name(
+                        intent.digest.removeprefix("sha256:")[:16]
+                    )
+
+                    def _checks_release_events() -> tuple[Mapping[str, Any], ...]:
+                        receipt = load_campaign_receipt(receipt_path)
+                        if receipt is None or receipt.intent_sha256 != intent.digest:
+                            raise RuntimeError("campaign checks release receipt changed")
+                        summary = receipt.maintenance_evidence.get("summary", {})
+                        if (
+                            summary.get("namespace") != namespace
+                            or summary.get("reservationName") != reservation_name
+                        ):
+                            raise RuntimeError("campaign checks release reservation scope changed")
+                        return tuple(receipt.maintenance_evidence.get("events", ()))
+
+                    def _observe_checks_release() -> Mapping[str, Any]:
+                        policy, _workers, _gpu_workers = _load_target()
+                        return (
+                            _campaign_checks()
+                            ._execution(policy, "target")
+                            ._reservation(reservation_name)
+                        )
+
+                    checks_release = CampaignChecksRelease(
+                        owner=intent.digest,
+                        reservation=reservation_name,
+                        load_events=_checks_release_events,
+                        record_event=lambda event: record_campaign_maintenance_event(
+                            path=receipt_path, intent=intent, event=event
+                        ),
+                        present=lambda: (
+                            reservation_name
+                            in _soperator_upgrade_reservation_names(
+                                namespace=namespace, extra_env=kube_env
+                            )
+                        ),
+                        observe=_observe_checks_release,
+                        delete=lambda: _soperator_upgrade_delete_maintenance_reservation(
+                            namespace=namespace,
+                            reservation_name=reservation_name,
+                            extra_env=kube_env,
+                        ),
+                        read_job=_campaign_job_control_record,
+                        authority=_assert_campaign_authority,
+                    )
+                    campaign_checks = SoperatorCampaignChecks(
+                        operation_id=intent.digest,
+                        reports_dir=paths.reports_dir,
+                        cluster_name=str(
+                            _rendered_soperator_upstream_values(target_paths.flux_dir)[
+                                "slurmCluster"
+                            ]["overrideValues"]["clusterName"]
+                        ),
+                        source_dir=Path(
+                            freeze_soperator_release(intent.source_release).source.source_dir
+                        ),
+                        kubernetes=_kubernetes,
+                        slurm=_slurm,
+                        assert_authority=_assert_campaign_authority,
+                        load_target=_load_target,
+                        apply_target=_apply_target,
+                        partition_preimages=_check_partition_preimages,
+                        target_writers=lambda: _soperator_checks_target_writers(
+                            target_paths.flux_dir
+                        ),
+                        reservation=reservation_name,
+                        release_maintenance=checks_release.release,
+                        verify_maintenance_released=checks_release.verify,
+                        recover_target=_recover_target_checks,
+                        emit=lambda message: console.print(message, markup=False),
+                    )
+                    return campaign_checks
+
                 def _enter_maintenance_impl(
                     record_event: Callable[[Mapping[str, Any]], None],
                     existing_evidence: Mapping[str, Any],
@@ -15604,6 +16048,27 @@ def soperator_upgrade_command(
                     def _record_entry(event: Mapping[str, Any]) -> None:
                         record_event(event)
                         events.append(dict(event))
+
+                    if intent.requires_fresh_checks:
+                        if not any(event.get("action") == "partition-preimage" for event in events):
+                            if events:
+                                raise RuntimeError(
+                                    "campaign admission has no original complete partition preimage"
+                                )
+                            _record_entry(
+                                {
+                                    "action": "partition-preimage",
+                                    "partitions": [
+                                        asdict(row)
+                                        for row in _soperator_upgrade_partition_state_snapshot(
+                                            namespace=namespace,
+                                            kube_context=kube_context,
+                                            extra_env=kube_env,
+                                        )
+                                    ],
+                                }
+                            )
+                        _campaign_checks().enter(_record_entry)
 
                     existing_records = _soperator_maintenance_pause_records(
                         tuple(event for event in events if isinstance(event, Mapping))
@@ -15922,6 +16387,8 @@ def soperator_upgrade_command(
                                 "reservation_present": reservation_present,
                             }
                         )
+                    if intent.requires_fresh_checks:
+                        _campaign_checks().pause_source_passive()
                     return {
                         "namespace": namespace,
                         "reservationName": reservation_name,
@@ -16014,6 +16481,9 @@ def soperator_upgrade_command(
                     )
 
                     def _assert_partitions_still_paused() -> None:
+                        if intent.requires_fresh_checks:
+                            _campaign_checks().verify_barrier()
+                            return
                         for record in records:
                             live = _soperator_upgrade_partition_state(
                                 namespace=namespace,
@@ -16033,6 +16503,38 @@ def soperator_upgrade_command(
                                     "until every operation-owned job hold is restored"
                                 )
 
+                    reservation_name = _non_empty_text(summary.get("reservationName"))
+                    if (
+                        intent.requires_fresh_checks
+                        and _has_event(
+                            "maintenance-reservation-delete-intent",
+                            reservation_name=reservation_name,
+                        )
+                        and not _has_event(
+                            "maintenance-reservation-delete-applied",
+                            reservation_name=reservation_name,
+                        )
+                        and reservation_name
+                        not in _soperator_upgrade_reservation_names(
+                            namespace=namespace, extra_env=kube_env
+                        )
+                    ):
+                        # The delete may have succeeded before its receipt write. Never
+                        # recreate a released barrier or require that absent barrier to
+                        # prove the already-completed diagnostic/restoration evidence.
+                        _campaign_checks().finalize(already_released=True)
+                        _record(
+                            "maintenance-reservation-delete-applied",
+                            reservation_name=reservation_name,
+                        )
+                    if intent.requires_fresh_checks and not _has_event(
+                        "maintenance-reservation-delete-applied",
+                        reservation_name=reservation_name,
+                    ):
+                        _campaign_checks().verify_handoff()
+
+                    if intent.requires_fresh_checks:
+                        _campaign_checks().authorize_admission()
                     released_job_count = 0
                     tombstone_count = 0
                     for held_record in held_records:
@@ -16146,6 +16648,8 @@ def soperator_upgrade_command(
                                 reservation_name=reservation_name,
                             )
                         campaign_lease.assert_held()
+                        if intent.requires_fresh_checks:
+                            _campaign_checks().verify_barrier()
                         _soperator_upgrade_delete_maintenance_reservation(
                             namespace=namespace,
                             reservation_name=reservation_name,
@@ -16156,54 +16660,58 @@ def soperator_upgrade_command(
                             reservation_name=reservation_name,
                         )
 
-                    restored_partition_count = 0
-                    for record in records:
-                        fingerprint = record.previous_record_fingerprint
-                        restored = _has_event(
-                            "maintenance-partition-restore-applied",
-                            partition=record.partition,
-                            previous_record_fingerprint=fingerprint,
-                        )
-                        if not restored:
-                            if not _has_event(
-                                "maintenance-partition-restore-intent",
-                                partition=record.partition,
-                                previous_record_fingerprint=fingerprint,
-                            ):
-                                _record(
-                                    "maintenance-partition-restore-intent",
-                                    partition=record.partition,
-                                    previous_record_fingerprint=fingerprint,
-                                )
-                            campaign_lease.assert_held()
-                            _soperator_upgrade_restore_slurm_partitions(
-                                namespace=namespace,
-                                records=(record,),
-                                kube_context=kube_context,
-                                extra_env=kube_env,
-                                allow_topology_migration=True,
-                            )
-                            _record(
+                    if intent.requires_fresh_checks:
+                        _campaign_checks().finish_admission()
+                        restored_partition_count = len(records)
+                    else:
+                        restored_partition_count = 0
+                        for record in records:
+                            fingerprint = record.previous_record_fingerprint
+                            restored = _has_event(
                                 "maintenance-partition-restore-applied",
                                 partition=record.partition,
                                 previous_record_fingerprint=fingerprint,
                             )
-                        live_partition = _soperator_upgrade_partition_state(
-                            namespace=namespace,
-                            partition=record.partition,
-                            kube_context=kube_context,
-                            extra_env=kube_env,
-                        )
-                        if not _soperator_upgrade_partition_migration_observation_matches(
-                            live_partition,
-                            record=record.previous_record,
-                            fingerprint=record.previous_record_fingerprint,
-                        ):
-                            raise RuntimeError(
-                                "recovery-required: Slurm partition restoration postcondition "
-                                f"is not exact for {record.partition}"
+                            if not restored:
+                                if not _has_event(
+                                    "maintenance-partition-restore-intent",
+                                    partition=record.partition,
+                                    previous_record_fingerprint=fingerprint,
+                                ):
+                                    _record(
+                                        "maintenance-partition-restore-intent",
+                                        partition=record.partition,
+                                        previous_record_fingerprint=fingerprint,
+                                    )
+                                campaign_lease.assert_held()
+                                _soperator_upgrade_restore_slurm_partitions(
+                                    namespace=namespace,
+                                    records=(record,),
+                                    kube_context=kube_context,
+                                    extra_env=kube_env,
+                                    allow_topology_migration=True,
+                                )
+                                _record(
+                                    "maintenance-partition-restore-applied",
+                                    partition=record.partition,
+                                    previous_record_fingerprint=fingerprint,
+                                )
+                            live_partition = _soperator_upgrade_partition_state(
+                                namespace=namespace,
+                                partition=record.partition,
+                                kube_context=kube_context,
+                                extra_env=kube_env,
                             )
-                        restored_partition_count += 1
+                            if not _soperator_upgrade_partition_migration_observation_matches(
+                                live_partition,
+                                record=record.previous_record,
+                                fingerprint=record.previous_record_fingerprint,
+                            ):
+                                raise RuntimeError(
+                                    "recovery-required: Slurm partition restoration postcondition "
+                                    f"is not exact for {record.partition}"
+                                )
+                            restored_partition_count += 1
 
                     if reservation_name in _soperator_upgrade_reservation_names(
                         namespace=namespace,
@@ -16232,6 +16740,8 @@ def soperator_upgrade_command(
                         target=target,
                         ownership=intent.ownership,
                         target_selector=intent.target_release,
+                        target_snapshot_sha256=intent.checks_release_snapshot_sha256,
+                        checks_policy_proposal=intent.checks_policy_proposal,
                         dry_run=False,
                         interactive=False,
                         job_policy=intent.job_policy,
@@ -16244,6 +16754,10 @@ def soperator_upgrade_command(
                             "mode": "parent-campaign",
                             "campaignIntentSha256": intent.digest,
                             "maintenanceOwner": "soperator-upgrade",
+                            "requiresFreshChecks": intent.requires_fresh_checks,
+                            "reservationName": _soperator_upgrade_maintenance_reservation_name(
+                                intent.digest.removeprefix("sha256:")[:16]
+                            ),
                         },
                         external_controller_spool_migration_store=(campaign_controller_spool_store),
                         config_transition_store=campaign_config_store,
@@ -16501,6 +17015,7 @@ def soperator_upgrade_command(
                                 target_flux_paths,
                                 extra_env=kube_env,
                                 emit=graph_progress.update,
+                                include_active_checks=not intent.requires_fresh_checks,
                             )
 
                     def _freeze_capacity() -> Mapping[str, Mapping[str, object]]:
@@ -16534,7 +17049,7 @@ def soperator_upgrade_command(
                             else set()
                         )
                         active_gpu_groups = {
-                            group.key: (group.provider_name, group.provider_id)
+                            group.key: group.provider_id
                             for group in intent.node_groups
                             if group.gpu and group.key in active_gpu_group_keys
                         }
@@ -16574,6 +17089,17 @@ def soperator_upgrade_command(
                         freeze_capacity=_freeze_capacity,
                         validate_runtime=_validate_runtime,
                     )
+                    checks_evidence: Mapping[str, Any] = {"status": "unchanged"}
+                    if intent.requires_fresh_checks:
+                        current = load_campaign_receipt(receipt_path)
+                        if current is None:
+                            raise RuntimeError("campaign checks receipt disappeared")
+                        checks_evidence = _campaign_checks().finalize(
+                            already_released=current.maintenance == "restored"
+                        )
+                        if _freeze_capacity() != post_validation_capacity:
+                            raise RuntimeError("campaign capacity changed during check acceptance")
+                        wait_for_soperator_release_graph(target_flux_paths, extra_env=kube_env)
                     if not isinstance(validation_result, tuple) or len(validation_result) != 5:
                         raise RuntimeError(
                             "Soperator final runtime validation returned invalid evidence"
@@ -16609,6 +17135,7 @@ def soperator_upgrade_command(
                             "finalCapacitySnapshot": post_validation_capacity,
                             "releaseSourceCount": len(source_receipts),
                             "releaseGraphReproved": True,
+                            "upstreamChecks": dict(checks_evidence),
                             "cudaLayers": {
                                 "providerGpuStack": [
                                     group.target_drivers_preset
@@ -16649,6 +17176,11 @@ def soperator_upgrade_command(
                                 enter_maintenance=_enter_maintenance,
                                 restore_maintenance=_restore_maintenance,
                                 assert_fence=_assert_campaign_fence,
+                                verify_maintenance=(
+                                    (lambda segment: _campaign_checks().before_segment(segment))
+                                    if intent.requires_fresh_checks
+                                    else None
+                                ),
                             )
                         except Exception as exc:
                             disposition = _soperator_upgrade_failure_disposition(
@@ -16721,6 +17253,16 @@ def soperator_upgrade_command(
                         on_retry=_report_parent_retry,
                         retry_wait=_parent_retry_wait,
                     )
+                    campaign_lease.assert_held()
+                    accept_ordinary_app_baseline(
+                        paths,
+                        identities={
+                            intent.target_ref: {
+                                "cluster_id": intent.cluster_id,
+                                "kubernetes_uid": intent.kubernetes_uid,
+                            }
+                        },
+                    )
                 finally:
                     _SOPERATOR_PARENT_OPERATION_LEASE.reset(parent_lease_token)
             console.print(
@@ -16746,21 +17288,6 @@ def _soperator_upgrade_flux_bundle_sha256(paths: ProjectPaths) -> str:
     return soperator_sha256(
         {str(path.relative_to(paths.flux_dir)): _sha256_file(path) for path in files}
     )
-
-
-def _rendered_soperator_upstream_values(flux_dir: Path) -> Mapping[str, Any]:
-    values_path = flux_dir / "configmap-terraform-fluxcd-values.yaml"
-    values_documents = list(yaml.safe_load_all(values_path.read_text(encoding="utf-8")))
-    if len(values_documents) != 1 or not isinstance(values_documents[0], Mapping):
-        raise ValueError("rendered Soperator values ConfigMap is invalid")
-    values_data = values_documents[0].get("data")
-    values_raw = values_data.get("values.yaml") if isinstance(values_data, Mapping) else None
-    if not isinstance(values_raw, str):
-        raise ValueError("rendered Soperator values ConfigMap has no values.yaml string")
-    soperator_values = yaml.safe_load(values_raw)
-    if not isinstance(soperator_values, Mapping):
-        raise ValueError("rendered Soperator values.yaml must be a mapping")
-    return soperator_values
 
 
 def _rendered_soperator_adapter_state(flux_dir: Path) -> Mapping[str, Any]:
@@ -17036,6 +17563,7 @@ def _render_soperator_upgrade_admission(
             output_path=manifest_path_for_generated_dir(staged_paths.generated_dir),
             manifest_paths=paths,
         )
+        preserve_ordinary_app_generation(paths, staged_paths)
         generation = build_project_generation_plan(
             final_paths=paths,
             staged_paths=staged_paths,
@@ -19506,10 +20034,10 @@ def _soperator_upgrade_scheduling_runtime_patch_is_exact(
     current_partition.update(copy.deepcopy(expected_partition))
     try:
         replacement_probe = {"nodesets": copy.deepcopy(replacement_nodesets)}
-        if _materialize_soperator_registered_runtime_mounts(replacement_probe):
+        if _materialize_soperator_nodeset_runtime_mounts(replacement_probe):
             return _fail("replacement-runtime-mounts")
         current_probe = {"nodesets": current_nodesets}
-        mounts_changed = _materialize_soperator_registered_runtime_mounts(current_probe)
+        mounts_changed = _materialize_soperator_nodeset_runtime_mounts(current_probe)
     except ValueError:
         return _fail("runtime-mount-collision")
     if not (changed and rollout_changed):
@@ -20763,6 +21291,8 @@ def _run_common_soperator_release_upgrade(
     requeue_job_ids: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    checks_policy_proposal: str = "",
+    target_snapshot_sha256: str | None = None,
     interactive: bool = False,
     supervise: bool = True,
     external_scheduling_evidence: Mapping[str, Any] | None = None,
@@ -20806,7 +21336,7 @@ def _run_common_soperator_release_upgrade(
             target=selected_target,
             persist_local_kubeconfig=False,
             set_current_context=False,
-            allow_terraform_output=False,
+            allow_terraform_output=ownership == "managed",
             require_renewable_auth=True,
         )
         if not kube_env:
@@ -20887,12 +21417,14 @@ def _run_common_soperator_release_upgrade(
                     frozen_target = freeze_soperator_release(
                         target_selector,
                         current_release=live_release,
+                        snapshot_sha256=target_snapshot_sha256,
                         emit=release_phase.update,
                     )
             else:
                 frozen_target = freeze_soperator_release(
                     target_selector,
                     current_release=live_release,
+                    snapshot_sha256=target_snapshot_sha256,
                 )
             operation_source_release = live_release
             _source_metadata, source_release_receipt, source_contract, source_capability_sha = (
@@ -20914,8 +21446,24 @@ def _run_common_soperator_release_upgrade(
                 )
             source_contract = release_intent.source_contract
             source_capability_sha = release_intent.source_capability_sha256
+        if (
+            target_snapshot_sha256 is not None
+            and frozen_target.snapshot.snapshot_sha256 != target_snapshot_sha256
+        ):
+            raise SoperatorSafetyPauseError("parent and child release snapshot identities differ")
         target_version = frozen_target.snapshot.release
         chart_row = _source_helm_chart_row(source_payload, target)
+        if EXPLICIT_VALUES_FIELD in chart_row:
+            validate_frozen_input(soperator_explicit_values(chart_row), frozen_target)
+        if not checks_policy_proposal:
+            if active_intent is not None:
+                raise RuntimeError("recovery-required: frozen checks policy proposal is missing")
+            checks_policy_proposal = freeze_checks_proposal(chart_row.get("values") or {})
+        chart_row["values"], check_changes = apply_checks_proposal(
+            chart_row.get("values") or {}, checks_policy_proposal
+        )
+        for change in check_changes:
+            console.print(f"Proposed upstream checks policy: {change}")
         target_values = chart_row.get("values")
         if not isinstance(target_values, Mapping):
             raise RuntimeError("Soperator upgrade requires chart values for rootfs authority")
@@ -20940,6 +21488,13 @@ def _run_common_soperator_release_upgrade(
             target_release=frozen_target.snapshot.release,
             source_contract=source_contract,
             target_contract=frozen_target.snapshot.capability_contract,
+            desired_state_changed=(
+                checks_proposal_changed(checks_policy_proposal)
+                or bool(
+                    external_scheduling_evidence
+                    and external_scheduling_evidence.get("requiresFreshChecks")
+                )
+            ),
         )
         if active_intent is not None and strategy.strategy.value != release_intent.strategy:
             raise RuntimeError(
@@ -21019,6 +21574,7 @@ def _run_common_soperator_release_upgrade(
                 "soperator status --verify-observability",
             ]
         )
+        _preflight_soperator_upgrade_checks(target_values, frozen_target)
         print_plan(plan_lines)
         if dry_run:
             return
@@ -21406,6 +21962,11 @@ def _run_common_soperator_release_upgrade(
                 raise RuntimeError("Soperator upgrade admission has no target chart values")
             admitted_upstream_values = _rendered_soperator_upstream_values(
                 admission_target_paths.flux_dir
+            )
+            _preflight_soperator_checks(
+                admitted_upstream_values,
+                source_dir=Path(admission_source_receipt.source_dir),
+                installing=False,
             )
             admission_artifacts = verify_soperator_release_artifacts(
                 frozen_target.snapshot,
@@ -22090,6 +22651,16 @@ def _run_common_soperator_release_upgrade(
                 manifest=manifest,
                 prompt_mysterybox_payload_values=False,
             )
+            if strategy.strategy is not SoperatorStrategy.NOOP:
+                _ensure_soperator_runtime_before_flux(
+                    generated_config,
+                    paths=target_paths,
+                    target_ref=target.target_ref,
+                    extra_env=kube_env,
+                    assert_authority=mutation_authority,
+                    prompt=_console_is_terminal(),
+                    emit=lambda message: console.print(message),
+                )
             if external_scheduling_evidence is not None:
                 operation_anchor = _apply_rendered_flux(
                     target_paths,
@@ -22187,6 +22758,16 @@ def _run_common_soperator_release_upgrade(
                 )
             mutation_authority()
             operation_anchor.complete()
+            if _SOPERATOR_PARENT_OPERATION_LEASE.get() is None:
+                accept_ordinary_app_baseline(
+                    paths,
+                    identities={
+                        target.target_ref: {
+                            "cluster_id": cluster_id,
+                            "kubernetes_uid": kubernetes_uid,
+                        }
+                    },
+                )
             complete_soperator_release_intent(
                 paths=target_paths,
                 target_ref=target.target_ref,
@@ -22259,7 +22840,13 @@ def _run_helm_chart_upgrade_command(
             + ". Pass explicit upgrade options or allow interactive prompting."
         )
 
-    source_payload = _load_source_payload(config_path)
+    _read_config_payload(config_path)
+    source_preimage = config_path.read_bytes()
+    source_payload = yaml.safe_load(source_preimage)
+    if _payload_has_soperator_lifecycle(source_payload):
+        validate_ordinary_app_scope(resolve_deploy_config_paths(config_path))
+    else:
+        source_payload = _load_source_payload(config_path)
     generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
     target = _prompt_upgrade_helm_chart_target_selector_if_needed(
         source_payload=source_payload,
@@ -22306,15 +22893,16 @@ def _run_helm_chart_upgrade_command(
         console.print(f"Helm chart target {target.selector} already uses version {target_version}.")
         return
 
-    _run_generated_bundle_validation(
-        generated_config,
-        paths,
-        title="Helm chart upgrade preflight",
-        quota_phase="upgrade",
-        flux_command_name="upgrade",
-        manifest=manifest,
-        prompt_mysterybox_payload_values=False,
-    )
+    if not _payload_has_soperator_lifecycle(generated_config):
+        _run_generated_bundle_validation(
+            generated_config,
+            paths,
+            title="Helm chart upgrade preflight",
+            quota_phase="upgrade",
+            flux_command_name="upgrade",
+            manifest=manifest,
+            prompt_mysterybox_payload_values=False,
+        )
     if not _update_source_helm_chart_version(
         source_payload,
         target=target,
@@ -22323,22 +22911,26 @@ def _run_helm_chart_upgrade_command(
         raise RuntimeError(
             f"Helm chart target {target.selector} did not accept version {target_version}."
         )
-    _write_text_atomic(config_path, render_updated_source_payload(source_payload))
+    if _payload_has_soperator_lifecycle(generated_config):
+        publish_ordinary_app_config(paths, source_payload, expected_bytes=source_preimage)
+    else:
+        _write_text_atomic(config_path, render_updated_source_payload(source_payload))
     console.print(
         f"Updated {config_path} for Helm chart {target.selector} upgrade to {target_version}.",
         soft_wrap=True,
     )
-    _run_internal_render_command(config_path, force=True)
-    staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
-    _run_generated_bundle_validation(
-        staged_config,
-        staged_paths,
-        title=f"Validate rendered Helm chart upgrade to {target_version}",
-        quota_phase="upgrade",
-        flux_command_name="upgrade",
-        manifest=staged_manifest,
-        prompt_mysterybox_payload_values=False,
-    )
+    render_command(config_path, force=True)
+    staged_config, staged_paths, staged_manifest = _load_deploy_context_readonly(config_path)
+    if not _payload_has_soperator_lifecycle(staged_config):
+        _run_generated_bundle_validation(
+            staged_config,
+            staged_paths,
+            title=f"Validate rendered Helm chart upgrade to {target_version}",
+            quota_phase="upgrade",
+            flux_command_name="upgrade",
+            manifest=staged_manifest,
+            prompt_mysterybox_payload_values=False,
+        )
     flux_apply_command(
         staged_paths.generated_dir,
         target_ref=target.target_ref,
@@ -22400,9 +22992,21 @@ def _load_manifest_backed_context(paths: ProjectPaths) -> tuple:
     config = runtime_config_from_manifest(manifest)
     if generic_command:
         _require_soperator_lifecycle_scope(config, command=generic_command)
+    if generic_command in {"deploy", "flux apply", "upgrade helm-chart"} and (
+        _payload_has_soperator_lifecycle(config)
+        or (
+            paths.config_path.exists()
+            and _payload_has_soperator_lifecycle(_read_config_payload(paths.config_path))
+        )
+    ):
+        validate_ordinary_bundle(paths, manifest)
     _apply_generated_tool_version_overrides(manifest)
     _ensure_runtime_auth_material(config, need_terraform=False)
-    _materialize_generated_terraform_tfvars(paths, manifest)
+    if not (
+        generic_command in {"deploy", "flux apply", "upgrade helm-chart"}
+        and _payload_has_soperator_lifecycle(config)
+    ):
+        _materialize_generated_terraform_tfvars(paths, manifest)
     return config, paths, manifest
 
 
@@ -23222,7 +23826,7 @@ def _validate_component_sources_or_raise(
     catalog_selected = (
         None if normalized_selected is None else normalized_selected - {_SOPERATOR_APP_ID}
     )
-    with console.status("[cyan]Validating component catalog/settings...[/cyan]"):
+    with _command_status("[cyan]Validating component catalog/settings...[/cyan]"):
         registry_kwargs: dict[str, Any] = {}
         if catalog_selected is not None:
             registry_kwargs["selected_app_ids"] = catalog_selected
@@ -23318,6 +23922,7 @@ def _dependency_seed_payload(
     existing_payload: dict[str, Any] | None,
     merge_existing: bool,
     app_version_overrides: dict[str, str] | None = None,
+    soperator_profile: str | None = None,
 ) -> dict[str, Any] | None:
     if not selected_apps:
         return None
@@ -23331,6 +23936,7 @@ def _dependency_seed_payload(
         selected_apps=selected_apps,
         infra_entries=infra_entries,
         app_entries=app_entries,
+        soperator_profile=soperator_profile,
     )
     parsed_seed_payload = yaml.safe_load(dependency_seed_yaml) or {}
     if not isinstance(parsed_seed_payload, dict):
@@ -23373,6 +23979,7 @@ def _starter_component_payload(
     app_namespace_overrides: dict[str, str] | None = None,
     app_releasename_overrides: dict[str, str] | None = None,
     app_version_overrides: dict[str, str] | None = None,
+    soperator_profile: str | None = None,
 ) -> dict[str, Any]:
     starter_yaml = starter_config_yaml(
         client_name=client_name,
@@ -23384,6 +23991,7 @@ def _starter_component_payload(
         selected_apps=selected_apps,
         infra_entries=infra_entries,
         app_entries=app_entries,
+        soperator_profile=soperator_profile,
     )
     starter_payload = yaml.safe_load(starter_yaml) or {}
     if not isinstance(starter_payload, dict):
@@ -24484,6 +25092,7 @@ def _component_selection_block(
     app_labels: Sequence[str],
     current_label: str = "",
     current_scope: ComponentScope | str | None = None,
+    sections: Sequence[tuple[str, Sequence[str]]] | None = None,
 ) -> str:
     if current_label:
         scope_label = str(current_scope).title() if current_scope is not None else "Component"
@@ -24512,6 +25121,11 @@ def _component_selection_block(
                 lines.append(f"    * {escape(label)} (current)")
                 continue
             lines.append(f"    - {escape(label)}")
+
+    if sections is not None:
+        for title, labels in sections:
+            _append_section(title, labels)
+        return "\n".join(lines)
 
     _append_section(
         "Infra",
@@ -25492,14 +26106,15 @@ def _maybe_print_soperator_worker_bulk_prompt_comment(full_path_label: str) -> N
     scope_label = _SOPERATOR_WORKER_BULK_SCOPE_LABELS.get(scope_token, "worker shards")
     if field == "apply_to_all":
         console.print(
-            "[dim]Bulk worker shard choice: true applies one autoscaling/ephemeral "
+            "[dim]Bulk worker shard choice: true applies one autoscaling "
             f"choice to {scope_label}; false asks each shard separately.[/dim]"
         )
         return
     if field == "autoscaling.enabled":
         console.print(
-            "[dim]Bulk worker autoscaling: true enables autoscaling and Soperator "
-            f"ephemeral nodes for {scope_label}; false disables both.[/dim]"
+            f"[dim]Bulk worker autoscaling: true enables autoscaling for {scope_label}; "
+            "ephemeral workers are configured separately for each shard. "
+            "False disables autoscaling and ephemeral workers.[/dim]"
         )
 
 
@@ -25604,7 +26219,6 @@ def _sync_soperator_worker_node_group_controls_after_prompt(
         if ephemeral_enabled_path is None:
             return
         if enabled:
-            _set_payload_value_creating_containers(payload, ephemeral_enabled_path, True)
             return
         _clear_soperator_worker_node_group_autoscaling_bounds(payload, group_prefix)
         _set_payload_value_creating_containers(payload, ephemeral_enabled_path, False)
@@ -25615,10 +26229,9 @@ def _sync_soperator_worker_node_group_controls_after_prompt(
     if autoscaling_enabled_path is None:
         return
     if not enabled:
-        _set_payload_value_creating_containers(payload, autoscaling_enabled_path, False)
-        _clear_soperator_worker_node_group_autoscaling_bounds(payload, group_prefix)
         return
-    _set_payload_value_creating_containers(payload, autoscaling_enabled_path, True)
+    if not _get_payload_value(payload, autoscaling_enabled_path):
+        raise ValueError("Ephemeral workers require autoscaling.enabled=true.")
 
 
 def _soperator_profile_uses_gpu(profile: Mapping[str, Any]) -> bool:
@@ -25757,35 +26370,6 @@ def _soperator_protected_storage_discovery_inputs(
             if not isinstance(spec, Mapping):
                 continue
             configured[str(role)] = copy.deepcopy(to_plain_data(spec))
-    if not configured:
-        snapshot = collect_kubectl_soperator_snapshot(
-            kube_context=kube_context,
-            extra_env=extra_env,
-        )
-        errors = snapshot.get("collection_errors")
-        if not isinstance(errors, list) or errors:
-            raise RuntimeError(
-                "Soperator protected SFS identity requires a complete live inventory"
-            )
-        bindings = _soperator_local_sfs_kubernetes_bindings(snapshot)
-        node_groups = snapshot.get("node_groups")
-        node_group_ids = tuple(
-            sorted(
-                _non_empty_text(item)
-                for item in (node_groups if isinstance(node_groups, Mapping) else {})
-                if _non_empty_text(item)
-            )
-        )
-        if bindings and node_group_ids:
-            return {
-                "storage_kind": "sfs",
-                "sfs_node_group_ids": node_group_ids,
-                "sfs_kubernetes_bindings": bindings,
-            }
-        raise RuntimeError(
-            "Soperator protected storage is neither explicit VM-NFS nor a target-bound "
-            "physical SFS identity"
-        )
     snapshot = collect_kubectl_soperator_snapshot(
         kube_context=kube_context,
         extra_env=extra_env,
@@ -25794,6 +26378,38 @@ def _soperator_protected_storage_discovery_inputs(
     if not isinstance(errors, list) or errors:
         raise RuntimeError(
             "Soperator protected SFS identity requires a complete live PVC/PV inventory"
+        )
+    bindings = _soperator_local_sfs_kubernetes_bindings(snapshot)
+    if bindings:
+        if configured and set(configured) - set(bindings):
+            raise RuntimeError(
+                "configured local SFS roles have incomplete retained PVC/PV bindings"
+            )
+        node_groups = snapshot.get("node_groups")
+        node_group_ids = tuple(
+            sorted(
+                _non_empty_text(item)
+                for item in (node_groups if isinstance(node_groups, Mapping) else {})
+                if _non_empty_text(item)
+            )
+        )
+        if not node_group_ids:
+            raise RuntimeError("protected local SFS identity has no immutable node-group IDs")
+        binding_inputs: dict[str, dict[str, object]] = {
+            role: dict(binding) for role, binding in bindings.items()
+        }
+        for role, spec in configured.items():
+            if isinstance(spec, Mapping):
+                binding_inputs[role]["mount_tag"] = _non_empty_text(spec.get("mount_tag")) or role
+        return {
+            "storage_kind": "sfs",
+            "sfs_node_group_ids": node_group_ids,
+            "sfs_kubernetes_bindings": binding_inputs,
+        }
+    if not configured:
+        raise RuntimeError(
+            "Soperator protected storage is neither explicit VM-NFS nor a target-bound "
+            "physical SFS identity"
         )
     return {
         "storage_kind": "sfs",
@@ -29004,6 +29620,7 @@ def _prompt_path_sort_key(
         "infra.components[].inputs.node_group_defaults.gpu.platform": 23,
         "infra.components[].inputs.node_group_defaults.gpu.reservation.policy": 24,
         "infra.components[].inputs.node_group_defaults.gpu.preset": 25,
+        "infra.components[].inputs.gpu_clusters.workers.infiniband_fabric": 26,
         "infra.components[].inputs.soperator.system_autoscaling.enabled": 38,
         "infra.components[].inputs.soperator.system_autoscaling.min_node_count": 39,
         "infra.components[].inputs.soperator.system_autoscaling.max_node_count": 40,
@@ -29823,7 +30440,9 @@ def _maybe_print_soperator_mk8s_sizing_prompt_guidance(
         "sizes GPU worker hosts, GPU count per host comes from the preset, and "
         "*_nodes_per_group controls generated worker group sharding up to the "
         "selected profile's per-group limit; worker_node_groups controls each "
-        "shard's autoscaling and ephemeral NodeSet state.[/dim]"
+        "shard's autoscaling and ephemeral NodeSet state. Autoscaling controls MK8s "
+        "capacity; ephemeral workers are an explicit upstream NodeSet choice "
+        "available when autoscaling is enabled.[/dim]"
     )
     emitted_guidance.add("soperator_mk8s_sizing")
 
@@ -29839,8 +30458,13 @@ def _maybe_print_soperator_prompt_guidance(
     if "soperator_guided_defaults" not in emitted_guidance:
         console.print(
             "[dim]Soperator guided mode asks for layout and policy choices only. "
-            "The chart internals stay on cxcli defaults and can still be edited "
-            "directly in config.yaml when you need an advanced override.[/dim]"
+            "Active diagnostics and reviewed passive diagnostics pause during isolated "
+            "maintenance; operational hooks and the selected job policy are preserved. "
+            "Passive checks resume for fresh acceptance, then recurring active schedules "
+            "resume before user admission. Unreviewed passive checks remain enabled. "
+            "The required checks controller is enabled automatically. "
+            "Supply advanced settings with --values-file before creating the install plan. "
+            "Resume uses the saved configuration and cannot accept new values.[/dim]"
         )
         emitted_guidance.add("soperator_guided_defaults")
 
@@ -29857,25 +30481,6 @@ def _maybe_print_soperator_prompt_guidance(
         "values.topologyProfile": (
             "Topology profile controls Slurm locality scheduling. Keep disabled "
             "unless worker nodes have accurate topology labels for the selected fabric."
-        ),
-        "values.soperator-activechecks.enabled": (
-            "Soperator ActiveChecks run the Soperator-owned CUDA, NCCL, storage, "
-            "and health probes as recurring Slurm workloads. Keep disabled for "
-            "production training clusters; enable only for benchmarking, diagnostics, "
-            "or maintenance windows."
-        ),
-        "values.soperator-activechecks.waitForChecks.enabled": (
-            "Wait for ActiveChecks is meaningful only when ActiveChecks are enabled. "
-            "It makes install readiness depend on those benchmark/diagnostic checks "
-            "finishing instead of only Helm release readiness."
-        ),
-        "values.soperator-checks.enabled": (
-            "The Soperator checks controller reconciles ActiveCheck resources and "
-            "node maintenance/degraded conditions. Keep disabled unless you "
-            "intentionally enable Soperator ActiveChecks or advanced "
-            "Soperator-managed node maintenance; cxcli will enable the controller "
-            "when ActiveChecks are enabled. Maintenance conditions drain and hand "
-            "off nodes; actual host reboot uses the SlurmNodeReboot path."
         ),
         "values.soperator-dcgm-exporter.enabled": (
             "The standard cxcli GPU telemetry path uses the NVIDIA GPU Operator DCGM "
@@ -30129,6 +30734,7 @@ def _app_chart_skip_defaults_preview_lines(
     *,
     entry: ComponentEntry,
     max_lines: int = 4,
+    include_chart_identity: bool = True,
 ) -> tuple[str, ...]:
     if entry.scope != "apps":
         return ()
@@ -30140,10 +30746,12 @@ def _app_chart_skip_defaults_preview_lines(
     )
     items: list[str] = []
     for key in _APP_SKIP_PREVIEW_TOP_LEVEL_KEYS:
+        if not include_chart_identity and key in {"namespace", "release-name", "version"}:
+            continue
         value = resolved.get(key)
         if _app_skip_preview_has_value(value):
             items.append(f"{key}={_app_skip_preview_format_value(value, path=(key,))}")
-    if entry.default_release_timeout:
+    if include_chart_identity and entry.default_release_timeout:
         items.append(f"timeout={entry.default_release_timeout}")
 
     values = resolved.get("values")
@@ -30167,8 +30775,11 @@ def _print_app_chart_skip_defaults_preview(
     component_node: Mapping[str, Any] | None,
     *,
     entry: ComponentEntry,
+    include_chart_identity: bool = True,
 ) -> None:
-    lines = _app_chart_skip_defaults_preview_lines(component_node, entry=entry)
+    lines = _app_chart_skip_defaults_preview_lines(
+        component_node, entry=entry, include_chart_identity=include_chart_identity
+    )
     if not lines:
         return
     console.print("[dim]Default values if skipped:[/dim]")
@@ -30221,6 +30832,11 @@ def _selected_observability_app_targets(
         if normalize_component_token(component_type_id(row)) not in app_ids:
             continue
         row_target_ref = normalize_component_token(app_chart_target_ref(row))
+        if row_target_ref in soperator_target_refs(payload) and component_type_id(row) in {
+            "grafana",
+            "gateway-helm",
+        }:
+            continue
         if row_target_ref:
             selected_targets.add(row_target_ref)
             continue
@@ -30252,6 +30868,7 @@ def _skip_observability_prompt(
     payload: dict[str, Any],
     entry: ComponentEntry,
     full_path_label: str,
+    soperator_install: bool = False,
 ) -> bool:
     if entry.scope != "infra" or not _is_observability_field(full_path_label):
         return False
@@ -30267,6 +30884,11 @@ def _skip_observability_prompt(
         if entry.id != "mk8s" or not mk8s_enabled:
             return True
         target_prefix = target_observability_match.group(1)
+        target_ref = _observability_prompt_target_ref(payload, full_path_label)
+        if target_ref in soperator_target_refs(payload) and (
+            soperator_install or not kubernetes_observability_agent_selected(payload, target_ref)
+        ):
+            return True
         if full_path_label == f"{target_prefix}.enabled":
             return False
         target_enabled = bool(_read_payload_field(payload, f"{target_prefix}.enabled"))
@@ -30339,7 +30961,7 @@ def _skip_soperator_child_chart_prompt(
     child_key = next(
         (
             key
-            for key in _SOPERATOR_CHILD_CHART_VALUE_KEYS
+            for key in (*_SOPERATOR_CHILD_CHART_VALUE_KEYS, "sssd")
             if f".values.{key}." in full_path_label or full_path_label.startswith(f"values.{key}.")
         ),
         "",
@@ -30788,7 +31410,7 @@ def _skip_soperator_managed_mk8s_prompt(
         )
         if section == "autoscaling":
             return field != "enabled" and not autoscaling_enabled
-        return True
+        return not autoscaling_enabled
     if ".inputs.soperator.worker_ephemeral_nodes." in full_path_label:
         if not has_soperator_target or install_mode != _SOPERATOR_TARGET_MODE_MANAGED:
             return True
@@ -30846,6 +31468,14 @@ def _skip_soperator_managed_mk8s_prompt(
         )
         profile = _soperator_profile_by_target(payload).get(target_ref, {})
         if not isinstance(profile, Mapping) or not _soperator_profile_uses_gpu(profile):
+            return True
+        cluster_path = full_path_label.rsplit(".", maxsplit=1)[0]
+        # A live capacity choice normally already materializes the fabric.
+        # Retain a required manual fallback for a referenced cluster when
+        # regional advice is absent, while Ethernet-only shapes omit it.
+        if not isinstance(_read_payload_field(payload, cluster_path), Mapping):
+            return True
+        if _non_empty_text(_read_payload_field(payload, full_path_label)):
             return True
         return gpu_cluster_fabric_match.group(1) not in _soperator_profile_managed_gpu_cluster_keys(
             profile
@@ -30968,6 +31598,16 @@ def _dynamic_required_prompt(
     entry: ComponentEntry,
     full_path_label: str,
 ) -> bool:
+    if entry.scope == "apps" and entry.id == "soperator":
+        for child, fields in (
+            ("soperator-backup-config", ("bucket.name", "bucket.endpoint")),
+            ("sssd", ("sssdConfSecretRefName",)),
+        ):
+            for field in fields:
+                suffix = f"values.{child}.{field}"
+                if full_path_label.endswith(suffix):
+                    prefix = full_path_label[: -len(suffix)]
+                    return _read_payload_field(payload, f"{prefix}values.{child}.enabled") is True
     if full_path_label.endswith(".inputs.public_ip_allocation_id"):
         return (
             _jump_host_create_public_ip_allocation_enabled(
@@ -31192,6 +31832,9 @@ def _prune_redundant_app_chart_default_values(
         component_path = _dynamic_app_chart_path(payload, chart_id, instance_id=instance_id)
         if component_path is None:
             continue
+        source_row = _get_payload_value(payload, component_path)
+        if not isinstance(source_row, Mapping):
+            continue
         values_path = component_path + ("values",)
         if not _payload_path_exists(payload, values_path):
             continue
@@ -31216,6 +31859,12 @@ def _prune_redundant_app_chart_default_values(
             if any(isinstance(segment, int) for segment in relative_path):
                 continue
             if relative_path not in explicit_value_paths:
+                continue
+            if chart_id == _SOPERATOR_APP_ID and any(
+                value_pointer(relative_path) == pointer
+                or value_pointer(relative_path).startswith(pointer + "/")
+                for pointer in source_row.get(EXPLICIT_VALUES_FIELD, [])
+            ):
                 continue
             full_path = values_path + relative_path
             explicit_value = _get_payload_value(payload, full_path)
@@ -32569,6 +33218,7 @@ def _run_component_field_wizard(
     skip_soperator_profile_prompt: bool = False,
     align_infra_resource_names_before_apps: bool = False,
     prompt_app_version_before_app_config: bool = False,
+    soperator_install: bool = False,
     skipped_components: set[tuple[ComponentScope, str, str]] | None = None,
 ) -> tuple[str, bool]:
     payload = yaml.safe_load(config_yaml) or {}
@@ -32636,6 +33286,8 @@ def _run_component_field_wizard(
             entry = app_lookup.get(chart_id)
             if entry is not None:
                 selected_components.append((entry, instance_id))
+        if soperator_install:
+            selected_components.sort(key=lambda item: item[0].id != _SOPERATOR_APP_ID)
         return selected_components
 
     def _selection_token_component_id(token: str) -> str:
@@ -32673,6 +33325,7 @@ def _run_component_field_wizard(
         *,
         selected_app_ids: Sequence[str],
         auto_enabled_app_ids: Sequence[str],
+        target_refs_by_app: Mapping[str, tuple[str, ...]] | None = None,
     ) -> set[str]:
         selected = {
             normalize_component_token(item)
@@ -32691,7 +33344,12 @@ def _run_component_field_wizard(
             token for token in selected if _selection_token_component_id(token) not in auto_ids
         }
         for app_id in sorted(auto_ids):
-            for target_ref in target_refs:
+            required_refs = (
+                target_refs_by_app.get(app_id, ())
+                if target_refs_by_app is not None
+                else target_refs
+            )
+            for target_ref in required_refs:
                 scoped.add(component_instance_label(app_id, target_ref))
         return scoped
 
@@ -32703,7 +33361,11 @@ def _run_component_field_wizard(
         ordered.extend(sorted(normalized_ids - set(ordered)))
         return tuple(ordered)
 
-    def _auto_enabled_app_notice_labels(app_ids: Sequence[str]) -> tuple[str, ...]:
+    def _auto_enabled_app_notice_labels(
+        app_ids: Sequence[str],
+        *,
+        target_refs_by_app: Mapping[str, tuple[str, ...]] | None = None,
+    ) -> tuple[str, ...]:
         target_refs = _selected_mk8s_target_refs()
         normalized_ids = _ordered_app_ids(app_ids)
         if not target_refs:
@@ -32711,7 +33373,11 @@ def _run_component_field_wizard(
         return tuple(
             component_instance_label(app_id, target_ref)
             for app_id in normalized_ids
-            for target_ref in target_refs
+            for target_ref in (
+                target_refs_by_app.get(app_id, ())
+                if target_refs_by_app is not None
+                else target_refs
+            )
         )
 
     def _enabled_app_row_identities() -> set[tuple[str, str]]:
@@ -32817,6 +33483,15 @@ def _run_component_field_wizard(
                 return f"{entry.id} on {target_ref}"
         return component_instance_label(entry.id, instance_id)
 
+    def _wizard_display_group(entry: ComponentEntry) -> str:
+        if not soperator_install:
+            return entry.scope
+        if entry.scope == "infra":
+            return "Infrastructure"
+        if entry.id == _SOPERATOR_APP_ID:
+            return "Soperator configuration"
+        return "Required platform or integration components"
+
     def _wizard_component_selection_labels() -> tuple[list[str], list[str]]:
         return (
             [
@@ -32835,12 +33510,21 @@ def _run_component_field_wizard(
         current_scope: ComponentScope | str | None = None,
     ) -> None:
         infra_labels, app_labels = _wizard_component_selection_labels()
+        sections = None
+        if soperator_install:
+            groups: dict[str, list[str]] = {"Infrastructure": infra_labels}
+            for entry, instance_id in _selected_components_for_scope("apps"):
+                groups.setdefault(_wizard_display_group(entry), []).append(
+                    _wizard_component_label(entry, instance_id)
+                )
+            sections = list(groups.items())
         console.print(
             _component_selection_block(
                 infra_labels=infra_labels,
                 app_labels=app_labels,
                 current_label=current_label,
                 current_scope=current_scope,
+                sections=sections,
             )
         )
 
@@ -32887,7 +33571,7 @@ def _run_component_field_wizard(
         )
         if deploy_context is not None:
             return deploy_context
-        return entry.scope, component_label
+        return _wizard_display_group(entry), component_label
 
     def _plain_mk8s_node_group_loop_enabled(
         *,
@@ -33069,7 +33753,7 @@ def _run_component_field_wizard(
         ) -> tuple[object, str]:
             _print_wizard_component_selection_context(
                 current_label=context_label,
-                current_scope=entry.scope,
+                current_scope=_wizard_display_group(entry),
             )
             updated, should_stop = _prompt_scalar_override(
                 path_label,
@@ -33581,7 +34265,7 @@ def _run_component_field_wizard(
                 group["os"] = str(os_value).strip()
                 _print_wizard_component_selection_context(
                     current_label=context_label,
-                    current_scope=entry.scope,
+                    current_scope=_wizard_display_group(entry),
                 )
                 _print_wizard_selected_field(os_label, os_value)
             else:
@@ -33684,7 +34368,7 @@ def _run_component_field_wizard(
                     continue
                 _print_wizard_component_selection_context(
                     current_label=context_label,
-                    current_scope=entry.scope,
+                    current_scope=_wizard_display_group(entry),
                 )
                 ssh_key, should_stop = _prompt_ssh_public_key_override(
                     f"{group_prefix}.ssh.public_keys[0]",
@@ -33790,7 +34474,7 @@ def _run_component_field_wizard(
         ) -> tuple[object, str]:
             _print_wizard_component_selection_context(
                 current_label=subnet_context_label,
-                current_scope=entry.scope,
+                current_scope=_wizard_display_group(entry),
             )
             updated, should_stop = _prompt_scalar_override(
                 path_label,
@@ -33821,7 +34505,7 @@ def _run_component_field_wizard(
         ) -> tuple[object, str]:
             _print_wizard_component_selection_context(
                 current_label=context_label,
-                current_scope=entry.scope,
+                current_scope=_wizard_display_group(entry),
             )
             if guidance:
                 console.print(f"[dim]{escape(guidance)}[/dim]")
@@ -33874,7 +34558,7 @@ def _run_component_field_wizard(
                 return None, (), "skip"
             _print_wizard_component_selection_context(
                 current_label=network_context_label,
-                current_scope=entry.scope,
+                current_scope=_wizard_display_group(entry),
             )
             choices = provider_lookup.resolve(
                 provider="project_private_pools",
@@ -34522,9 +35206,19 @@ def _run_component_field_wizard(
         )
         if observability_selection.issues or not observability_selection.auto_enabled_app_ids:
             return
+        selected_target_refs = set(_selected_mk8s_target_refs())
+        target_refs_by_app = {
+            app_id: tuple(
+                target_ref
+                for target_ref in required_observability_app_target_refs(payload, app_id)
+                if target_ref in selected_target_refs
+            )
+            for app_id in observability_selection.auto_enabled_app_ids
+        }
         active_selected_apps = _target_scoped_auto_app_selection(
             selected_app_ids=active_selected_apps,
             auto_enabled_app_ids=observability_selection.auto_enabled_app_ids,
+            target_refs_by_app=target_refs_by_app,
         )
         wizard_auto_enabled_observability_apps.update(observability_selection.auto_enabled_app_ids)
         materialize_app_chart_target_refs(payload)
@@ -34533,7 +35227,6 @@ def _run_component_field_wizard(
             payload,
             app_entries=app_entries,
         )
-        _ensure_target_scoped_auto_app_rows(observability_selection.auto_enabled_app_ids)
         _record_new_auto_enabled_app_rows(
             before=before_rows,
             auto_enabled_app_ids=observability_selection.auto_enabled_app_ids,
@@ -34550,7 +35243,8 @@ def _run_component_field_wizard(
         )
         _filter_wizard_selected_app_rows()
         notice_labels = _auto_enabled_app_notice_labels(
-            observability_selection.auto_enabled_app_ids
+            observability_selection.auto_enabled_app_ids,
+            target_refs_by_app=target_refs_by_app,
         )
         console.print(
             f"{warning_markup('Adjusted component selection:')} enabling "
@@ -34570,15 +35264,28 @@ def _run_component_field_wizard(
         pre_prompted_app_paths: set[PayloadPath] = set()
         _print_wizard_component_selection_context(
             current_label=component_label,
-            current_scope=entry.scope,
+            current_scope=_wizard_display_group(entry),
         )
         if entry.scope == "apps":
             component_node = (
                 _get_payload_value(payload, component_path) if component_path is not None else None
             )
+            if soperator_install and entry.id == _SOPERATOR_APP_ID:
+                frozen_version = (
+                    component_node.get("version", "")
+                    if isinstance(component_node, Mapping)
+                    else entry.version
+                )
+                console.print(
+                    "[dim]Official upstream nebius/soperator; frozen release "
+                    f"{escape(str(frozen_version))}. "
+                    "These settings connect the upstream charts to the configured infrastructure."
+                    "[/dim]"
+                )
             _print_app_chart_skip_defaults_preview(
                 component_node if isinstance(component_node, Mapping) else None,
                 entry=entry,
+                include_chart_identity=not (soperator_install and entry.id == _SOPERATOR_APP_ID),
             )
             if prompt_app_version_before_app_config and component_path is not None:
                 version_path = component_path + ("version",)
@@ -34607,7 +35314,9 @@ def _run_component_field_wizard(
                 _print_wizard_selected_field(version_label, updated_version)
                 pre_prompted_app_paths.add(version_path)
         decision = _wizard_continue_phase(
-            f"Configure '{component_label}' component fields now?",
+            "Configure upstream Soperator settings now?"
+            if soperator_install and entry.id == _SOPERATOR_APP_ID
+            else f"Configure '{component_label}' component fields now?",
             default=True if entry.scope == "infra" else None,
             allow_back=True,
         )
@@ -35225,7 +35934,6 @@ def _run_component_field_wizard(
                         max_path,
                         _soperator_worker_node_group_shard_size(group_key),
                     )
-                _set_payload_value_creating_containers(payload, ephemeral_path, True)
                 return
             _clear_soperator_worker_node_group_autoscaling_bounds(payload, group_prefix)
             _set_payload_value_creating_containers(payload, ephemeral_path, False)
@@ -35488,6 +36196,7 @@ def _run_component_field_wizard(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
+                    soperator_install=soperator_install,
                 ):
                     continue
                 if _skip_mysterybox_eso_prompt(
@@ -35557,8 +36266,10 @@ def _run_component_field_wizard(
                 if _skip_soperator_worker_bulk_prompt(full_path_label):
                     continue
                 worker_control_prompt = _soperator_worker_node_group_control_prompt(full_path_label)
-                if worker_control_prompt is not None and _soperator_worker_group_bulk_covered(
-                    worker_control_prompt[0]
+                if (
+                    worker_control_prompt is not None
+                    and worker_control_prompt[1] == "autoscaling"
+                    and _soperator_worker_group_bulk_covered(worker_control_prompt[0])
                 ):
                     continue
                 if _skip_soperator_managed_mk8s_prompt(
@@ -35934,6 +36645,19 @@ def _run_component_field_wizard(
                     _set_payload_value_creating_containers(payload, full_path, updated)
                 else:
                     _set_payload_value(payload, full_path, updated)
+                if (
+                    entry.id == _SOPERATOR_APP_ID
+                    and entry.scope == "apps"
+                    and component_path is not None
+                ):
+                    relative = full_path[len(component_path) :]
+                    if relative and relative[0] == "values" and updated is not None:
+                        # Confirmed defaults are deliberate choices too.
+                        _set_payload_value_creating_containers(payload, full_path, updated)
+                        explicit_row = _get_payload_value(payload, component_path)
+                        if not isinstance(explicit_row, dict):
+                            raise ValueError("Soperator wizard component must be a mapping")
+                        mark_explicit_value(explicit_row, relative[1:])
                 _sync_soperator_worker_node_group_controls_after_prompt(
                     payload=payload,
                     entry=entry,
@@ -35941,13 +36665,6 @@ def _run_component_field_wizard(
                     value=updated,
                 )
                 _print_wizard_selected_field(full_path_label, updated)
-                _maybe_refresh_compute_boot_disk_defaults_after_shape_change(
-                    payload=payload,
-                    entry=entry,
-                    full_path_label=full_path_label,
-                    previous_component_inputs=previous_component_inputs,
-                    provider_lookup=provider_lookup,
-                )
                 _maybe_refresh_compute_data_disk_size_after_type_change(
                     payload=payload,
                     entry=entry,
@@ -35985,6 +36702,13 @@ def _run_component_field_wizard(
                                 required_prompt_labels=required_prompt_labels,
                             ),
                         )
+                _maybe_refresh_compute_boot_disk_defaults_after_shape_change(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    previous_component_inputs=previous_component_inputs,
+                    provider_lookup=provider_lookup,
+                )
             if module_dependency_expander is None:
                 break
             before_expand = len(prompt_paths)
@@ -36031,12 +36755,15 @@ def _run_component_field_wizard(
     section: ComponentScope = "infra" if infra_components else "apps"
     infra_index = 0
     app_index = 0
-    active_section: ComponentScope | None = None
+    active_section: str | None = None
 
     while True:
         if section == "infra":
             if active_section != "infra":
-                _print_wizard_section_banner(title="Infra", components=infra_components)
+                _print_wizard_section_banner(
+                    title="Infrastructure" if soperator_install else "Infra",
+                    components=infra_components,
+                )
                 active_section = "infra"
             if not infra_components:
                 section = "apps"
@@ -36068,12 +36795,18 @@ def _run_component_field_wizard(
             active_section = None
             continue
 
-        if active_section != "apps":
-            _print_wizard_section_banner(title="Apps", components=app_components)
-            active_section = "apps"
         if not app_components:
             return _wizard_payload_yaml(), True
         entry, instance_id = app_components[app_index]
+        group = _wizard_display_group(entry)
+        if active_section != group:
+            _print_wizard_section_banner(
+                title=group if soperator_install else "Apps",
+                components=[
+                    item for item in app_components if _wizard_display_group(item[0]) == group
+                ],
+            )
+            active_section = group
         outcome = _run_component(entry, instance_id)
         if outcome == _WizardComponentOutcome.QUIT:
             return _wizard_payload_yaml(), False
@@ -36355,6 +37088,7 @@ def _resolve_apps_chart_dependencies(
     collect_warnings: bool,
 ) -> tuple[set[str], tuple[_AppChartDependencyAdjustment, ...], tuple[str, ...]]:
     selected = set(selected_apps)
+    soperator_apps = app_ids_on_soperator_targets(payload)
     entry_by_id = {entry.id: entry for entry in app_entries}
 
     chart_name_index: dict[str, set[str]] = {}
@@ -36389,9 +37123,18 @@ def _resolve_apps_chart_dependencies(
         if source_entry is None:
             continue
 
-        for dependency_id in source_entry.default_release_install_after:
+        # Ordinary charts retain normal dependencies. The upstream graph owns
+        # Soperator's children and supplies cert-manager to its target.
+        ordering_dependencies = (
+            ()
+            if source_app_id == _SOPERATOR_APP_ID and source_app_id in soperator_apps
+            else source_entry.default_release_install_after
+        )
+        for dependency_id in ordering_dependencies:
             dependency_id = str(dependency_id).strip().lower()
             if not dependency_id:
+                continue
+            if dependency_id == "cert-manager" and source_app_id in soperator_apps:
                 continue
             if dependency_id not in entry_by_id:
                 if collect_warnings:
@@ -36400,6 +37143,8 @@ def _resolve_apps_chart_dependencies(
                         f"apps:{source_app_id} references unknown apps component "
                         f"'{dependency_id}'"
                     )
+                continue
+            if dependency_id == "cert-manager" and source_app_id in soperator_apps:
                 continue
             if dependency_id in selected:
                 continue
@@ -36416,6 +37161,9 @@ def _resolve_apps_chart_dependencies(
                 queue.append(dependency_id)
                 enqueued.add(dependency_id)
 
+        # The frozen upstream graph already owns its complete child dependency set.
+        if source_app_id == _SOPERATOR_APP_ID and source_app_id in soperator_apps:
+            continue
         chart_ref = _app_component_chart_ref_from_payload(payload, source_entry)
         if chart_ref is None:
             continue
@@ -36458,6 +37206,8 @@ def _resolve_apps_chart_dependencies(
                         f"apps:{source_app_id} matched multiple components for "
                         f"'{dependency_name}': {', '.join(sorted(matched_ids))}"
                     )
+                continue
+            if dependency_id == "cert-manager" and source_app_id in soperator_apps:
                 continue
             if dependency_id in selected:
                 continue
@@ -39127,6 +39877,7 @@ def _runtime_auth_token_sdk(material: RuntimeAuthCacheMaterial):
     return SDK(**kwargs)
 
 
+@install_progress_step("auth-ready", "Waiting for Nebius authentication readiness")
 def _wait_for_runtime_auth_token_ready(material: RuntimeAuthCacheMaterial) -> None:
     timeout_seconds = _runtime_auth_float_env(
         _RUNTIME_AUTH_TOKEN_READY_TIMEOUT_ENV,
@@ -39452,7 +40203,7 @@ def _import_runtime_auth_environment(
             service_account_description=(
                 "Canonical service account used by nebius-cxcli project automation"
             ),
-            role_ids=["editor"],
+            role_ids=[_RUNTIME_SERVICE_ACCOUNT_ROLE],
             profile=None,
             endpoint=None,
             config_file=None,
@@ -39481,6 +40232,7 @@ def _import_runtime_auth_environment(
     return imported
 
 
+@install_progress_step("auth-profile", "Checking the canonical service account and authorized key")
 def _create_or_recreate_runtime_auth_profile(
     *,
     project_id: str,
@@ -39489,6 +40241,7 @@ def _create_or_recreate_runtime_auth_profile(
     profile: str | None,
     endpoint: str | None,
     sdk_config_file: Path | None,
+    reconcile_permissions: bool = False,
 ) -> tuple[RuntimeAuthCacheMaterial, bool]:
     _capture_runtime_auth_operator_environment()
     with _runtime_auth_project_lock(project_id=project_id, client_name=client_name):
@@ -39520,13 +40273,14 @@ def _create_or_recreate_runtime_auth_profile(
                 service_account_description=(
                     "Canonical service account used by nebius-cxcli project automation"
                 ),
-                role_ids=["editor"],
+                role_ids=[_RUNTIME_SERVICE_ACCOUNT_ROLE],
                 profile=profile,
                 endpoint=endpoint,
                 config_file=sdk_config_file,
                 prefer_operator_auth=True,
                 allow_mutation=True,
                 strict_managed_identity=True,
+                reconcile_managed_roles=reconcile_permissions,
             )
             intent = _runtime_auth_key_intent(
                 project_id=project_id,
@@ -39691,6 +40445,16 @@ def _runtime_auth_profile_status(
             cloud_check_error = str(exc)
             issues.append(f"failed Nebius auth public key verification: {exc}")
 
+    if not issues and cloud_public_key_exists:
+        material = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+        if material is None:
+            issues.append("canonical runtime credential could not be loaded")
+        else:
+            try:
+                _runtime_identity_verifier.verify(material)
+            except RuntimeError as exc:
+                issues.append(str(exc))
+
     return RuntimeAuthProfileStatus(
         project_id=project_id,
         client_name=client_name,
@@ -39800,6 +40564,7 @@ def _export_runtime_auth_material(material: RuntimeAuthCacheMaterial) -> None:
         os.environ["AWS_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
 
 
+@install_progress_step("storage-key", "Preparing Object Storage authentication")
 def _ensure_runtime_auth_s3_material(
     material: RuntimeAuthCacheMaterial,
 ) -> RuntimeAuthCacheMaterial:
@@ -39882,6 +40647,7 @@ def _ensure_runtime_auth_s3_material(
         return updated
 
 
+@install_progress_step("authentication", "Preparing Nebius project authentication")
 def _ensure_runtime_auth_material(
     config: Any,
     *,
@@ -39931,6 +40697,7 @@ def _ensure_runtime_auth_material(
         )
         _wait_for_runtime_auth_token_ready(material)
 
+    _runtime_identity_verifier.verify(material)
     if need_terraform:
         material = _ensure_runtime_auth_s3_material(material)
     _export_runtime_auth_material(material)
@@ -39938,7 +40705,7 @@ def _ensure_runtime_auth_material(
     if created:
         console.print(
             "[green]Created canonical Nebius project authentication[/green] "
-            f"({_RUNTIME_SERVICE_ACCOUNT_NAME}, editor)."
+            f"({_RUNTIME_SERVICE_ACCOUNT_NAME}, project {_RUNTIME_SERVICE_ACCOUNT_ROLE})."
         )
 
 
@@ -39949,7 +40716,7 @@ def _mysterybox_eso_service_account_description() -> str:
 @contextmanager
 def _operator_auth_env_without_runtime_auth(
     *, project_id: str | None = None, client_name: str = "project"
-):
+) -> Iterator[None]:
     """Restore captured operator auth while suppressing cxcli runtime identity."""
     snapshot = _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT
     if snapshot is not None:
@@ -39987,6 +40754,16 @@ def _operator_auth_env_without_runtime_auth(
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+_runtime_identity_verifier = RuntimeIdentityVerifier(
+    project_lock=lambda **kwargs: _runtime_auth_project_lock(**kwargs),
+    canonical_environment=lambda material: _canonical_runtime_auth_environment(material),
+    operator_environment=lambda **kwargs: _operator_auth_env_without_runtime_auth(**kwargs),
+    ensure_identity=lambda **kwargs: ensure_ci_service_account_identity(**kwargs),
+    service_account_name=_RUNTIME_SERVICE_ACCOUNT_NAME,
+    role=_RUNTIME_SERVICE_ACCOUNT_ROLE,
+)
 
 
 @contextmanager
@@ -40671,6 +41448,11 @@ def _kubectl_apply_manifest(
         if isinstance(manifest, Sequence) and not isinstance(manifest, Mapping)
         else [manifest]
     )
+    documents = [
+        guarded for document in documents if (guarded := guarded_app_manifest(document)) is not None
+    ]
+    if not documents:
+        return
     rendered = yaml.safe_dump_all(
         [dict(document) for document in documents],
         sort_keys=False,
@@ -41458,6 +42240,7 @@ def _ensure_backend_s3_env_aliases() -> None:
         os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = secret_key
 
 
+@install_progress_step("state-backend", "Preparing Terraform remote state")
 def _ensure_terraform_backend_ready(config: Any) -> None:
     _configure_quiet_native_logs()
     _ensure_runtime_auth_material(
@@ -41673,9 +42456,11 @@ def _payload_has_soperator_lifecycle(config: Any) -> bool:
 
 
 def _require_soperator_lifecycle_scope(config: Any, *, command: str) -> None:
-    """Keep every Soperator mutation below the dedicated command group."""
+    """Keep protected mutations under the lifecycle and admit scoped app commands."""
 
     if _SOPERATOR_LIFECYCLE_INTERNAL.get() or not _payload_has_soperator_lifecycle(config):
+        return
+    if command in {"render", "deploy", "flux apply", "upgrade helm-chart"}:
         return
     if "destroy" in command:
         guidance = "Use `nebius-cxcli soperator destroy CONFIG --target TARGET`."
@@ -41744,7 +42529,9 @@ def _active_chart_count_for_target(config: Any, *, target_ref: str) -> int:
     )
 
 
-def _required_runtime_component_output_specs(config: Any) -> list[dict[str, str]]:
+def _required_runtime_component_output_specs(
+    config: Any, *, include_soperator_handoffs: bool = True
+) -> list[dict[str, str]]:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         return []
@@ -41769,14 +42556,16 @@ def _required_runtime_component_output_specs(config: Any) -> list[dict[str, str]
         chart_id = component_type_id(item)
         if not chart_id:
             continue
-        if chart_id == _SOPERATOR_APP_ID:
+        if chart_id == _SOPERATOR_APP_ID and include_soperator_handoffs:
             target_ref = normalize_component_token(
                 app_chart_target_ref(item) or component_instance_id(item)
             )
             handoff = handoffs_by_ref.get(target_ref)
-            output_name = str((handoff or {}).get("cluster_id_output_name") or "").strip()
             instance_id = str((handoff or {}).get("instance_id") or "").strip()
             component_id = str((handoff or {}).get("component_id") or "").strip()
+            source_entry = all_entries.get(component_id)
+            source_handoff = getattr(source_entry, "handoff", None)
+            output_name = str(getattr(source_handoff, "cluster_id_output_name", "") or "").strip()
             if output_name and instance_id and component_id:
                 source_ref = component_output_ref(instance_id, output_name)
                 if source_ref not in seen_refs:
@@ -42258,7 +43047,9 @@ def _run_deploy_validation_batch(
             emit=emit,
         )
     if group == "soperator":
-        return run_soperator_cluster_validations(
+        from .soperator_deploy_validation import run_soperator_deploy_validations
+
+        return run_soperator_deploy_validations(
             validations,
             reports_dir=reports_dir,
             extra_env=extra_env,
@@ -43137,10 +43928,19 @@ def _filter_deploy_validations(
     skip_validations: bool,
     skip_kinds: set[str],
 ) -> list[dict[str, Any]]:
+    parent_target = campaign_validation_target(
+        _SOPERATOR_PARENT_CONFIG_TRANSITION_STORE.get(),
+        owner=_SOPERATOR_PARENT_CONFIG_TRANSITION_OWNER.get(),
+    )
     deploy_candidate_validations = [
         item
         for item in validations
         if _deploy_validation_kind(item) not in _NON_DEPLOY_VALIDATION_KINDS
+        and not (
+            parent_target
+            and _deploy_validation_kind(item) == SOPERATOR_CLUSTER_VALIDATION_KIND
+            and _non_empty_text(item.get("target_ref")) == parent_target
+        )
     ]
     if skip_validations:
         return [item for item in deploy_candidate_validations if bool(item.get("required"))]
@@ -44624,6 +45424,21 @@ def _prepare_cluster_handoff_kube_env(
             env[CLUSTER_HANDOFF_ACCESS_ENV] = access
             return env
 
+    if (
+        require_renewable_auth
+        and not cluster_id
+        and allow_terraform_output
+        and resolved_target.get("ownership") == "managed"
+        and resolved_target.get("component_id") == MK8S_COMPONENT_ID
+        and resolved_target.get(DEPLOY_TARGET_KIND_FIELD) != EXTERNAL_MK8S_TARGET_KIND
+        and _non_empty_text(resolved_target.get("cluster_id_output_name"))
+    ):
+        cluster_id = terraform_output_raw(
+            paths.infra_dir,
+            str(resolved_target["cluster_id_output_name"]),
+            extra_env=_terraform_runtime_env(config),
+            initialize=False,
+        )
     if require_renewable_auth and not cluster_id:
         raise RuntimeError(
             f"Long-running cluster handoff for target '{target_ref}' requires an immutable "
@@ -44742,9 +45557,13 @@ def _run_kubectl_with_transient_retries(
     retries: int = 0,
     retry_delay_seconds: float = 5.0,
     retry_stderr_markers: Sequence[str] = (),
+    assert_authority: Callable[[], object] | None = None,
 ) -> None:
     max_attempts = max(1, retries + 1)
     for attempt in range(1, max_attempts + 1):
+        if assert_authority is not None:
+            assert_authority()
+        assert_app_mutation_authority()
         completed = subprocess.run(
             cmd,
             env=_post_flux_subprocess_env(env),
@@ -44921,12 +45740,15 @@ def _is_post_flux_custom_resource(doc: Mapping[str, Any]) -> bool:
     if not isinstance(api_version, str) or "/" not in api_version:
         return False
     group, _version = api_version.split("/", maxsplit=1)
-    return group == "slurm.nebius.ai"
+    return group in {"slurm.nebius.ai", "external-secrets.io"}
 
 
 def _post_flux_custom_resource_priority(doc: Mapping[str, Any]) -> int:
     kind = str(doc.get("kind", "")).strip()
     return {
+        "ClusterSecretStore": 1,
+        "SecretStore": 1,
+        "ExternalSecret": 2,
         "SlurmCluster": 10,
         "NodeConfigurator": 20,
         "NodeSet": 30,
@@ -45549,6 +46371,20 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
                     retry_delay_seconds=5.0,
                     retry_stderr_markers=_KUBECTL_TRANSIENT_FAILURE_MARKERS,
                 )
+                for doc in custom_docs_by_priority[priority]:
+                    api_group, separator, _ = str(doc.get("apiVersion", "")).partition("/")
+                    if api_group == "external-secrets.io" and separator:
+                        metadata = doc["metadata"]
+                        command = [
+                            "kubectl",
+                            "wait",
+                            "--for=condition=Ready",
+                            "--timeout=180s",
+                            f"{doc['kind']}/{metadata['name']}",
+                        ]
+                        if metadata.get("namespace"):
+                            command.extend(["-n", metadata["namespace"]])
+                        _run_post_flux_kubectl(command, env=env, timeout=210)
         if hook_docs:
             hook_path = temp_path / f"{manifest_path.stem}-hooks.yaml"
             _write_post_flux_docs(hook_path, hook_docs)
@@ -45575,6 +46411,8 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
 def _post_flux_manifest_sort_key(path: Path) -> tuple[int, str]:
     # MysteryBox ExternalSecrets may provide runtime Secrets consumed by local
     # chart manifests rendered as post-Flux YAML.
+    if path.name == "post-flux-00-mysterybox-eso.yaml":
+        return (-1, path.name)
     if path.name == "post-flux-mysterybox-eso.yaml":
         return (0, path.name)
     return (1, path.name)
@@ -45587,9 +46425,16 @@ def _post_flux_manifest_paths(paths: ProjectPaths) -> list[Path]:
     )
 
 
-def _apply_post_flux_manifests(paths: ProjectPaths, *, env: Mapping[str, str]) -> None:
-    for manifest_path in _post_flux_manifest_paths(paths):
-        _apply_post_flux_manifest(manifest_path, env=env)
+def _apply_post_flux_manifests(
+    paths: ProjectPaths,
+    *,
+    env: Mapping[str, str],
+    assert_authority: Callable[[], object] | None = None,
+) -> None:
+    with app_mutation_scope(assert_authority) if assert_authority is not None else nullcontext():
+        for manifest_path in _post_flux_manifest_paths(paths):
+            assert_app_mutation_authority()
+            _apply_post_flux_manifest(manifest_path, env=env)
 
 
 def _is_admission_webhook_doc(doc: Mapping[str, Any]) -> bool:
@@ -46018,6 +46863,7 @@ def _apply_rendered_flux(
     paths: ProjectPaths,
     *,
     config: Any | None = None,
+    require_existing_flux: bool = False,
     extra_env: dict[str, str] | None = None,
     target_ref: str = "",
     ownership: str = "managed",
@@ -46042,6 +46888,11 @@ def _apply_rendered_flux(
     recover_requeued_jobs: Callable[[], object] | None = None,
     recover_held_jobs: Callable[[], object] | None = None,
     bind_operation_spec_sha256: Callable[[str], object] | None = None,
+    checks_reservation: Callable[[], str] | None = None,
+    checks_partition_preimages: Callable[[], tuple[SlurmPartitionPauseRecord, ...]] = lambda: (),
+    bind_checks_lifecycle: Callable[[ChecksLifecycle], None] | None = None,
+    release_checks_reservation: Callable[[Mapping[str, Any]], None] | None = None,
+    verify_checks_reservation_released: Callable[[Mapping[str, Any]], None] | None = None,
     before_reconcile_mutations: Callable[[], object] | None = None,
     read_controller_spool_migration: (Callable[[], Mapping[str, object] | None] | None) = None,
     write_controller_spool_migration: (Callable[[Mapping[str, object]], None] | None) = None,
@@ -46062,6 +46913,16 @@ def _apply_rendered_flux(
     soperator_source_receipt = None
     soperator_artifact_receipt = None
     target_jail_authority = None
+    checks_policy = None
+    parent_owns_checks = (
+        isinstance(scheduling_evidence, Mapping)
+        and scheduling_evidence.get("mode") == "parent-campaign"
+    )
+    checks_execution = None
+    source_checks = None
+    runtime_recovery = None
+    docker_drain_recovery = None
+    topology_recovery = None
     soperator_adapter_state: Mapping[str, Any] = {}
     soperator_cluster_values: Mapping[str, Any] = {}
     if (paths.flux_dir / "configmap-terraform-fluxcd-values.yaml").is_file():
@@ -46076,6 +46937,9 @@ def _apply_rendered_flux(
         )
         soperator_source_receipt = ensure_soperator_release_source(soperator_snapshot)
         soperator_values = _rendered_soperator_upstream_values(paths.flux_dir)
+        checks_policy = compile_checks_policy(
+            Path(soperator_source_receipt.source_dir), soperator_values
+        )
         soperator_adapter_state = _rendered_soperator_adapter_state(paths.flux_dir)
         soperator_cluster_values = _rendered_soperator_cluster_values(soperator_values)
         target_jail_authority = rendered_soperator_jail_image_authority(
@@ -46152,7 +47016,9 @@ def _apply_rendered_flux(
         )
         if soperator_snapshot is not None:
             observed_release = _live_soperator_release_for_reconcile(env=env)
-            current_release = str(operation_source_release or observed_release).strip()
+            current_release = str(
+                observed_release if operation_source_release is None else operation_source_release
+            ).strip()
             if operation_source_release is not None and observed_release not in {
                 current_release,
                 soperator_snapshot.release,
@@ -46485,6 +47351,56 @@ def _apply_rendered_flux(
                         },
                     )
             _set_phase("[cyan]Binding the immutable Soperator operation authority...[/cyan]")
+            if admitted_repair_reason in {
+                INSTALL_DASHBOARD_REPAIR_REASON,
+                INSTALL_CHECKS_REPAIR_REASON,
+                INSTALL_REST_REPAIR_REASON,
+                LOGIN_REPAIR_REASON,
+                COLLECTOR_REPAIR_REASON,
+                GPU_MAINTENANCE_REPAIR_REASON,
+                RUNTIME_REPAIR_REASON,
+                STORAGE_REPAIR_REASON,
+                USERNS_REPAIR_REASON,
+                DOCKER_REPAIR_REASON,
+                TOPOLOGY_REPAIR_REASON,
+                CPU_MASK_REPAIR_REASON,
+            }:
+                repair = (
+                    admission_evidence.get(
+                        {
+                            INSTALL_CHECKS_REPAIR_REASON: "installChecksRepair",
+                            INSTALL_REST_REPAIR_REASON: "installRestRepair",
+                            LOGIN_REPAIR_REASON: "installLoginRepair",
+                            COLLECTOR_REPAIR_REASON: "installCollectorRepair",
+                            GPU_MAINTENANCE_REPAIR_REASON: "installGpuMaintenanceRepair",
+                            RUNTIME_REPAIR_REASON: "installRuntimeRepair",
+                            STORAGE_REPAIR_REASON: "installStorageRepair",
+                            USERNS_REPAIR_REASON: "installUsernsRepair",
+                            DOCKER_REPAIR_REASON: "installDockerRepair",
+                            TOPOLOGY_REPAIR_REASON: "installTopologyRepair",
+                            CPU_MASK_REPAIR_REASON: "installCpuMaskRepair",
+                            INSTALL_DASHBOARD_REPAIR_REASON: "installDashboardRepair",
+                        }[admitted_repair_reason]
+                    )
+                    if isinstance(admission_evidence, Mapping)
+                    else None
+                )
+                if (
+                    reconcile_strategy.strategy is not SoperatorStrategy.INSTALL
+                    or not isinstance(repair, Mapping)
+                    or repair.get("previousOperationSpecSha256") != superseded_operation_spec_sha256
+                    or repair.get("interventionGeneration") != intervention_generation
+                ):
+                    raise SoperatorSafetyPauseError(
+                        "Install dashboard repair lost its admitted lineage"
+                    )
+                repair_lineage = SoperatorReconcileRepairLineage(
+                    predecessor_receipt=repair["predecessorReceipt"],
+                    previous_operation_spec_sha256=superseded_operation_spec_sha256,
+                    reason=admitted_repair_reason,
+                    resume_phase="apply-declarative-release",
+                )
+
             operation_spec = build_soperator_operation_spec(
                 paths=paths,
                 target_ref=target_ref or paths.path_project_folder,
@@ -46511,6 +47427,7 @@ def _apply_rendered_flux(
                     if protected_before_receipt is not None
                     else None
                 ),
+                checks_policy_sha256=checks_policy.sha256 if checks_policy else "",
                 admission_evidence=admission_evidence,
                 intervention_generation=intervention_generation,
             )
@@ -46577,8 +47494,248 @@ def _apply_rendered_flux(
                     ) from exc
 
             operation_authority = _assert_operation_authority
+            if (
+                checks_policy is not None
+                and reconcile_strategy.strategy is not SoperatorStrategy.NOOP
+            ):
+
+                def _checks_kubernetes(
+                    args: list[str], document: Mapping[str, Any] | None
+                ) -> Mapping[str, Any]:
+                    result = _run_soperator_upgrade_process(
+                        ["kubectl", "--context", kube_context, *args],
+                        input_text=json.dumps(document) if document is not None else None,
+                        extra_env=extra_env,
+                        timeout_seconds=120,
+                        check=True,
+                    )
+                    payload = _soperator_checks_kubernetes_payload(args, result.stdout)
+                    if not isinstance(payload, Mapping):
+                        raise RuntimeError("Soperator checks received invalid Kubernetes evidence")
+                    return payload
+
+                def _checks_slurm(command: str) -> str:
+                    return _run_soperator_upgrade_login_command(
+                        "soperator",
+                        command,
+                        kube_context=kube_context,
+                        extra_env=extra_env,
+                        timeout_seconds=120,
+                    ).stdout
+
+                checks_execution = SoperatorChecksExecution(
+                    policy=checks_policy,
+                    operation_id=operation_spec_sha256,
+                    receipt_path=paths.reports_dir
+                    / ("soperator-checks-" + operation_spec_sha256.split(":")[-1][:24] + ".json"),
+                    kubernetes=_checks_kubernetes,
+                    slurm=_checks_slurm,
+                    assert_authority=operation_authority,
+                    emit=_update_progress_detail,
+                )
+                checks_execution.lifecycle = ChecksLifecycle(
+                    checks_execution,
+                    lambda context: apply_staged_soperator_release(
+                        paths,
+                        extra_env=extra_env,
+                        checks_policy=checks_policy,
+                        checks_context=context,
+                        freeze_main_workload_authority=operation_anchor.freeze_main_workload_authority,
+                    ),
+                    preimages=(
+                        (lambda: ())
+                        if reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                        else checks_partition_preimages
+                    ),
+                    installing=reconcile_strategy.strategy is SoperatorStrategy.INSTALL,
+                )
+                if bool(release_checks_reservation) != bool(verify_checks_reservation_released):
+                    raise RuntimeError("checks reservation release requires its paired verifier")
+                if bind_checks_lifecycle is not None and not parent_owns_checks:
+                    bind_checks_lifecycle(checks_execution.lifecycle)
+                if parent_owns_checks:
+                    if not isinstance(scheduling_evidence, Mapping):
+                        raise RuntimeError("parent diagnostics require bound scheduling evidence")
+                    checks_execution.state["reservation"] = str(
+                        scheduling_evidence.get("reservationName") or ""
+                    )
+                if admitted_repair_reason == TOPOLOGY_REPAIR_REASON:
+                    from .soperator_install_topology_recovery import InstallTopologyRecovery
+                    from .soperator_install_topology_repair import topology_reservation_handoff
+
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install topology repair evidence is missing")
+                    topology_repair = admission_evidence["installTopologyRepair"]
+                    topology_recovery = InstallTopologyRecovery(checks_execution, topology_repair)
+                    _set_phase(
+                        "[cyan]Preserving native NUMA failure evidence before CPU topology repair...[/cyan]"
+                    )
+                    topology_recovery.close()
+                    topology_recovery.adopt(
+                        topology_reservation_handoff(
+                            topology_repair, paths=paths, policy=checks_policy
+                        )
+                    )
+                if admitted_repair_reason == CPU_MASK_REPAIR_REASON:
+                    from .soperator_install_cpu_mask_recovery import InstallCpuMaskRecovery
+                    from .soperator_install_cpu_mask_repair import cpu_mask_reservation_handoff
+
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install CPU mask repair evidence is missing")
+                    cpu_mask_repair = admission_evidence["installCpuMaskRepair"]
+                    topology_recovery = InstallCpuMaskRecovery(checks_execution, cpu_mask_repair)
+                    _set_phase(
+                        "[cyan]Preserving native MLC failure evidence before CPU mask repair...[/cyan]"
+                    )
+                    topology_recovery.close()
+                    topology_recovery.adopt(
+                        cpu_mask_reservation_handoff(
+                            cpu_mask_repair, paths=paths, policy=checks_policy
+                        )
+                    )
+                if admitted_repair_reason == DOCKER_REPAIR_REASON:
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install Docker repair evidence is missing")
+                    docker_repair = admission_evidence["installDockerRepair"]
+
+                    def _read_docker_worker(node: str, args: list[str]) -> str:
+                        return _run_soperator_upgrade_process(
+                            [
+                                "kubectl",
+                                "--context",
+                                kube_context,
+                                "-n",
+                                "soperator",
+                                "exec",
+                                node,
+                                "-c",
+                                "slurmd",
+                                "--",
+                                *args,
+                            ],
+                            extra_env=extra_env,
+                            timeout_seconds=120,
+                            check=True,
+                        ).stdout
+
+                    docker_drain_recovery = InstallDockerDrainRecovery(
+                        checks_execution, docker_repair, _read_docker_worker
+                    )
+                    _set_phase(
+                        "[cyan]Preserving failed native checks before worker Docker repair...[/cyan]"
+                    )
+                    docker_drain_recovery.quiesce()
+                    close_docker_repair_reservation(checks_execution, docker_repair)
+                    checks_execution.adopt_install_reservation(
+                        docker_reservation_handoff(docker_repair, paths=paths, policy=checks_policy)
+                    )
+                if admitted_repair_reason == USERNS_REPAIR_REASON:
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install Enroot repair evidence is missing")
+                    userns_repair = admission_evidence["installUsernsRepair"]
+                    _set_phase(
+                        "[cyan]Preserving failed native checks before Enroot runtime repair...[/cyan]"
+                    )
+                    close_userns_repair_reservation(checks_execution, userns_repair)
+                    checks_execution.adopt_install_reservation(
+                        userns_reservation_handoff(userns_repair, paths=paths, policy=checks_policy)
+                    )
+                if admitted_repair_reason == STORAGE_REPAIR_REASON:
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install storage repair evidence is missing")
+                    storage_repair = admission_evidence["installStorageRepair"]
+                    _set_phase(
+                        "[cyan]Retiring the exact evicted native import before storage repair...[/cyan]"
+                    )
+                    InstallStorageRecovery(checks_execution, storage_repair).quiesce()
+                    checks_execution.adopt_install_reservation(
+                        storage_reservation_handoff(
+                            storage_repair, paths=paths, policy=checks_policy
+                        )
+                    )
+                if admitted_repair_reason == RUNTIME_REPAIR_REASON:
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install runtime repair evidence is missing")
+
+                    def _read_runtime_worker(node: str, args: list[str]) -> str:
+                        return _run_soperator_upgrade_process(
+                            [
+                                "kubectl",
+                                "--context",
+                                kube_context,
+                                "-n",
+                                "soperator",
+                                "exec",
+                                node,
+                                "-c",
+                                "slurmd",
+                                "--",
+                                *args,
+                            ],
+                            extra_env=extra_env,
+                            timeout_seconds=120,
+                            check=True,
+                        ).stdout
+
+                    runtime_repair = admission_evidence["installRuntimeRepair"]
+                    runtime_recovery = InstallRuntimeRecovery(
+                        checks_execution, runtime_repair, _read_runtime_worker
+                    )
+                    _set_phase(
+                        "[cyan]Retiring the exact failed install probe before runtime repair...[/cyan]"
+                    )
+                    runtime_recovery.quiesce()
+                    checks_execution.adopt_install_reservation(
+                        runtime_reservation_handoff(
+                            runtime_repair, paths=paths, policy=checks_policy
+                        )
+                    )
+                if admitted_repair_reason == GPU_MAINTENANCE_REPAIR_REASON:
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install maintenance repair evidence is missing")
+                    checks_execution.adopt_install_reservation(
+                        gpu_maintenance_reservation_handoff(
+                            admission_evidence["installGpuMaintenanceRepair"],
+                            paths=paths,
+                            policy=checks_policy,
+                        )
+                    )
+                if (
+                    reconcile_strategy.strategy is not SoperatorStrategy.INSTALL
+                    and not parent_owns_checks
+                ):
+                    _set_phase(
+                        "[cyan]Quiescing upstream checks before scheduling changes...[/cyan]"
+                    )
+                    if source_release_ownership is not None and source_parent_writer is None:
+                        source_parent_writer = capture_source_parent_writer(
+                            cast(OwnershipCommandRunner, _protected_command_runner),
+                            kube_context=kube_context,
+                            ownership=source_release_ownership,
+                        )
+                        if source_parent_writer is not None:
+                            if source_ownership_path is None or source_ownership_identity is None:
+                                raise RuntimeError(
+                                    "source ownership receipt identity is unavailable"
+                                )
+                            _write_owner_only_json(
+                                source_ownership_path,
+                                {
+                                    **source_ownership_identity,
+                                    "ownership": source_release_ownership.as_payload(),
+                                    "parentWriter": source_parent_writer.as_payload(),
+                                },
+                            )
+                    source_checks = SourceChecksMaintenance(
+                        checks_execution,
+                        Path(freeze_soperator_release(current_release).source.source_dir),
+                        str(soperator_cluster_values["clusterName"]),
+                    )
+                    source_checks.quiesce()
             if before_reconcile_mutations is not None:
                 before_reconcile_mutations()
+            if source_checks is not None:
+                source_checks.pause_passive(checks_reservation() if checks_reservation else "")
             if reconcile_strategy.strategy is SoperatorStrategy.PROTECTED_DATA_PLANE:
                 _set_phase("[cyan]Preparing protected rootfs recovery state...[/cyan]")
                 if rootfs_admission_preflight is None:
@@ -46844,6 +48001,10 @@ def _apply_rendered_flux(
                 progress=flux_progress_sink,
             )
         elif not flux_installed:
+            if require_existing_flux:
+                raise RuntimeError(
+                    "Ordinary app apply requires existing Flux controllers and APIs; restore them through the Soperator lifecycle"
+                )
             if operation_authority is not None:
                 operation_authority()
             if flux_progress_sink is None:
@@ -48155,8 +49316,12 @@ def _apply_rendered_flux(
                 )
 
             def _apply_bundle() -> object:
+                if source_checks is not None:
+                    source_checks.before_target_apply()
                 _set_phase("[cyan]Materializing the suspended target release graph...[/cyan]")
                 if soperator_snapshot is not None:
+                    if reconcile_strategy is None:
+                        raise RuntimeError("Soperator reconcile strategy is unavailable")
                     if operation_anchor is None:
                         raise RuntimeError("Soperator operation anchor was not established")
                     if _soperator_upgrade_refreshes_controller_spool_receipt_writer(repair_lineage):
@@ -48177,8 +49342,66 @@ def _apply_rendered_flux(
                             f"{stage_index}/{stage_count}: {release_summary}[/cyan]"
                         )
 
+                    if checks_execution is not None:
+                        checks_execution.state["targetApplyIntent"] = True
+                        checks_execution._save()
                     return apply_staged_soperator_release(
                         paths,
+                        retired_release=(
+                            admission_evidence["installDashboardRepair"]["retiredRelease"]
+                            if admitted_repair_reason == INSTALL_DASHBOARD_REPAIR_REASON
+                            and isinstance(admission_evidence, Mapping)
+                            else None
+                        ),
+                        checks_policy=checks_policy if checks_execution is not None else None,
+                        checks_context=checks_execution.require_lifecycle().context()
+                        if checks_execution is not None
+                        else None,
+                        checks_installing=reconcile_strategy.strategy is SoperatorStrategy.INSTALL,
+                        recover_interrupted_checks=(
+                            (
+                                lambda: terminate_admitted_wait_hook(
+                                    admission_evidence[
+                                        INPUT_REPAIR_EVIDENCE_KEYS[admitted_repair_reason]
+                                    ],
+                                    env={**os.environ, **(extra_env or {})},
+                                    kube_context=kube_context,
+                                    assert_authority=_assert_operation_authority,
+                                )
+                            )
+                            if admitted_repair_reason in INPUT_REPAIR_EVIDENCE_KEYS
+                            and admitted_repair_reason
+                            not in {
+                                COLLECTOR_REPAIR_REASON,
+                                GPU_MAINTENANCE_REPAIR_REASON,
+                                RUNTIME_REPAIR_REASON,
+                                STORAGE_REPAIR_REASON,
+                                USERNS_REPAIR_REASON,
+                                DOCKER_REPAIR_REASON,
+                                TOPOLOGY_REPAIR_REASON,
+                                CPU_MASK_REPAIR_REASON,
+                            }
+                            and isinstance(admission_evidence, Mapping)
+                            else None
+                        ),
+                        remediated_install_release=(
+                            admission_evidence[INPUT_REPAIR_EVIDENCE_KEYS[admitted_repair_reason]][
+                                INPUT_REPAIR_RELEASE_KEYS[admitted_repair_reason]
+                            ]
+                            if admitted_repair_reason in INPUT_REPAIR_EVIDENCE_KEYS
+                            and admitted_repair_reason
+                            not in {
+                                GPU_MAINTENANCE_REPAIR_REASON,
+                                RUNTIME_REPAIR_REASON,
+                                STORAGE_REPAIR_REASON,
+                                USERNS_REPAIR_REASON,
+                                DOCKER_REPAIR_REASON,
+                                TOPOLOGY_REPAIR_REASON,
+                                CPU_MASK_REPAIR_REASON,
+                            }
+                            and isinstance(admission_evidence, Mapping)
+                            else None
+                        ),
                         extra_env=extra_env,
                         cache_dir=cache_path,
                         freeze_main_workload_authority=(
@@ -48215,6 +49438,7 @@ def _apply_rendered_flux(
                     retries=2,
                     retry_delay_seconds=5.0,
                     retry_stderr_markers=_KUBECTL_TRANSIENT_FAILURE_MARKERS,
+                    assert_authority=operation_authority,
                 )
                 return None
 
@@ -48266,6 +49490,11 @@ def _apply_rendered_flux(
                 return None
 
             def _verify_completed_declarative_release() -> object:
+                if checks_execution is not None and not parent_owns_checks:
+                    if checks_execution.state.get("scheduleRelease"):
+                        _restore_checks()
+                    else:
+                        _recover_catchup_checks()
                 if controller_spool_migration is not None:
                     prepared = controller_spool_migration.prepare()
                     controller_spool_migration.finish(
@@ -48319,19 +49548,21 @@ def _apply_rendered_flux(
                 if not post_flux_manifests:
                     return {"status": "not-required"}
                 _set_phase("[cyan]Applying post-Flux manifests to the target cluster...[/cyan]")
-                _apply_post_flux_manifests(paths, env=env)
+                _apply_post_flux_manifests(paths, env=env, assert_authority=operation_authority)
                 return {
                     "status": "applied",
                     "manifests": [path.name for path in post_flux_manifests],
                 }
 
             def _restore_infrastructure() -> object:
+                if reconcile_strategy is None or operation_authority is None:
+                    raise RuntimeError(
+                        "Soperator infrastructure restoration authority is unavailable"
+                    )
                 _set_phase(
                     "[cyan]Restoring checkpoint-owned infrastructure and Slurm state...[/cyan]"
                 )
-                if restore_infrastructure is None:
-                    return {"status": "not-required"}
-                return restore_infrastructure()
+                return maintenance.restore()
 
             def _wait_infrastructure() -> object:
                 _set_phase("[cyan]Verifying final target infrastructure identity...[/cyan]")
@@ -48369,12 +49600,14 @@ def _apply_rendered_flux(
                     graph_receipt = wait_for_soperator_release_graph(
                         paths,
                         extra_env=extra_env,
+                        include_active_checks=not parent_owns_checks,
                         emit=_update_progress_detail,
                     )
                 else:
                     graph_receipt = wait_for_soperator_release_graph(
                         paths,
                         extra_env=extra_env,
+                        include_active_checks=not parent_owns_checks,
                         emit=_update_progress_detail,
                         main_workload_identity=main_identity,
                     )
@@ -48389,17 +49622,187 @@ def _apply_rendered_flux(
                     "slurmWorkers": slurm_receipt,
                 }
 
-            def _release_requeued_jobs() -> object:
-                _set_phase("[cyan]Releasing operation-owned requeued-running jobs...[/cyan]")
-                if release_requeued_jobs is None:
-                    return {"status": "not-required", "group": "requeued-running"}
-                return release_requeued_jobs()
+            def _accept_checks() -> object:
+                if checks_policy is None:
+                    raise RuntimeError("Soperator checks policy authority is unavailable")
+                if parent_owns_checks:
+                    return {
+                        "status": "delegated",
+                        "owner": "parent-campaign",
+                        "policy": checks_policy.sha256,
+                    }
+                _set_phase(
+                    "[cyan]Validating fresh upstream checks before customer handoff...[/cyan]"
+                )
+                if checks_execution is None:
+                    raise RuntimeError("Soperator checks execution authority is missing")
+                if runtime_recovery is not None:
+                    runtime_recovery.restore_drains()
+                if docker_drain_recovery is not None:
+                    docker_drain_recovery.restore_drains()
+                checks_execution.require_lifecycle().before_acceptance()
+                return checks_execution.accept(
+                    before_jobs=(
+                        docker_drain_recovery.resume_probe if docker_drain_recovery else None
+                    ),
+                    reservation=str(checks_execution.state.get("reservation") or ""),
+                    workers=_soperator_upgrade_expected_static_slurm_nodes(soperator_values),
+                    gpu_workers=_soperator_upgrade_expected_static_slurm_nodes(
+                        {
+                            "nodesets": {
+                                "overrideValues": {
+                                    "nodesets": [
+                                        row
+                                        for row in soperator_values.get("nodesets", {})
+                                        .get("overrideValues", {})
+                                        .get("nodesets", [])
+                                        if row.get("gpu", {}).get("enabled") is True
+                                    ]
+                                }
+                            }
+                        }
+                    ),
+                )
 
-            def _release_held_jobs() -> object:
+            def _verify_completed_checks() -> object:
+                if checks_execution is None:
+                    raise RuntimeError("Soperator checks acceptance authority is unavailable")
+                return checks_execution.verify_acceptance()
+
+            def _checks_handoff() -> ChecksScheduleHandoff:
+                if checks_execution is None or parent_owns_checks or reconcile_strategy is None:
+                    raise RuntimeError("initial checks handoff ownership is unavailable")
+                release = (
+                    checks_execution.release_install_reservation
+                    if reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                    else release_checks_reservation
+                )
+                verify_released = (
+                    checks_execution.verify_install_reservation_released
+                    if reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                    else verify_checks_reservation_released
+                )
+                if release is None or verify_released is None:
+                    raise RuntimeError("upgrade checks reservation lacks its scheduling owner")
+                return ChecksScheduleHandoff(
+                    checks_execution,
+                    owner=checks_execution.operation_id,
+                    release=release,
+                    verify_released=verify_released,
+                    admission=checks_execution.require_lifecycle().admission,
+                )
+
+            def _released_checks_maintenance(mutate: bool) -> object:
+                if checks_execution is None:
+                    raise RuntimeError("released checks execution is unavailable")
+                handoff = _checks_handoff()
+                release = handoff.release() if mutate else handoff.verify()
+                partitions = checks_execution._initial_partition_states(
+                    soperator_cluster_values.get("partitionConfiguration", {}).get("partitions", [])
+                )
+                checks_execution.require_lifecycle().admission.verify()
+                return {
+                    "reservation": release["reservationPreimage"],
+                    "partitions": partitions,
+                    "scheduleRelease": release,
+                }
+
+            def _restore_checks() -> object:
+                if checks_policy is None:
+                    raise RuntimeError("Soperator checks policy authority is unavailable")
+                if parent_owns_checks:
+                    return {
+                        "status": "delegated",
+                        "owner": "parent-campaign",
+                        "policy": checks_policy.sha256,
+                    }
+                _set_phase("[cyan]Restoring upstream check schedules and authorization...[/cyan]")
+                if checks_execution is None or operation_anchor is None:
+                    raise RuntimeError("Soperator checks restoration authority is missing")
+                _recover_catchup_checks()
+                return _checks_handoff().restore(
+                    apply_policy=checks_execution.require_lifecycle().schedules,
+                    policy_restored=lambda: SoperatorCampaignChecks._policy_restored(
+                        checks_execution
+                    ),
+                    complete_source_handoff=lambda: (
+                        source_checks.complete(_soperator_checks_target_writers(paths.flux_dir))
+                        if source_checks is not None
+                        else checks_execution.complete_source_handoff(
+                            _soperator_checks_target_writers(paths.flux_dir)
+                        )
+                    ),
+                )
+
+            def _recover_catchup_checks() -> object:
+                from .soperator_checks_catchup_flux import recover_staged_checks
+
+                if checks_execution is None or parent_owns_checks:
+                    return None
+                if soperator_source_receipt is None or operation_anchor is None:
+                    raise RuntimeError("checks catch-up recovery source authority is unavailable")
+                return recover_staged_checks(
+                    checks_execution,
+                    paths=paths,
+                    source_dir=Path(soperator_source_receipt.source_dir),
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                    cache_dir=cache_path,
+                    freeze_main_workload_authority=operation_anchor.freeze_main_workload_authority,
+                    on_stage_progress=lambda current, total, names: _set_phase(
+                        f"Recovering check policy stage {current}/{total}: " + ", ".join(names)
+                    ),
+                )
+
+            def _verify_checks_restored() -> object:
+                if checks_policy is None:
+                    raise RuntimeError("Soperator checks policy authority is unavailable")
+                if parent_owns_checks:
+                    return {
+                        "status": "delegated",
+                        "owner": "parent-campaign",
+                        "policy": checks_policy.sha256,
+                    }
+                if checks_execution is None or checks_execution.state.get("phase") != "restored":
+                    raise RuntimeError("upstream checks policy restoration is pending")
+                if not SoperatorCampaignChecks._policy_restored(checks_execution):
+                    raise RuntimeError("upstream checks policy restoration is not converged")
+                _checks_handoff().verify()
+                return {"status": "restored", "policy": checks_policy.sha256}
+
+            def _release_requeued_jobs(*, recover: bool = False) -> object:
+                _set_phase("[cyan]Releasing operation-owned requeued-running jobs...[/cyan]")
+                if checks_execution is not None and not parent_owns_checks:
+                    checks_execution.verify_acceptance()
+                    _checks_handoff().verify()
+                    checks_execution.require_lifecycle().authorize_admission()
+                callback = recover_requeued_jobs if recover else release_requeued_jobs
+                if callback is None:
+                    callback = release_requeued_jobs
+                result = (
+                    callback()
+                    if callback is not None
+                    else {"status": "not-required", "group": "requeued-running"}
+                )
+                if recover and verify_requeued_jobs is not None:
+                    verify_requeued_jobs()
+                return result
+
+            def _release_held_jobs(*, recover: bool = False) -> object:
                 _set_phase("[cyan]Releasing other operation-owned held jobs...[/cyan]")
-                if release_held_jobs is None:
-                    return {"status": "not-required", "group": "other-held"}
-                return release_held_jobs()
+                callback = recover_held_jobs if recover else release_held_jobs
+                if callback is None:
+                    callback = release_held_jobs
+                result = (
+                    callback()
+                    if callback is not None
+                    else {"status": "not-required", "group": "other-held"}
+                )
+                if recover and verify_held_jobs is not None:
+                    verify_held_jobs()
+                if checks_execution is not None and not parent_owns_checks:
+                    checks_execution.require_lifecycle().finish()
+                return result
 
             if (
                 soperator_snapshot is not None
@@ -48444,12 +49847,38 @@ def _apply_rendered_flux(
                         adopted_target_release=soperator_snapshot.release,
                     )
 
+                maintenance = SoperatorChecksMaintenance(
+                    checks=None if parent_owns_checks else checks_execution,
+                    installing=(
+                        reconcile_strategy is not None
+                        and reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                    ),
+                    partitions=soperator_cluster_values.get("partitionConfiguration", {}).get(
+                        "partitions", []
+                    ),
+                    reservation=checks_reservation or (lambda: ""),
+                    restore_infrastructure=restore_infrastructure
+                    or (lambda: {"status": "not-required"}),
+                    recover_infrastructure=recover_restored_infrastructure
+                    or verify_restored_infrastructure
+                    or _wait_infrastructure,
+                    verify_infrastructure=verify_restored_infrastructure or _wait_infrastructure,
+                    verify_checks_restored=_verify_checks_restored,
+                    before_checks=topology_recovery.maintenance
+                    if topology_recovery
+                    else (lambda _mutate: None),
+                    released_checks=_released_checks_maintenance,
+                )
                 storage_preimage_daemonsets = (
                     ("nebius-cxcli-soperator-jail-mount",)
                     if _soperator_upgrade_refreshes_controller_spool_receipt_writer(repair_lineage)
                     else None
                 )
                 completed_postconditions: dict[str, Callable[[Mapping[str, object]], object]] = {
+                    "validate-target-active-checks": lambda _evidence: (
+                        _accept_checks() if parent_owns_checks else _verify_completed_checks()
+                    ),
+                    "restore-steady-check-policy": lambda _evidence: _verify_checks_restored(),
                     "establish-boot-storage-barrier": lambda _evidence: (
                         verify_soperator_adapter_storage(
                             paths,
@@ -48462,9 +49891,7 @@ def _apply_rendered_flux(
                     ),
                     "apply-post-flux-manifests": lambda _evidence: _wait_pre_restore_product(),
                     "restore-infrastructure-and-scheduling-preimages": lambda _evidence: (
-                        verify_restored_infrastructure()
-                        if verify_restored_infrastructure is not None
-                        else _wait_infrastructure()
+                        maintenance.verify()
                     ),
                     "release-requeued-running-jobs": lambda _evidence: (
                         verify_requeued_jobs()
@@ -48472,32 +49899,27 @@ def _apply_rendered_flux(
                         else _wait_complete_product()
                     ),
                     "release-other-operation-held-jobs": lambda _evidence: (
-                        verify_held_jobs()
-                        if verify_held_jobs is not None
-                        else _wait_complete_product()
+                        (
+                            verify_held_jobs()
+                            if verify_held_jobs is not None
+                            else _wait_complete_product()
+                        ),
+                        (
+                            checks_execution.require_lifecycle().admission.verify()
+                            if checks_execution is not None and not parent_owns_checks
+                            else None
+                        ),
                     ),
                 }
                 interrupted_recovery: dict[str, Callable[[Mapping[str, object]], object]] = {
                     "restore-infrastructure-and-scheduling-preimages": lambda _transition: (
-                        recover_restored_infrastructure()
-                        if recover_restored_infrastructure is not None
-                        else verify_restored_infrastructure()
-                        if verify_restored_infrastructure is not None
-                        else _wait_infrastructure()
+                        maintenance.recover()
                     ),
-                    "release-requeued-running-jobs": lambda _transition: (
-                        recover_requeued_jobs()
-                        if recover_requeued_jobs is not None
-                        else verify_requeued_jobs()
-                        if verify_requeued_jobs is not None
-                        else _wait_complete_product()
+                    "release-requeued-running-jobs": lambda _transition: _release_requeued_jobs(
+                        recover=True
                     ),
-                    "release-other-operation-held-jobs": lambda _transition: (
-                        recover_held_jobs()
-                        if recover_held_jobs is not None
-                        else verify_held_jobs()
-                        if verify_held_jobs is not None
-                        else _wait_complete_product()
+                    "release-other-operation-held-jobs": lambda _transition: _release_held_jobs(
+                        recover=True
                     ),
                 }
                 if reconcile_strategy.strategy is SoperatorStrategy.PROTECTED_DATA_PLANE:
@@ -48559,6 +49981,8 @@ def _apply_rendered_flux(
                         wait_pre_restore_product=_wait_pre_restore_product,
                         restore_infrastructure=_restore_infrastructure,
                         wait_infrastructure=_wait_infrastructure,
+                        accept_checks=_accept_checks,
+                        restore_checks=_restore_checks,
                         wait_restored_product=_wait_complete_product,
                         release_requeued_jobs=_release_requeued_jobs,
                         wait_requeued_product=_wait_complete_product,
@@ -48636,7 +50060,7 @@ def _apply_rendered_flux(
             post_flux_manifests = _post_flux_manifest_paths(paths)
             if post_flux_manifests:
                 _set_phase("[cyan]Applying post-Flux manifests to the target cluster...[/cyan]")
-                _apply_post_flux_manifests(paths, env=env)
+                _apply_post_flux_manifests(paths, env=env, assert_authority=operation_authority)
     for message in completion_messages:
         console.print(message)
     return operation_anchor
@@ -48839,23 +50263,6 @@ def _ensure_soperator_notifier_runtime_before_flux(
     )
 
 
-def _ensure_soperator_backup_runtime_before_flux(
-    config: Any,
-    *,
-    extra_env: dict[str, str] | None,
-    target_ref: str = "",
-) -> None:
-    if not soperator_backup_enabled_for_target(config, target_ref=target_ref):
-        return
-    ensure_soperator_backup_runtime_secrets(
-        config,
-        extra_env=extra_env,
-        target_ref=target_ref,
-        prompt=_console_is_terminal(),
-        emit=lambda message: console.print(message),
-    )
-
-
 def _collect_grafana_status_after_flux(
     config: Any,
     *,
@@ -48913,6 +50320,7 @@ def _collect_grafana_status_after_flux(
 class DeployRunSummary:
     validation_report: DeployValidationReport | None = None
     gitops_bootstrap_commands: tuple[str, ...] = ()
+    cluster_identities: Mapping[str, Mapping[str, str]] | None = None
 
 
 def _deploy_kubectl_json(
@@ -49137,7 +50545,7 @@ def _soperator_upgrade_reservation_preimages(
 ) -> tuple:
     result = _run_soperator_upgrade_login_command(
         namespace,
-        "scontrol show reservation -o",
+        "env SLURM_TIME_FORMAT=standard TZ=UTC scontrol show reservation -o",
         extra_env=extra_env,
         timeout_seconds=120,
         check=False,
@@ -49708,6 +51116,7 @@ def _restore_soperator_flux_apply_infrastructure(
     *,
     extra_env: Mapping[str, str] | None,
     assert_authority: Callable[[], object],
+    partition_owner: Callable[[], object] | None = None,
 ) -> dict[str, object]:
     drained_by_namespace, partitions_by_namespace, requeued, pending_held, reservations = (
         _soperator_flux_apply_owned_scheduling_state(actions)
@@ -49767,14 +51176,17 @@ def _restore_soperator_flux_apply_infrastructure(
             )
             if any("DRAIN" in after[node]["state"] for node in restore_nodes):
                 raise RuntimeError("Soperator operation-owned Slurm node remains drained")
-    for namespace, records in sorted(partitions_by_namespace.items()):
-        assert_authority()
-        _soperator_upgrade_restore_slurm_partitions(
-            namespace=namespace,
-            records=records,
-            extra_env=extra_env,
-            allow_topology_migration=True,
-        )
+    if partition_owner is not None:
+        partition_owner()
+    else:
+        for namespace, records in sorted(partitions_by_namespace.items()):
+            assert_authority()
+            _soperator_upgrade_restore_slurm_partitions(
+                namespace=namespace,
+                records=records,
+                extra_env=extra_env,
+                allow_topology_migration=True,
+            )
     return {
         "namespaces": sorted(
             set(drained_by_namespace)
@@ -49838,16 +51250,6 @@ def _release_soperator_flux_apply_jobs(
                 )
             postimages[(namespace, job_id)] = item
     removed_reservations = 0
-    if group == "requeued-running":
-        for namespace, reservation_names in sorted(reservations_by_namespace.items()):
-            for reservation_name in sorted(reservation_names):
-                assert_authority()
-                _soperator_upgrade_delete_maintenance_reservation(
-                    namespace=namespace,
-                    reservation_name=reservation_name,
-                    extra_env=extra_env,
-                )
-                removed_reservations += 1
     for namespace, job_ids in sorted(selected_by_namespace.items()):
         current = {
             job.job_id: job
@@ -49890,6 +51292,8 @@ def _verify_soperator_flux_apply_infrastructure_restored(
     actions: Sequence[Mapping[str, Any]],
     *,
     extra_env: Mapping[str, str] | None,
+    partition_owner: Callable[[], object] | None = None,
+    reservation_released: bool = False,
 ) -> dict[str, object]:
     drained, partitions, _requeued, _pending, reservations = (
         _soperator_flux_apply_owned_scheduling_state(actions)
@@ -49902,24 +51306,29 @@ def _verify_soperator_flux_apply_infrastructure_restored(
         )
         if any("DRAIN" in snapshot[node]["state"] for node in nodes):
             raise RuntimeError("Soperator operation-owned Slurm node remains drained")
-    for namespace, records in partitions.items():
-        for record in records:
-            live = _soperator_upgrade_partition_state(
-                namespace=namespace,
-                partition=record.partition,
-                extra_env=extra_env,
-            )
-            if not _soperator_upgrade_partition_migration_observation_matches(
-                live,
-                record=record.previous_record,
-                fingerprint=record.previous_record_fingerprint,
-            ):
-                raise RuntimeError("Soperator operation-owned Slurm partition remains paused")
+    if partition_owner is not None:
+        partition_owner()
+    else:
+        for namespace, records in partitions.items():
+            for record in records:
+                live = _soperator_upgrade_partition_state(
+                    namespace=namespace,
+                    partition=record.partition,
+                    extra_env=extra_env,
+                )
+                if not _soperator_upgrade_partition_migration_observation_matches(
+                    live,
+                    record=record.previous_record,
+                    fingerprint=record.previous_record_fingerprint,
+                ):
+                    raise RuntimeError("Soperator operation-owned Slurm partition remains paused")
     for namespace, reservation_names in reservations.items():
         live_names = set(
             _soperator_upgrade_reservation_names(namespace=namespace, extra_env=extra_env)
         )
-        if not reservation_names.issubset(live_names):
+        if reservation_released and reservation_names & live_names:
+            raise RuntimeError("released diagnostic reservation was recreated")
+        if not reservation_released and not reservation_names.issubset(live_names):
             raise RuntimeError("Soperator maintenance reservation disappeared before job release")
     return {"status": "restored", "namespaceCount": len(set(drained) | set(partitions))}
 
@@ -50681,6 +52090,7 @@ def _apply_rendered_flux_with_soperator_job_policy(
     superseded_operation_spec_sha256: str = "",
     admitted_repair_reason: str = "",
     operation_started_at: float | None = None,
+    install_recovery: bool = False,
     upgrade_progress: SoperatorUpgradeProgress | None = None,
 ) -> SoperatorOperationAnchor | None:
     payload = to_plain_data(config)
@@ -50780,6 +52190,46 @@ def _apply_rendered_flux_with_soperator_job_policy(
             journal = {}
     else:
         journal = {}
+
+    if install_recovery and resume_existing:
+        repair = prepare_install_input_repair(
+            slurm=lambda command: (
+                _run_soperator_upgrade_login_command(
+                    "soperator",
+                    command,
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                ).stdout
+            ),
+            paths=paths,
+            target_ref=target_ref,
+            scheduling_journal=journal,
+            local_scheduling_journal=local_journal,
+            env={**os.environ, **(extra_env or {})},
+            kube_context=kube_context,
+            assert_authority=assert_authority,
+        )
+        if repair is not None:
+            admission_evidence = {
+                {
+                    INSTALL_CHECKS_REPAIR_REASON: "installChecksRepair",
+                    INSTALL_REST_REPAIR_REASON: "installRestRepair",
+                    LOGIN_REPAIR_REASON: "installLoginRepair",
+                    COLLECTOR_REPAIR_REASON: "installCollectorRepair",
+                    GPU_MAINTENANCE_REPAIR_REASON: "installGpuMaintenanceRepair",
+                    RUNTIME_REPAIR_REASON: "installRuntimeRepair",
+                    STORAGE_REPAIR_REASON: "installStorageRepair",
+                    USERNS_REPAIR_REASON: "installUsernsRepair",
+                    DOCKER_REPAIR_REASON: "installDockerRepair",
+                    TOPOLOGY_REPAIR_REASON: "installTopologyRepair",
+                    CPU_MASK_REPAIR_REASON: "installCpuMaskRepair",
+                    INSTALL_DASHBOARD_REPAIR_REASON: "installDashboardRepair",
+                }[repair["schema"]]: repair
+            }
+            intervention_generation = int(repair["interventionGeneration"])
+            superseded_operation_spec_sha256 = str(repair["previousOperationSpecSha256"])
+            admitted_repair_reason = str(repair["schema"])
+            console.print("Admitted the exact install render repair; preserving install history.")
 
     def _persist_journal(payload: dict[str, Any]) -> None:
         try:
@@ -50919,6 +52369,84 @@ def _apply_rendered_flux_with_soperator_job_policy(
             journal["operationSpecSha256"] = operation_spec_sha256
             _persist_journal(journal)
 
+    def _checks_reservation_name() -> str:
+        reservations = _soperator_flux_apply_owned_scheduling_state(journal["actions"])[4]
+        names = reservations.get("soperator", set())
+        if len(names) > 1:
+            raise RuntimeError("ambiguous operation reservation for check acceptance")
+        return next(iter(names), "")
+
+    diagnostic_lifecycle: ChecksLifecycle | None = None
+
+    def _bind_checks_lifecycle(lifecycle: ChecksLifecycle) -> None:
+        nonlocal diagnostic_lifecycle
+        diagnostic_lifecycle = lifecycle
+
+    def _checks_preimages() -> tuple[SlurmPartitionPauseRecord, ...]:
+        return diagnostic_partition_preimages(journal["slurmPreimage"]["partitions"])
+
+    def _checks_release_identity(proof: Mapping[str, Any]) -> None:
+        if (
+            proof.get("operation") != journal.get("operationSpecSha256")
+            or proof.get("reservation") != _checks_reservation_name()
+            or diagnostic_lifecycle is None
+            or diagnostic_lifecycle.checks.state.get("scheduleRelease", {}).get("binding") != proof
+        ):
+            raise RuntimeError("diagnostic reservation release differs from its scheduling owner")
+        diagnostic_lifecycle.admission.verify()
+
+    def _verify_checks_release(proof: Mapping[str, Any]) -> None:
+        _checks_release_identity(proof)
+        if journal.get("checksReservationRelease") != {
+            "binding": dict(proof),
+            "status": "released",
+        }:
+            raise RuntimeError("diagnostic reservation release receipt is incomplete")
+        if proof["reservation"] in _soperator_upgrade_reservation_names(
+            namespace="soperator", extra_env=extra_env
+        ):
+            raise RuntimeError("released diagnostic reservation was recreated")
+
+    def _release_checks(proof: Mapping[str, Any]) -> None:
+        _checks_release_identity(proof)
+        if diagnostic_lifecycle is None:
+            raise RuntimeError("diagnostic reservation owner is unavailable")
+        receipt = journal.get("checksReservationRelease")
+        if receipt is not None and receipt.get("binding") != proof:
+            raise RuntimeError("diagnostic reservation release binding changed")
+        if receipt is not None and receipt.get("status") == "released":
+            _verify_checks_release(proof)
+            return
+        present = proof["reservation"] in _soperator_upgrade_reservation_names(
+            namespace="soperator", extra_env=extra_env
+        )
+        if not present and receipt is None:
+            raise RuntimeError("diagnostic reservation disappeared without its owner intent")
+        if present:
+            observed = diagnostic_lifecycle.checks._reservation(proof["reservation"])
+            if observed["fingerprint"] != proof["fingerprint"] or observed["users"] != ["root"]:
+                raise RuntimeError("diagnostic reservation changed before release")
+        journal["checksReservationRelease"] = {"binding": dict(proof), "status": "intent"}
+        _persist_journal(journal)
+        if present:
+            assert_authority()
+            _soperator_upgrade_delete_maintenance_reservation(
+                namespace="soperator", reservation_name=proof["reservation"], extra_env=extra_env
+            )
+        if proof["reservation"] in _soperator_upgrade_reservation_names(
+            namespace="soperator", extra_env=extra_env
+        ):
+            raise RuntimeError("diagnostic reservation deletion has not converged")
+        journal["checksReservationRelease"]["status"] = "released"
+        _persist_journal(journal)
+
+    def _reservation_released() -> bool:
+        receipt = journal.get("checksReservationRelease")
+        if receipt is None:
+            return False
+        _verify_checks_release(receipt["binding"])
+        return True
+
     try:
 
         def _ensure_slurm_gated() -> None:
@@ -51020,10 +52548,21 @@ def _apply_rendered_flux_with_soperator_job_policy(
                 [item for item in actions if isinstance(item, Mapping)],
                 extra_env=extra_env,
                 assert_authority=assert_authority,
+                partition_owner=diagnostic_lifecycle.admission.verify
+                if diagnostic_lifecycle
+                else None,
             )
             return _record_stage("infrastructure-restored", "infrastructureRestoreReceipt", receipt)
 
         def _release_requeued() -> object:
+            if diagnostic_lifecycle is None:
+                reservations = _soperator_flux_apply_owned_scheduling_state(journal["actions"])[4]
+                for namespace, names in reservations.items():
+                    for name in names:
+                        assert_authority()
+                        _soperator_upgrade_delete_maintenance_reservation(
+                            namespace=namespace, reservation_name=name, extra_env=extra_env
+                        )
             if _stage_completed("requeued-running-released"):
                 return journal.get("requeuedReleaseReceipt", {"status": "already-complete"})
             actions = journal["actions"]
@@ -51055,6 +52594,10 @@ def _apply_rendered_flux_with_soperator_job_policy(
             return _verify_soperator_flux_apply_infrastructure_restored(
                 [item for item in actions if isinstance(item, Mapping)],
                 extra_env=extra_env,
+                partition_owner=diagnostic_lifecycle.admission.verify
+                if diagnostic_lifecycle
+                else None,
+                reservation_released=_reservation_released(),
             )
 
         def _verify_requeued_released() -> object:
@@ -51081,18 +52624,22 @@ def _apply_rendered_flux_with_soperator_job_policy(
             except RuntimeError:
                 actions = journal["actions"]
                 assert isinstance(actions, list)
-                _resume_soperator_flux_apply_maintenance_reservations(
-                    [item for item in actions if isinstance(item, Mapping)],
-                    extra_env=extra_env,
-                    decision_recorder=_record_decision,
-                    assert_authority=assert_authority,
-                )
+                if not _reservation_released():
+                    _resume_soperator_flux_apply_maintenance_reservations(
+                        [item for item in actions if isinstance(item, Mapping)],
+                        extra_env=extra_env,
+                        decision_recorder=_record_decision,
+                        assert_authority=assert_authority,
+                    )
                 actions = journal["actions"]
                 assert isinstance(actions, list)
                 _restore_soperator_flux_apply_infrastructure(
                     [item for item in actions if isinstance(item, Mapping)],
                     extra_env=extra_env,
                     assert_authority=assert_authority,
+                    partition_owner=diagnostic_lifecycle.admission.verify
+                    if diagnostic_lifecycle
+                    else None,
                 )
                 receipt = _verify_infrastructure_restored()
             if not _stage_completed("infrastructure-restored"):
@@ -51150,6 +52697,11 @@ def _apply_rendered_flux_with_soperator_job_policy(
             recover_requeued_jobs=_recover_requeued_released,
             recover_held_jobs=_recover_other_held_released,
             bind_operation_spec_sha256=_bind_operation_spec,
+            checks_reservation=_checks_reservation_name,
+            checks_partition_preimages=_checks_preimages,
+            bind_checks_lifecycle=_bind_checks_lifecycle,
+            release_checks_reservation=_release_checks,
+            verify_checks_reservation_released=_verify_checks_release,
             before_reconcile_mutations=_ensure_slurm_gated,
             read_controller_spool_migration=_read_controller_spool_migration,
             write_controller_spool_migration=_write_controller_spool_migration,
@@ -51211,8 +52763,11 @@ def _deploy_generated_artifacts(
     on_terraform_complete: Callable[[], None] | None = None,
     soperator_install_lease: SoperatorInstallRemoteLease | None = None,
     soperator_install_approval_fingerprint: str = "",
+    soperator_runtime_input_env: Mapping[str, str] | None = None,
+    soperator_runtime_prompt: bool = False,
 ) -> DeployRunSummary:
     """Deploy an existing generated artifact bundle without rerendering it."""
+    cluster_identities: dict[str, dict[str, str]] = {}
     soperator_operation_started_at = time.time()
     soperator_infrastructure_plan_sha256 = (
         _sha256_file(terraform_plan_file) if terraform_plan_file is not None else ""
@@ -51410,6 +52965,10 @@ def _deploy_generated_artifacts(
                         raise RuntimeError(
                             "Soperator install could not read the kube-system namespace UID"
                         )
+                    cluster_identities[target_ref] = {
+                        "cluster_id": cluster_id,
+                        "kubernetes_uid": kubernetes_uid,
+                    }
                     soperator_install_lease.bind_cluster_identity(
                         cluster_id=cluster_id,
                         kubernetes_uid=kubernetes_uid,
@@ -51456,11 +53015,21 @@ def _deploy_generated_artifacts(
                         extra_env=kube_env,
                         target_ref=target_ref,
                     )
-                    _ensure_grafana_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref,
-                    )
+                    with (
+                        runtime_app_mutations(
+                            config,
+                            target_ref=target_ref,
+                            env=kube_env or {},
+                            authority=_assert_soperator_authority,
+                        )
+                        if soperator_install_lease is not None
+                        else nullcontext()
+                    ):
+                        _ensure_grafana_runtime_before_flux(
+                            config,
+                            extra_env=kube_env,
+                            target_ref=target_ref,
+                        )
                     _ensure_soperator_notifier_runtime_before_flux(
                         config,
                         extra_env=kube_env,
@@ -51469,10 +53038,14 @@ def _deploy_generated_artifacts(
                             target_paths
                         ),
                     )
-                    _ensure_soperator_backup_runtime_before_flux(
+                    _ensure_soperator_runtime_before_flux(
                         config,
-                        extra_env=kube_env,
+                        paths=target_paths,
+                        extra_env={**(kube_env or {}), **(soperator_runtime_input_env or {})},
                         target_ref=target_ref,
+                        assert_authority=_assert_soperator_authority,
+                        prompt=soperator_runtime_prompt and _console_is_terminal(),
+                        emit=lambda message: console.print(message),
                     )
                 if needs_cluster_ready:
                     _report_cluster_nodes_status(
@@ -51490,17 +53063,39 @@ def _deploy_generated_artifacts(
                         validation_error = exc
                         break
                 if target_has_apps:
+                    ordinary_dir = target_paths.flux_dir / "ordinary"
+                    if soperator_install_lease is not None and ordinary_dir.is_dir():
+                        _assert_soperator_authority()
+                        with tempfile.TemporaryDirectory(
+                            prefix="cxcli-install-apps-"
+                        ) as ordinary_temp:
+                            prerequisite_dir = Path(ordinary_temp)
+                            shutil.copytree(ordinary_dir, prerequisite_dir, dirs_exist_ok=True)
+                            protected_secrets = (
+                                target_paths.flux_dir / "post-flux-mysterybox-eso.yaml"
+                            )
+                            if protected_secrets.is_file():
+                                shutil.copyfile(
+                                    protected_secrets,
+                                    prerequisite_dir / "post-flux-00-mysterybox-eso.yaml",
+                                )
+                            _apply_rendered_flux(
+                                replace(target_paths, flux_dir=prerequisite_dir),
+                                extra_env=kube_env,
+                                assert_authority=_assert_soperator_authority,
+                            )
                     if pre_soperator_validations:
                         console.print(
                             "Applying platform Flux resources before Soperator GPU validations "
                             f"for target {target_ref}..."
                         )
-                        with _staged_flux_without_soperator(
-                            target_paths,
-                            config=config,
-                            target_ref=target_ref,
-                        ) as staged_target_paths:
-                            _apply_rendered_flux(staged_target_paths, extra_env=kube_env)
+                        if not ordinary_dir.is_dir():
+                            with _staged_flux_without_soperator(
+                                target_paths,
+                                config=config,
+                                target_ref=target_ref,
+                            ) as staged_target_paths:
+                                _apply_rendered_flux(staged_target_paths, extra_env=kube_env)
                         try:
                             _run_target_deploy_validations(
                                 pre_soperator_validations,
@@ -51514,6 +53109,11 @@ def _deploy_generated_artifacts(
                     _apply_rendered_flux_with_soperator_job_policy(
                         config,
                         target_paths,
+                        install_recovery=soperator_install_lease is not None
+                        and skip_terraform_apply,
+                        operation_source_release=""
+                        if soperator_install_lease is not None
+                        else None,
                         command_name="deploy",
                         target_ref=target_ref,
                         extra_env=kube_env,
@@ -51582,7 +53182,7 @@ def _deploy_generated_artifacts(
                 extra_env=None,
                 externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
             )
-            _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_runtime_before_flux(config, paths=paths, extra_env=None)
             _apply_rendered_flux_with_soperator_job_policy(
                 config,
                 paths,
@@ -51662,6 +53262,7 @@ def _deploy_generated_artifacts(
     return DeployRunSummary(
         validation_report=validation_report,
         gitops_bootstrap_commands=tuple(gitops_bootstrap_commands),
+        cluster_identities=cluster_identities,
     )
 
 
@@ -53315,6 +54916,14 @@ def _filter_runtime_payload_for_selected_components(
         selected_app_charts.extend(matched_rows)
     apps["charts"] = selected_app_charts
     _materialize_single_target_app_bindings(runtime_payload)
+    if not any(entry.id == _SOPERATOR_APP_ID for entry in app_entries):
+        # Picker entries exclude lifecycle intent; retain its exact ownership record
+        # for intermediate dependency checks, without making it selectable.
+        selected_app_charts.extend(
+            copy.deepcopy(dict(row))
+            for row in app_charts
+            if isinstance(row, Mapping) and component_type_id(row) == _SOPERATOR_APP_ID
+        )
 
     return runtime_payload
 
@@ -53470,10 +55079,15 @@ def _write_runtime_payload_config(
     overwrite: bool = False,
     expected_bytes: bytes | None = None,
     expected_absent: bool = False,
+    ordinary_apps_only: bool = False,
 ) -> bool:
     if expected_bytes is not None and expected_absent:
         raise ValueError("config write cannot expect both existing bytes and an absent path")
     normalize_runtime_config_payload(payload, base_dir=config_path.parent)
+    if ordinary_apps_only:
+        return publish_ordinary_app_config(
+            resolve_project_paths(config_path), payload, expected_bytes=expected_bytes
+        )
     next_config_text = yaml.safe_dump(payload, sort_keys=False)
     current_config_text = None
     if config_path.exists():
@@ -54169,719 +55783,34 @@ def create_command(
     gate.
     """
     try:
-        _require_generic_selection_excludes_soperator(
-            apps_components_opt,
-            command="create",
+        _require_generic_selection_excludes_soperator(apps_components_opt, command="create")
+        _create_project(
+            target_path=target_path,
+            client_name=client_name,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            email=email,
+            infra_components_opt=infra_components_opt,
+            apps_components_opt=apps_components_opt,
+            network_ids_opt=network_ids_opt,
+            subnet_ids_opt=subnet_ids_opt,
+            network_refs_opt=network_refs_opt,
+            subnet_refs_opt=subnet_refs_opt,
+            validate_sources=validate_sources,
+            validate_config=validate_config,
+            no_interactive=no_interactive,
+            force=force,
+            app_namespace_overrides=_parse_component_value_overrides(
+                raw_values=app_namespace_opt, option_name="--app-namespace"
+            ),
+            app_releasename_overrides=_parse_component_value_overrides(
+                raw_values=app_releasename_opt, option_name="--app-releasename"
+            ),
+            app_version_overrides=_parse_component_value_overrides(
+                raw_values=app_version_opt, option_name="--app-version"
+            ),
         )
-        base_path = target_path.resolve()
-        _validate_deployments_root_target(base_path, allow_missing=True)
-        deployments_root = _resolve_deployments_root(base_path)
-        _assert_not_nested_deployments_root(deployments_root)
-        interactive_mode = not no_interactive
-        resolved_tenant_id = _value_or_prompt(
-            tenant_id,
-            option_name="--tenant-id",
-            prompt_text="Tenant ID",
-            interactive=interactive_mode,
-            default_value=None,
-        )
-        resolved_project_id = _value_or_prompt(
-            project_id,
-            option_name="--project-id",
-            prompt_text="Project ID",
-            interactive=interactive_mode,
-            default_value=None,
-        )
-        provider_lookup = ProviderOptionLookup()
-        resolved_tenant_id, resolved_project_id = _validate_tenant_project_ids_or_prompt(
-            tenant_id=resolved_tenant_id,
-            project_id=resolved_project_id,
-            interactive=interactive_mode,
-            provider_lookup=provider_lookup,
-        )
-        resolved_tenant_folder, resolved_project_folder = _resolve_create_target_folders(
-            provider_lookup=provider_lookup,
-            tenant_id=resolved_tenant_id,
-            project_id=resolved_project_id,
-        )
-
-        existing_config_path = _project_config_path(
-            deployments_root=deployments_root,
-            tenant_folder=resolved_tenant_folder,
-            project_folder=resolved_project_folder,
-        )
-        had_existing_config = existing_config_path.exists()
-        infra_source_validation_ran = False
-        if had_existing_config:
-            with existing_config_path.open("r", encoding="utf-8") as handle:
-                loaded_payload = yaml.safe_load(handle) or {}
-            if not isinstance(loaded_payload, dict):
-                raise RuntimeError("Existing config.yaml payload must be a mapping")
-            (
-                _existing_client_name,
-                existing_tenant_id,
-                existing_project_id,
-                _existing_region_id,
-                _existing_email,
-            ) = _identity_values_from_payload(loaded_payload)
-            if (
-                existing_tenant_id != resolved_tenant_id
-                or existing_project_id != resolved_project_id
-            ):
-                raise RuntimeError(
-                    "Resolved name-based project path collision: "
-                    f"{existing_config_path.parent} already belongs to tenant_id/project_id "
-                    f"'{existing_tenant_id}'/'{existing_project_id}', not "
-                    f"'{resolved_tenant_id}'/'{resolved_project_id}'. "
-                    "Move the existing folder or rename one of the Nebius resources before rerunning `create`."
-                )
-            if not interactive_mode and not force:
-                raise RuntimeError(
-                    "Existing project found: "
-                    f"{existing_config_path.parent}. `create` no longer reconciles existing configs. "
-                    "Use `component list/add/remove --config <config.yaml>` for day-2 "
-                    "component edits, or rerun with "
-                    "`--force` to overwrite this one project folder from scratch."
-                )
-            if validate_sources:
-                _validate_component_sources_or_raise(selected_app_ids=set())
-                infra_source_validation_ran = True
-            if interactive_mode:
-                if force:
-                    _warn_existing_project_overwrite(config_path=existing_config_path)
-                    console.print(
-                        "[dim]`--force` confirms the overwrite. "
-                        "This only affects that one resolved project folder.[/dim]"
-                    )
-                elif not _confirm_existing_project_overwrite(config_path=existing_config_path):
-                    console.print("No changes applied.")
-                    return
-            else:
-                _warn_existing_project_overwrite(config_path=existing_config_path)
-                console.print(
-                    "[dim]`--force` confirms the overwrite in non-interactive mode. "
-                    "This only affects that one resolved project folder.[/dim]"
-                )
-        if validate_sources and not infra_source_validation_ran:
-            _validate_component_sources_or_raise(selected_app_ids=set())
-
-        resolved_client_name = _client_name_or_prompt(
-            client_name,
-            interactive=interactive_mode,
-        )
-        _ensure_project_auth_identity(
-            project_id=resolved_project_id,
-            client_name=resolved_client_name,
-        )
-        resolved_region_id = _region_or_prompt(
-            region_id,
-            interactive=interactive_mode,
-        )
-        resolved_email = _optional_email_or_prompt(
-            email,
-            interactive=interactive_mode,
-        )
-
-        infra_entries = _with_infra_provider_groups(component_entries("infra"))
-        app_entries = tuple(
-            entry for entry in component_entries("apps") if entry.id != _SOPERATOR_APP_ID
-        )
-        if _SOPERATOR_LIFECYCLE_INTERNAL.get():
-            snapshot = _SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE.get()
-            release = _non_empty_text(getattr(snapshot, "release", ""))
-            if not release:
-                raise RuntimeError(
-                    "Soperator lifecycle create requires a frozen official upstream release."
-                )
-            app_entries = (*app_entries, soperator_install_entry(release))
-
-        optional_wizard_mode = interactive_mode
-        if interactive_mode:
-            selected_infra_raw: set[str] = set()
-            selected_apps_raw: set[str] = set()
-            while True:
-                optional_decision = _wizard_continue_phase(
-                    "Continue with optional wizard phases (component selection and fields)?",
-                    default=True,
-                )
-                if _wizard_phase_stop_requested(optional_decision) or not optional_decision:
-                    optional_wizard_mode = False
-                    selected_infra_raw = _resolve_component_ids(
-                        scope="infra",
-                        raw_values=infra_components_opt,
-                        interactive=False,
-                        entries=infra_entries,
-                    )
-                    selected_apps_raw = _resolve_component_ids(
-                        scope="apps",
-                        raw_values=apps_components_opt,
-                        interactive=False,
-                        entries=app_entries,
-                    )
-                    break
-
-                optional_wizard_mode = True
-                selection_stage: ComponentScope = "infra"
-                try:
-                    while True:
-                        try:
-                            if selection_stage == "infra":
-                                selected_infra_raw = _resolve_component_ids(
-                                    scope="infra",
-                                    raw_values=infra_components_opt,
-                                    interactive=True,
-                                    entries=infra_entries,
-                                    seed_defaults=selected_infra_raw or None,
-                                )
-                                selection_stage = "apps"
-                                if (
-                                    apps_components_opt is None
-                                    and not _selected_cluster_target_component_ids(
-                                        selected_infra_raw,
-                                        infra_entries,
-                                    )
-                                ):
-                                    selected_apps_raw = set()
-                                    console.print(
-                                        "[dim]Skipping app chart selection because no MK8s "
-                                        "target was selected. Select infra:mk8s to add Helm "
-                                        "charts or Soperator.[/dim]"
-                                    )
-                                    break
-                            selected_apps_raw = _resolve_component_ids(
-                                scope="apps",
-                                raw_values=apps_components_opt,
-                                interactive=True,
-                                entries=app_entries,
-                                seed_defaults=selected_apps_raw or None,
-                            )
-                            app_target_issue = _app_selection_without_cluster_target_issue(
-                                selected_infra=selected_infra_raw,
-                                selected_apps=selected_apps_raw,
-                                infra_entries=infra_entries,
-                            )
-                            if app_target_issue:
-                                console.print(
-                                    f"{warning_markup('Invalid app selection:')} {app_target_issue}"
-                                )
-                                if infra_components_opt is not None:
-                                    raise RuntimeError(app_target_issue)
-                                selection_stage = "infra"
-                                continue
-                            break
-                        except _WizardBackRequested:
-                            if selection_stage == "apps":
-                                selection_stage = "infra"
-                                continue
-                            raise
-                except _WizardBackRequested:
-                    continue
-                except _WizardQuitRequested:
-                    optional_wizard_mode = False
-                    selected_infra_raw = _resolve_component_ids(
-                        scope="infra",
-                        raw_values=infra_components_opt,
-                        interactive=False,
-                        entries=infra_entries,
-                    )
-                    selected_apps_raw = _resolve_component_ids(
-                        scope="apps",
-                        raw_values=apps_components_opt,
-                        interactive=False,
-                        entries=app_entries,
-                    )
-                    break
-                break
-        else:
-            selected_infra_raw = _resolve_component_ids(
-                scope="infra",
-                raw_values=infra_components_opt,
-                interactive=False,
-                entries=infra_entries,
-            )
-            selected_apps_raw = _resolve_component_ids(
-                scope="apps",
-                raw_values=apps_components_opt,
-                interactive=False,
-                entries=app_entries,
-            )
-        app_namespace_overrides = _parse_component_value_overrides(
-            raw_values=app_namespace_opt,
-            option_name="--app-namespace",
-        )
-        app_releasename_overrides = _parse_component_value_overrides(
-            raw_values=app_releasename_opt,
-            option_name="--app-releasename",
-        )
-        app_version_overrides = _parse_component_value_overrides(
-            raw_values=app_version_opt,
-            option_name="--app-version",
-        )
-        soperator_profile: str | None = _SOPERATOR_INSTALL_PROFILE_OVERRIDE.get()
-        if interactive_mode and optional_wizard_mode and _SOPERATOR_APP_ID in selected_apps_raw:
-            console.print(
-                "[dim]Soperator create materializes the full production MK8s+SFS "
-                "bundle. Use `nebius-cxcli soperator onboard "
-                "<config.yaml-or-deployments-root>` for existing Nebius MK8s "
-                "clusters.[/dim]"
-            )
-            console.print(
-                "[dim]Soperator worker profile controls whether the fresh "
-                "production bundle uses CPU-only, GPU-only, or mixed worker "
-                "NodeSets before MK8s fields and deployment-testing prompts.[/dim]"
-            )
-            if soperator_profile is None:
-                try:
-                    soperator_profile = _prompt_soperator_profile()
-                except _WizardQuitRequested:
-                    optional_wizard_mode = False
-                    soperator_profile = _default_soperator_profile_name()
-        elif _SOPERATOR_APP_ID in selected_apps_raw:
-            soperator_profile = soperator_profile or _default_soperator_profile_name()
-        selected_infra_before_soperator_expansion = set(selected_infra_raw)
-        selected_apps_before_soperator_expansion = set(selected_apps_raw)
-        selected_infra_raw = _expand_soperator_component_selection(
-            selected_infra=selected_infra_raw,
-            selected_apps=selected_apps_raw,
-            infra_entries=infra_entries,
-        )
-        selected_apps_raw = _expand_soperator_app_selection(
-            selected_apps=selected_apps_raw,
-            app_entries=app_entries,
-        )
-        _print_soperator_selection_adjustments(
-            selected_infra_before=selected_infra_before_soperator_expansion,
-            selected_apps_before=selected_apps_before_soperator_expansion,
-            selected_infra_after=selected_infra_raw,
-            selected_apps_after=selected_apps_raw,
-        )
-        app_target_issue = _app_selection_without_cluster_target_issue(
-            selected_infra=selected_infra_raw,
-            selected_apps=selected_apps_raw,
-            infra_entries=infra_entries,
-        )
-        if app_target_issue:
-            raise RuntimeError(app_target_issue)
-
-        dependency_seed_payload = _dependency_seed_payload(
-            client_name=resolved_client_name,
-            tenant_id=resolved_tenant_id,
-            project_id=resolved_project_id,
-            region_id=resolved_region_id,
-            email=resolved_email,
-            selected_infra=selected_infra_raw,
-            selected_apps=selected_apps_raw,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
-            existing_payload=None,
-            merge_existing=False,
-            app_version_overrides=app_version_overrides,
-        )
-
-        dependency_resolution_started = time.monotonic()
-        if selected_apps_raw:
-            with console.status("[cyan]Resolving app chart dependencies...[/cyan]"):
-                selected_infra, selected_apps = _normalize_component_dependencies(
-                    selected_infra=selected_infra_raw,
-                    selected_apps=selected_apps_raw,
-                    infra_entries=infra_entries,
-                    app_entries=app_entries,
-                    payload_for_app_chart_deps=dependency_seed_payload,
-                )
-        else:
-            selected_infra, selected_apps = _normalize_component_dependencies(
-                selected_infra=selected_infra_raw,
-                selected_apps=selected_apps_raw,
-                infra_entries=infra_entries,
-                app_entries=app_entries,
-                payload_for_app_chart_deps=dependency_seed_payload,
-            )
-        dependency_resolution_elapsed = time.monotonic() - dependency_resolution_started
-        if dependency_resolution_elapsed >= 1:
-            console.print(
-                "[dim]App dependency resolution finished in "
-                f"{dependency_resolution_elapsed:.1f}s[/dim]"
-            )
-        source_validated_app_ids: set[str] = set()
-        if validate_sources and selected_apps:
-            _validate_component_sources_or_raise(
-                selected_app_ids=selected_apps,
-                include_infra=False,
-            )
-            source_validated_app_ids.update(selected_apps)
-
-        wizard_completed = True
-        starter_payload = _starter_component_payload(
-            client_name=resolved_client_name,
-            tenant_id=resolved_tenant_id,
-            project_id=resolved_project_id,
-            region_id=resolved_region_id,
-            email=resolved_email,
-            selected_infra=selected_infra,
-            selected_apps=selected_apps,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
-            app_namespace_overrides=app_namespace_overrides,
-            app_releasename_overrides=app_releasename_overrides,
-            app_version_overrides=app_version_overrides,
-        )
-        if soperator_profile is not None:
-            _apply_soperator_profile_to_payload(
-                starter_payload,
-                profile=soperator_profile,
-            )
-        _apply_vpc_ref_overrides(
-            payload=starter_payload,
-            selected_infra=selected_infra,
-            network_refs=network_refs_opt,
-            subnet_refs=subnet_refs_opt,
-        )
-        _apply_vpc_id_overrides(
-            payload=starter_payload,
-            selected_infra=selected_infra,
-            network_ids=network_ids_opt,
-            subnet_ids=subnet_ids_opt,
-        )
-        final_payload = starter_payload
-        _materialize_singleton_provider_defaults(
-            payload=final_payload,
-            selected_infra=selected_infra,
-            infra_entries=infra_entries,
-            provider_lookup=provider_lookup,
-        )
-        _materialize_mk8s_image_defaults(
-            payload=final_payload,
-            selected_infra=selected_infra,
-            infra_entries=infra_entries,
-            provider_lookup=provider_lookup,
-        )
-        _materialize_vm_image_defaults(
-            payload=final_payload,
-            selected_infra=selected_infra,
-            infra_entries=infra_entries,
-            provider_lookup=provider_lookup,
-        )
-        materialize_compute_boot_disk_defaults(
-            final_payload,
-            provider_lookup=provider_lookup,
-        )
-        _materialize_create_soperator_component_defaults(final_payload)
-        selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
-            final_payload,
-            selected_apps=selected_apps,
-            app_entries=app_entries,
-        )
-        _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
-        if interactive_mode:
-            _print_component_selection_summary(
-                selected_infra=selected_infra,
-                selected_apps=selected_apps,
-                infra_entries=infra_entries,
-                app_entries=app_entries,
-                payload=final_payload,
-            )
-
-        if interactive_mode and optional_wizard_mode:
-            field_wizard_kwargs: dict[str, Any] = {}
-            if soperator_profile is not None:
-                field_wizard_kwargs["skip_soperator_profile_prompt"] = True
-            field_wizard_kwargs["align_infra_resource_names_before_apps"] = True
-            field_wizard_kwargs["prompt_app_version_before_app_config"] = True
-            config_yaml_override, wizard_completed = _run_component_field_wizard(
-                config_yaml=yaml.safe_dump(final_payload, sort_keys=False),
-                selected_infra=selected_infra,
-                selected_apps=selected_apps,
-                infra_entries=infra_entries,
-                app_entries=app_entries,
-                provider_lookup=provider_lookup,
-                **field_wizard_kwargs,
-            )
-            parsed_override = yaml.safe_load(config_yaml_override) or {}
-            if not isinstance(parsed_override, dict):
-                raise RuntimeError("Updated config payload must be a mapping")
-            final_payload = parsed_override
-            _materialize_planned_vpc_binding_tokens(final_payload)
-            selected_apps = _enabled_ids_from_runtime_payload(
-                payload=final_payload,
-                entries=app_entries,
-            )
-
-        _materialize_create_soperator_component_defaults(final_payload)
-        selected_apps, mysterybox_eso_app_labels = (
-            _materialize_soperator_child_chart_secret_dependencies(
-                final_payload,
-                selected_apps=selected_apps,
-                app_entries=app_entries,
-            )
-        )
-        _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
-        _materialize_mk8s_image_defaults(
-            payload=final_payload,
-            selected_infra=selected_infra,
-            infra_entries=infra_entries,
-            provider_lookup=provider_lookup,
-        )
-        _materialize_vm_image_defaults(
-            payload=final_payload,
-            selected_infra=selected_infra,
-            infra_entries=infra_entries,
-            provider_lookup=provider_lookup,
-        )
-        _materialize_singleton_provider_defaults(
-            payload=final_payload,
-            selected_infra=selected_infra,
-            infra_entries=infra_entries,
-            provider_lookup=provider_lookup,
-        )
-        _materialize_planned_vpc_binding_tokens(final_payload)
-        materialize_compute_boot_disk_defaults(
-            final_payload,
-            provider_lookup=provider_lookup,
-        )
-        if not interactive_mode:
-            _require_vpc_networking_for_noninteractive(
-                payload=final_payload,
-                selected_infra=selected_infra,
-                infra_entries=infra_entries,
-                provider_lookup=provider_lookup,
-            )
-        gpu_app_selection = resolve_mk8s_gpu_app_selection(
-            final_payload,
-            selected_app_ids=selected_apps,
-            app_entries=app_entries,
-        )
-        if gpu_app_selection.issues:
-            raise RuntimeError(
-                "MK8s GPU app defaults are incomplete:\n  - "
-                + "\n  - ".join(gpu_app_selection.issues)
-            )
-        if gpu_app_selection.auto_enabled_app_ids:
-            selected_apps = set(gpu_app_selection.selected_app_ids)
-            auto_enabled_seed = _starter_component_payload(
-                client_name=resolved_client_name,
-                tenant_id=resolved_tenant_id,
-                project_id=resolved_project_id,
-                region_id=resolved_region_id,
-                email=resolved_email,
-                selected_infra=selected_infra,
-                selected_apps=selected_apps,
-                infra_entries=infra_entries,
-                app_entries=app_entries,
-                app_namespace_overrides=app_namespace_overrides,
-                app_releasename_overrides=app_releasename_overrides,
-                app_version_overrides=app_version_overrides,
-            )
-            _ensure_payload_contains_component_rows(
-                payload=final_payload,
-                seed_payload=auto_enabled_seed,
-            )
-            console.print(
-                f"{warning_markup('Adjusted component selection:')} enabling "
-                + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
-                + " because the selected MK8s GPU configuration requires them."
-            )
-        if ensure_mk8s_gpu_app_rows(final_payload, app_entries=app_entries):
-            selected_apps = _enabled_ids_from_runtime_payload(
-                payload=final_payload,
-                entries=app_entries,
-            )
-        observability_selection = resolve_observability_app_selection(
-            final_payload,
-            selected_app_ids=selected_apps,
-            app_entries=app_entries,
-        )
-        if observability_selection.issues:
-            raise RuntimeError(
-                "Observability app defaults are incomplete:\n  - "
-                + "\n  - ".join(observability_selection.issues)
-            )
-        if observability_selection.auto_enabled_app_ids:
-            selected_apps = set(observability_selection.selected_app_ids)
-            auto_enabled_seed = _starter_component_payload(
-                client_name=resolved_client_name,
-                tenant_id=resolved_tenant_id,
-                project_id=resolved_project_id,
-                region_id=resolved_region_id,
-                email=resolved_email,
-                selected_infra=selected_infra,
-                selected_apps=selected_apps,
-                infra_entries=infra_entries,
-                app_entries=app_entries,
-                app_namespace_overrides=app_namespace_overrides,
-                app_releasename_overrides=app_releasename_overrides,
-                app_version_overrides=app_version_overrides,
-            )
-            _ensure_payload_contains_component_rows(
-                payload=final_payload,
-                seed_payload=auto_enabled_seed,
-            )
-            console.print(
-                f"{warning_markup('Adjusted component selection:')} enabling "
-                + ", ".join(
-                    f"'apps:{item}'" for item in observability_selection.auto_enabled_app_ids
-                )
-                + " because the selected observability configuration requires them."
-            )
-        _align_new_infra_instance_ids_with_resource_names(final_payload)
-        _materialize_create_soperator_component_defaults(final_payload)
-        materialize_compute_boot_disk_defaults(
-            final_payload,
-            provider_lookup=provider_lookup,
-        )
-        if ensure_mysterybox_eso_app_rows(final_payload, app_entries=app_entries):
-            selected_apps = _enabled_ids_from_runtime_payload(
-                payload=final_payload,
-                entries=app_entries,
-            )
-        selected_apps, nfs_csi_app_labels = _ensure_nfs_csi_app_dependency_selection(
-            final_payload,
-            selected_apps=selected_apps,
-            app_entries=app_entries,
-        )
-        _print_nfs_csi_app_dependency_adjustment(nfs_csi_app_labels)
-        materialize_mk8s_gpu_app_values(final_payload)
-        materialize_observability_infra_values(final_payload)
-        _prune_mk8s_node_group_defaults_without_soperator(
-            final_payload,
-            infra_entries=infra_entries,
-        )
-        _refresh_soperator_registration_fingerprints(final_payload)
-
-        create_required_field_issues = (
-            _wizard_followup_required_field_issues(
-                payload=final_payload,
-                infra_entries=infra_entries,
-            )
-            if interactive_mode and (not optional_wizard_mode or not wizard_completed)
-            else []
-        )
-        if create_required_field_issues:
-            _print_incomplete_wizard_no_write_warning(
-                issues=create_required_field_issues,
-                message="No project config or generated output was written.",
-                preserved_path=existing_config_path.parent if had_existing_config else None,
-                skipped_path=existing_config_path.parent if not had_existing_config else None,
-            )
-            raise typer.Exit(code=1)
-        _prune_redundant_app_chart_default_values(
-            payload=final_payload,
-            app_entries=app_entries,
-        )
-        _refresh_soperator_registration_fingerprints(final_payload)
-        if validate_sources:
-            selected_apps = _validate_final_enabled_app_sources_or_raise(
-                payload=final_payload,
-                app_entries=app_entries,
-                already_validated_app_ids=source_validated_app_ids,
-            )
-            requested_version_app_ids = set(app_version_overrides)
-            requested_version_app_ids.update(
-                _app_chart_ids_with_non_catalog_versions(
-                    payload=final_payload,
-                    app_entries=app_entries,
-                )
-            )
-            _validate_requested_app_chart_versions_or_raise(
-                payload=final_payload,
-                candidate_app_ids=requested_version_app_ids,
-            )
-        selected_infra = _enabled_ids_from_runtime_payload(
-            payload=final_payload,
-            entries=infra_entries,
-        )
-        selected_apps = _enabled_ids_from_runtime_payload(
-            payload=final_payload,
-            entries=app_entries,
-        )
-
-        result = _scaffold_instance(
-            base_path=base_path,
-            client_name=resolved_client_name,
-            tenant_folder=resolved_tenant_folder,
-            project_folder=resolved_project_folder,
-            tenant_id=resolved_tenant_id,
-            project_id=resolved_project_id,
-            region_id=resolved_region_id,
-            email=resolved_email,
-            selected_infra=selected_infra,
-            selected_apps=selected_apps,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
-            force=force or had_existing_config,
-            config_yaml=yaml.safe_dump(final_payload, sort_keys=False),
-        )
-        if _SOPERATOR_LIFECYCLE_INTERNAL.get():
-            _SOPERATOR_INSTALL_CONFIG_RESULT.set(result.config_path.resolve())
-        gitignore_result = _ensure_deployments_gitignore(
-            deployments_root=result.deployments_root,
-        )
-
-        console.print(f"Deployments root: {result.deployments_root}")
-        if gitignore_result.path is not None:
-            if gitignore_result.wrote:
-                console.print(f"Ensured deployments .gitignore: {gitignore_result.path}")
-            else:
-                console.print(f"Deployments .gitignore up-to-date: {gitignore_result.path}")
-        if result.wrote_config:
-            if had_existing_config:
-                console.print(f"Overwritten project: {result.project_path}")
-            else:
-                console.print(f"Created project: {result.project_path}")
-        else:
-            if had_existing_config:
-                console.print(
-                    f"Project already matched the overwrite target: {result.project_path}"
-                )
-            else:
-                console.print(f"Config up-to-date: {result.config_path}")
-        if validate_config:
-            _run_runtime_validation(
-                config_path=result.config_path,
-                strict=False,
-                title="Post-create validation",
-            )
-        quota_report = _warn_on_live_quota_issues(final_payload, phase="create")
-        if quota_report.has_confirmed_insufficiency:
-            console.print(
-                f"{warning_markup('Create completed with quota warnings.')} "
-                "Render can continue, but deploy will fail until the required quota is available "
-                "and any selected GPU shape has matching Capacity Dashboard capacity."
-            )
-            _print_quota_remediation_hint(result.config_path, quota_report)
-        if not validate_config:
-            _print_mk8s_gpu_validation_warnings(final_payload)
-        display_payload = final_payload
-        with suppress(Exception):
-            persisted_payload = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
-            if isinstance(persisted_payload, dict):
-                display_payload = persisted_payload
-        display_selected_infra = _enabled_ids_from_runtime_payload(
-            payload=display_payload,
-            entries=infra_entries,
-        )
-        display_selected_apps = _enabled_ids_from_runtime_payload(
-            payload=display_payload,
-            entries=app_entries,
-        )
-        console.print(
-            "Enabled infra components: "
-            + (", ".join(sorted(display_selected_infra)) if display_selected_infra else "(none)")
-        )
-        console.print(
-            "Enabled apps components: "
-            + (", ".join(sorted(display_selected_apps)) if display_selected_apps else "(none)")
-        )
-        if _active_chart_count(final_payload) > 0 and _config_uses_private_cluster_handoff(
-            final_payload
-        ):
-            console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
-        console.print(f"Ensured generated skeleton: {result.config_path.parent / 'generated'}")
-        _print_create_next_steps(result.config_path)
-        if gitignore_result.inside_git_repo:
-            console.print(
-                f"{warning_markup('Security warning:')} keep this customer repository private "
-                "because the deployments root contains sensitive operational metadata."
-            )
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -54889,6 +55818,102 @@ def create_command(
         raise typer.Exit(code=130) from None
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
+
+
+# Bind helpers at invocation time so each command receives its current console,
+# provider context, and wizard services. The workflow never imports the CLI.
+_ordinary_app_workflow = OrdinaryAppWorkflow(
+    services=lambda: OrdinaryAppServices(
+        prepare_handoff=_prepare_cluster_handoff_kube_env,
+        read_kubernetes_uid=_read_kube_system_namespace_uid,
+        ensure_grafana=_ensure_grafana_runtime_before_flux,
+        apply_flux=_apply_rendered_flux,
+        collect_grafana=_collect_grafana_status_after_flux,
+        emit=console.print,
+    ),
+    resolve_targets=lambda *args, **kwargs: _resolve_selected_deploy_targets(*args, **kwargs),
+)
+accept_ordinary_app_baseline = _ordinary_app_workflow.accept_baseline
+_apply_ordinary_app_command = _ordinary_app_workflow.apply
+
+
+_create_project = ProjectCreationWorkflow(
+    lambda: ProjectCreationServices(
+        provider_lookup=ProviderOptionLookup,
+        soperator_required_infra_ids=_SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS,
+        wizard_back_requested=_WizardBackRequested,
+        wizard_quit_requested=_WizardQuitRequested,
+        active_chart_count=_active_chart_count,
+        align_new_infra_instance_ids_with_resource_names=_align_new_infra_instance_ids_with_resource_names,
+        app_chart_ids_with_non_catalog_versions=_app_chart_ids_with_non_catalog_versions,
+        app_selection_without_cluster_target_issue=_app_selection_without_cluster_target_issue,
+        apply_soperator_profile_to_payload=_apply_soperator_profile_to_payload,
+        apply_vpc_id_overrides=_apply_vpc_id_overrides,
+        apply_vpc_ref_overrides=_apply_vpc_ref_overrides,
+        assert_not_nested_deployments_root=_assert_not_nested_deployments_root,
+        client_name_or_prompt=_client_name_or_prompt,
+        command_status=_command_status,
+        config_uses_private_cluster_handoff=_config_uses_private_cluster_handoff,
+        confirm_existing_project_overwrite=_confirm_existing_project_overwrite,
+        dependency_seed_payload=_dependency_seed_payload,
+        enabled_ids_from_runtime_payload=_enabled_ids_from_runtime_payload,
+        ensure_deployments_gitignore=_ensure_deployments_gitignore,
+        ensure_mysterybox_eso_app_dependency_selection=_ensure_mysterybox_eso_app_dependency_selection,
+        ensure_nfs_csi_app_dependency_selection=_ensure_nfs_csi_app_dependency_selection,
+        ensure_payload_contains_component_rows=_ensure_payload_contains_component_rows,
+        ensure_project_auth_identity=_ensure_project_auth_identity,
+        expand_soperator_app_selection=_expand_soperator_app_selection,
+        expand_soperator_component_selection=_expand_soperator_component_selection,
+        identity_values_from_payload=_identity_values_from_payload,
+        materialize_create_soperator_component_defaults=_materialize_create_soperator_component_defaults,
+        materialize_mk8s_image_defaults=_materialize_mk8s_image_defaults,
+        materialize_planned_vpc_binding_tokens=_materialize_planned_vpc_binding_tokens,
+        materialize_singleton_provider_defaults=_materialize_singleton_provider_defaults,
+        materialize_soperator_child_chart_secret_dependencies=_materialize_soperator_child_chart_secret_dependencies,
+        materialize_vm_image_defaults=_materialize_vm_image_defaults,
+        normalize_component_dependencies=_normalize_component_dependencies,
+        optional_email_or_prompt=_optional_email_or_prompt,
+        print_component_selection_summary=_print_component_selection_summary,
+        print_create_next_steps=_print_create_next_steps,
+        print_incomplete_wizard_no_write_warning=_print_incomplete_wizard_no_write_warning,
+        print_mk8s_gpu_validation_warnings=_print_mk8s_gpu_validation_warnings,
+        print_mysterybox_eso_app_dependency_adjustment=_print_mysterybox_eso_app_dependency_adjustment,
+        print_nfs_csi_app_dependency_adjustment=_print_nfs_csi_app_dependency_adjustment,
+        print_quota_remediation_hint=_print_quota_remediation_hint,
+        print_soperator_selection_adjustments=_print_soperator_selection_adjustments,
+        private_cluster_handoff_note=_private_cluster_handoff_note,
+        project_config_path=_project_config_path,
+        prompt_soperator_profile=_prompt_soperator_profile,
+        prune_mk8s_node_group_defaults_without_soperator=_prune_mk8s_node_group_defaults_without_soperator,
+        prune_redundant_app_chart_default_values=_prune_redundant_app_chart_default_values,
+        refresh_soperator_registration_fingerprints=_refresh_soperator_registration_fingerprints,
+        region_or_prompt=_region_or_prompt,
+        require_vpc_networking_for_noninteractive=_require_vpc_networking_for_noninteractive,
+        resolve_component_ids=_resolve_component_ids,
+        resolve_create_target_folders=_resolve_create_target_folders,
+        resolve_deployments_root=_resolve_deployments_root,
+        run_component_field_wizard=_run_component_field_wizard,
+        run_runtime_validation=_run_runtime_validation,
+        scaffold_instance=_scaffold_instance,
+        selected_cluster_target_component_ids=_selected_cluster_target_component_ids,
+        starter_component_payload=_starter_component_payload,
+        validate_component_sources_or_raise=_validate_component_sources_or_raise,
+        validate_deployments_root_target=_validate_deployments_root_target,
+        validate_final_enabled_app_sources_or_raise=_validate_final_enabled_app_sources_or_raise,
+        validate_requested_app_chart_versions_or_raise=_validate_requested_app_chart_versions_or_raise,
+        validate_tenant_project_ids_or_prompt=_validate_tenant_project_ids_or_prompt,
+        value_or_prompt=_value_or_prompt,
+        warn_existing_project_overwrite=_warn_existing_project_overwrite,
+        warn_on_live_quota_issues=_warn_on_live_quota_issues,
+        with_infra_provider_groups=_with_infra_provider_groups,
+        wizard_continue_phase=_wizard_continue_phase,
+        wizard_followup_required_field_issues=_wizard_followup_required_field_issues,
+        wizard_phase_stop_requested=_wizard_phase_stop_requested,
+        component_entries=component_entries,
+        console=console,
+        materialize_compute_boot_disk_defaults=materialize_compute_boot_disk_defaults,
+    )
+)
 
 
 @component_app.command(
@@ -55175,8 +56200,14 @@ def component_add_command(
             command="component add",
         )
         config_path = _require_component_config_option(config_path)
-        _config, _paths = _load_context(config_path)
-        payload = _load_config_payload(config_path.resolve())
+        source_preimage = config_path.resolve().read_bytes()
+        payload = _read_config_payload(config_path.resolve())
+        ordinary_selection = _payload_has_soperator_lifecycle(payload)
+        if ordinary_selection:
+            validate_ordinary_app_scope(resolve_project_paths(config_path))
+        _config, _paths = _load_context_readonly(config_path)
+        if not ordinary_selection:
+            payload = _load_config_payload(config_path.resolve())
         if validate_sources:
             _validate_component_sources_or_raise(selected_app_ids=set())
         interactive_mode = not no_interactive
@@ -55885,7 +56916,12 @@ def component_add_command(
                 candidate_app_identities=requested_version_app_identities,
             )
 
-        wrote_config = _write_runtime_payload_config(config_path.resolve(), next_payload)
+        wrote_config = _write_runtime_payload_config(
+            config_path.resolve(),
+            next_payload,
+            ordinary_apps_only=_payload_has_soperator_lifecycle(payload),
+            expected_bytes=source_preimage if _payload_has_soperator_lifecycle(payload) else None,
+        )
         if wrote_config:
             console.print(f"Updated: {config_path.resolve()}")
         else:
@@ -56171,6 +57207,7 @@ def component_remove_command(
             command="component remove",
         )
         config_path = _require_component_config_option(config_path)
+        source_preimage = config_path.resolve().read_bytes()
         payload = _read_config_payload(config_path.resolve())
         interactive_mode = not no_interactive
 
@@ -56250,7 +57287,9 @@ def component_remove_command(
                 "cluster target. Use `nebius-cxcli soperator destroy CONFIG --target TARGET`."
             )
 
-        _config, _paths = _load_context(config_path)
+        if _payload_has_soperator_lifecycle(payload):
+            validate_ordinary_app_scope(resolve_project_paths(config_path))
+        _config, _paths = _load_context_readonly(config_path)
         payload = _load_config_payload(config_path.resolve())
 
         if not remove_targets:
@@ -56288,6 +57327,13 @@ def component_remove_command(
                     removed_cluster_targets.add(target.instance_id)
             else:
                 removed_app_labels.append(label)
+                if (
+                    target.component_id == "nebius-observability-agent"
+                    and target.instance_id in soperator_target_refs
+                ):
+                    for deploy_target in next_payload.get("deploy", {}).get("targets", []):
+                        if deploy_target.get("instance_id") == target.instance_id:
+                            deploy_target.setdefault("observability", {})["enabled"] = False
         if removed_cluster_targets:
             removed_target_app_labels = _remove_target_scoped_app_rows(
                 payload=next_payload,
@@ -56307,7 +57353,12 @@ def component_remove_command(
                 + "\n  - ".join(selection_issues)
             )
 
-        wrote_config = _write_runtime_payload_config(config_path.resolve(), next_payload)
+        wrote_config = _write_runtime_payload_config(
+            config_path.resolve(),
+            next_payload,
+            ordinary_apps_only=_payload_has_soperator_lifecycle(payload),
+            expected_bytes=source_preimage if _payload_has_soperator_lifecycle(payload) else None,
+        )
         if wrote_config:
             console.print(f"Updated: {config_path.resolve()}")
         else:
@@ -58434,10 +59485,7 @@ def validate_sources_command(
 
 @app.command(
     "auth",
-    short_help=(
-        "Validate or rotate canonical project authentication; project-aware commands "
-        "create it automatically."
-    ),
+    short_help=("Manage canonical project authentication and permissions."),
     epilog=(
         "Examples: "
         "nebius-cxcli auth --validate-profile "
@@ -58598,8 +59646,16 @@ def auth_command(
                     profile=profile,
                     endpoint=endpoint,
                     sdk_config_file=resolved_sdk_config,
+                    reconcile_permissions=True,
                 )
                 _wait_for_runtime_auth_token_ready(material)
+                _runtime_identity_verifier.verify(
+                    material,
+                    allow_mutation=True,
+                    profile=profile,
+                    endpoint=endpoint,
+                    sdk_config_file=resolved_sdk_config,
+                )
                 _export_runtime_auth_material(material)
                 profile_label = "runtime auth profile"
                 if recreate:
@@ -58708,8 +59764,9 @@ def auth_command(
         "(replaces render-owned artifacts without prompting); "
         "nebius-cxcli --source-profile local render ./deployments/tenant/project/config.yaml "
         "(uses source.local Terraform/Helm paths from component_sources.yaml during development). "
-        "Configs containing Soperator are rejected; its render is internal to `soperator install`, "
-        "`soperator onboard`, `soperator upgrade`, and `soperator destroy`."
+        "For completed Soperator projects, render updates ordinary app resources only and "
+        "preserves the accepted infrastructure and upstream graph. Protected changes use the "
+        "corresponding `soperator` lifecycle command."
     ),
 )
 def render_command(
@@ -58730,12 +59787,34 @@ def render_command(
 ) -> None:
     """Render and transactionally replace generated artifacts from one project config.yaml, prompting only before replacing existing render-owned artifacts unless --force is provided."""
     try:
+        _read_config_payload(config_path)
+        source_preimage = config_path.read_bytes()
+        ordinary_mode = (
+            not _SOPERATOR_LIFECYCLE_INTERNAL.get()
+            and _payload_has_soperator_lifecycle(_read_config_payload(config_path.resolve()))
+        )
+        if ordinary_mode:
+            validate_ordinary_app_scope(resolve_project_paths(config_path))
         config, paths = _load_generic_soperator_lifecycle_context(
-            _load_runtime_context,
+            _load_context_readonly if ordinary_mode else _load_runtime_context,
             config_path,
             command="render",
         )
         _require_soperator_lifecycle_scope(config, command="render")
+        if ordinary_mode:
+            app_source_issues = _validate_enabled_chart_sources(ordinary_config(config))
+            if app_source_issues:
+                raise RuntimeError(
+                    "Ordinary app source validation failed: " + "; ".join(app_source_issues)
+                )
+            if not _confirm_render_overwrite(paths, force=force):
+                return
+            ordinary_written = render_ordinary_apps(config, paths, source_preimage=source_preimage)
+            console.print(
+                f"Rendered {len(ordinary_written)} ordinary app files under {paths.flux_dir}"
+            )
+            _print_render_deploy_hint(config_path)
+            return
         if isinstance(config, dict):
             _materialize_soperator_component_defaults(config)
             _materialize_soperator_render_only_values(config)
@@ -58757,27 +59836,37 @@ def render_command(
         gitignore_result = _ensure_deployments_gitignore(
             deployments_root=paths.deployments_dir,
         )
-        component_output_values = _runtime_component_output_values(config, paths)
+        # Managed cluster identity is unavailable before the initial Terraform
+        # render/apply. Flux uses its stable target reference until the strict
+        # post-Terraform refresh resolves the immutable provider cluster ID.
+        component_output_values = _runtime_component_output_values(
+            config,
+            paths,
+            required_specs=_required_runtime_component_output_specs(
+                config, include_soperator_handoffs=False
+            ),
+        )
         staged_paths = staged_generated_paths(paths)
         try:
             staged_paths.infra_dir.mkdir(parents=True, exist_ok=True)
             staged_paths.flux_dir.mkdir(parents=True, exist_ok=True)
             staged_paths.reports_dir.mkdir(parents=True, exist_ok=True)
             written: list[Path] = []
-            written.extend(
-                render_terraform_artifacts(
-                    config,
-                    staged_paths,
-                    source_profile=resolved_source_profile,
+            with install_phase("render", "Rendering infrastructure and the pinned upstream graph"):
+                written.extend(
+                    render_terraform_artifacts(
+                        config,
+                        staged_paths,
+                        source_profile=resolved_source_profile,
+                    )
                 )
-            )
-            written.extend(
-                render_flux(
-                    config,
-                    staged_paths,
-                    component_output_values=component_output_values,
+                written.extend(
+                    render_flux(
+                        config,
+                        staged_paths,
+                        component_output_values=component_output_values,
+                    )
                 )
-            )
             _print_mk8s_gpu_validation_warnings(config)
             quota_report = _warn_on_config_live_quota_issues(config, paths, phase="render")
             _write_generated_runtime_manifest(
@@ -58788,6 +59877,7 @@ def render_command(
                 output_path=manifest_path_for_generated_dir(staged_paths.generated_dir),
                 manifest_paths=paths,
             )
+            preserve_ordinary_app_generation(paths, staged_paths)
             promote_staged_generated_paths(staged_paths, paths)
         except Exception:
             reset_generated_bundle(staged_paths)
@@ -59137,9 +60227,9 @@ def acceptance_test_benchmark_command(
         "(skips a single optional MK8s GPU deployment-testing check; repeatable; "
         "--skip-validations skips optional deployment-testing checks only); "
         "Canonical project authentication is ensured before deployment preflight. "
-        "Configs or generated bundles containing Soperator lifecycle state are rejected before "
-        "authentication, Terraform, or Flux work; use the "
-        "corresponding `soperator` lifecycle command."
+        "For completed Soperator projects, deploy applies the rendered ordinary app bundle "
+        "without Terraform or Slurm maintenance. Protected changes use the corresponding "
+        "`soperator` lifecycle command."
     ),
 )
 def deploy_command(
@@ -59237,15 +60327,15 @@ def deploy_command(
     Deploy resolves the sibling `generated/` directory and still uses
     `generated/nebius-cxcli-manifest.json` as the authoritative deploy
     contract so source-config changes after render do not silently alter
-    the deployed bundle. Any Soperator app row or registration marker is
-    rejected by the dedicated lifecycle scope guard before authentication or
-    deployment preflight; generic
-    deploy never installs, reconciles, or upgrades Soperator. Use `soperator
+    the deployed bundle. On a completed Soperator project, deploy requires an
+    accepted protected baseline and applies only the rendered ordinary apps,
+    without Terraform or Slurm lifecycle work. Protected drift, unfinished
+    lifecycle operations, and foreign resource ownership are rejected. Use `soperator
     install` for a new cluster, `soperator onboard` to register an existing
     installation, and `soperator upgrade` for a release change. If an approved
     upgrade is interrupted, rerun the same approved `soperator upgrade
-    --execute --approve` command to recover its frozen operation. Before
-    Terraform apply, deploy runs a generated-bundle preflight covering strict
+    --execute --approve` command to recover its frozen operation. For ordinary
+    projects, before Terraform apply, deploy runs a generated-bundle preflight covering strict
     readiness checks, VPC networking preflight, live Nebius quota/capacity
     validation, Terraform validation, and rendered Flux manifest validation
     when apps are enabled. For bundled MK8s reruns,
@@ -59291,6 +60381,21 @@ def deploy_command(
             command="deploy",
         )
         _require_soperator_lifecycle_scope(config, command="deploy")
+        if _payload_has_soperator_lifecycle(config) and not _SOPERATOR_LIFECYCLE_INTERNAL.get():
+            app_validations = _filter_deploy_validations(
+                list(manifest.get("render", {}).get("ordinary_validations", [])),
+                skip_validations=skip_validations,
+                skip_kinds=_resolve_deploy_validation_skip_kinds(tuple(skip_validation or ())),
+            )
+            _apply_ordinary_app_command(
+                config,
+                paths,
+                manifest,
+                target_ref=target_ref,
+                all_targets=all_targets or target_ref is None,
+                validations=app_validations,
+            )
+            return
         skip_validation_kinds = _resolve_deploy_validation_skip_kinds(tuple(skip_validation or ()))
         summary = _deploy_generated_artifacts(
             config,
@@ -59805,8 +60910,9 @@ def flux_bootstrap_command(
                             target_paths
                         ),
                     )
-                    _ensure_soperator_backup_runtime_before_flux(
+                    _ensure_soperator_runtime_before_flux(
                         config,
+                        paths=target_paths,
                         extra_env=kube_env,
                         target_ref=target_ref_value,
                     )
@@ -59835,7 +60941,7 @@ def flux_bootstrap_command(
                 extra_env=None,
                 externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
             )
-            _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_runtime_before_flux(config, paths=paths, extra_env=None)
             action = ensure_flux(paths, extra_env=None)
             if _post_flux_manifest_paths(paths):
                 wait_for_rendered_flux_resources(
@@ -59854,12 +60960,13 @@ def flux_bootstrap_command(
     short_help="Use GENERATED_PATH to apply Flux directly from generated/flux.",
     epilog=(
         "Examples: "
-        "nebius-cxcli flux apply ./deployments/acme/generated "
+        "nebius-cxcli flux apply ./deployments/acme/generated --all-targets "
         "(reconciles HelmReleases and child charts on every target); "
         "nebius-cxcli flux apply ./deployments/acme/generated --target mk8s-prod "
         "(reconciles one target only). "
-        "Use after `nebius-cxcli render` to push partition-policy or topology changes "
-        "without rerunning the full deploy."
+        "Use after `nebius-cxcli render` to apply app changes. On completed Soperator "
+        "projects this applies ordinary apps only; protected topology and partition changes "
+        "use the Soperator lifecycle. Omitted apps are not uninstalled."
     ),
 )
 def flux_apply_command(
@@ -59935,6 +61042,11 @@ def flux_apply_command(
             command="flux apply",
         )
         _require_soperator_lifecycle_scope(config, command="flux apply")
+        if _payload_has_soperator_lifecycle(config) and not _SOPERATOR_LIFECYCLE_INTERNAL.get():
+            _apply_ordinary_app_command(
+                config, paths, manifest, target_ref=target_ref, all_targets=all_targets
+            )
+            return
         if _active_chart_count(config) == 0:
             raise RuntimeError("No enabled apps charts are configured for this project.")
         if _manifest_requires_flux_terraform_state(manifest):
@@ -59997,8 +61109,9 @@ def flux_apply_command(
                             target_paths
                         ),
                     )
-                    _ensure_soperator_backup_runtime_before_flux(
+                    _ensure_soperator_runtime_before_flux(
                         config,
+                        paths=target_paths,
                         extra_env=kube_env,
                         target_ref=target_ref_value,
                     )
@@ -60042,7 +61155,7 @@ def flux_apply_command(
                 extra_env=None,
                 externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
             )
-            _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_runtime_before_flux(config, paths=paths, extra_env=None)
             _apply_rendered_flux_with_soperator_job_policy(
                 config,
                 paths,

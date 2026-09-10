@@ -14,6 +14,93 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Separate strongSwan secret output from ordinary file rendering, preserving
+  atomic mode-`0600` writes and in-memory previews with explicit regression coverage.
+- Fixed ordinary apply rejecting multiple static tunnels sharing a remote prefix.
+  Verification preserves the existing last-enabled-tunnel route selection, rejects
+  stale routes on superseded interfaces, and distinguishes kernel-connected inner
+  subnets. Route writing, historical ownership, recovery formats and HA are unchanged.
+- Fixed `apply` showing a traceback for missing configuration environment
+  variables. Ordinary and HA admission now reports the missing names and a
+  same-shell setup hint, then exits nonzero before locks or deployment work.
+- Fixed bootstrap health reporting an inactive agent as running. The message
+  now requires an exact successful `active` service result.
+- Quoted the validated management SSH key in ordinary and HA cloud-init so
+  YAML-sensitive comments cannot alter its type or contents. The existing
+  pre-provisioning single-key authentication contract is preserved.
+- Fixed `vm-ha` rejecting the exact managed SSH trust import required by its
+  ordinary-to-HA migration plan. Migration now includes that publication in the
+  existing digest approval and apply revalidation; unrelated trust repairs and
+  destructive plans retain their explicit prerequisites.
+- Stabilized migration approval across dry-run, replanning and execution when
+  the absent standby needs a generated SSH identity. Approval binds retained
+  trust and scoped generation intent; dry-run stays read-only and execution
+  still publishes and verifies exact host pins.
+- Fixed migration's final intent check dropping the approved ordinary handoff
+  evidence from its digest. The guarded reservation and fresh cloud observation
+  now compose the same approval state; real cloud drift still blocks migration.
+- Fixed ordinary reapply rejecting inactive optional URL dependencies in installed
+  package metadata. Environment and extra markers are evaluated before the URL
+  policy; active URL dependencies still require a separately built wheel set.
+- Fixed ordinary first apply rejecting a freshly bootstrapped gateway. Planning
+  admits a process-free management restart wait for an approved, journaled stop,
+  and verifies absent optional FRR failure handlers through systemd metadata.
+  Executable handlers and unresolved jobs remain blocking. Agent services wait
+  for the first resolved configuration before starting.
+- Fixed existing gateways with missing boot-disk evidence being classified as
+  new VMs. Ordinary and HA planning now inspect the exact attached disk, preserve
+  valid renamed disks, and stop before deployment on missing or inexact evidence.
+- Fixed ordinary SSH deployment exceeding Linux's single-argument limit after
+  adding route ownership checks. The complete runner and request now use bounded
+  stdin transport within the existing remote deadline.
+- Fixed approved ordinary retries getting stuck after verification was saved but
+  the final reply was lost. Each active mutating operation now publishes its own
+  retirement binding before completion; read-only unchanged checks remain inert.
+- Fixed ordinary static routes left behind when tunnels are removed, disabled,
+  reordered or changed to BGP. Preview and existing disruption approval now bind
+  exact historical ownership and route removals; cleanup precedes interface reuse.
+  Durable operation evidence preserves interrupted updates and later absence
+  verification. Existing public configuration, last-applied state and operation
+  journal formats remain compatible; interfaces and unrelated routes are preserved.
+- Fixed ordinary command completion to require bounded leader and descendant
+  settlement before retiring its operation evidence. Uncertain process identity
+  or surviving writers keep the guard unresolved.
+- Ordinary verification now rejects stale routes on configured static tunnel
+  interfaces. Routing cleanup skips flushing an already empty table 220, avoiding
+  a false failure when only its policy rule remains.
+
+- Fixed ordinary-to-HA migration rejecting its own approved handoff. Package
+  verification now separates stable predecessors from runtime admission, and
+  interrupted handoffs resume under their actual ordinary or HA owner.
+- Added approved package repair for the retained host of an unfinished HA
+  conversion, including damaged product imports. Exact locks, raw effect evidence,
+  durable startup exclusion and an independent cold guard preserve existing HA
+  authority. Retries cover completed writes, first startup and lost replies;
+  completed handoffs do not impose repair locks on healthy gateways.
+
+- Fixed raw gRPC allocation lookup serialization for the supported Nebius SDK
+  `>=0.3.18,<0.4.0` range (issue #190).
+- Fixed FRR bootstrap account ordering and required-step error propagation for
+  newly created VMs. Failed provisioning, incomplete targets, and readiness or
+  deployment failures now prevent apply success (reviewed from PR #179).
+- Added compatible in-place apply planning, exact disruption approval, preserved
+  compatible dependencies, and verification without deployment effects for
+  healthy unchanged gateways. Existing HA lifecycle and fencing owners remain
+  authoritative; previous-release agents can take the approved upgrade path.
+- Ordinary apply now uses a bounded serialized transaction and exact agent
+  confirmation after required local checks, with partial-progress failure reports.
+  Added correct firewall interface naming for XFRM links with a parent suffix.
+- Fixed selected dependency upgrades over distro packages without uninstall
+  records, while retaining normal replacement of pip-owned versions. HA
+  replacement planning no longer binds new Compute to a retired guest's state.
+- Fixed ordinary timeout admission with a durable operation journal, typed
+  systemd job tracking, networkd convergence checks, and guarded management/CLI
+  writers. Uncertain work blocks further mutations until settlement and fresh
+  approval; no automatic replay, rollback, or reboot is introduced.
+- Preserved previous-release upgrades with management quiescence, persistent
+  startup admission, ordinary service dependency variants, and a guarded handoff
+  to existing HA authority. Added real Ubuntu systemd/networkd PR and release gates.
+
 ## [nebius-vpngw-v0.6.0] - 2026-09-03
 
 - Restored reproducible Python 3.12 installs by bounding Click before its 8.4

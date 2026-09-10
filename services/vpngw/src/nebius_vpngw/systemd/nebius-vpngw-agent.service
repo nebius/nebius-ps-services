@@ -1,5 +1,6 @@
 [Unit]
 Description=Nebius VPNGW Agent
+ConditionPathExists=/etc/nebius-vpngw/config-resolved.yaml
 After=network-online.target strongswan-starter.service frr.service
 Wants=network-online.target strongswan-starter.service frr.service
 

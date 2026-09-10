@@ -25,8 +25,165 @@ runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
+@pytest.fixture
+def install_scope_config(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "rendered_module_sources",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(module_name="cluster", instance_id="gpu1", component_id="mk8s"),
+            SimpleNamespace(module_name="storage", instance_id="sfs", component_id="sfs"),
+        ),
+    )
+    return {
+        "apps": {"charts": [{"id": "soperator", "instance_id": "gpu1", "enabled": True}]},
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "gpu1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "worker": {"service_account": {"name": "worker-account"}},
+                            "existing": {"service_account": {"id": "serviceaccount-existing"}},
+                            "disabled": {"enabled": False, "service_account": {"name": "disabled"}},
+                            "unconfigured": {},
+                        }
+                    },
+                }
+            ]
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "nebius_iam_v1_group.cluster_soperator_observability",
+        "nebius_iam_v1_group_membership.cluster_soperator_observability",
+        "nebius_iam_v1_access_permit.cluster_soperator_observability",
+    ],
+)
+@pytest.mark.parametrize("key", ["worker", "existing"])
+def test_install_scope_accepts_exact_generated_observability_iam(
+    install_scope_config, resource, key
+):
+    cli._validate_soperator_install_terraform_plan_scope(
+        install_scope_config,
+        {
+            "resource_changes": [
+                {
+                    "address": "module.cluster.nebius_mk8s_v1_cluster.this",
+                    "change": {"actions": ["create"]},
+                },
+                {"address": f'{resource}["{key}"]', "change": {"actions": ["create"]}},
+            ],
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        'nebius_iam_v1_group.other_soperator_observability["worker"]',
+        'nebius_iam_v1_group.cluster_soperator_observability_extra["worker"]',
+        'nebius_iam_v1_group.cluster_soperator_observability["foreign"]',
+        'nebius_iam_v1_group.cluster_soperator_observability["disabled"]',
+        'nebius_iam_v1_group.cluster_soperator_observability["unconfigured"]',
+        "nebius_iam_v1_group.cluster_soperator_observability",
+        'nebius_iam_v1_group.cluster_soperator_observability["worker"].extra',
+        'nebius_iam_v1_access_permit.cluster_soperator_observability_admin["worker"]',
+    ],
+)
+def test_install_scope_rejects_unowned_root_iam(install_scope_config, address):
+    with pytest.raises(RuntimeError, match="outside its"):
+        cli._validate_soperator_install_terraform_plan_scope(
+            install_scope_config,
+            {
+                "resource_changes": [{"address": address, "change": {"actions": ["create"]}}],
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "actions,message",
+    [
+        (["delete", "create"], "delete or replacement"),
+        (["create"], "no MK8s or SFS changes"),
+    ],
+)
+def test_install_scope_root_iam_cannot_replace_or_fake_fresh_infra(
+    install_scope_config, actions, message
+):
+    with pytest.raises(RuntimeError, match=message):
+        cli._validate_soperator_install_terraform_plan_scope(
+            install_scope_config,
+            {
+                "resource_changes": [
+                    {
+                        "address": 'nebius_iam_v1_group.cluster_soperator_observability["worker"]',
+                        "change": {"actions": actions},
+                    }
+                ],
+            },
+        )
+
+
 def _plain_cli_output(value: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", value)
+
+
+def test_soperator_cluster_identity_is_deferred_until_terraform_refresh(monkeypatch, tmp_path):
+    config = {"apps": {"charts": [{"id": "soperator", "instance_id": "gpu1", "enabled": True}]}}
+    monkeypatch.setattr(
+        cli,
+        "component_entry_lookup",
+        lambda: {
+            "mk8s": SimpleNamespace(handoff=SimpleNamespace(cluster_id_output_name="cluster_id"))
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_enabled_cluster_handoffs",
+        lambda _config: [
+            {
+                "instance_id": "gpu1",
+                "component_id": "mk8s",
+                "cluster_id_output_name": "gpu1_cluster_id",
+            }
+        ],
+    )
+    paths = SimpleNamespace(infra_dir=tmp_path / "not-yet-rendered")
+    monkeypatch.setattr(
+        cli,
+        "terraform_output_json",
+        lambda *_args, **_kwargs: pytest.fail("initial render must not read Terraform outputs"),
+    )
+    initial_specs = cli._required_runtime_component_output_specs(
+        config, include_soperator_handoffs=False
+    )
+    assert cli._runtime_component_output_values(config, paths, required_specs=initial_specs) == {}
+
+    observed_dirs = []
+
+    def outputs(infra_dir, **_kwargs):
+        observed_dirs.append(infra_dir)
+        return {"gpu1_cluster_id": {"value": "cluster-created-by-terraform"}}
+
+    monkeypatch.setattr(cli, "terraform_output_json", outputs)
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+    resolved = cli._runtime_component_output_values(config, paths)
+    assert resolved == {
+        cli.component_output_ref("gpu1", "cluster_id"): "cluster-created-by-terraform"
+    }
+    assert observed_dirs == [paths.infra_dir]
+
+    monkeypatch.setattr(cli, "terraform_output_json", lambda *_args, **_kwargs: {})
+    with pytest.raises(
+        RuntimeError, match="missing required rendered root outputs.*gpu1_cluster_id"
+    ):
+        cli._runtime_component_output_values(config, paths)
 
 
 def test_cross_version_partition_restore_normalizes_alloc_nodes_all(
@@ -215,6 +372,7 @@ def test_full_stack_campaign_plan_uses_one_row_per_group_and_keeps_each_hop() ->
         ownership="onboarded",
         backend="provider-api",
         source_release="1.22.3",
+        checks_policy_proposal='{"changes": []}',
         target_release="4.1.7",
         target_jail_cuda_version="12.9.0",
         source_kubernetes_version="1.33",
@@ -595,8 +753,8 @@ def test_upgrade_gpu_validation_keeps_operator_global_and_scopes_cuda_per_active
         target_ref="cluster-a",
         kube_env={},
         gpu_node_groups={
-            "worker-a": ("worker-a", "node-group-a"),
-            "worker-b": ("worker-b", "node-group-b"),
+            "worker-a": "node-group-a",
+            "worker-b": "node-group-b",
         },
     )
 
@@ -610,11 +768,12 @@ def test_upgrade_gpu_validation_keeps_operator_global_and_scopes_cuda_per_active
         "worker-a",
         "worker-b",
     )
-    assert [item.get("node_groups") for item in captured] == [
+    assert [item.get("node_group_ids") for item in captured] == [
         None,
-        ["worker-a", "node-group-a"],
-        ["worker-b", "node-group-b"],
+        ["node-group-a"],
+        ["node-group-b"],
     ]
+    assert all("node_groups" not in item for item in captured)
     assert len({str(item["report_file"]) for item in captured}) == 3
     assert len({outcome["validationRunId"] for outcome in outcomes}) == 1
     for outcome in outcomes:
@@ -779,7 +938,7 @@ def test_upgrade_gpu_validation_requires_manifest_spec_for_active_group(
             config_path=tmp_path / "config.yaml",
             target_ref="cluster-a",
             kube_env={},
-            gpu_node_groups={"worker-a": ("worker-a", "node-group-a")},
+            gpu_node_groups={"worker-a": "node-group-a"},
         )
 
 
@@ -828,7 +987,7 @@ def test_upgrade_gpu_validation_rejects_skipped_cuda_report(
             config_path=tmp_path / "config.yaml",
             target_ref="cluster-a",
             kube_env={},
-            gpu_node_groups={"worker-a": ("worker-a", "node-group-a")},
+            gpu_node_groups={"worker-a": "node-group-a"},
         )
 
 
@@ -885,7 +1044,7 @@ def test_upgrade_gpu_validation_failed_replay_preserves_accepted_report(
         config_path=tmp_path / "config.yaml",
         target_ref="cluster-a",
         kube_env={},
-        gpu_node_groups={"worker-a": ("worker-a", "node-group-a")},
+        gpu_node_groups={"worker-a": "node-group-a"},
     )
     accepted_path = Path(str(accepted[0]["reportFile"]))
     accepted_bytes = accepted_path.read_bytes()
@@ -895,7 +1054,7 @@ def test_upgrade_gpu_validation_failed_replay_preserves_accepted_report(
             config_path=tmp_path / "config.yaml",
             target_ref="cluster-a",
             kube_env={},
-            gpu_node_groups={"worker-a": ("worker-a", "node-group-a")},
+            gpu_node_groups={"worker-a": "node-group-a"},
         )
 
     assert attempted_paths[0] == accepted_path
@@ -1413,6 +1572,12 @@ def test_deployments_root_onboard_retry_replaces_scaffold_region_from_live_clust
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # This focused scaffold test stubs rendering; baseline publication is a
+    # separate lifecycle boundary covered by ordinary app workflow tests.
+    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_a, **_k: None)
+    # This scaffold fixture has no discovered worker placement. Fingerprint
+    # materialization is a separate boundary, as in the marker-clearing test.
+    monkeypatch.setattr(cli, "_refresh_soperator_registration_fingerprints", lambda _payload: None)
     config_path, effects, _collection_contexts = _prepare_onboarding(
         monkeypatch,
         tmp_path,
@@ -1473,6 +1638,9 @@ def test_successful_onboard_clears_pending_live_region_marker(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # This focused scaffold test stubs rendering; baseline publication is a
+    # separate lifecycle boundary covered by ordinary app workflow tests.
+    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_a, **_k: None)
     payload = _onboard_source_payload()
     payload["apps"]["charts"] = [
         {
@@ -1980,3 +2148,64 @@ def test_soperator_commands_reject_misrouted_options_at_the_parser(
     assert result.exit_code == 2
     assert "No such option" in output
     assert foreign_option in output
+
+
+@pytest.mark.parametrize(
+    "source_release,observed,expected",
+    [
+        ("", "4.1.5", None),
+        ("", "", None),
+        ("", "4.1.6", "reject"),
+        (None, "4.1.5", "4.1.5"),
+        ("4.1.4", "4.1.5", "4.1.4"),
+    ],
+)
+def test_flux_resume_preserves_explicit_absent_install_source(
+    monkeypatch, tmp_path, source_release, observed, expected
+):
+    paths = SimpleNamespace(
+        flux_dir=tmp_path, reports_dir=tmp_path, path_project_folder="cluster-a"
+    )
+    (tmp_path / "configmap-terraform-fluxcd-values.yaml").write_text("{}")
+    snapshot = SimpleNamespace(release="4.1.5", capability_contract="upstream-flux-v1")
+    monkeypatch.setattr(cli, "flux_dir_has_rendered_resources", lambda *_: True)
+    monkeypatch.setattr(cli, "load_soperator_release_snapshot", lambda *_: snapshot)
+    monkeypatch.setattr(
+        cli, "ensure_soperator_release_source", lambda *_: SimpleNamespace(source_dir=str(tmp_path))
+    )
+    monkeypatch.setattr(cli, "compile_checks_policy", lambda *_: None)
+    for name in (
+        "_rendered_soperator_upstream_values",
+        "_rendered_soperator_adapter_state",
+        "_rendered_soperator_cluster_values",
+    ):
+        monkeypatch.setattr(cli, name, lambda *_: {})
+    monkeypatch.setattr(cli, "rendered_soperator_jail_image_authority", lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "verify_soperator_release_artifacts", lambda *a, **kw: None)
+    monkeypatch.setattr(cli.shutil, "which", lambda *_: "kubectl")
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
+    monkeypatch.setattr(cli, "flux_controllers_installed", lambda **kw: True)
+    monkeypatch.setattr(cli, "flux_crds_installed", lambda **kw: True)
+    monkeypatch.setattr(cli, "_live_soperator_release_for_reconcile", lambda **kw: observed)
+    monkeypatch.setattr(
+        cli,
+        "inspect_soperator_release_contract",
+        lambda *_: (None, None, "upstream-flux-v1", "source-hash"),
+    )
+
+    class StopBeforeMutation(Exception):
+        pass
+
+    def resolve(**kwargs):
+        assert kwargs["current_release"] == expected
+        raise StopBeforeMutation
+
+    monkeypatch.setattr(cli, "resolve_soperator_reconcile_strategy", resolve)
+    if expected == "reject":
+        with pytest.raises(RuntimeError, match="outside the frozen operation lineage"):
+            cli._apply_rendered_flux(paths, config={}, operation_source_release=source_release)
+    else:
+        with pytest.raises(StopBeforeMutation):
+            cli._apply_rendered_flux(paths, config={}, operation_source_release=source_release)

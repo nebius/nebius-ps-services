@@ -4,7 +4,7 @@ A slow result may coincide with thermal, power, error, or sharing conditions tha
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 11 for MIG partitioning, MPS process sharing, power/clock/health observations and isolation. Use Lesson 1’s preflight distinction between observed device state and measured application behavior; this lab only observes configuration.
+**Theory preparation:** Read Lesson 11 for MIG partitioning, MPS process sharing, power/clock/health observations and isolation. Use Lab 10’s preflight distinction between observed device state and measured application behavior; this lab only observes configuration.
 
 Run on an allocated H100 with permission to read its management information. Use the [evidence and privacy guide](../evidence-security.md); raw management output can contain identifiers that do not belong in public course reports.
 

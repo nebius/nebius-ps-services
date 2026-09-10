@@ -3,11 +3,47 @@
 These are layout-budget regressions, not browser or font-rendering proof.
 """
 
+import re
 import xml.etree.ElementTree as ET
 
 import pytest
 
-from test_course_content_contract import ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT, load_builder
+
+
+@pytest.mark.parametrize("course", COURSES)
+def test_overviews_keep_readable_scale_in_a_narrow_article(course: str) -> None:
+    builder = load_builder()
+    for index, row in enumerate(
+        builder.parse_visuals(ROOT / course / "reference/visual-plan.md"), 1
+    ):
+        markup = builder.diagram(row, index)
+        svg = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup, re.S).group())
+        width = float(svg.get("viewBox").split()[2])
+        # At a 320px figure width, 18-unit labels retain at least 12px type.
+        # This budget complements rendered review; it is not font-fit proof.
+        assert 18 * 320 / width >= 12
+
+
+def test_pipeline_copy_completion_precedes_dependent_compute() -> None:
+    builder = load_builder()
+    rows = builder.parse_visuals(ROOT / "custom-cuda-kernels/reference/visual-plan.md")
+    row = next(row for row in rows if row.layout == "pipeline")
+    markup = builder.diagram(row, 1)
+    svg = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup, re.S).group())
+    completion = next(
+        node
+        for node in svg.findall("text")
+        if " ".join(node.itertext()).startswith("Copy ")
+    )
+    compute_boxes = sorted(svg.findall("rect"), key=lambda node: float(node.get("x")))[
+        :2
+    ]
+    next_compute = max(float(node.get("y")) for node in compute_boxes)
+    last_baseline = (
+        float(completion.get("y")) + (len(completion.findall("tspan")) - 1) * 21.6
+    )
+    assert last_baseline < next_compute
 
 
 def test_multiline_overview_label_is_centered_in_its_slot() -> None:

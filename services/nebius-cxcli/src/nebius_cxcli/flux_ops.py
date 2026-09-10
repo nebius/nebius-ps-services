@@ -34,6 +34,11 @@ from .soperator_adapter import (
     SOPERATOR_LIFECYCLE_RECREATABLE,
     SOPERATOR_LIFECYCLE_SHARED,
 )
+from .soperator_check_history import terminal_native_check_pods
+from .soperator_checks_binding import bind_auxiliary_cluster
+from .soperator_checks_phase import ChecksPhaseContext
+from .soperator_checks_policy import SoperatorChecksPolicy, operation_checks_documents
+from .soperator_enroot import apply_enroot_profile, split_enroot_profile_documents
 from .soperator_failures import (
     SoperatorMainWorkloadIdentity,
     SoperatorMainWorkloadTerminalError,
@@ -44,6 +49,7 @@ from .soperator_flux_graph import (
     SOPERATOR_GRAPH_LABEL_VALUE,
     SOPERATOR_GRAPH_SCHEMA,
 )
+from .soperator_install_retry import collector_install_retry_patch, install_retry_pending
 from .soperator_upgrade_progress import (
     SoperatorProgressEvent,
     SoperatorProgressSink,
@@ -902,6 +908,182 @@ def _wait_for_suspended_child_inventory(
         time.sleep(max(0.1, poll_interval_seconds))
 
 
+def _completed_admitted_install_remediation(
+    payload: Mapping[str, Any],
+    expected: Mapping[str, str] | None,
+) -> bool:
+    """A queued retry after verified uninstall is not an in-flight Helm action."""
+    if expected is None:
+        return False
+    metadata = payload.get("metadata", {})
+    status = payload.get("status", {})
+    generation = metadata.get("generation")
+    history = status.get("history") or []
+    if expected.get("sourceKind") == "HelmChart":
+        source_matches = (
+            all(
+                expected.get(key)
+                for key in ("sourceName", "sourceNamespace", "sourceVersion", "sourceConfigDigest")
+            )
+            and payload.get("spec", {}).get("chartRef")
+            == {
+                "kind": "HelmChart",
+                "name": expected["sourceName"],
+                "namespace": expected["sourceNamespace"],
+            }
+            and status.get("lastAttemptedRevision") == expected["sourceVersion"]
+            and status.get("lastAttemptedConfigDigest") == expected["sourceConfigDigest"]
+        )
+    else:
+        source_matches = (
+            expected.get("sourceKind") in {None, "OCIRepository"}
+            and bool(expected.get("sourceDigest"))
+            and status.get("lastAttemptedRevisionDigest") == expected.get("sourceDigest")
+        )
+    if (
+        any(metadata.get(key) != expected.get(key) for key in ("name", "namespace", "uid"))
+        or not expected.get("uid")
+        or payload.get("spec", {}).get("suspend") is not True
+        or not isinstance(generation, int)
+        or generation != status.get("observedGeneration")
+        or not source_matches
+        or status.get("lastAttemptedReleaseAction") != "install"
+        or not history
+        or history[0].get("action") != "uninstall-remediation"
+        or history[0].get("status") not in {"uninstalling", "uninstalled"}
+        or any(row.get("status") in {"deployed", "superseded"} for row in history)
+    ):
+        return False
+    conditions = status.get("conditions") or []
+    for kind, state, reason in (
+        ("Reconciling", "True", "ProgressingWithRetry"),
+        ("Ready", "False", "InstallFailed"),
+        ("Remediated", "True", "UninstallSucceeded"),
+    ):
+        matches = [row for row in conditions if row.get("type") == kind]
+        if len(matches) != 1 or any(
+            matches[0].get(key) != value
+            for key, value in {
+                "status": state,
+                "reason": reason,
+                "observedGeneration": generation,
+            }.items()
+        ):
+            return False
+    return True
+
+
+def _completed_admitted_checks_rollback(
+    payload: Mapping[str, Any], expected: Mapping[str, str] | None
+) -> bool:
+    """Recognize only the accepted checks writer's completed policy rollback."""
+    if expected is None or not expected.get("uid") or not expected.get("sourceDigest"):
+        return False
+    metadata, spec, status = (
+        payload.get("metadata", {}),
+        payload.get("spec", {}),
+        payload.get("status", {}),
+    )
+    generation = metadata.get("generation")
+    history = status.get("history") or []
+    source = spec.get("chartRef", {})
+    if (
+        any(metadata.get(key) != expected.get(key) for key in ("name", "namespace", "uid"))
+        or metadata.get("deletionTimestamp")
+        or spec.get("suspend") is not True
+        or type(generation) is not int
+        or generation <= 0
+        or status.get("observedGeneration") != generation
+        or status.get("lastAttemptedReleaseAction") != "upgrade"
+        or status.get("lastAttemptedRevisionDigest") != expected["sourceDigest"]
+        or not status.get("lastAttemptedConfigDigest")
+        or source.get("kind") != "OCIRepository"
+        or not source.get("name")
+        or not history
+        or history[0].get("action") != "rollback"
+        or history[0].get("status") != "deployed"
+        or not isinstance(history[0].get("version"), int)
+        or history[0]["version"] <= 0
+        or not history[0].get("configDigest")
+        or history[0].get("chartVersion") != status.get("lastAttemptedRevision")
+        or history[0].get("name") != (spec.get("releaseName") or metadata["name"])
+        or history[0].get("namespace") != (spec.get("targetNamespace") or metadata["namespace"])
+        or any(
+            row.get("status")
+            in {"pending-install", "pending-upgrade", "pending-rollback", "uninstalling"}
+            for row in history
+        )
+    ):
+        return False
+    # Helm's new rollback revision does not carry an OCI digest. Prove its
+    # source through the failed upgrade and the prior matching deployed values.
+    failed = [
+        row
+        for row in history[1:]
+        if (
+            row.get("version") == history[0]["version"] - 1
+            and row.get("action") == "upgrade"
+            and row.get("status") == "failed"
+            and row.get("configDigest") == status["lastAttemptedConfigDigest"]
+            and row.get("ociDigest") == expected["sourceDigest"]
+            and all(row.get(k) == history[0].get(k) for k in ("name", "namespace", "chartVersion"))
+        )
+    ]
+    prior = [
+        row
+        for row in history[1:]
+        if (
+            isinstance(row.get("version"), int)
+            and 0 < row["version"] < history[0]["version"] - 1
+            and row.get("status") == "superseded"
+            and row.get("ociDigest") == expected["sourceDigest"]
+            and all(
+                row.get(k) == history[0].get(k)
+                for k in ("name", "namespace", "chartVersion", "configDigest")
+            )
+        )
+    ]
+    if len(failed) != 1 or not prior:
+        return False
+    conditions = status.get("conditions") or []
+    if any(row.get("type") == "Stalled" and row.get("status") == "True" for row in conditions):
+        return False
+    for kind, state, reason in (
+        ("Reconciling", "True", "ProgressingWithRetry"),
+        ("Ready", "False", "RollbackSucceeded"),
+        ("Released", "False", "UpgradeFailed"),
+        ("Remediated", "True", "RollbackSucceeded"),
+    ):
+        matches = [row for row in conditions if row.get("type") == kind]
+        if len(matches) != 1 or any(
+            matches[0].get(key) != value
+            for key, value in {
+                "status": state,
+                "reason": reason,
+                "observedGeneration": generation,
+            }.items()
+        ):
+            return False
+    return True
+
+
+def _admitted_helmchart_artifact_matches(
+    payload: Mapping[str, Any], expected: Mapping[str, str]
+) -> bool:
+    metadata = payload.get("metadata", {})
+    return (
+        bool(expected.get("sourceUid"))
+        and metadata.get("uid") == expected["sourceUid"]
+        and metadata.get("name") == expected.get("sourceName")
+        and metadata.get("namespace") == expected.get("sourceNamespace")
+        and payload.get("spec", {}).get("chart") == expected.get("sourceChart")
+        and payload.get("spec", {}).get("version") == expected.get("sourceVersion")
+        and bool(expected.get("sourceDigest"))
+        and payload.get("status", {}).get("artifact", {}).get("digest")
+        == expected.get("sourceDigest")
+    )
+
+
 def _wait_for_helmrelease_quiescence(
     releases: set[tuple[str, str]],
     *,
@@ -909,6 +1091,8 @@ def _wait_for_helmrelease_quiescence(
     env: Mapping[str, str],
     timeout_seconds: int,
     poll_interval_seconds: float,
+    remediated_install_release: Mapping[str, str] | None = None,
+    remediated_checks_release: Mapping[str, str] | None = None,
 ) -> None:
     """Wait until requested suspensions are visible and no reconciliation is active."""
 
@@ -948,6 +1132,76 @@ def _wait_for_helmrelease_quiescence(
                 )
                 for item in conditions
             )
+            if reconciling and _completed_admitted_install_remediation(
+                payload, remediated_install_release
+            ):
+                if (
+                    remediated_install_release is not None
+                    and remediated_install_release.get("sourceKind") == "HelmChart"
+                ):
+                    source = _run_kubectl_json_process(
+                        [
+                            "kubectl",
+                            "--cache-dir",
+                            str(cache_dir),
+                            "-n",
+                            remediated_install_release["sourceNamespace"],
+                            "get",
+                            "helmchart",
+                            remediated_install_release["sourceName"],
+                            "-o",
+                            "json",
+                        ],
+                        env=env,
+                    )
+                    if not _admitted_helmchart_artifact_matches(source, remediated_install_release):
+                        raise RuntimeError("admitted install HelmChart artifact identity changed")
+                reconciling = False
+            if reconciling and _completed_admitted_checks_rollback(
+                payload, remediated_checks_release
+            ):
+                reference = payload["spec"]["chartRef"]
+                namespace = reference.get("namespace") or metadata["namespace"]
+                source = _run_kubectl_json_process(
+                    [
+                        "kubectl",
+                        "--cache-dir",
+                        str(cache_dir),
+                        "-n",
+                        namespace,
+                        "get",
+                        "ocirepository",
+                        reference["name"],
+                        "-o",
+                        "json",
+                    ],
+                    env=env,
+                )
+                if (
+                    source.get("metadata", {}).get("name") != reference["name"]
+                    or source.get("metadata", {}).get("namespace") != namespace
+                    or not source.get("metadata", {}).get("uid")
+                    or source.get("metadata", {}).get("deletionTimestamp")
+                    or not isinstance(source.get("metadata", {}).get("generation"), int)
+                    or source["metadata"]["generation"]
+                    != source.get("status", {}).get("observedGeneration")
+                    or source.get("spec", {}).get("ref")
+                    != {"digest": payload["status"]["lastAttemptedRevisionDigest"]}
+                    or source.get("status", {}).get("artifact", {}).get("revision")
+                    != payload["status"]["lastAttemptedRevisionDigest"]
+                    or not any(
+                        c.get("type") == "Ready"
+                        and c.get("status") == "True"
+                        and c.get("observedGeneration") == source["metadata"]["generation"]
+                        for c in source.get("status", {}).get("conditions", [])
+                    )
+                    or any(
+                        c.get("type") in {"Reconciling", "Stalled"} and c.get("status") == "True"
+                        for c in source.get("status", {}).get("conditions", [])
+                    )
+                ):
+                    raise RuntimeError("admitted checks rollback OCI artifact identity changed")
+                reconciling = False
             if (
                 payload.get("spec", {}).get("suspend") is not True
                 or not isinstance(metadata, Mapping)
@@ -973,6 +1227,7 @@ def _wait_for_soperator_release_stage(
     timeout_seconds: int,
     poll_interval_seconds: float,
     main_target: FluxWaitTarget | None = None,
+    pending_install_retries: Mapping[tuple[str, str], str] | None = None,
     freeze_main_workload_authority: (
         Callable[[SoperatorMainWorkloadIdentity], SoperatorMainWorkloadIdentity] | None
     ) = None,
@@ -1051,7 +1306,10 @@ def _wait_for_soperator_release_stage(
                     )
             else:
                 stalled = _true_condition(payload, "Stalled")
-                if stalled:
+                retry_pending = install_retry_pending(
+                    payload, (pending_install_retries or {}).get((namespace, name))
+                )
+                if stalled and not retry_pending:
                     reason = str(stalled.get("reason") or "Stalled").strip() or "Stalled"
                     raise RuntimeError(
                         f"staged Soperator HelmRelease {namespace}/{name} stalled "
@@ -1062,6 +1320,9 @@ def _wait_for_soperator_release_stage(
                 or int(metadata.get("generation") or -1)
                 != int(status.get("observedGeneration") or -2)
                 or bool(_true_condition(payload, "Stalled"))
+                or install_retry_pending(
+                    payload, (pending_install_retries or {}).get((namespace, name))
+                )
                 or not _condition_is_ready(payload)
                 or str(chart_ref.get("kind") or "") != str(item.get("sourceKind") or "")
                 or str(chart_ref.get("name") or "") != str(item.get("sourceName") or "")
@@ -1073,6 +1334,77 @@ def _wait_for_soperator_release_stage(
         if time.monotonic() >= deadline:
             raise RuntimeError(f"Soperator HelmRelease stage {stage} did not become Ready")
         time.sleep(max(0.1, poll_interval_seconds))
+
+
+def _request_collector_install_retry(
+    expected: Mapping[str, str], *, cache_dir: Path, env: Mapping[str, str]
+) -> str | None:
+    base = ["kubectl", "--cache-dir", str(cache_dir)]
+    payload = _run_kubectl_json_process(
+        [*base, "-n", expected["namespace"], "get", "helmrelease", expected["name"], "-o", "json"],
+        env=env,
+    )
+    stalled = _true_condition(payload, "Stalled")
+    if not stalled or stalled.get("reason") != "MissingRollbackTarget":
+        return None
+    if expected.get("sourceKind") != "HelmChart":
+        raise RuntimeError("Collector retry requires its sealed HelmChart source")
+    source = _run_kubectl_json_process(
+        [
+            *base,
+            "-n",
+            expected["sourceNamespace"],
+            "get",
+            "helmchart",
+            expected["sourceName"],
+            "-o",
+            "json",
+        ],
+        env=env,
+    )
+    if not _admitted_helmchart_artifact_matches(source, expected):
+        raise RuntimeError("Collector retry lost its frozen HelmChart artifact")
+    spec = payload.get("spec", {})
+    if not spec.get("targetNamespace") or not spec.get("releaseName"):
+        raise RuntimeError("Collector retry lost its native Deployment identity")
+    deployment = _run_kubectl_json_process(
+        [
+            *base,
+            "-n",
+            spec["targetNamespace"],
+            "get",
+            "deployment",
+            spec["releaseName"],
+            "-o",
+            "json",
+        ],
+        env=env,
+    )
+    request = collector_install_retry_patch(payload, expected, deployment)
+    if request is None:
+        return None
+    token, patch = request
+    if patch:
+        result = subprocess.run(
+            [
+                *base,
+                "-n",
+                expected["namespace"],
+                "patch",
+                "helmrelease",
+                expected["name"],
+                "--type=json",
+                "-p",
+                json.dumps(patch),
+            ],
+            env=dict(env),
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        if result.returncode:
+            raise RuntimeError("Could not request the exact native collector retry")
+    return token
 
 
 def _deployment_is_current_and_available(payload: Mapping[str, Any]) -> bool:
@@ -1621,6 +1953,7 @@ def _existing_soperator_release_frontier(
     *,
     outer: Mapping[str, Any],
     rows: Sequence[Mapping[str, str]],
+    retired_release: Mapping[str, str] | None = None,
 ) -> set[tuple[str, str]]:
     """Return only exact, non-terminating target identities safe to suspend."""
 
@@ -1636,6 +1969,16 @@ def _existing_soperator_release_frontier(
     )
     raw_identities = {(str(row["rawNamespace"]), str(row["rawName"])) for row in rows}
     final_identities = {(str(row["finalNamespace"]), str(row["finalName"])) for row in rows}
+    retired_identity = None
+    if retired_release is not None:
+        if (
+            set(retired_release) != {"namespace", "name", "uid"}
+            or retired_release.get("namespace") != FLUX_NAMESPACE
+            or retired_release.get("name") != "cxcli-soperator-fluxcd-monitoring-dashboards"
+            or not retired_release.get("uid")
+        ):
+            raise SoperatorSafetyPauseError("the admitted retired dashboard identity is invalid")
+        retired_identity = (retired_release["namespace"], retired_release["name"])
     active: set[tuple[str, str]] = set()
     observed_raw: set[tuple[str, str]] = set()
     observed_final: set[tuple[str, str]] = set()
@@ -1712,6 +2055,18 @@ def _existing_soperator_release_frontier(
                 )
             observed_final.add(identity)
             selected = True
+        elif identity == retired_identity:
+            history = item.get("status", {}).get("history") or []
+            if (
+                not graph_owned
+                or retired_release is None
+                or metadata.get("uid") != retired_release["uid"]
+                or any(row.get("status") in {"deployed", "superseded"} for row in history)
+            ):
+                raise SoperatorSafetyPauseError(
+                    "the retired dashboard child lost its admitted identity"
+                )
+            selected = True
         elif raw_owned or graph_owned:
             raise SoperatorSafetyPauseError(
                 f"unexpected Soperator HelmRelease {identity[0]}/{identity[1]} is owned "
@@ -1733,6 +2088,13 @@ def _existing_soperator_release_frontier(
 def apply_staged_soperator_release(
     paths: ProjectPaths,
     *,
+    retired_release: Mapping[str, str] | None = None,
+    checks_policy: SoperatorChecksPolicy | None = None,
+    checks_installing: bool = False,
+    checks_context: ChecksPhaseContext | None = None,
+    recover_interrupted_checks: Callable[[], None] | None = None,
+    remediated_install_release: Mapping[str, str] | None = None,
+    remediated_checks_release: Mapping[str, str] | None = None,
     extra_env: dict[str, str] | None = None,
     cache_dir: Path | None = None,
     timeout_seconds: int = 1800,
@@ -1792,6 +2154,37 @@ def apply_staged_soperator_release(
         final_documents = [
             item for item in yaml.safe_load_all(build.stdout) if isinstance(item, dict)
         ]
+        final_documents, enroot_profiles = split_enroot_profile_documents(final_documents)
+        profile_owners = [
+            item
+            for item in releases
+            if isinstance(item, Mapping)
+            and item.get("upstreamReleaseName") == "soperator-fluxcd-security-profiles-operator"
+        ]
+        if enroot_profiles and (
+            len(profile_owners) != 1
+            or int(profile_owners[0].get("stage") or 0) >= int(main_rows[0].get("stage") or 0)
+        ):
+            raise ValueError(
+                "Enroot requires one upstream profile operator before the main workload"
+            )
+        # This chart creates child releases, whose readiness belongs to the
+        # stages below. Helm must not wait on intentionally suspended children.
+        # Apply to the common copy so staged and stable reconciliation agree.
+        final_outer = _staged_soperator_outer_release(final_documents, releases)
+        for action in ("install", "upgrade"):
+            final_outer.setdefault("spec", {}).setdefault(action, {})["disableWait"] = True
+        bind_auxiliary_cluster(final_outer, final_outer["spec"].get("values", {}))
+        if checks_policy is not None:
+            outer_metadata = final_outer["metadata"]
+            final_documents = operation_checks_documents(
+                final_documents,
+                checks_policy,
+                installing=checks_installing,
+                outer_namespace=str(outer_metadata["namespace"]),
+                outer_name=str(outer_metadata["name"]),
+                context=checks_context,
+            )
         staged_documents = copy.deepcopy(final_documents)
         staged_outer = _staged_soperator_outer_release(staged_documents, releases)
         staged_outer_metadata = staged_outer["metadata"]
@@ -1819,6 +2212,7 @@ def apply_staged_soperator_release(
             current_payload,
             outer=staged_outer,
             rows=raw_child_rows,
+            retired_release=retired_release,
         )
         for namespace, name in sorted(existing_releases):
             _patch_helmrelease_suspend(
@@ -1828,12 +2222,16 @@ def apply_staged_soperator_release(
                 cache_dir=effective_cache,
                 env=env,
             )
+        if recover_interrupted_checks is not None:
+            recover_interrupted_checks()
         _wait_for_helmrelease_quiescence(
             existing_releases,
             cache_dir=effective_cache,
             env=env,
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
+            remediated_install_release=remediated_install_release,
+            remediated_checks_release=remediated_checks_release,
         )
         outer_spec = staged_outer.setdefault("spec", {})
         outer_spec["suspend"] = False
@@ -1917,10 +2315,27 @@ def apply_staged_soperator_release(
             is_main_stage = any(item.get("isMain") is True for item in stage_items)
             prepared_main_stage: Mapping[str, object] | None = None
             release_opened = False
+            pending_install_retries: dict[tuple[str, str], str] = {}
             if is_main_stage and prepare_main_release_stage is not None:
                 prepared_main_stage = prepare_main_release_stage()
             try:
                 for item in stage_items:
+                    if (
+                        checks_installing
+                        and remediated_install_release is not None
+                        and remediated_install_release.get("sourceKind") == "HelmChart"
+                        and item.get("releaseName") == remediated_install_release.get("name")
+                    ):
+                        retry_token = _request_collector_install_retry(
+                            remediated_install_release, cache_dir=effective_cache, env=env
+                        )
+                        if retry_token is not None:
+                            pending_install_retries[
+                                (
+                                    remediated_install_release["namespace"],
+                                    remediated_install_release["name"],
+                                )
+                            ] = retry_token
                     _remove_helmrelease_suspend(
                         name=str(item.get("releaseName") or ""),
                         namespace=str(item.get("namespace") or FLUX_NAMESPACE),
@@ -1935,6 +2350,7 @@ def apply_staged_soperator_release(
                     timeout_seconds=timeout_seconds,
                     poll_interval_seconds=poll_interval_seconds,
                     main_target=main_target,
+                    pending_install_retries=pending_install_retries,
                     freeze_main_workload_authority=freeze_main_workload_authority,
                 )
                 release_opened = True
@@ -1959,6 +2375,14 @@ def apply_staged_soperator_release(
                 timeout_seconds=timeout_seconds,
                 poll_interval_seconds=poll_interval_seconds,
             )
+            if enroot_profiles and profile_owners[0] in stage_items:
+                apply_enroot_profile(
+                    enroot_profiles,
+                    env=env,
+                    cache_dir=effective_cache,
+                    timeout_seconds=timeout_seconds,
+                    poll_interval_seconds=poll_interval_seconds,
+                )
             protected_namespace_releases = {
                 (
                     str(item.get("namespace") or FLUX_NAMESPACE),
@@ -2009,7 +2433,8 @@ def prepare_soperator_adapter_storage(
     adapter_path = paths.flux_dir / "soperator-nebius-adapter.yaml"
     if not adapter_path.is_file():
         return
-    documents = list(_iter_yaml_docs(adapter_path))
+    all_documents = list(_iter_yaml_docs(adapter_path))
+    documents, _ = split_enroot_profile_documents(all_documents)
     if not documents:
         raise ValueError("the rendered Soperator adapter manifest is empty")
     allowed_lifecycles = {
@@ -2612,31 +3037,6 @@ def _soperator_product_readiness(
     if not storage_ready:
         return False, storage_detail
 
-    pods = _kubectl_json(
-        ["kubectl", "-n", "soperator", "get", "pods", "-o", "json"],
-        env=env,
-    )
-    if pods is None or not isinstance(pods.get("items"), list) or not pods["items"]:
-        return False, "Soperator Pod inventory is unavailable"
-    for pod in pods["items"]:
-        if not isinstance(pod, Mapping):
-            return False, "Soperator Pod inventory is invalid"
-        metadata = pod.get("metadata")
-        status = pod.get("status")
-        name = str(metadata.get("name") or "?") if isinstance(metadata, Mapping) else "?"
-        phase = str(status.get("phase") or "") if isinstance(status, Mapping) else ""
-        if phase == "Succeeded":
-            continue
-        conditions = status.get("conditions") if isinstance(status, Mapping) else None
-        pod_ready = isinstance(conditions, list) and any(
-            isinstance(condition, Mapping)
-            and condition.get("type") == "Ready"
-            and str(condition.get("status") or "").lower() == "true"
-            for condition in conditions
-        )
-        if phase != "Running" or not pod_ready:
-            return False, f"Soperator Pod {name} is not Ready or successfully Completed"
-
     cluster_name = str(contract.get("clusterName") or "soperator")
     cluster = _kubectl_json(
         [
@@ -2653,6 +3053,43 @@ def _soperator_product_readiness(
     )
     if cluster is None or not _slurm_cluster_available(cluster):
         return False, f"SlurmCluster {cluster_name} is not Available"
+
+    pods = _kubectl_json(
+        ["kubectl", "-n", "soperator", "get", "pods", "-o", "json"],
+        env=env,
+    )
+    if pods is None or not isinstance(pods.get("items"), list) or not pods["items"]:
+        return False, "Soperator Pod inventory is unavailable"
+    if any(not isinstance(pod, Mapping) for pod in pods["items"]):
+        return False, "Soperator Pod inventory is invalid"
+    history = terminal_native_check_pods(
+        pods["items"],
+        cluster=cluster,
+        releases=list(owned.values()),
+        read=lambda resource: _kubectl_json(
+            ["kubectl", "-n", "soperator", "get", resource, "-o", "json"], env=env
+        ),
+    )
+    for pod in pods["items"]:
+        if not isinstance(pod, Mapping):
+            return False, "Soperator Pod inventory is invalid"
+        metadata = pod.get("metadata")
+        status = pod.get("status")
+        name = str(metadata.get("name") or "?") if isinstance(metadata, Mapping) else "?"
+        phase = str(status.get("phase") or "") if isinstance(status, Mapping) else ""
+        if phase == "Succeeded" or (
+            phase == "Failed" and isinstance(metadata, Mapping) and metadata.get("uid") in history
+        ):
+            continue
+        conditions = status.get("conditions") if isinstance(status, Mapping) else None
+        pod_ready = isinstance(conditions, list) and any(
+            isinstance(condition, Mapping)
+            and condition.get("type") == "Ready"
+            and str(condition.get("status") or "").lower() == "true"
+            for condition in conditions
+        )
+        if phase != "Running" or not pod_ready:
+            return False, f"Soperator Pod {name} is not Ready or successfully Completed"
 
     expected_roles = readiness.get("roles") if isinstance(readiness, Mapping) else None
     if isinstance(expected_roles, list) and expected_roles:
@@ -3084,12 +3521,24 @@ def _native_soperator_observation(
     pod_items = pods.get("items") if isinstance(pods, Mapping) else None
     if not isinstance(pod_items, list) or not pod_items:
         return False, "native Soperator Pod inventory is unavailable", None
+    if any(not isinstance(pod, Mapping) for pod in pod_items):
+        return False, "native Soperator Pod inventory is invalid", None
+    history = terminal_native_check_pods(
+        pod_items,
+        cluster=cluster,
+        releases=soperator_releases,
+        read=lambda resource: _kubectl_json(
+            ["kubectl", "-n", "soperator", "get", resource, "-o", "json"], env=env
+        ),
+    )
     for pod in pod_items:
         if not isinstance(pod, Mapping):
             return False, "native Soperator Pod inventory is invalid", None
         pod_status = pod.get("status")
         phase = str(pod_status.get("phase") or "") if isinstance(pod_status, Mapping) else ""
-        if phase == "Succeeded":
+        if phase == "Succeeded" or (
+            phase == "Failed" and pod.get("metadata", {}).get("uid") in history
+        ):
             continue
         conditions = pod_status.get("conditions") if isinstance(pod_status, Mapping) else None
         ready = isinstance(conditions, list) and any(

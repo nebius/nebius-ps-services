@@ -400,7 +400,8 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_benchmark() -> None:
     }
 
 
-def test_mk8s_gpu_app_selection_uses_all_gpu_node_groups_in_target() -> None:
+@pytest.mark.parametrize("rdma_first", [False, True])
+def test_mk8s_gpu_app_selection_uses_all_gpu_node_groups_in_target(rdma_first: bool) -> None:
     payload = _mk8s_payload(
         platform="gpu-h100-sxm",
         preset="1gpu-16vcpu-200gb",
@@ -424,6 +425,12 @@ def test_mk8s_gpu_app_selection_uses_all_gpu_node_groups_in_target() -> None:
         },
     }
     inputs["gpu_clusters"] = {"rdma": {"infiniband_fabric": "fabric-1"}}
+    if rdma_first:
+        inputs["node_groups"] = dict(reversed(list(inputs["node_groups"].items())))
+    payload["apps"]["charts"] = [
+        {"id": app_id, "enabled": True, "instance_id": "mk8s"}
+        for app_id in ("soperator", "nvidia-gpu-operator", "nvidia-network-operator")
+    ]
 
     selection = resolve_mk8s_gpu_app_selection(
         payload,
@@ -440,6 +447,12 @@ def test_mk8s_gpu_app_selection_uses_all_gpu_node_groups_in_target() -> None:
         "nvidia-gpu-operator",
         "nvidia-network-operator",
     )
+    assert prune_inactive_mk8s_gpu_app_rows(payload) is False
+    assert {row["id"] for row in payload["apps"]["charts"]} == {
+        "soperator",
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    }
 
 
 def test_mk8s_gpu_validation_specs_are_target_scoped_for_multiple_gpu_groups() -> None:
@@ -2372,6 +2385,57 @@ def test_run_kubectl_adds_explicit_context_from_extra_env(
     )
 
     assert calls == [["kubectl", "--context", "external-context", "get", "nodes"]]
+
+
+@pytest.mark.parametrize("missing_id", [False, True])
+def test_cuda_smoke_binds_provider_id_despite_shared_logical_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, missing_id: bool
+) -> None:
+    items = []
+    for name, group_id in (("gpu-a", "group-a"), ("gpu-b", "group-b")):
+        labels = {"nebius.com/node-group": "worker"}
+        if not missing_id:
+            labels["nebius.com/node-group-id"] = group_id
+        items.append(
+            {
+                "metadata": {"name": name, "labels": labels},
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                },
+            }
+        )
+    monkeypatch.setattr(mk8s_gpu, "_kubectl_json", lambda *_args, **_kwargs: {"items": items})
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_request_totals_by_node",
+        lambda **_kwargs: {name: {"gpu_count": 8} for name in ("gpu-a", "gpu-b")},
+    )
+    monkeypatch.setattr(
+        mk8s_gpu, "_apply_docs", lambda *_args, **_kwargs: pytest.fail("must not create a probe")
+    )
+    spec = {
+        "kind": "mk8s_gpu_visibility",
+        "namespace": "gpu-validation",
+        "image": "cuda-sample",
+        "timeout": "1m",
+        "report_file": "scope.json",
+        "node_groups": ["worker"],
+        "node_group_ids": ["group-a"],
+    }
+    if missing_id:
+        with pytest.raises(RuntimeError, match="could not find any Ready Kubernetes node"):
+            mk8s_gpu._run_cuda_smoke_validation(
+                spec=spec, reports_dir=tmp_path, extra_env=None, emit=None
+            )
+        return
+    report_path = mk8s_gpu._run_cuda_smoke_validation(
+        spec=spec, reports_dir=tmp_path, extra_env=None, emit=None
+    )
+    report = json.loads(report_path.read_text())
+    assert report["total_gpu_node_count"] == 1
+    assert report["node_group_ids"] == ["group-a"]
+    assert [row["node_name"] for row in report["skipped_nodes"]] == ["gpu-a"]
 
 
 def test_cuda_smoke_retries_transient_pod_phase_timeout(

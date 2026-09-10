@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import atexit
 import base64
 import csv
 import errno
@@ -19,7 +20,7 @@ import time
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.parser import BytesParser
 from enum import Enum
 from importlib import metadata
@@ -49,6 +50,7 @@ from ..vm_ha_credentials import (
 from .ssh_client_auth import SSHClientAuth, resolve_ssh_client_auth
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
+from .vm_ha_package import VMHAPackagePlan
 
 _LEGACY_VM_HA_IDENTITY_SCRIPT = r"""
 import json
@@ -187,6 +189,11 @@ class VMHAStandbyReplacementNotReady(RuntimeError):
 _VM_HA_SERVICE_ASSET_DESTINATIONS = (
     ("nebius-vpngw-agent.service", "/etc/systemd/system/nebius-vpngw-agent.service", 0o644),
     (
+        "nebius-vpngw-agent-ordering.conf",
+        "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
+        0o644,
+    ),
+    (
         "nebius-vpngw-fix-routes.service",
         "/etc/systemd/system/nebius-vpngw-fix-routes.service",
         0o644,
@@ -265,6 +272,9 @@ class VMHAAgentArtifact:
     capabilities: tuple[str, ...]
     device: int
     inode: int
+    dependency_plans: tuple[tuple[str, VMHAPackagePlan], ...] = field(
+        default=(), repr=False, compare=False
+    )
 
     @staticmethod
     def _sha256(stream: Any) -> str:
@@ -968,6 +978,10 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     for name, destination_text, mode in assets:
         payload = archive.read(f"nebius_vpngw/systemd/{name}")
         destination = pathlib.Path(destination_text)
+        if name == "nebius-vpngw-agent-ordering.conf" and destination.exists():
+            ordinary = archive.read("nebius_vpngw/systemd/nebius-vpngw-ordinary-agent-ordering.conf")
+            if destination.read_bytes() not in (payload, ordinary):
+                raise RuntimeError("product agent override has unknown contents")
         destination.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(
             prefix=f".{destination.name}.", dir=destination.parent
@@ -2025,6 +2039,7 @@ printf "VM_HA_DEACTIVATED=1\\n"
         local_cfg: dict,
         *,
         artifact: VMHAAgentArtifact | None = None,
+        handoff: Any = None,
     ) -> dict[str, object]:
         """Install and prove the exact agent plus its crypto dependencies."""
 
@@ -2037,6 +2052,57 @@ printf "VM_HA_DEACTIVATED=1\\n"
             artifact = VMHAAgentArtifact.from_wheel(wheel_path, source="direct-apply-build")
         wheel_path = artifact.path
         wheel_sha256 = artifact.sha256
+        dependency_plan = dict(artifact.dependency_plans).get(inst_cfg.hostname)
+        if handoff is not None:
+            if dependency_plan is None:
+                raise RuntimeError("HA handoff requires its approved package plan")
+            if handoff.finished:
+                from .ordinary_apply import remote
+                from .vm_ha_package import package_predecessor
+
+                current = package_predecessor(
+                    remote(
+                        self,
+                        ssh_target,
+                        inst_cfg,
+                        local_cfg,
+                        {"action": "inspect-package", "manifest": dependency_plan.manifest},
+                    )["observation"]
+                )
+                expected = dict(
+                    dependency_plan.observation,
+                    files=dependency_plan.manifest["files"],
+                    package_version=dependency_plan.manifest["version"],
+                    dependencies=dependency_plan.manifest["expected_dependencies"],
+                    assets={p: a["sha256"] for p, a in dependency_plan.manifest["assets"].items()},
+                    asset_modes={
+                        p: [a["mode"], 0, 0] for p, a in dependency_plan.manifest["assets"].items()
+                    },
+                )
+                # Dependency metadata changes are approved along with their exact
+                # wheel bytes and were verified before repair completion.
+                expected["requirements"] = dependency_plan.manifest["expected_requirements"]
+                if current != expected or handoff.package_receipt is None:
+                    raise RuntimeError("HA repaired package predecessor changed")
+                receipt = handoff.package_receipt
+            else:
+                receipt = handoff.prepare_package(dependency_plan)
+            if not set(artifact.capabilities).issubset(receipt.get("capabilities", [])):
+                raise RuntimeError("HA handoff package capabilities changed")
+            return receipt
+        if dependency_plan is not None:
+            from .ordinary_apply import digest, remote
+            from .vm_ha_package import package_predecessor
+
+            current = remote(
+                self,
+                ssh_target,
+                inst_cfg,
+                local_cfg,
+                {"action": "inspect-package", "manifest": dependency_plan.manifest},
+            )["observation"]
+            if digest(package_predecessor(current)) != digest(dependency_plan.observation):
+                raise RuntimeError("VM-HA package predecessor changed after approval")
         remote_directory: str | None = None
         remote_wheel: str | None = None
         paramiko = self._ensure_paramiko()
@@ -2074,6 +2140,12 @@ printf "VM_HA_DEACTIVATED=1\\n"
                     file_size=os.fstat(wheel_stream.fileno()).st_size,
                     confirm=True,
                 )
+                if dependency_plan is not None:
+                    for path in dependency_plan.dependency_paths:
+                        expected = dependency_plan.manifest["dependency_wheels"][path.name]
+                        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                            raise RuntimeError("VM-HA dependency artifact changed after approval")
+                        sftp.put(str(path), f"{remote_directory}/{path.name}")
             verify_wheel_command = (
                 f"echo {shlex.quote(f'{wheel_sha256}  {remote_wheel}')} "
                 "| sha256sum --check --status"
@@ -2082,16 +2154,51 @@ printf "VM_HA_DEACTIVATED=1\\n"
             if stdout.channel.recv_exit_status() != 0:
                 raise RuntimeError("VM-HA agent package bytes did not match the approved artifact")
             install_command = (
-                "sudo /usr/bin/python3 -m pip install --upgrade --force-reinstall "
-                "--ignore-installed "
-                f"--break-system-packages {shlex.quote(remote_wheel)}"
+                "sudo /usr/bin/python3 -m pip install "
+                f"--ignore-installed --break-system-packages {shlex.quote(remote_wheel)}"
             )
+            if dependency_plan is not None:
+                from .ordinary_remote import DEPENDENCY_INSTALL_SCRIPT
+
+                dependency_targets = []
+                for path in dependency_plan.dependency_paths:
+                    target = f"{remote_directory}/{path.name}"
+                    expected = dependency_plan.manifest["dependency_wheels"][path.name]
+                    _stdin, stdout, _stderr = client.exec_command(
+                        f"echo {shlex.quote(f'{expected}  {target}')} | sha256sum --check --status",
+                        timeout=30,
+                    )
+                    if stdout.channel.recv_exit_status() != 0:
+                        raise RuntimeError("VM-HA dependency upload integrity failed")
+                    dependency_targets.append(shlex.quote(target))
+                install_command = (
+                    "sudo /usr/bin/python3 -m pip install --no-index --no-deps "
+                    "--break-system-packages " + shlex.quote(remote_wheel)
+                )
+                if dependency_targets:
+                    install_command = (
+                        "sudo /usr/bin/python3 -B -c "
+                        + shlex.quote(DEPENDENCY_INSTALL_SCRIPT)
+                        + " "
+                        + " ".join(dependency_targets)
+                        + " && "
+                        + install_command
+                    )
             _stdin, stdout, stderr = client.exec_command(install_command, get_pty=True, timeout=180)
             safe_stdout = self._read_bounded_remote_output(stdout)
             safe_stderr = self._read_bounded_remote_output(stderr)
             if stdout.channel.recv_exit_status() != 0:
                 failure_class = self._remote_failure_class(safe_stdout, safe_stderr)
                 raise RuntimeError(f"VM-HA agent package installation failed ({failure_class})")
+            # pip preserves compatible dependencies. Reinstall only the exact
+            # approved product wheel to handle equal-version source rebuilds.
+            _stdin, stdout, _stderr = client.exec_command(
+                "sudo /usr/bin/python3 -m pip install --no-deps --force-reinstall "
+                f"--break-system-packages {shlex.quote(remote_wheel)}",
+                timeout=120,
+            )
+            if stdout.channel.recv_exit_status() != 0:
+                raise RuntimeError("VM-HA exact agent package installation failed")
             verification = (
                 "import cffi,cryptography,importlib.metadata as m,json,nebius_vpngw;"
                 "from cryptography.hazmat.primitives.asymmetric import ec;"
@@ -2173,8 +2280,14 @@ printf "VM_HA_DEACTIVATED=1\\n"
         finally:
             if remote_wheel is not None and remote_directory is not None:
                 try:
+                    staged = [remote_wheel]
+                    if dependency_plan is not None:
+                        staged.extend(
+                            f"{remote_directory}/{path.name}"
+                            for path in dependency_plan.dependency_paths
+                        )
                     cleanup = (
-                        f"rm -f {shlex.quote(remote_wheel)} && "
+                        "rm -f -- " + " ".join(shlex.quote(path) for path in staged) + " && "
                         f"rmdir {shlex.quote(remote_directory)}"
                     )
                     client.exec_command(cleanup, timeout=10)
@@ -2837,28 +2950,21 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
             )
             return None
 
-        dist_dir = project_root / "dist"
+        build_directory = tempfile.TemporaryDirectory(prefix="vpngw-agent-wheel-")
+        atexit.register(build_directory.cleanup)
+        dist_dir = Path(build_directory.name)
 
         # Always attempt to build latest wheel if pyproject is present
         if (project_root / "pyproject.toml").exists():
-            # Clean old wheels to prevent stale dependencies
-            if dist_dir.exists():
-                old_wheels = list(dist_dir.glob("nebius_vpngw-*.whl"))
-                if old_wheels:
-                    print(
-                        f"[SSHPush] Removing {len(old_wheels)} old wheel(s) to ensure fresh build..."
-                    )
-                    for old_wheel in old_wheels:
-                        old_wheel.unlink()
-
             print("[SSHPush] Building nebius-vpngw wheel package with python -m build...")
             try:
                 result = subprocess.run(
-                    [sys.executable, "-m", "build", "--wheel"],
+                    [sys.executable, "-m", "build", "--wheel", "--outdir", str(dist_dir)],
                     cwd=project_root,
                     capture_output=True,
                     text=True,
                     timeout=90,
+                    env={**os.environ, "SOURCE_DATE_EPOCH": "315532800"},
                 )
                 if result.returncode != 0:
                     print(f"[SSHPush] Wheel build failed: {result.stderr}")
@@ -2905,7 +3011,18 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
         agent_artifact: VMHAAgentArtifact | None = None,
         replacement_policy_request: str | None = None,
         fail_closed: bool = False,
+        ordinary_plan: Any = None,
+        approved_disruption: bool = False,
+        handoff: Any = None,
+        apply_operation_id: str | None = None,
     ) -> None:
+        if staged_receipt is None:
+            from .ordinary_apply import execute_plan
+
+            if ordinary_plan is None:
+                raise RuntimeError("Ordinary deployment requires a reviewed exact apply plan")
+            execute_plan(self, ordinary_plan, local_cfg, approved=approved_disruption)
+            return
         required_remote = staged_receipt is not None or fail_closed
         if staged_receipt is not None:
             if runtime_binding is None:
@@ -2930,710 +3047,380 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
         print(f"[SSHPush] Connecting to {ssh_target} as {username} ...")
         client = paramiko.SSHClient()
         try:
-            configure_paramiko_host_verification(
-                client,
-                paramiko,
-                policy=self._ssh_policy,
-                hostname=inst_cfg.hostname if self._ssh_policy is not None else None,
-                transport_host=ssh_target if self._ssh_policy is not None else None,
-            )
-            self._connect_client(
-                client,
-                hostname=ssh_target,
-                username=username,
-                vm_spec=vm_spec,
-            )
-        except Exception as e:
-            error_msg = str(e).lower()
-            print(f"[SSHPush] SSH connect failed to {ssh_target}: {e}")
-
-            identity_failure = _host_identity_failure(e, paramiko, ssh_target)
-            if identity_failure is not None:
-                raise identity_failure from e
-
-            # Provide helpful guidance for common network issues
-            if "timed out" in error_msg or "timeout" in error_msg:
-                print("\n" + "=" * 80)
-                print("⚠️  NETWORK CONNECTIVITY ISSUE DETECTED")
-                print("=" * 80)
-                print("The VM appears to be unreachable. This can happen if:")
-                print("  1. The VM is still booting (cloud-init may be installing packages)")
-                print("  2. Network configuration issues during VM initialization")
-                print("  3. Firewall or security group blocking SSH access")
-                print("\nRECOMMENDED ACTIONS:")
-                print("  • Wait 2-3 minutes and try running 'apply' again")
-                print("  • Check VM status in Nebius Console (serial logs can show boot issues)")
-                print("  • If the issue persists, restart the VM from the console and retry")
-                print("  • As a last resort, run: nebius-vpngw destroy -y && nebius-vpngw apply")
-                print("=" * 80 + "\n")
-            if required_remote:
-                raise RuntimeError(
-                    f"{'VM-HA activation' if staged_receipt is not None else 'required'} "
-                    f"SSH connection failed for {ssh_target}"
-                ) from e
-            return
-
-        restart_agent = False
-
-        # VM-HA package preparation already installed and verified the exact
-        # approval-bound artifact plus its service assets. Activation must not
-        # select or rebuild different bytes after that proof.
-        if staged_receipt is not None:
-            print("[SSHPush] Reusing the verified VM-HA agent artifact...")
-            wheel_path = None
-            restart_agent = True
-        else:
-            print("[SSHPush] Deploying latest nebius-vpngw package...")
-            wheel_path = self._build_wheel()
-        if wheel_path and wheel_path.exists():
-            wheel_version = None
-            wheel_parts = wheel_path.name.split("-")
-            if len(wheel_parts) >= 2:
-                wheel_version = wheel_parts[1]
             try:
-                with client.open_sftp() as sftp:
-                    remote_wheel = f"/tmp/{wheel_path.name}"
-                    sftp.put(str(wheel_path), remote_wheel)
-                    print(f"[SSHPush] Uploaded {wheel_path.name}")
-
-                # Install/upgrade the wheel with dependencies
-                # Use --break-system-packages on Ubuntu 24.04+ which has PEP 668 restrictions
-                # Use --ignore-installed to avoid conflicts with system-managed packages like typing_extensions
-                # Use 'python3 -m pip' instead of 'pip3' for Ubuntu 24.04 compatibility
-                install_cmd = f"sudo python3 -m pip install --upgrade --ignore-installed --break-system-packages {remote_wheel}"
-                stdin, stdout, stderr = client.exec_command(install_cmd, get_pty=True, timeout=120)
-                rc = stdout.channel.recv_exit_status()
-                out = stdout.read().decode().strip()
-                err = stderr.read().decode().strip()
-                if rc == 0:
-                    restart_agent = True
-                    # Reinstall just our package to avoid stale version metadata, without touching deps
-                    reinstall_cmd = (
-                        f"sudo python3 -m pip install --upgrade --force-reinstall "
-                        f"--no-deps --break-system-packages {remote_wheel}"
-                    )
-                    stdin_re, stdout_re, stderr_re = client.exec_command(
-                        reinstall_cmd, get_pty=True, timeout=120
-                    )
-                    rc_re = stdout_re.channel.recv_exit_status()
-                    re_out = stdout_re.read().decode().strip()
-                    re_err = stderr_re.read().decode().strip()
-                    if rc_re != 0:
-                        if required_remote:
-                            raise RuntimeError("VM-HA package reinstall verification failed")
-                        print("[SSHPush] WARNING: Forced reinstall failed; continuing anyway")
-                        if re_out:
-                            print(
-                                f"[SSHPush] stdout: {re_out[-500:]}"
-                                if len(re_out) > 500
-                                else f"[SSHPush] stdout: {re_out}"
-                            )
-                        if re_err:
-                            print(
-                                f"[SSHPush] stderr: {re_err[-500:]}"
-                                if len(re_err) > 500
-                                else f"[SSHPush] stderr: {re_err}"
-                            )
-
-                    # Verify package actually installed by importing it
-                    verify_cmd = (
-                        'python3 -c "import importlib.metadata as m, nebius_vpngw; '
-                        "print('version=' + m.version('nebius-vpngw')); "
-                        "print('path=' + nebius_vpngw.__file__)\""
-                    )
-                    stdin_check, stdout_check, stderr_check = client.exec_command(
-                        verify_cmd, timeout=10
-                    )
-                    rc_check = stdout_check.channel.recv_exit_status()
-                    verify_out = stdout_check.read().decode().strip()
-                    verify_err = stderr_check.read().decode().strip()
-                    if rc_check == 0 and verify_out:
-                        lines = [line.strip() for line in verify_out.splitlines() if line.strip()]
-                        version_line = next(
-                            (line for line in lines if line.startswith("version=")), ""
-                        )
-                        path_line = next((line for line in lines if line.startswith("path=")), "")
-                        if version_line:
-                            installed_version = version_line.split("=", 1)[1]
-                            installed_path = path_line.split("=", 1)[1] if path_line else None
-                            print(
-                                "[SSHPush] Package installed/upgraded successfully: "
-                                f"nebius-vpngw {installed_version}"
-                            )
-                            if wheel_version and installed_version != wheel_version:
-                                print(
-                                    "[SSHPush] WARNING: Installed version does not match "
-                                    f"wheel ({installed_version} != {wheel_version}). "
-                                    "A system package may be shadowing the installed wheel."
-                                )
-                                if installed_path:
-                                    print(f"[SSHPush] Installed package path: {installed_path}")
-                        else:
-                            print("[SSHPush] WARNING: Could not read installed package version")
-                    else:
-                        if required_remote:
-                            raise RuntimeError("VM-HA installed package import check failed")
-                        print(
-                            "[SSHPush] WARNING: pip install succeeded but package import check failed"
-                        )
-                        if verify_err:
-                            print(
-                                f"[SSHPush] stderr: {verify_err[-500:]}"
-                                if len(verify_err) > 500
-                                else f"[SSHPush] stderr: {verify_err}"
-                            )
-                    # Install/refresh systemd unit - read from package systemd/ directory
-                    import nebius_vpngw
-
-                    systemd_dir = Path(nebius_vpngw.__file__).parent / "systemd"
-                    service_unit_file = systemd_dir / "nebius-vpngw-agent.service"
-
-                    if service_unit_file.exists():
-                        service_unit = service_unit_file.read_text()
-                    else:
-                        # Fallback to embedded content if file not found
-                        service_unit = """[Unit]
-Description=Nebius VPNGW Agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Environment="PYTHONUNBUFFERED=1"
-ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
-RestartSec=3
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-                    try:
-                        with client.open_sftp() as sftp:
-                            with sftp.file("/tmp/nebius-vpngw-agent.service", "w") as f:
-                                f.write(service_unit)
-                            print("[SSHPush] Staged systemd unit update")
-
-                            # Deploy route fix service and timer
-                            # Use installed package location (works both in dev and deployed)
-                            import nebius_vpngw
-
-                            systemd_dir = Path(nebius_vpngw.__file__).parent / "systemd"
-
-                            fix_routes_service = systemd_dir / "nebius-vpngw-fix-routes.service"
-                            fix_routes_timer = systemd_dir / "nebius-vpngw-fix-routes.timer"
-
-                            if fix_routes_service.exists():
-                                with sftp.file("/tmp/nebius-vpngw-fix-routes.service", "w") as f:
-                                    f.write(fix_routes_service.read_text())
-                                print("[SSHPush] Staged route fix service")
-
-                            if fix_routes_timer.exists():
-                                with sftp.file("/tmp/nebius-vpngw-fix-routes.timer", "w") as f:
-                                    f.write(fix_routes_timer.read_text())
-                                print("[SSHPush] Staged route fix timer")
-
-                            # Deploy health monitoring service
-                            health_monitor_service = (
-                                systemd_dir / "nebius-vpngw-health-monitor.service"
-                            )
-                            if health_monitor_service.exists():
-                                with sftp.file(
-                                    "/tmp/nebius-vpngw-health-monitor.service", "w"
-                                ) as f:
-                                    f.write(health_monitor_service.read_text())
-                                print("[SSHPush] Staged health monitoring service")
-
-                            firewall_script = systemd_dir / "setup-vpngw-firewall.sh"
-                            if firewall_script.exists():
-                                with sftp.file("/tmp/setup-vpngw-firewall.sh", "w") as f:
-                                    f.write(firewall_script.read_text())
-                                print("[SSHPush] Staged firewall setup script")
-
-                            vm_ha_peer_firewall_script = (
-                                systemd_dir / "nebius-vpngw-vm-ha-peer-firewall.sh"
-                            )
-                            if staged_receipt is not None and vm_ha_peer_firewall_script.exists():
-                                with sftp.file(
-                                    "/tmp/nebius-vpngw-vm-ha-peer-firewall.sh", "w"
-                                ) as f:
-                                    f.write(vm_ha_peer_firewall_script.read_text())
-                                print("[SSHPush] Staged VM-HA peer firewall helper")
-
-                            esp4_preflight_script = systemd_dir / "nebius-vpngw-esp4-preflight.sh"
-                            if esp4_preflight_script.exists():
-                                with sftp.file("/tmp/nebius-vpngw-esp4-preflight.sh", "w") as f:
-                                    f.write(esp4_preflight_script.read_text())
-                                print("[SSHPush] Staged ESP4 preflight helper")
-
-                            if staged_receipt is not None:
-                                ufw_lock_tmpfiles = systemd_dir / "nebius-vpngw-ufw-lock.conf"
-                                if ufw_lock_tmpfiles.exists():
-                                    with sftp.file("/tmp/nebius-vpngw-ufw-lock.conf", "w") as f:
-                                        f.write(ufw_lock_tmpfiles.read_text())
-                                    print("[SSHPush] Staged VM-HA UFW lock tmpfiles policy")
-                    except Exception as e:
-                        if required_remote:
-                            raise RuntimeError("VM-HA systemd asset staging failed") from e
-                        print(f"[SSHPush] Failed to stage systemd unit: {e}")
-                else:
-                    print(f"[SSHPush] Package installation failed (rc={rc})")
-                    if out:
-                        print(
-                            f"[SSHPush] stdout: {out[-500:]}"
-                            if len(out) > 500
-                            else f"[SSHPush] stdout: {out}"
-                        )
-                    if err:
-                        print(
-                            f"[SSHPush] stderr: {err[-500:]}"
-                            if len(err) > 500
-                            else f"[SSHPush] stderr: {err}"
-                        )
-                    if required_remote:
-                        raise RuntimeError("VM-HA package installation failed")
-                    print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
-            except Exception as e:
-                if required_remote:
-                    raise RuntimeError("VM-HA package deployment failed") from e
-                print(f"[SSHPush] Failed to deploy package: {e}")
-                print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
-        elif staged_receipt is None:
-            if required_remote:
-                raise RuntimeError("VM-HA activation requires a deployable agent wheel")
-            print("[SSHPush] WARNING: Could not build wheel, skipping package deployment")
-
-        # Upload to /tmp then move with sudo
-        if staged_receipt is not None:
-            assert runtime_binding is not None
-            staged_binding = self._runtime_binding_for_nebius_credentials(
-                inst_cfg=inst_cfg,
-                runtime_binding=runtime_binding,
-                target=staged_receipt.nebius_credentials_path,
-                digest=staged_receipt.nebius_credentials_sha256,
-            )
-            rendered_config = self._render_vm_ha_config(inst_cfg, staged_binding)
-            expected = self._vm_ha_receipt(
-                inst_cfg,
-                rendered_config,
-                runtime_binding=staged_binding,
-                nebius_credentials_path=staged_receipt.nebius_credentials_path,
-                nebius_credentials_sha256=staged_receipt.nebius_credentials_sha256,
-            )
-            if staged_receipt != expected:
-                client.close()
-                raise ValueError("VM-HA activation receipt does not match the node manifest")
-            tmp_path = f"/etc/nebius-vpngw/vm-ha-staged/{staged_receipt.generation_id}.yaml"
-        else:
-            tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
-            try:
-                with client.open_sftp() as sftp, sftp.file(tmp_path, "w") as f:
-                    f.write(inst_cfg.config_yaml)
-                print(f"[SSHPush] Uploaded temp config to {tmp_path}")
-            except Exception as e:
-                print(f"[SSHPush] SFTP upload failed: {e}")
-                client.close()
-                return
-
-        agent_cmd = (
-            "sudo systemctl restart nebius-vpngw-agent"
-            if restart_agent
-            else "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent"
-        )
-        config_install_cmd = (
-            f"sudo install -o root -g root -m 0600 {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
-            if staged_receipt is not None
-            else f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
-        )
-        config_mode = "0600" if staged_receipt is not None else "0644"
-        legacy_service_asset_commands = (
-            (
-                # Ordinary non-HA deployment still stages service assets in /tmp.
-                "if [ -f /tmp/nebius-vpngw-fix-routes.service ]; then sudo mv /tmp/nebius-vpngw-fix-routes.service /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
-                "if [ -f /tmp/nebius-vpngw-fix-routes.timer ]; then sudo mv /tmp/nebius-vpngw-fix-routes.timer /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
-                "if [ -f /tmp/nebius-vpngw-health-monitor.service ]; then sudo mv /tmp/nebius-vpngw-health-monitor.service /etc/systemd/system/nebius-vpngw-health-monitor.service; fi",
-                "if [ -f /tmp/setup-vpngw-firewall.sh ]; then sudo mv /tmp/setup-vpngw-firewall.sh /usr/local/bin/setup-vpngw-firewall.sh; fi",
-                "if [ -f /tmp/nebius-vpngw-esp4-preflight.sh ]; then sudo mv /tmp/nebius-vpngw-esp4-preflight.sh /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
-                "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
-            )
-            if staged_receipt is None
-            else ()
-        )
-        vm_ha_service_asset_commands = (
-            ("sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/nebius-vpngw-ufw-lock.conf",)
-            if staged_receipt is not None
-            else ()
-        )
-
-        # Move into place and trigger reload
-        cmds = [
-            "sudo mkdir -p /etc/nebius-vpngw",
-            *(
-                [self._vm_ha_staged_verify_command(staged_receipt)]
-                if staged_receipt is not None
-                else []
-            ),
-            config_install_cmd,
-            "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
-            f"sudo chmod {config_mode} /etc/nebius-vpngw/config-resolved.yaml",
-            *self._vm_ha_peer_firewall_commands(vm_ha=staged_receipt is not None),
-            *legacy_service_asset_commands,
-            *vm_ha_service_asset_commands,
-            "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
-            "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
-            "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-health-monitor.service; fi",
-            "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo chmod 0755 /usr/local/bin/setup-vpngw-firewall.sh; fi",
-            "if [ -f /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
-            "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
-            "sudo systemctl daemon-reload",
-            *self._vm_ha_reset_failed_commands(vm_ha=staged_receipt is not None),
-            *(
-                [
-                    "sudo install -o root -g root -m 0600 /dev/null /etc/nebius-vpngw/vm-ha-enabled",
-                ]
-                if staged_receipt is not None
-                else []
-            ),
-            *(
-                self._vm_ha_control_service_commands(
-                    initialize_policy=True,
-                    replacement_policy_request=replacement_policy_request,
+                configure_paramiko_host_verification(
+                    client,
+                    paramiko,
+                    policy=self._ssh_policy,
+                    hostname=inst_cfg.hostname if self._ssh_policy is not None else None,
+                    transport_host=ssh_target if self._ssh_policy is not None else None,
                 )
+                self._connect_client(
+                    client,
+                    hostname=ssh_target,
+                    username=username,
+                    vm_spec=vm_spec,
+                )
+            except Exception as error:
+                identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+                if identity_failure is not None:
+                    raise identity_failure from error
+                raise RuntimeError("VM-HA activation SSH connection failed") from error
+
+            # Package bytes and service assets were proved during approved HA
+            # preparation. Activation must reuse that exact artifact.
+            print("[SSHPush] Reusing the verified VM-HA agent artifact...")
+
+            # Upload to /tmp then move with sudo
+            if staged_receipt is not None:
+                assert runtime_binding is not None
+                staged_binding = self._runtime_binding_for_nebius_credentials(
+                    inst_cfg=inst_cfg,
+                    runtime_binding=runtime_binding,
+                    target=staged_receipt.nebius_credentials_path,
+                    digest=staged_receipt.nebius_credentials_sha256,
+                )
+                rendered_config = self._render_vm_ha_config(inst_cfg, staged_binding)
+                expected = self._vm_ha_receipt(
+                    inst_cfg,
+                    rendered_config,
+                    runtime_binding=staged_binding,
+                    nebius_credentials_path=staged_receipt.nebius_credentials_path,
+                    nebius_credentials_sha256=staged_receipt.nebius_credentials_sha256,
+                )
+                if staged_receipt != expected:
+                    client.close()
+                    raise ValueError("VM-HA activation receipt does not match the node manifest")
+                tmp_path = f"/etc/nebius-vpngw/vm-ha-staged/{staged_receipt.generation_id}.yaml"
+            agent_cmd = ""  # The fenced HA controller exclusively owns agent activation.
+            config_install_cmd = (
+                f"sudo install -o root -g root -m 0600 {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
+                if staged_receipt is not None
+                else f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
+            )
+            config_mode = "0600" if staged_receipt is not None else "0644"
+            vm_ha_service_asset_commands = (
+                ("sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/nebius-vpngw-ufw-lock.conf",)
                 if staged_receipt is not None
                 else ()
-            ),
-            # Enable and start route fix timer (only if service file exists)
-            "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
-            # Enable and start health monitoring service (only if service file exists)
-            "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo systemctl enable --now nebius-vpngw-health-monitor.service; fi",
-            *(
-                [
-                    # Ordinary non-HA setup retains the established eager
-                    # route/firewall path. VM-HA defers both until the
-                    # controller has granted active authority.
-                    'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
-                    "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
-                ]
-                if staged_receipt is None
-                else []
-            ),
-            # In VM-HA the fenced controller exclusively owns ordinary-agent
-            # activation after it has durably entered passive mode.
-            *self._agent_activation_commands(
-                agent_cmd=agent_cmd,
-                vm_ha=staged_receipt is not None,
-            ),
-        ]
-        had_failures = self._run_remote_commands(
-            client,
-            cmds,
-            required_remote=required_remote,
-        )
+            )
 
-        if staged_receipt is not None:
-            try:
-                self._wait_for_vm_ha_materialization(client)
-            except Exception:
-                client.close()
-                raise
-
-        if not had_failures:
-            if restart_agent:
-                print("[SSHPush] Applied config, systemd unit, and restarted agent")
-            else:
-                print("[SSHPush] Applied config, systemd unit, and reloaded agent")
-
-        # Verify routing table health after route fix ran
-        try:
-
-            def _check_routing_health() -> tuple[str, str]:
-                stdin, stdout, stderr = client.exec_command(
-                    "ip rule list | grep -q 'lookup 220' && echo 'EXISTS' || echo 'OK'",
-                    timeout=10,
-                )
-                table220 = stdout.read().decode().strip()
-
-                stdin, stdout, stderr = client.exec_command(
-                    "ip route show 169.254.0.0/16 2>/dev/null | grep -q eth0 && echo 'EXISTS' || echo 'OK'",
-                    timeout=10,
-                )
-                apipa = stdout.read().decode().strip()
-                return table220, apipa
-
-            table220_status, apipa_status = _check_routing_health()
-            if table220_status != "OK" or apipa_status != "OK":
-                import time
-
-                time.sleep(5)
-                table220_status, apipa_status = _check_routing_health()
-
-            if table220_status == "OK" and apipa_status == "OK":
-                print("[SSHPush] ✓ Routing table clean (Table 220 and broad APIPA removed)")
-            else:
-                if table220_status == "EXISTS":
-                    print(
-                        "[SSHPush] ⚠ Table 220 policy route still exists (may impact VPN routing)"
+            # Move into place and trigger reload
+            if handoff is not None:
+                if staged_receipt is None or apply_operation_id is None:
+                    raise RuntimeError("HA handoff activation requires its exact apply lock")
+                handoff.publish_activation(receipt=staged_receipt, operation_id=apply_operation_id)
+            cmds = [
+                "sudo mkdir -p /etc/nebius-vpngw",
+                *(
+                    [self._vm_ha_staged_verify_command(staged_receipt)]
+                    if staged_receipt is not None
+                    else []
+                ),
+                *([] if handoff is not None else [config_install_cmd]),
+                "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
+                f"sudo chmod {config_mode} /etc/nebius-vpngw/config-resolved.yaml",
+                *self._vm_ha_peer_firewall_commands(vm_ha=staged_receipt is not None),
+                *vm_ha_service_asset_commands,
+                "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
+                "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
+                "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-health-monitor.service; fi",
+                "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo chmod 0755 /usr/local/bin/setup-vpngw-firewall.sh; fi",
+                "if [ -f /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
+                "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
+                "sudo systemctl daemon-reload",
+                *self._vm_ha_reset_failed_commands(vm_ha=staged_receipt is not None),
+                *(
+                    [
+                        "sudo install -o root -g root -m 0600 /dev/null /etc/nebius-vpngw/vm-ha-enabled",
+                    ]
+                    if staged_receipt is not None and handoff is None
+                    else []
+                ),
+                *(
+                    self._vm_ha_control_service_commands(
+                        initialize_policy=True,
+                        replacement_policy_request=replacement_policy_request,
                     )
-                if apipa_status == "EXISTS":
-                    print(
-                        "[SSHPush] ⚠ Broad APIPA route (169.254.0.0/16) still exists (should be removed for XFRM tunnels)"
-                    )
-        except Exception:
-            # Non-critical check, don't fail deployment
-            pass
-
-        # Ensure FRR is installed (cloud-init can fail if repo/version is unavailable)
-        try:
-            stdin, stdout, stderr = client.exec_command(
-                "dpkg -l frr 2>/dev/null | grep -q '^ii'", timeout=10
-            )
-            rc = stdout.channel.recv_exit_status()
-            if rc != 0:
-                print("[SSHPush] ⚠ FRR package missing; attempting install...")
-                install_cmd = (
-                    "sudo bash -lc '"
-                    "set -e;"
-                    'if ! dpkg -l frr 2>/dev/null | grep -q "^ii"; then '
-                    "command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y curl); "
-                    "if [ ! -f /etc/apt/sources.list.d/frr.list ]; then "
-                    "curl -s https://deb.frrouting.org/frr/keys.asc | tee /usr/share/keyrings/frrouting.asc > /dev/null; "
-                    "UBUNTU_CODENAME=$(lsb_release -cs); "
-                    'echo "deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable" > /etc/apt/sources.list.d/frr.list; '
-                    "fi; "
-                    "apt-get update; "
-                    "DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools; "
-                    "fi'"
-                )
-                stdin, stdout, stderr = client.exec_command(install_cmd, timeout=300, get_pty=True)
-                install_rc = stdout.channel.recv_exit_status()
-                if install_rc == 0:
-                    print("[SSHPush] ✓ FRR installed")
-                else:
-                    err = stderr.read().decode().strip()
-                    print(f"[SSHPush] ✗ FRR install failed: {err}")
-        except Exception as e:
-            print(f"[SSHPush] ⚠ FRR install check failed: {e}")
-
-        # Ensure swanctl is installed (required for if_id_in/out and VICI config loading)
-        try:
-            stdin, stdout, stderr = client.exec_command(
-                "dpkg -l strongswan-swanctl 2>/dev/null | grep -q '^ii'", timeout=10
-            )
-            rc = stdout.channel.recv_exit_status()
-            if rc != 0:
-                print("[SSHPush] ⚠ strongswan-swanctl missing; attempting install...")
-                install_cmd = (
-                    "sudo bash -lc '"
-                    "set -e;"
-                    "apt-get update; "
-                    "DEBIAN_FRONTEND=noninteractive apt-get install -y strongswan-swanctl'"
-                )
-                stdin, stdout, stderr = client.exec_command(install_cmd, timeout=300, get_pty=True)
-                install_rc = stdout.channel.recv_exit_status()
-                if install_rc == 0:
-                    print("[SSHPush] ✓ strongswan-swanctl installed")
-                else:
-                    err = stderr.read().decode().strip()
-                    print(f"[SSHPush] ✗ strongswan-swanctl install failed: {err}")
-        except Exception as e:
-            print(f"[SSHPush] ⚠ strongswan-swanctl install check failed: {e}")
-
-        # Verify service is actually running
-        try:
-            print("[SSHPush] Verifying service status...")
-            stdin, stdout, stderr = client.exec_command(
-                "sudo systemctl is-active nebius-vpngw-agent", timeout=10
-            )
-            rc = stdout.channel.recv_exit_status()
-            status = stdout.read().decode().strip()
-
-            if rc == 0 and status == "active":
-                print("[SSHPush] ✓ nebius-vpngw-agent is running")
-            else:
-                print(f"[SSHPush] ✗ nebius-vpngw-agent is NOT running (status: {status})")
-                # Get detailed status for troubleshooting
-                stdin, stdout, stderr = client.exec_command(
-                    "sudo systemctl status nebius-vpngw-agent --no-pager -l", timeout=10
-                )
-                detailed_status = stdout.read().decode()
-                print(f"[SSHPush] Service status:\n{detailed_status}")
-
-            # Verify strongSwan (account for different service names) and FRR
-            strongswan_checks = [
-                ("strongswan-starter", "sudo systemctl is-active strongswan-starter"),
-                ("strongswan-swanctl", "sudo systemctl is-active strongswan-swanctl"),
-                (
-                    "charon",
-                    "pgrep -x charon >/dev/null && echo active || echo inactive",
+                    if staged_receipt is not None
+                    else ()
+                ),
+                # Enable and start route fix timer (only if service file exists)
+                "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
+                # Enable and start health monitoring service (only if service file exists)
+                "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo systemctl enable --now nebius-vpngw-health-monitor.service; fi",
+                *(
+                    [
+                        # Ordinary non-HA setup retains the established eager
+                        # route/firewall path. VM-HA defers both until the
+                        # controller has granted active authority.
+                        'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
+                        "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
+                    ]
+                    if staged_receipt is None
+                    else []
+                ),
+                # In VM-HA the fenced controller exclusively owns ordinary-agent
+                # activation after it has durably entered passive mode.
+                *self._agent_activation_commands(
+                    agent_cmd=agent_cmd,
+                    vm_ha=staged_receipt is not None,
                 ),
             ]
-            strongswan_statuses = []
-            strongswan_ok = False
-            for name, cmd in strongswan_checks:
-                stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
-                rc = stdout.channel.recv_exit_status()
-                svc_status = stdout.read().decode().strip()
-                strongswan_statuses.append(f"{name}={svc_status or rc}")
-                if rc == 0 and svc_status == "active":
-                    print(f"[SSHPush] ✓ strongSwan is running ({name})")
-                    strongswan_ok = True
-                    break
-            if not strongswan_ok:
-                joined = ", ".join(strongswan_statuses)
-                print(f"[SSHPush] ✗ strongSwan appears inactive (checked: {joined})")
+            had_failures = self._run_remote_commands(
+                client,
+                cmds,
+                required_remote=required_remote,
+            )
 
-            # FRR check - wait up to 15 seconds for FRR to start
-            frr_active = False
-            svc_status = "unknown"
-            for attempt in range(3):  # 3 attempts, 5 seconds apart
-                stdin, stdout, stderr = client.exec_command(
-                    "sudo systemctl is-active frr", timeout=10
-                )
-                rc = stdout.channel.recv_exit_status()
-                svc_status = stdout.read().decode().strip()
-                if rc == 0 and svc_status == "active":
-                    print("[SSHPush] ✓ frr is running")
-                    frr_active = True
-                    break
-                elif attempt < 2:  # Don't sleep on last attempt
+            if staged_receipt is not None:
+                try:
+                    self._wait_for_vm_ha_materialization(client)
+                except Exception:
+                    client.close()
+                    raise
+
+            if not had_failures:
+                print("[SSHPush] HA configuration materialized and verified")
+
+            # Verify routing table health after route fix ran
+            try:
+
+                def _check_routing_health() -> tuple[str, str]:
+                    stdin, stdout, stderr = client.exec_command(
+                        "ip rule list | grep -q 'lookup 220' && echo 'EXISTS' || echo 'OK'",
+                        timeout=10,
+                    )
+                    table220 = stdout.read().decode().strip()
+
+                    stdin, stdout, stderr = client.exec_command(
+                        "ip route show 169.254.0.0/16 2>/dev/null | grep -q eth0 && echo 'EXISTS' || echo 'OK'",
+                        timeout=10,
+                    )
+                    apipa = stdout.read().decode().strip()
+                    return table220, apipa
+
+                table220_status, apipa_status = _check_routing_health()
+                if table220_status != "OK" or apipa_status != "OK":
                     import time
 
                     time.sleep(5)
+                    table220_status, apipa_status = _check_routing_health()
 
-            if not frr_active:
-                print(f"[SSHPush] ✗ frr is NOT running (status: {svc_status})")
-
-            # Check BGP session status via FRR instead of TCP port probing
-            # (TCP probes fail when BGP sessions are already established)
-            try:
-                defaults_mode = (
-                    (local_cfg.get("defaults", {}) or {}).get("routing", {}) or {}
-                ).get("mode", "bgp")
-
-                # Collect BGP peers for this instance (active and passive tunnels)
-                bgp_peers = []
-                for conn in local_cfg.get("connections") or []:
-                    routing_mode = conn.get("routing_mode") or defaults_mode
-                    if routing_mode != "bgp":
-                        continue
-                    for tun in conn.get("tunnels") or []:
-                        if int(tun.get("gateway_instance_index", 0)) != inst_cfg.instance_index:
-                            continue
-                        ha_role = tun.get("ha_role", "active")
-                        if ha_role == "disable":
-                            continue  # Skip only explicitly disabled tunnels
-                        r_ip = tun.get("inner_remote_ip")
-                        if r_ip:
-                            bgp_peers.append(r_ip)
-
-                if bgp_peers:
-                    # Wait for IPsec tunnels to establish before testing connectivity
-                    import json
-                    import time
-
-                    print("[SSHPush] Waiting for IPsec tunnels to establish...")
-                    time.sleep(10)
-
-                    print(f"[SSHPush] Verifying tunnel connectivity to {len(bgp_peers)} peer(s)...")
-
-                    # Step 1: Test ping connectivity to BGP peers
-                    all_peers_reachable = True
-                    for peer_ip in bgp_peers:
-                        cmd = f"ping -c 2 -W 2 {peer_ip} >/dev/null 2>&1 && echo OK || echo FAIL"
-                        stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
-                        result = stdout.read().decode().strip()
-                        if result == "OK":
-                            print(f"[SSHPush] ✓ Tunnel connectivity OK: {peer_ip} is reachable")
-                        else:
-                            print(
-                                f"[SSHPush] ✗ Tunnel connectivity FAILED: {peer_ip} is NOT reachable"
-                            )
-                            all_peers_reachable = False
-
-                    if not all_peers_reachable:
+                if table220_status == "OK" and apipa_status == "OK":
+                    print("[SSHPush] ✓ Routing table clean (Table 220 and broad APIPA removed)")
+                else:
+                    if table220_status == "EXISTS":
                         print(
-                            "[SSHPush] WARNING: Some peers are not reachable. BGP may not establish."
+                            "[SSHPush] ⚠ Table 220 policy route still exists (may impact VPN routing)"
                         )
-
-                    # Step 2: Wait for BGP sessions to establish (up to 60 seconds)
-                    print("[SSHPush] Waiting for BGP sessions to establish...")
-                    max_wait_time = 60
-                    start_time = time.time()
-                    all_established = False
-                    last_states: dict[str, str] = {}
-
-                    while (time.time() - start_time) < max_wait_time:
-                        cmd = "sudo vtysh -c 'show bgp summary json' 2>/dev/null || echo '{}'"
-                        stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
-                        output = stdout.read().decode().strip()
-
-                        try:
-                            bgp_summary = json.loads(output) if output != "{}" else {}
-                            ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
-
-                            established_count = 0
-                            current_states: dict[str, str] = {}
-
-                            for peer_ip in bgp_peers:
-                                peer_info = ipv4_peers.get(peer_ip, {})
-                                state = peer_info.get("state", "Unknown")
-                                current_states[peer_ip] = state
-
-                                if state == "Established":
-                                    established_count += 1
-
-                            # Print state changes
-                            for peer_ip, state in current_states.items():
-                                if peer_ip not in last_states or last_states[peer_ip] != state:
-                                    elapsed = int(time.time() - start_time)
-                                    if state == "Established":
-                                        print(
-                                            f"[SSHPush] ✓ BGP session with {peer_ip} is Established (after {elapsed}s)"
-                                        )
-                                    elif state != "Unknown":
-                                        print(
-                                            f"[SSHPush]   BGP session with {peer_ip}: {state} (waiting...)"
-                                        )
-
-                            last_states = current_states
-
-                            if established_count == len(bgp_peers):
-                                all_established = True
-                                break
-
-                            # Wait 3 seconds before checking again
-                            time.sleep(3)
-
-                        except (json.JSONDecodeError, Exception):
-                            # FRR might not be fully started yet
-                            time.sleep(3)
-                            continue
-
-                    # Final status report
-                    if all_established:
-                        elapsed = int(time.time() - start_time)
+                    if apipa_status == "EXISTS":
                         print(
-                            f"[SSHPush] ✓ All BGP sessions established successfully (took {elapsed}s)"
-                        )
-                    else:
-                        elapsed = int(time.time() - start_time)
-                        print(f"[SSHPush] ⚠ BGP sessions not yet established after {elapsed}s")
-                        print(
-                            f"[SSHPush]   Current states: {', '.join([f'{ip}={state}' for ip, state in last_states.items()])}"
-                        )
-                        print(
-                            "[SSHPush]   BGP sessions may take additional time to establish. Check with: nebius-vpngw status"
+                            "[SSHPush] ⚠ Broad APIPA route (169.254.0.0/16) still exists (should be removed for XFRM tunnels)"
                         )
             except Exception:
-                # BGP check is informational only, don't fail deployment
+                # Non-critical check, don't fail deployment
                 pass
-        except Exception as e:
-            print(f"[SSHPush] Failed to verify service status: {e}")
 
-        try:
+            # Verify service is actually running
+            try:
+                print("[SSHPush] Verifying service status...")
+                stdin, stdout, stderr = client.exec_command(
+                    "sudo systemctl is-active nebius-vpngw-agent", timeout=10
+                )
+                rc = stdout.channel.recv_exit_status()
+                status = stdout.read().decode().strip()
+
+                if rc == 0 and status == "active":
+                    print("[SSHPush] ✓ nebius-vpngw-agent is running")
+                else:
+                    print(f"[SSHPush] ✗ nebius-vpngw-agent is NOT running (status: {status})")
+                    # Get detailed status for troubleshooting
+                    stdin, stdout, stderr = client.exec_command(
+                        "sudo systemctl status nebius-vpngw-agent --no-pager -l", timeout=10
+                    )
+                    detailed_status = stdout.read().decode()
+                    print(f"[SSHPush] Service status:\n{detailed_status}")
+
+                # Verify strongSwan (account for different service names) and FRR
+                strongswan_checks = [
+                    ("strongswan-starter", "sudo systemctl is-active strongswan-starter"),
+                    ("strongswan-swanctl", "sudo systemctl is-active strongswan-swanctl"),
+                    (
+                        "charon",
+                        "pgrep -x charon >/dev/null && echo active || echo inactive",
+                    ),
+                ]
+                strongswan_statuses = []
+                strongswan_ok = False
+                for name, cmd in strongswan_checks:
+                    stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+                    rc = stdout.channel.recv_exit_status()
+                    svc_status = stdout.read().decode().strip()
+                    strongswan_statuses.append(f"{name}={svc_status or rc}")
+                    if rc == 0 and svc_status == "active":
+                        print(f"[SSHPush] ✓ strongSwan is running ({name})")
+                        strongswan_ok = True
+                        break
+                if not strongswan_ok:
+                    joined = ", ".join(strongswan_statuses)
+                    print(f"[SSHPush] ✗ strongSwan appears inactive (checked: {joined})")
+
+                # FRR check - wait up to 15 seconds for FRR to start
+                frr_active = False
+                svc_status = "unknown"
+                for attempt in range(3):  # 3 attempts, 5 seconds apart
+                    stdin, stdout, stderr = client.exec_command(
+                        "sudo systemctl is-active frr", timeout=10
+                    )
+                    rc = stdout.channel.recv_exit_status()
+                    svc_status = stdout.read().decode().strip()
+                    if rc == 0 and svc_status == "active":
+                        print("[SSHPush] ✓ frr is running")
+                        frr_active = True
+                        break
+                    elif attempt < 2:  # Don't sleep on last attempt
+                        import time
+
+                        time.sleep(5)
+
+                if not frr_active:
+                    print(f"[SSHPush] ✗ frr is NOT running (status: {svc_status})")
+
+                # Check BGP session status via FRR instead of TCP port probing
+                # (TCP probes fail when BGP sessions are already established)
+                try:
+                    defaults_mode = (
+                        (local_cfg.get("defaults", {}) or {}).get("routing", {}) or {}
+                    ).get("mode", "bgp")
+
+                    # Collect BGP peers for this instance (active and passive tunnels)
+                    bgp_peers = []
+                    for conn in local_cfg.get("connections") or []:
+                        routing_mode = conn.get("routing_mode") or defaults_mode
+                        if routing_mode != "bgp":
+                            continue
+                        for tun in conn.get("tunnels") or []:
+                            if int(tun.get("gateway_instance_index", 0)) != inst_cfg.instance_index:
+                                continue
+                            ha_role = tun.get("ha_role", "active")
+                            if ha_role == "disable":
+                                continue  # Skip only explicitly disabled tunnels
+                            r_ip = tun.get("inner_remote_ip")
+                            if r_ip:
+                                bgp_peers.append(r_ip)
+
+                    if bgp_peers:
+                        # Wait for IPsec tunnels to establish before testing connectivity
+                        import json
+                        import time
+
+                        print("[SSHPush] Waiting for IPsec tunnels to establish...")
+                        time.sleep(10)
+
+                        print(
+                            f"[SSHPush] Verifying tunnel connectivity to {len(bgp_peers)} peer(s)..."
+                        )
+
+                        # Step 1: Test ping connectivity to BGP peers
+                        all_peers_reachable = True
+                        for peer_ip in bgp_peers:
+                            cmd = (
+                                f"ping -c 2 -W 2 {peer_ip} >/dev/null 2>&1 && echo OK || echo FAIL"
+                            )
+                            stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+                            result = stdout.read().decode().strip()
+                            if result == "OK":
+                                print(f"[SSHPush] ✓ Tunnel connectivity OK: {peer_ip} is reachable")
+                            else:
+                                print(
+                                    f"[SSHPush] ✗ Tunnel connectivity FAILED: {peer_ip} is NOT reachable"
+                                )
+                                all_peers_reachable = False
+
+                        if not all_peers_reachable:
+                            print(
+                                "[SSHPush] WARNING: Some peers are not reachable. BGP may not establish."
+                            )
+
+                        # Step 2: Wait for BGP sessions to establish (up to 60 seconds)
+                        print("[SSHPush] Waiting for BGP sessions to establish...")
+                        max_wait_time = 60
+                        start_time = time.time()
+                        all_established = False
+                        last_states: dict[str, str] = {}
+
+                        while (time.time() - start_time) < max_wait_time:
+                            cmd = "sudo vtysh -c 'show bgp summary json' 2>/dev/null || echo '{}'"
+                            stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+                            output = stdout.read().decode().strip()
+
+                            try:
+                                bgp_summary = json.loads(output) if output != "{}" else {}
+                                ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
+
+                                established_count = 0
+                                current_states: dict[str, str] = {}
+
+                                for peer_ip in bgp_peers:
+                                    peer_info = ipv4_peers.get(peer_ip, {})
+                                    state = peer_info.get("state", "Unknown")
+                                    current_states[peer_ip] = state
+
+                                    if state == "Established":
+                                        established_count += 1
+
+                                # Print state changes
+                                for peer_ip, state in current_states.items():
+                                    if peer_ip not in last_states or last_states[peer_ip] != state:
+                                        elapsed = int(time.time() - start_time)
+                                        if state == "Established":
+                                            print(
+                                                f"[SSHPush] ✓ BGP session with {peer_ip} is Established (after {elapsed}s)"
+                                            )
+                                        elif state != "Unknown":
+                                            print(
+                                                f"[SSHPush]   BGP session with {peer_ip}: {state} (waiting...)"
+                                            )
+
+                                last_states = current_states
+
+                                if established_count == len(bgp_peers):
+                                    all_established = True
+                                    break
+
+                                # Wait 3 seconds before checking again
+                                time.sleep(3)
+
+                            except (json.JSONDecodeError, Exception):
+                                # FRR might not be fully started yet
+                                time.sleep(3)
+                                continue
+
+                        # Final status report
+                        if all_established:
+                            elapsed = int(time.time() - start_time)
+                            print(
+                                f"[SSHPush] ✓ All BGP sessions established successfully (took {elapsed}s)"
+                            )
+                        else:
+                            elapsed = int(time.time() - start_time)
+                            print(f"[SSHPush] ⚠ BGP sessions not yet established after {elapsed}s")
+                            print(
+                                f"[SSHPush]   Current states: {', '.join([f'{ip}={state}' for ip, state in last_states.items()])}"
+                            )
+                            print(
+                                "[SSHPush]   BGP sessions may take additional time to establish. Check with: nebius-vpngw status"
+                            )
+                except Exception:
+                    # BGP check is informational only, don't fail deployment
+                    pass
+            except Exception as e:
+                print(f"[SSHPush] Failed to verify service status: {e}")
+
+            try:
+                client.close()
+            except Exception:
+                pass  # Ignore Paramiko cleanup warnings
+        finally:
             client.close()
-        except Exception:
-            pass  # Ignore Paramiko cleanup warnings

@@ -136,3 +136,52 @@ def sample_infrastructure_receipt() -> SoperatorInfrastructureReceipt:
             assignment_sha256="sha256:" + "f" * 64,
         ),
     )
+
+
+def sample_jail_logs_binding():
+    system = {"matchExpressions": [{"key": "node-group", "operator": "In", "values": ["system"]}]}
+    storage = {"matchExpressions": [{"key": "jail", "operator": "In", "values": ["true"]}]}
+    values = {
+        "observability": {"enabled": True},
+        "slurmCluster": {
+            "namespace": "soperator",
+            "overrideValues": {
+                "clusterName": "soperator",
+                "k8sNodeFilters": [
+                    {
+                        "name": "system",
+                        "affinity": {
+                            "nodeAffinity": {
+                                "requiredDuringSchedulingIgnoredDuringExecution": {
+                                    "nodeSelectorTerms": [system]
+                                }
+                            }
+                        },
+                    }
+                ],
+                "volumeSources": [
+                    {"name": "jail", "persistentVolumeClaim": {"claimName": "active-jail"}}
+                ],
+            },
+        },
+    }
+    documents = [
+        {
+            "kind": "PersistentVolumeClaim",
+            "metadata": {"name": "active-jail", "namespace": "soperator"},
+            "spec": {"volumeName": "active-jail-pv"},
+        },
+        {
+            "kind": "PersistentVolume",
+            "metadata": {
+                "name": "active-jail-pv",
+                "labels": {"soperator.nebius.ai/lifecycle": "protected"},
+            },
+            "spec": {
+                "claimRef": {"name": "active-jail", "namespace": "soperator"},
+                "local": {"path": "/mnt/jail-store/rootfs/slot-a"},
+                "nodeAffinity": {"required": {"nodeSelectorTerms": [storage]}},
+            },
+        },
+    ]
+    return values, documents

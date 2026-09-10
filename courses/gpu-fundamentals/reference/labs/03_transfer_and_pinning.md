@@ -4,7 +4,7 @@ Pinned memory can help the GPU transfer data directly, but allocating pinned buf
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 1 for complete timing and exact-copy checks, then Lesson 8 for pageable versus pinned storage, nonblocking submission and completion. Predict which wait makes each copied value safe before running the four transfer modes.
+**Theory preparation:** Read Lab 01 for complete timing and exact-copy checks, then Lesson 8 for pageable versus pinned storage, nonblocking submission and completion. Predict which wait makes each copied value safe before running the four transfer modes.
 
 Use one H100 and sufficient host memory for both pageable and pinned buffers. Pinning consumes a limited host resource. The default smoke transfer is 64 MiB; use the size override for a bounded comparison.
 

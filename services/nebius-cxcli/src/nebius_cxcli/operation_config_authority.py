@@ -143,6 +143,26 @@ def validate_config_transition_chain(
         expected = transition.to_config_sha256
 
 
+def _transition_postimage_matches(
+    transition: ConfigGenerationTransition,
+    *,
+    config_sha256: str,
+    snapshot_sha256: str,
+    generation_sha256: str | None,
+) -> bool:
+    # A durable applied receipt seals configuration independently of runtime
+    # targets in the historical journal. A planned receipt still needs proof
+    # that its exact transaction was fully materialized.
+    return (
+        config_sha256 == transition.to_config_sha256
+        and snapshot_sha256 == transition.project_postimage_sha256
+        and (
+            transition.status == "applied"
+            or generation_sha256 == transition.project_generation_sha256
+        )
+    )
+
+
 def assert_config_authority_current(
     transitions: Sequence[ConfigGenerationTransition],
     *,
@@ -165,10 +185,11 @@ def assert_config_authority_current(
         )
     else:
         tail = transitions[-1]
-        postimage_matches = (
-            current_config_sha256 == tail.to_config_sha256
-            and current_project_snapshot_sha256 == tail.project_postimage_sha256
-            and current_project_generation_sha256 == tail.project_generation_sha256
+        postimage_matches = _transition_postimage_matches(
+            tail,
+            config_sha256=current_config_sha256,
+            snapshot_sha256=current_project_snapshot_sha256,
+            generation_sha256=current_project_generation_sha256,
         )
         preimage_snapshot = (
             transitions[-2].project_postimage_sha256
@@ -303,10 +324,17 @@ def apply_project_generation_transition(
     current_snapshot = current_project_snapshot_sha256()
     if existing is not None:
         validate_config_transition(existing)
+        if existing.owner != owner or existing.stage != stage:
+            raise SoperatorSafetyPauseError(
+                "the recorded config generation belongs to a different operation stage",
+                code="config-generation-owner",
+            )
         if current_config == existing.to_config_sha256:
-            if (
-                current_generation != existing.project_generation_sha256
-                or current_snapshot != existing.project_postimage_sha256
+            if not _transition_postimage_matches(
+                existing,
+                config_sha256=current_config,
+                snapshot_sha256=current_snapshot,
+                generation_sha256=current_generation,
             ):
                 raise SoperatorSafetyPauseError(
                     "config.yaml matches the operation postimage but generated state does not",

@@ -2284,7 +2284,7 @@ def test_registered_scheduling_runtime_repair_requires_frozen_partitions_and_mou
         )
     )
     replacement_worker = replacement_values["nodesets"]["overrideValues"]["nodesets"][0]
-    assert cli._materialize_soperator_registered_runtime_mounts({"nodesets": [replacement_worker]})
+    assert cli._materialize_soperator_nodeset_runtime_mounts({"nodesets": [replacement_worker]})
     replacement_revision = cli._soperator_registered_static_config_revision(
         {
             "nodesets": [replacement_worker],
@@ -2457,6 +2457,7 @@ def _discarded_inventory_replay(
 ]:
     preflight = _rootfs_admission()
     operation_spec = cli.SoperatorOperationSpec(
+        checks_policy_sha256="sha256:" + "c" * 64,
         target_ref="cluster-a",
         ownership="managed",
         strategy="protected-data-plane",
@@ -3879,8 +3880,9 @@ def test_soperator_help_exposes_unified_commands_and_release_flag() -> None:
     assert "--no-live" in status_output
 
     render_output = _normalized(render.output)
-    for lifecycle_command in ("install", "onboard", "upgrade", "destroy"):
-        assert f"soperator {lifecycle_command}" in render_output
+    assert "render updates ordinary app resources only" in render_output
+    assert "preserves the accepted infrastructure and upstream graph" in render_output
+    assert "`soperator` lifecycle command" in render_output
 
     flux_destroy_output = _normalized(flux_destroy.output)
     assert "Bundles containing Soperator are rejected" in flux_destroy_output
@@ -3922,9 +3924,8 @@ def test_soperator_help_exposes_unified_commands_and_release_flag() -> None:
         assert removed_option not in upgrade_output
 
     deploy_output = _normalized(deploy.output)
-    assert "Configs or generated bundles containing Soperator lifecycle state are rejected" in (
-        deploy_output
-    )
+    assert "deploy applies the rendered ordinary app bundle" in deploy_output
+    assert "without Terraform or Slurm maintenance" in deploy_output
     assert "rerun the same approved `soperator upgrade --execute --approve` command" in (
         deploy_output
     )
@@ -4050,7 +4051,7 @@ def test_generic_render_rejects_all_soperator_lifecycle_state_before_side_effect
     result = runner.invoke(cli.app, ["render", str(config_path), "--force"])
 
     assert result.exit_code == 1, result.output
-    assert "does not manage Soperator clusters" in _normalized(result.output)
+    assert "require a successfully completed Soperator" in _normalized(result.output)
     assert load_attempts == []
     assert not (config_path.parent / "generated").exists()
 
@@ -4125,7 +4126,12 @@ def test_generic_generated_commands_reject_all_soperator_lifecycle_state_before_
     result = runner.invoke(cli.app, argv)
 
     assert result.exit_code == 1, result.output
-    assert "does not manage Soperator clusters" in _normalized(result.output)
+    expected = (
+        "require a successfully completed Soperator"
+        if argv[0] == "deploy" or argv[:2] == ["flux", "apply"]
+        else "does not manage Soperator clusters"
+    )
+    assert expected in _normalized(result.output)
     assert side_effects == []
     assert not (generated_dir / "infra" / "terraform.auto.tfvars.json").exists()
 
@@ -5764,8 +5770,7 @@ def test_managed_soperator_destroy_applies_only_saved_selected_cluster_plan(
         "module.cluster_a",
         "nebius_iam_v1_group.cluster_a_soperator_observability",
         "nebius_iam_v1_group_membership.cluster_a_soperator_observability",
-        "nebius_iam_v1_access_permit.cluster_a_soperator_observability_metrics",
-        "nebius_iam_v1_access_permit.cluster_a_soperator_observability_logs",
+        "nebius_iam_v1_access_permit.cluster_a_soperator_observability",
     )
     assert calls[-1][0] == "apply"
     assert digest.startswith("sha256:")
@@ -6176,7 +6181,16 @@ def test_generic_create_rejects_soperator_before_provider_work(monkeypatch, tmp_
     assert "soperator install" in _normalized(result.output)
 
 
-def test_soperator_install_uses_saved_plan_for_execution(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("unsupported_checks", [False, True])
+def test_soperator_install_uses_saved_plan_for_execution(
+    monkeypatch, tmp_path: Path, unsupported_checks: bool
+) -> None:
+    def preflight(*_args):
+        if unsupported_checks:
+            raise ValueError("unsupported upstream check execution contract")
+
+    monkeypatch.setattr(cli, "_preflight_soperator_install_checks", preflight)
+    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_args, **_kwargs: None)
     config_path = tmp_path / "tenant" / "project" / "config.yaml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("version: v1\n", encoding="utf-8")
@@ -6206,11 +6220,13 @@ def test_soperator_install_uses_saved_plan_for_execution(monkeypatch, tmp_path: 
     }
     manifest: dict[str, Any] = {"deploy": {"targets": []}}
     deployed: list[Path | None] = []
+    config["apps"]["charts"].append(
+        {"id": "grafana", "instance_id": "mk8s", "enabled": True, "values": {"replicas": 2}}
+    )
+    saved_config = json.dumps(config, sort_keys=True)
+    config_path.write_text(saved_config, encoding="utf-8")
+    monkeypatch.setattr(cli, "_create_project", lambda **_kwargs: pytest.fail("resume creation"))
 
-    def _create(**_kwargs: Any) -> None:
-        cli._SOPERATOR_INSTALL_CONFIG_RESULT.set(config_path)
-
-    monkeypatch.setattr(cli, "create_command", _create)
     monkeypatch.setattr(cli, "render_command", lambda **_kwargs: None)
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: (config, paths, manifest))
     monkeypatch.setattr(cli, "_managed_soperator_install_target_ref", lambda *_args: "mk8s")
@@ -6226,6 +6242,7 @@ def test_soperator_install_uses_saved_plan_for_execution(monkeypatch, tmp_path: 
 
     @contextmanager
     def _lease(**_kwargs: Any):
+        assert not unsupported_checks, "checks preflight must precede execution authority"
         yield _Lease()
 
     monkeypatch.setattr(cli, "_soperator_install_execution_lease", _lease)
@@ -6259,14 +6276,22 @@ def test_soperator_install_uses_saved_plan_for_execution(monkeypatch, tmp_path: 
         ],
     )
 
+    if unsupported_checks:
+        assert result.exit_code == 1
+        assert "unsupported upstream check execution contract" in _normalized(result.output)
+        assert not deployed
+        return
     assert result.exit_code == 0, result.output
     assert deployed == [terraform_plan_path]
+    assert json.dumps(config, sort_keys=True) == saved_config
+    assert config_path.read_text(encoding="utf-8") == saved_config
 
 
 def test_soperator_fresh_install_forwards_every_creation_option(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(cli, "_preflight_soperator_install_checks", lambda *_args: None)
     config_path = tmp_path / "tenant-a" / "project-a" / "config.yaml"
     paths = _paths(config_path.parent)
     paths = replace(paths, config_path=config_path)
@@ -6276,11 +6301,13 @@ def test_soperator_fresh_install_forwards_every_creation_option(
         "apps": {"charts": [{"id": "soperator", "instance_id": "cluster-a", "enabled": True}]}
     }
     manifest: dict[str, object] = {"deploy": {"targets": []}}
+    values_path = tmp_path / "values.yaml"
+    values_path.write_text("sssd: {enabled: false}\n")
     create_calls: list[dict[str, object]] = []
 
-    def _create(**kwargs: object) -> None:
+    def _create(**kwargs: object) -> Path:
         create_calls.append(dict(kwargs))
-        cli._SOPERATOR_INSTALL_CONFIG_RESULT.set(config_path)
+        return config_path
 
     @contextmanager
     def _frozen_context(_release: object):
@@ -6294,12 +6321,16 @@ def test_soperator_fresh_install_forwards_every_creation_option(
     def _lease(**_kwargs: object):
         yield _Lease()
 
-    monkeypatch.setattr(cli, "create_command", _create)
-    monkeypatch.setattr(cli, "render_command", lambda **_kwargs: None)
+    monkeypatch.setattr(cli, "_create_project", _create)
+
+    def _render(**_kwargs: object) -> None:
+        assert cli._RENDER_DEPLOY_HINT_SUPPRESSED.get()
+
+    monkeypatch.setattr(cli, "render_command", _render)
     monkeypatch.setattr(
         cli,
         "freeze_soperator_release",
-        lambda _selector: SimpleNamespace(snapshot=SimpleNamespace(release="4.1.7")),
+        lambda _selector, **_kwargs: SimpleNamespace(snapshot=SimpleNamespace(release="4.1.7")),
     )
     monkeypatch.setattr(cli, "use_frozen_soperator_release", _frozen_context)
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: (config, paths, manifest))
@@ -6353,6 +6384,8 @@ def test_soperator_fresh_install_forwards_every_creation_option(
             "network-ref-a",
             "--subnet-ref",
             "subnet-ref-a",
+            "--values-file",
+            str(values_path),
             "--force",
             "--no-interactive",
             "--dry-run",
@@ -6370,9 +6403,9 @@ def test_soperator_fresh_install_forwards_every_creation_option(
             "email": "ops@example.invalid",
             "infra_components_opt": ["mk8s", "sfs"],
             "apps_components_opt": ["soperator"],
-            "app_namespace_opt": None,
-            "app_releasename_opt": None,
-            "app_version_opt": "4.1.7",
+            "soperator_release": SimpleNamespace(release="4.1.7"),
+            "soperator_profile": "nebius-mixed-v1",
+            "soperator_values": {"sssd": {"enabled": False}},
             "network_ids_opt": ["network-a", "network-b"],
             "subnet_ids_opt": ["subnet-a"],
             "network_refs_opt": ["network-ref-a"],
@@ -6389,6 +6422,7 @@ def test_soperator_install_replan_replaces_saved_plan_only_in_resume_dry_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(cli, "_preflight_soperator_install_checks", lambda *_args: None)
     config_path = tmp_path / "tenant" / "project" / "config.yaml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("version: v1\n", encoding="utf-8")
@@ -6464,7 +6498,7 @@ def test_soperator_install_replan_rejects_non_resume_mode_before_project_work(
 ) -> None:
     monkeypatch.setattr(
         cli,
-        "create_command",
+        "_create_project",
         lambda **_kwargs: pytest.fail("invalid --replan must fail before project work"),
     )
 
@@ -6486,7 +6520,9 @@ def test_soperator_install_replan_rejects_non_resume_mode_before_project_work(
 
     assert result.exit_code == 1
     assert "--replan is valid only with --resume --dry-run" in _normalized(result.output)
-    assert cli._SOPERATOR_INSTALL_PROFILE_OVERRIDE.get() is None
+    from nebius_cxcli.soperator_install_progress import install_progress_active
+
+    assert not install_progress_active()
 
 
 def test_soperator_install_replan_accepts_only_an_exact_planned_receipt(
@@ -6881,7 +6917,7 @@ def test_soperator_install_rejects_one_step_automated_apply_before_project_work(
 ) -> None:
     monkeypatch.setattr(
         cli,
-        "create_command",
+        "_create_project",
         lambda **_kwargs: pytest.fail("must require reviewed plan before project work"),
     )
 
@@ -6915,7 +6951,7 @@ def test_soperator_install_noninteractive_requires_release_before_resolver_or_pr
     )
     monkeypatch.setattr(
         cli,
-        "create_command",
+        "_create_project",
         lambda **_kwargs: pytest.fail("missing release must fail before project work"),
     )
 
@@ -7419,6 +7455,9 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(cli, "_preflight_soperator_upgrade_checks", lambda *_args: None)
+    monkeypatch.setattr(cli, "_preflight_soperator_checks", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_args, **_kwargs: None)
     paths = _paths(tmp_path)
     source_payload = {
         "client_info": {"nebius": {"project_id": "project-a"}},
@@ -7488,19 +7527,23 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     monkeypatch.setattr(cli, "_live_soperator_release_for_reconcile", lambda **_kwargs: "4.1.6")
     monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **_kwargs: "uid")
     monkeypatch.setattr(cli, "load_active_soperator_release_intent", lambda **_kwargs: None)
+    freeze_calls = []
     monkeypatch.setattr(
         cli,
         "freeze_soperator_release",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            snapshot=SimpleNamespace(
-                release="4.1.7",
-                capability_contract="upstream-flux-v1",
-                capability_sha256="sha256:" + "2" * 64,
-                snapshot_sha256="sha256:" + "3" * 64,
-                source_manifest_sha256="sha256:" + "5" * 64,
-                populate_jail_image=("registry.example.invalid/jail@sha256:" + "4" * 64),
-            )
-        ),
+        lambda *_args, **_kwargs: (
+            freeze_calls.append(_kwargs),
+            SimpleNamespace(
+                snapshot=SimpleNamespace(
+                    release="4.1.7",
+                    capability_contract="upstream-flux-v1",
+                    capability_sha256="sha256:" + "2" * 64,
+                    snapshot_sha256="sha256:" + "3" * 64,
+                    source_manifest_sha256="sha256:" + "5" * 64,
+                    populate_jail_image=("registry.example.invalid/jail@sha256:" + "4" * 64),
+                )
+            ),
+        )[1],
     )
     monkeypatch.setattr(
         cli,
@@ -7566,7 +7609,11 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
         lambda _paths: "sha256:" + "7" * 64,
     )
     monkeypatch.setattr(cli, "validate_config", lambda payload, **_kwargs: payload)
-    monkeypatch.setattr(cli, "ensure_soperator_release_source", lambda _snapshot: object())
+    monkeypatch.setattr(
+        cli,
+        "ensure_soperator_release_source",
+        lambda _snapshot: SimpleNamespace(source_dir=tmp_path),
+    )
 
     def _verify_artifacts(*_args: object, **kwargs: object) -> SoperatorArtifactReceipt:
         values = kwargs.get("values")
@@ -7624,6 +7671,7 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
         target=target,
         ownership="managed",
         target_selector="4.1.7",
+        target_snapshot_sha256="sha256:" + "3" * 64,
         dry_run=False,
         job_policy="wait-to-finish",
         cancel_job_ids=(),
@@ -7645,12 +7693,16 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     assert intents == ["begin", "complete"]
     assert source_payload == original_source_payload
     assert verified_values == [rendered_values]
+    assert freeze_calls[0]["snapshot_sha256"] == "sha256:" + "3" * 64
 
 
 def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_latest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(cli, "_preflight_soperator_upgrade_checks", lambda *_args: None)
+    monkeypatch.setattr(cli, "_preflight_soperator_checks", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_args, **_kwargs: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     _write_rendered_soperator_values(
@@ -7670,7 +7722,11 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
                     "namespace": "soperator",
                     "release-name": "soperator",
                     "version": "4.1.7",
-                    "values": {"externalNfs": {"enabled": True, "server": "10.0.0.20"}},
+                    "values": {
+                        "externalNfs": {"enabled": True, "server": "10.0.0.20"},
+                        "soperator-checks": {"enabled": True},
+                        "soperator-activechecks": {"enabled": True},
+                    },
                 }
             ]
         },
@@ -7795,7 +7851,11 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
         lambda _paths: "sha256:" + "7" * 64,
     )
     monkeypatch.setattr(cli, "validate_config", lambda payload, **_kwargs: payload)
-    monkeypatch.setattr(cli, "ensure_soperator_release_source", lambda _snapshot: object())
+    monkeypatch.setattr(
+        cli,
+        "ensure_soperator_release_source",
+        lambda _snapshot: SimpleNamespace(source_dir=tmp_path),
+    )
     artifact_receipt = SoperatorArtifactReceipt(
         release="4.1.7",
         source_manifest_sha256="sha256:" + "5" * 64,
@@ -7902,6 +7962,9 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
         target=target,
         ownership="managed",
         target_selector="latest",
+        checks_policy_proposal=cli.freeze_checks_proposal(
+            source_payload["apps"]["charts"][0]["values"]
+        ),
         dry_run=False,
         job_policy="wait-to-finish",
         cancel_job_ids=(),
@@ -8085,13 +8148,12 @@ def test_slurm_restore_replays_only_checkpoint_owned_state_in_safe_order(
     assert [kind for kind, _value in calls] == [
         "nodes",
         "partitions",
-        "reservation",
         "jobs",
         "jobs",
     ]
     assert calls[-2][1] == ("soperator", ("42",))
     assert calls[-1][1] == ("soperator", ("84",))
-    assert authority_calls == ["held", "held", "held", "held", "held"]
+    assert authority_calls == ["held", "held", "held", "held"]
     assert receipt == {
         "namespaces": ["soperator"],
         "restoredNodeCount": 1,
@@ -8767,3 +8829,11 @@ def test_interrupted_one_shot_callbacks_recover_then_verify_live_state(
         "requeued-running": 2,
         "other-held": 2,
     }
+
+
+def test_checks_transport_accepts_native_batched_create_json_stream():
+    from nebius_cxcli.cli import _soperator_checks_kubernetes_payload
+
+    output = '{"kind":"Job","metadata":{"name":"one"}}\n{"kind":"Job","metadata":{"name":"two"}}\n'
+    assert _soperator_checks_kubernetes_payload(["create", "-f", "-", "-o", "json"], output) == {}
+    assert _soperator_checks_kubernetes_payload(["get", "jobs"], '{"items":[]}') == {"items": []}

@@ -71,8 +71,6 @@ or optimizer work even when the resulting parameter difference is small.
 
 ## Begin with the concepts
 
-Start with the first lesson's **Start here** section and its inline workflow diagram. It defines the subject and essential vocabulary, explains why it is useful, and walks through a small example before advanced engineering details. Follow the syllabus checkpoints for the beginner route; experienced readers can use those checkpoints to identify what they already understand.
-
 Lab 32 is a download-free CPU introduction to learning a weight; use `python3 labs/32_learning_basics.py --device cpu` in the course environment. Its explicit `--device cuda` path is for an allocated H100. Continue with the transformer labs after the conceptual checks.
 
 ## Continue learning

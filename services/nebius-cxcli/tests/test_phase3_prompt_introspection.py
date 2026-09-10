@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import yaml
 
 import nebius_cxcli.cli as cli_module
@@ -595,6 +596,43 @@ def test_run_component_field_wizard_can_skip_preselected_soperator_profile(monke
     assert updated_payload["apps"]["charts"][0]["profile"] == "nebius-cpu-v1"
 
 
+def test_soperator_fabric_fallback_only_prompts_for_an_unresolved_gpu_cluster() -> None:
+    entry = ComponentEntry(id="mk8s", scope="infra", config_path="infra.mk8s", description="mk8s")
+    inputs = {"gpu_clusters": {"workers": {}}}
+    payload = {
+        "infra": {
+            "components": [
+                {"id": "mk8s", "instance_id": "cluster1", "enabled": True, "inputs": inputs}
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "profile": "nebius-gpu-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    path = "infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric"
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload, entry=entry, full_path_label=path
+    )
+    inputs["gpu_clusters"]["workers"]["infiniband_fabric"] = "verified-fabric"
+    assert _skip_soperator_managed_mk8s_prompt(payload=payload, entry=entry, full_path_label=path)
+    inputs["gpu_clusters"].clear()
+    assert _skip_soperator_managed_mk8s_prompt(payload=payload, entry=entry, full_path_label=path)
+    prefix = ("infra", "components", 0, "inputs")
+    preset = prefix + ("node_group_defaults", "gpu", "preset")
+    fabric = prefix + ("gpu_clusters", "workers", "infiniband_fabric")
+    assert _prompt_path_sort_key(preset, required_leaf_names={"preset", "infiniband_fabric"}) < (
+        _prompt_path_sort_key(fabric, required_leaf_names={"preset", "infiniband_fabric"})
+    )
+
+
 def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
     entry = ComponentEntry(
         id="mk8s",
@@ -817,7 +855,7 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
             ".autoscaling.max_node_count"
         ),
     )
-    assert _skip_soperator_managed_mk8s_prompt(
+    assert not _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
         full_path_label=(
@@ -1073,6 +1111,8 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
             return False, False
         if path_label in autoscaling_enabled_paths:
             return True, False
+        if path_label.endswith(".ephemeral_nodes.enabled"):
+            return True, False
         if path_label.endswith(".autoscaling.enabled"):
             return False, False
         return current, False
@@ -1139,7 +1179,7 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
         ".autoscaling.max_node_count" in prompted_paths
     )
-    assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
+    assert sum(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths) == 2
     worker_enabled_prompt_order = [
         path
         for path in prompted_paths
@@ -1331,10 +1371,10 @@ def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
         ".inputs.soperator.worker_node_groups.worker-" in path and ".autoscaling." in path
         for path in prompted_paths
     )
-    assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
+    assert sum(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths) == 4
     assert (
         "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
-        in prompted_paths
+        not in prompted_paths
     )
 
     updated_payload = yaml.safe_load(updated_yaml)
@@ -1358,7 +1398,7 @@ def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
             "min_node_count": 0,
             "max_node_count": expected_worker_max[group_key],
         }
-        assert worker_group["ephemeral_nodes"]["enabled"] is True
+        assert worker_group["ephemeral_nodes"]["enabled"] is False
     for group_key, node_group in inputs["node_groups"].items():
         if node_group.get("workload") == "worker":
             assert node_group["autoscaling"] == {
@@ -1366,7 +1406,7 @@ def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
                 "max_node_count": expected_worker_max[group_key],
             }
             assert "node_count" not in node_group
-    assert inputs["soperator"]["worker_ephemeral_nodes"]["suspend_time_seconds"] == 300
+    assert "worker_ephemeral_nodes" not in inputs["soperator"]
 
 
 def test_run_component_field_wizard_bulk_disables_soperator_worker_controls(
@@ -1711,13 +1751,11 @@ def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
         "infra.components[0].inputs.soperator.worker_node_groups."
         "all_worker_shards_autoscaling_enabled"
     )
-    suspend_path = (
-        "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
-    )
+    ephemeral_path = "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0.ephemeral_nodes.enabled"
     answers = {
         bulk_apply_path: [True],
         bulk_enabled_path: [True, False],
-        suspend_path: [cli_module._WIZARD_BACKTRACK],
+        ephemeral_path: [cli_module._WIZARD_BACKTRACK],
     }
 
     def _capture_continue_phase(
@@ -1756,7 +1794,7 @@ def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
     assert prompted_paths.count(bulk_enabled_path) == 2
     assert prompt_currents[bulk_apply_path] == [True]
     assert prompt_currents[bulk_enabled_path] == [False, True]
-    assert prompted_paths.count(suspend_path) == 1
+    assert prompted_paths.count(ephemeral_path) == 1
     assert not any(
         ".inputs.soperator.worker_node_groups.worker-" in path and ".autoscaling." in path
         for path in prompted_paths
@@ -2955,6 +2993,121 @@ def test_run_component_field_wizard_removes_backtracked_observability_app(
     assert updated_payload["apps"]["charts"] == []
 
 
+@pytest.mark.parametrize("backtrack", [False, True])
+def test_install_wizard_groups_core_and_prerequisites_without_extra_telemetry(
+    monkeypatch, backtrack
+):
+    payload = _mk8s_observability_payload()
+    core = {
+        "id": "soperator",
+        "instance_id": "mk8s",
+        "target_ref": "mk8s",
+        "enabled": True,
+        "version": "4.1.7",
+        "values": {"slurmConfig": {"clusterName": "example"}},
+    }
+    dependency = {
+        "id": "external-secrets",
+        "instance_id": "mk8s",
+        "target_ref": "mk8s",
+        "enabled": True,
+        "values": {},
+    }
+    payload["apps"]["charts"] = [dependency, core]
+    entries = tuple(
+        ComponentEntry(
+            id=row["id"], scope="apps", config_path=f"apps.{row['id']}", description=row["id"]
+        )
+        for row in (dependency, core)
+    )
+    phases = []
+    output = []
+    prompts = []
+
+    def phase(label, **_kwargs):
+        phases.append(label)
+        if (
+            label.startswith("Configure 'external-secrets")
+            and backtrack
+            and phases.count(label) == 1
+        ):
+            return cli_module._WizardPhaseDecision(False, back=True)
+        return label == "Configure 'mk8s' component fields now?"
+
+    def answer(label, current, **_kwargs):
+        prompts.append(label)
+        assert ".observability" not in label
+        return current, False
+
+    monkeypatch.setattr(cli_module, "module_variables", lambda _source: ())
+    monkeypatch.setattr(cli_module, "module_required_variables", lambda _source: ())
+    monkeypatch.setattr(cli_module, "helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", phase)
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", answer)
+    monkeypatch.setattr(
+        cli_module.console, "print", lambda message="", **_kwargs: output.append(str(message))
+    )
+    updated, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload),
+        selected_infra={"mk8s"},
+        selected_apps={"soperator", "external-secrets"},
+        infra_entries=(_mk8s_observability_wizard_entry(),),
+        app_entries=entries,
+        soperator_install=True,
+    )
+    assert completed
+    assert "infra.components[0].inputs.cluster.public_endpoint" in prompts
+    text = "\n".join(output)
+    groups = [
+        "Infrastructure",
+        "Soperator configuration",
+        "Required platform or integration components",
+    ]
+    positions = [text.index(f"--- {group} wizard section ---") for group in groups]
+    assert positions == sorted(positions)
+    assert text.count("--- Soperator configuration wizard section ---") == (2 if backtrack else 1)
+    assert "Apps wizard section" not in text and "Observability guidance:" not in text
+    assert "Configure upstream Soperator settings now?" in phases
+    assert not any(
+        "Install cxcli-managed" in phase or "additional app telemetry" in phase for phase in phases
+    )
+    rows = yaml.safe_load(updated)["apps"]["charts"]
+    assert {row["id"] for row in rows} == {"soperator", "external-secrets"}
+    saved_core = next(row for row in rows if row["id"] == "soperator")
+    assert saved_core["version"] == core["version"]
+    assert saved_core["values"]["slurmConfig"]["clusterName"] == "example"
+
+
+def test_install_wizard_quit_during_upstream_configuration_returns_incomplete(monkeypatch):
+    payload = _mk8s_observability_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "enabled": True,
+            "version": "4.1.7",
+            "values": {},
+        }
+    ]
+    entry = ComponentEntry(
+        id="soperator", scope="apps", config_path="apps.soperator", description="upstream"
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_a, **_k: cli_module._WizardPhaseDecision(False, quit=True),
+    )
+    _updated, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload),
+        selected_infra=set(),
+        selected_apps={"soperator"},
+        infra_entries=(),
+        app_entries=(entry,),
+        soperator_install=True,
+    )
+    assert not completed
+
+
 def test_run_component_field_wizard_keeps_chart_defaults_virtual_on_stop(monkeypatch) -> None:
     monkeypatch.setattr(
         "nebius_cxcli.cli.helm_chart_default_values",
@@ -3137,3 +3290,67 @@ def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypat
         ("Configure 'mk8s' component fields now?", True),
         ("Configure 'gateway-helm' component fields now?", None),
     ]
+
+
+def test_mixed_target_wizard_announces_only_required_observability_targets(monkeypatch):
+    import copy
+
+    payload = _mk8s_observability_payload()
+    payload["infra"]["components"].append(copy.deepcopy(payload["infra"]["components"][0]))
+    payload["infra"]["components"][1]["instance_id"] = "sop"
+    payload["deploy"]["targets"].append(copy.deepcopy(payload["deploy"]["targets"][0]))
+    payload["deploy"]["targets"][1]["instance_id"] = "sop"
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "sop",
+            "target_ref": "sop",
+            "enabled": True,
+            "version": "4.1.7",
+            "values": {},
+        }
+    ]
+    protected = copy.deepcopy(payload["apps"]["charts"][0])
+    phases = []
+    notices = []
+
+    def phase(label, **_kwargs):
+        phases.append(label)
+        return len(phases) <= 2
+
+    def prompt(label, current, **_kwargs):
+        if label == "deploy.targets[0].observability.enabled":
+            return True, False
+        return current, False
+
+    def capture(message="", *_args, **_kwargs):
+        if "Adjusted component selection:" in str(message):
+            notices.append(str(message))
+
+    monkeypatch.setattr(cli_module, "module_variables", lambda _source: ())
+    monkeypatch.setattr(cli_module, "module_required_variables", lambda _source: ())
+    monkeypatch.setattr(cli_module, "helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", phase)
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", prompt)
+    monkeypatch.setattr(cli_module.console, "print", capture)
+    updated, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload),
+        selected_infra={"mk8s", "sop"},
+        selected_apps={"soperator"},
+        infra_entries=(_mk8s_observability_wizard_entry(),),
+        app_entries=(_observability_agent_entry(), _grafana_entry(), _gateway_entry()),
+        provider_lookup=None,
+    )
+    assert completed
+    rows = yaml.safe_load(updated)["apps"]["charts"]
+    core = next(row for row in rows if row["id"] == "soperator")
+    assert all(
+        core[key] == protected[key] for key in ("instance_id", "target_ref", "enabled", "version")
+    )
+    assert {(row["id"], row["target_ref"]) for row in rows if row["id"] != "soperator"} == {
+        ("nebius-observability-agent", "mk8s"),
+        ("grafana", "mk8s"),
+        ("gateway-helm", "mk8s"),
+    }
+    assert notices
+    assert all("@sop" not in notice for notice in notices)

@@ -70,12 +70,26 @@ wizard:
     write_default_to_config: true
     type_hint: string
   values.soperator-backup-config.backup.schedule:
-    default: "@daily-random"
     write_default_to_config: true
     type_hint: string
   values.soperator-backup-config.prune.schedule:
-    default: "@daily-random"
     write_default_to_config: true
+    type_hint: string
+  values.soperator-backup-config.bucket.name:
+    type_hint: string
+    write_default_to_config: true
+  values.soperator-backup-config.bucket.endpoint:
+    type_hint: string
+    write_default_to_config: true
+  values.soperator-backup-config.prune.retention.keepDaily:
+    type_hint: number
+    write_default_to_config: true
+  values.sssd.sssdConfSecretRefName:
+    default: soperator-sssd-config
+    type_hint: string
+    write_default_to_config: true
+  values.sssd.sssdLdapCAConfigMapRefName:
+    default: ""
     type_hint: string
   placements.system:
     write_default_to_config: true
@@ -132,34 +146,20 @@ wizard:
       from: soperator_node_groups
       args:
         role: worker
-  values.soperator-activechecks.enabled: &disabled-component
+  values.soperator-dcgm-exporter.enabled: &disabled-component
     default: false
     write_default_to_config: true
     type_hint: bool
-  values.soperator-activechecks.waitForChecks.enabled: *disabled-component
-  values.soperator-checks.enabled: *disabled-component
-  values.soperator-dcgm-exporter.enabled: *disabled-component
   values.soperator-notifier.enabled: *disabled-component
   values.soperator-backup-config.enabled: *disabled-component
   values.sssd.enabled: *disabled-component
 defaults:
-  values.soperator-checks.enabled: false
+  values.sssd.sssdConfSecretRefName: soperator-sssd-config
+  values.soperator-checks.enabled: true
   values.soperator-checks.fullnameOverride: soperator-checks
   values.soperator-checks.serviceMonitor.enabled: false
-  values.soperator-activechecks.enabled: false
+  values.soperator-activechecks.enabled: true
   values.soperator-activechecks.fullnameOverride: soperator-activechecks
-  values.soperator-activechecks.waitForChecks.enabled: false
-  values.soperator-activechecks.checks.all-reduce-perf-nccl-in-docker.runAfterCreation: false
-  values.soperator-activechecks.checks.all-reduce-perf-nccl-with-ib.runAfterCreation: false
-  values.soperator-activechecks.checks.all-reduce-perf-nccl-without-ib.runAfterCreation: false
-  values.soperator-activechecks.checks.cuda-samples.runAfterCreation: false
-  values.soperator-activechecks.checks.dcgmi-diag-r2.runAfterCreation: false
-  values.soperator-activechecks.checks.dcgmi-diag-r3.runAfterCreation: false
-  values.soperator-activechecks.checks.gpu-fryer.runAfterCreation: false
-  values.soperator-activechecks.checks.ib-gpu-perf.runAfterCreation: false
-  values.soperator-activechecks.checks.manage-jail-state.runAfterCreation: false
-  values.soperator-activechecks.checks.mem-perf.runAfterCreation: false
-  values.soperator-activechecks.checks.prepull-container-image.runAfterCreation: false
   values.soperator-notifier.enabled: false
   values.soperator-notifier.fullnameOverride: soperator-notifier
   values.soperator-notifier.slack.mode: existing-webhook
@@ -168,7 +168,6 @@ defaults:
   values.soperator-notifier.slack.existingSecretKey: url
   values.soperator-notifier.slack.mysterybox.property: url
   values.soperator-backup-config.enabled: false
-  values.soperator-backup-config.fullnameOverride: soperator-jail-backup
   values.soperator-backup-config.secret.name: jail-backup
   values.soperator-backup-config.secret.keys.accessKeyID: aws-access-key-id
   values.soperator-backup-config.secret.keys.secretAccessKey: aws-access-secret-key
@@ -411,8 +410,6 @@ cli:
                     cpu: 100m
                     memory: 128Mi
                     ephemeralStorage: 1Gi
-          activechecks:
-            srunReadyPartition: cpu
           values:
             mariadb-operator:
               installOperator: true
@@ -740,8 +737,6 @@ cli:
                   manager:
                     env:
                       topologyLabelPrefix: topology.nvidia.com
-          activechecks:
-            srunReadyPartition: hidden
           onboarding_values: *id004
           values:
             mariadb-operator:
@@ -839,7 +834,7 @@ cli:
                 resources:
                   cpu: '32'
                   memory: 16Gi
-                  ephemeralStorage: 10Gi
+                  ephemeralStorage: 55Gi
                   gpu: 8
                 volumes:
                   spool:
@@ -1066,7 +1061,7 @@ cli:
                     resources:
                       cpu: '32'
                       memory: 16Gi
-                      ephemeralStorage: 10Gi
+                      ephemeralStorage: 55Gi
                       gpu: 8
                     volumes:
                       spool:
@@ -1252,8 +1247,6 @@ cli:
             disabled: *id002
             nebius-tiered-tree-v1: *id003
             nebius-nvl-rack-v1: *id005
-          activechecks:
-            srunReadyPartition: hidden
           onboarding_values: *id004
           values:
             mariadb-operator:
@@ -1299,7 +1292,7 @@ cli:
                 resources:
                   cpu: '32'
                   memory: 16Gi
-                  ephemeralStorage: 10Gi
+                  ephemeralStorage: 55Gi
                   gpu: 8
                 volumes:
                   spool:

@@ -9,16 +9,7 @@ import pytest
 from test_course_content_contract import COURSES, ROOT, load_builder
 
 
-THEORY_FIELDS = {
-    "title",
-    "Objective",
-    "Prerequisite bridge",
-    "Recall",
-    "Why it matters",
-    "Mental model",
-    "Mechanism",
-    "Practice labs",
-}
+THEORY_FIELDS = {"title", "Objective", "How it works", "Practice labs", "Mental model"}
 
 
 @pytest.mark.parametrize("course", COURSES)
@@ -28,8 +19,7 @@ def test_every_lesson_retains_theory_and_exact_lab_links(course):
     lessons = builder.parse_course(root / "COURSE.md")[2]
     metadata = json.loads((root / "reference/course.json").read_text())
     for number, lesson in enumerate(lessons, 1):
-        opening = "Start here" if number == 1 else "What it is"
-        assert set(lesson) == THEORY_FIELDS | {opening}
+        assert set(lesson) == THEORY_FIELDS
         labs = [lab for lab in metadata["labs"] if number in lab["lessons"]]
         assert labs, f"Lesson {number} has no practical owner"
         expected = []
@@ -74,6 +64,12 @@ def load_validator():
 @pytest.mark.parametrize(
     "field",
     [
+        "Start here",
+        "What it is",
+        "Prerequisite bridge",
+        "Recall",
+        "Why it matters",
+        "Mechanism",
         "H100 focus",
         "Worked example",
         "Trade-offs",
@@ -258,8 +254,8 @@ def test_lab_tables_preserve_cells_and_non_table_pipes(tmp_path, monkeypatch, fa
     guide = builder.lab_guides(tmp_path, metadata, 1)[0]
     fields = {"Practice labs": "- [Lab 01: Example](reference/labs/01_example.md)"}
     document = (
-        '<section class="lesson"><div class="practice-links"><strong>Practice labs</strong>'
-        '<ul><li><a href="#lab-01-example">Lab 01: Example</a></li></ul></div>\n</section>'
+        '<section class="lesson"><div class="practice-links"><strong>Practice labs</strong> '
+        '<ul><li><a href="#lab-01-example">Lab 01: Example</a></li></ul>\n</div>\n</section>'
         + builder.lab_markup(tmp_path, guide, [{"title": "Example"}], {})
     )
     replacements = {

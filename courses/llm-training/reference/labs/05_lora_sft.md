@@ -4,7 +4,7 @@ LoRA trains low-rank adapter parameters while leaving most pretrained weights fr
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 2–4 for labels, transformer computation and updates, then Lesson 14 for SFT, LoRA factor composition, PEFT configuration, frozen weights and trainable-state accounting. Lesson 1 is a preview only. Distinguish this lab’s padding-only mask from response-only supervision.
+**Theory preparation:** Read Lessons 2–4 for labels, transformer computation and updates, then Lesson 14 for SFT, LoRA factors and trainable-state accounting. Distinguish padding-only masking from response-only supervision.
 
 Qualify the Training extras and the approved model artifact described in the runbook. Model revisions must be immutable commits and remote custom code is disabled. Downloads, model caches, and adapter artifacts remain private.
 
@@ -14,7 +14,7 @@ Adapter compute can be small relative to the base GEMM but may introduce extra k
 
 For one projection, the adapter adds `s * B(Ax)` to the frozen base result `Wx`. A reduces the input to rank r; B expands it to the output width; s is the configured update scale. Only the selected trainable factors receive optimizer updates. Read Lesson 14's two-value hand calculation before interpreting trainable-parameter counts; the reduction in state follows from these smaller matrix shapes, not from skipping the base projection.
 
-The script loads the tokenizer and model, adds LoRA adapters to selected projection modules, constructs small supervised examples, and trains only allowed parameters. The baseline masks padding only: both question and answer tokens are supervised. Response-only prompt-label masking is an extension, not implemented by this baseline. It records trainable versus total counts, adapter gradient norms, parameter deltas, and a bounded held-out next-token/logit-digest observation. The base model still occupies memory even when its parameters are frozen.
+Transformers loads the pinned tokenizer and model; PEFT (Parameter-Efficient Fine-Tuning) attaches LoRA factors to `q_proj` and `v_proj`. Inspect actual trainable parameters before interpreting the requested configuration. The supplied workload masks padding only, so question and answer tokens both contribute to loss; response-only masking is an extension. The script records trainable counts, adapter gradients and updates, frozen-base behavior and a bounded held-out observation. Frozen base weights still occupy memory.
 
 ## Practice
 

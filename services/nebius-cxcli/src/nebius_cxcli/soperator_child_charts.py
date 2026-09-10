@@ -264,24 +264,12 @@ def soperator_child_chart_warnings(payload_or_config: Any) -> tuple[str, ...]:
         if activechecks_enabled:
             warnings.append(
                 "Soperator ActiveChecks are enabled "
-                f"for target {target_label}; they install recurring Slurm checks "
-                "including NCCL, CUDA, GPU stress, RDMA, and maintenance jobs that "
-                "can consume full GPU nodes and RDMA bandwidth while training is "
-                "running. Use them only for benchmarking/diagnostic clusters or "
-                "maintenance windows, not production training clusters."
-            )
-        if _checks_enabled(soperator_row) and not activechecks_enabled:
-            warnings.append(
-                "Soperator checks controller is enabled "
-                f"for target {target_label}; it does not run GPU benchmarks by "
-                "itself, but it reconciles ActiveCheck resources and node "
-                "maintenance/degraded status into SlurmNodeDrain and "
-                "SlurmNodeReboot conditions. NebiusMaintenanceScheduled is a "
-                "graceful maintenance drain/node handoff signal; SlurmNodeReboot "
-                "is the actual host reboot signal when the rebooter is enabled. "
-                "Keep it disabled unless this cluster intentionally uses "
-                "Soperator ActiveChecks or advanced Soperator-managed node "
-                "maintenance automation."
+                f"for target {target_label}. Active diagnostics and reviewed passive "
+                "diagnostics pause during isolated installation and upgrade maintenance; "
+                "operational hooks and the selected job policy are preserved. Passive "
+                "checks resume for fresh acceptance and are validated before customer handoff. "
+                "Unreviewed passive checks remain enabled. Recurring "
+                "diagnostics use the upstream schedules and Slurm resource allocation."
             )
         if _rebooter_enabled(soperator_row):
             warnings.append(

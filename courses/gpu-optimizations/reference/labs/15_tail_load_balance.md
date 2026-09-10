@@ -4,7 +4,7 @@ A long final task can delay completion even when most work has finished, while a
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 10 and Fundamentals Lessons 3, 5 and 6 for grid waves, occupancy, divergence versus skew and completion tails. Lesson 2 supplies the fork/join timing boundary. Report the modeled work ratio when comparing the balanced and skewed schedules. Fundamentals Lesson 6 explains the NaN output sentinel used to detect unwritten results before reference comparison.
+**Theory preparation:** Read Lesson 10 and Fundamentals Lessons 3, 5 and 6 for grid waves, occupancy, divergence versus skew and completion tails. Lesson 2 supplies the fork/join timing boundary. Report the modeled work ratio when comparing the balanced and skewed schedules. Fundamentals Lab 11 explains the NaN output sentinel used to detect unwritten results before reference comparison.
 
 Use one H100 with the course-qualified Triton compiler. Review task makespan—the time until all tasks finish—and the difference between task imbalance, warp divergence, and a grid tail.
 

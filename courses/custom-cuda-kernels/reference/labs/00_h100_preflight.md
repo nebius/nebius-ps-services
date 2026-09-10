@@ -4,13 +4,15 @@ A custom kernel depends on a compiler, target architecture, runtime, and physica
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 2 for CMake configuration, compilation/linking, CTest, SM90 code, driver/runtime roles and the image/build-directory contract. Fundamentals explains the purpose of preflight checks and the role of the GPU device. This build/readiness exercise precedes every kernel run.
+**Theory preparation:** Read Lessons 1–2 for host/device execution, toolchain stages and architecture targets. Follow the image, build and allocation requirements below before running.
 
 Follow the [CUDA build runbook](../cluster-smoke-test.md). The cluster owner supplies a reviewed container runner, immutable CUDA development image, and approved CUTLASS source. Required binaries use CUDA C++20 with `CMAKE_CUDA_ARCHITECTURES=90`.
 
 Compute capability 9.0 is the default. Labs requiring Hopper architecture-specific instructions use an explicit isolated `90a` target and state that the resulting binary is architecture-specific.
 
 ## Concepts and code path
+
+Lab 00 reports runtime and driver-supported CUDA API versions. Retain the compiler version separately from the build log; reporting versions is distinct from executing a compiler test.
 
 CMake describes how to configure and build the project. CTest is its test runner: it executes registered tests and reports their outcomes. It cannot supply tests that the project has not defined and does not replace separate sanitizer or profiler runs.
 

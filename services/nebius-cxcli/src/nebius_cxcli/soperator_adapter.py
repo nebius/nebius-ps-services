@@ -11,8 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .soperator_checks_binding import bind_checks_jail
+from .soperator_enroot import enroot_profile_document
 from .soperator_jail_mounts import JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS
 from .soperator_release import SoperatorReleaseSnapshot
+from .soperator_rest_contract import materialize_soperator_rest
 
 SOPERATOR_ADAPTER_LABEL = "soperator.nebius.ai/managed-by"
 SOPERATOR_ADAPTER_LABEL_VALUE = "nebius-cxcli-adapter"
@@ -30,7 +33,10 @@ _NFS_SERVER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
 _IMMUTABLE_IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PROTECTED_UPGRADE_GENERATED_VOLUME_SOURCE_NAMES = frozenset({"controller-spool", "jail"})
 SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS = frozenset(
-    {"sha256:20cf96ba24157f4c2cd4248906613b041680cf7d0275add50c2f1a92e72be073"}
+    {
+        "sha256:20cf96ba24157f4c2cd4248906613b041680cf7d0275add50c2f1a92e72be073",
+        "sha256:6a94b6dcf232e1b3358cb7fd40861750e55f4510883ab43f168bc6c4d8363dea",
+    }
 )
 SOPERATOR_VM_STACK_CLEANUP_HOOK_DISABLED_PACKAGES = frozenset(
     {
@@ -188,6 +194,7 @@ _PARENT_ONLY_KEYS = {
     "soperator-notifier",
     "storage",
     "storageClass",
+    "sssd",
     "topologyProfile",
     "uninstallCleanup",
     "volume",
@@ -1083,10 +1090,38 @@ def _compile_slurm_values(
     result = {
         key: copy.deepcopy(value) for key, value in values.items() if key not in _PARENT_ONLY_KEYS
     }
+    materialize_soperator_rest(result)
     if "partitionConfiguration" in result:
         result["partitionConfiguration"] = _compile_partition_configuration(
             result["partitionConfiguration"]
         )
+        partition_config = result["partitionConfiguration"]
+        if (
+            isinstance(partition_config, dict)
+            and partition_config.get("configType") == "structured"
+        ):
+            partitions = partition_config.get("partitions")
+            if isinstance(partitions, list) and not any(
+                p.get("name") == "hidden" for p in partitions
+            ):
+                worker_refs = sorted(
+                    {
+                        str(node["name"])
+                        for node in values.get("nodesets", [])
+                        if isinstance(node, Mapping) and node.get("name")
+                    }
+                )
+                if not worker_refs:
+                    raise ValueError(
+                        "upstream checks hidden partition requires worker NodeSet references"
+                    )
+                partitions.append(
+                    {
+                        "name": "hidden",
+                        "nodeSetRefs": worker_refs,
+                        "config": "Default=NO Hidden=YES State=UP MaxTime=INFINITE OverSubscribe=YES",
+                    }
+                )
     existing_sources = result.get("volumeSources")
     adapter_source_names = {
         "controller-spool",
@@ -1380,7 +1415,14 @@ def compile_upstream_soperator_values(
         "storageClasses": {"enabled": False},
     }
     checks = _mapping(values.get("soperator-checks"))
-    activechecks = _mapping(values.get("soperator-activechecks"))
+    activechecks = bind_checks_jail(
+        _mapping(values.get("soperator-activechecks")), str(contract["active_pvc"])
+    )
+    unsupported_checks = {"waitForChecks", "srunReadyPartition"} & activechecks.keys()
+    if unsupported_checks:
+        raise ValueError(
+            "unsupported upstream ActiveChecks fields: " + ", ".join(sorted(unsupported_checks))
+        )
     notifier = _mapping(values.get("soperator-notifier"))
     backup = _mapping(values.get("soperator-backup-config"))
     dcgm = _mapping(values.get("soperator-dcgm-exporter"))
@@ -1420,7 +1462,7 @@ def compile_upstream_soperator_values(
     }
     if "soperator-checks" in values:
         soperator["soperatorChecks"] = {
-            "enabled": checks.pop("enabled", False) is True,
+            "enabled": checks.pop("enabled", True) is True,
             "overrideValues": checks or None,
         }
     umbrella["soperator"] = soperator
@@ -1442,7 +1484,7 @@ def compile_upstream_soperator_values(
             "config": {
                 "enabled": backup.pop("enabled", False) is True,
                 "version": pinned.release,
-                "overrideValues": backup or None,
+                "values": backup or None,
             },
         }
     observability = _mapping(values.get("observability"))
@@ -1793,6 +1835,7 @@ def render_soperator_adapter_documents(
     controller_spool = contract["controller_spool"]
     accounting = contract["accounting"]
     docs: list[dict[str, Any]] = [
+        enroot_profile_document(_lifecycle_labels(labels, SOPERATOR_LIFECYCLE_RECREATABLE)),
         {
             "apiVersion": "storage.k8s.io/v1",
             "kind": "StorageClass",
@@ -1802,7 +1845,7 @@ def render_soperator_adapter_documents(
             },
             "provisioner": "kubernetes.io/no-provisioner",
             "volumeBindingMode": "WaitForFirstConsumer",
-        }
+        },
     ]
     for slot in ("slot-a", "slot-b"):
         item = contract["slots"][slot]

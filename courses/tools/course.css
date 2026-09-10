@@ -46,6 +46,8 @@ main p, .lesson > div, .lesson > details, .supporting-guide > ul, .supporting-gu
 main > section:target, article:target, figure:target { border-color: var(--teal); }
 .course-subtitle { color: var(--muted); }
 .lesson > div, .lesson > details { margin: 1.15rem 0; }
+.lesson > .how-it-works { max-width: none; }
+.how-it-works > ul, .how-it-works > ol { max-width: var(--reading-width); }
 .lesson > div > strong, .lesson > details > summary { color: var(--ink); }
 .lesson .lesson-outcome { border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
 .lesson .warning { border-color: var(--amber); background: var(--amber-wash); }

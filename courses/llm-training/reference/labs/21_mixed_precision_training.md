@@ -4,7 +4,7 @@ A precision change affects more than forward logits: gradients and optimizer upd
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 4, 6 and 7 for the full update, memory lifetimes, autocast, FP16 scaling/unscaling, clipping, matched references and aggregate gradient/update error. Lesson 6 is a code-and-ledger preview; run the complete format comparison in Lesson 7.
+**Theory preparation:** Read Lessons 4, 6 and 7 for complete updates, memory lifetimes, autocast, FP16 scaling and relative L2 error. Inspect the memory ledger in Lesson 6; run the complete precision comparison after Lesson 7.
 
 Use one H100 in the Training environment. In Lesson 6, only inspect the memory-accounting code and prepare the ledger; this script has no memory-only mode. Run the complete comparison in Lesson 7 after reviewing autocast and dynamic gradient scaling. The FP16 path uses scaling; the BF16 path does not require the same scaling behavior by default.
 
@@ -46,7 +46,7 @@ sbatch slurm/single_gpu.sbatch labs/21_mixed_precision_training.py --profile smo
 
 ## Check your results
 
-Require finite values and updates plus the declared FP32 comparison gates. Defaults allow loss relative error 0.05 and gradient/update relative L2 error 0.2; these are recipe-specific training checks, not elementwise BF16 allclose. Inspect thresholds alongside each mode's numerical and warmed-timing records.
+Compare matched pre-update losses, named gradients and parameter-update deltas against FP32 before interpreting separate warmed timing. Gradient and update error aggregate squared values across matching tensor names; the denominator is guarded at `1e-12`. Scalar loss uses absolute difference divided by guarded absolute reference loss. Missing gradients or non-finite state, norms or errors invalidate acceptance. Defaults allow loss relative error 0.05 and gradient/update relative L2 error 0.2. These whole-update gates apply to this recipe; they are not elementwise BF16 allclose or evidence of convergence.
 
 Retain a dtype-by-state ledger, phase peaks, allocator statistics, and shape contract.
 

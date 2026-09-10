@@ -1,8 +1,180 @@
 from __future__ import annotations
 
+import os
 import socket
 
 import pytest
+
+
+@pytest.fixture
+def ordinary_static_observer(monkeypatch, tmp_path):
+    """Real ordinary verifier with isolated non-routing observations.
+
+    Tests supply routes produced by the real writer, or a real network namespace;
+    this fixture never derives expected forwarding from the helper under test.
+    """
+    import ipaddress
+    import json
+    from types import SimpleNamespace
+
+    from nebius_vpngw import ordinary_operations as ops
+    from nebius_vpngw.agent import ordinary
+    from nebius_vpngw.tunnel_state import collect_tunnel_state
+
+    monkeypatch.setattr(ops, "JOURNAL", tmp_path / "observer/operation.json")
+    swan, frr = tmp_path / "swanctl.conf", tmp_path / "frr.conf"
+    swan.write_text("fixture connections\n")
+    swan.chmod(0o600)
+    frr.write_text("router bgp 65001\n")
+    monkeypatch.setattr(ordinary, "SWANCTL_CONF", swan)
+    monkeypatch.setattr(ordinary, "FRR_CONF", frr)
+    monkeypatch.setattr(
+        ordinary, "managed_files", lambda cfg: {swan: swan.read_text(), frr: frr.read_text()}
+    )
+
+    def prepare(cfg):
+        tunnels, _, endpoints = collect_tunnel_state(cfg, log=lambda _: None)
+        state = SimpleNamespace(routes=[], ip_reader=None)
+
+        def ip_rows(args):
+            if "rule" in args:
+                return []
+            if "route" in args:
+                return state.routes
+            if args == ["ip", "-d", "-j", "link", "show"]:
+                return [
+                    {"ifname": "eth0", "ifindex": 2, "mtu": 1500},
+                    *(
+                        ip_rows(["ip", "-d", "-j", "link", "show", "dev", e["name"]])[0]
+                        for e in endpoints
+                    ),
+                ]
+            if args[-1] == "eth0":
+                return [{"ifindex": 2, "mtu": 1500}]
+            endpoint = next(e for e in endpoints if e["name"] == args[-1])
+            if "link" in args:
+                return [
+                    {
+                        "ifname": endpoint["name"],
+                        "ifindex": endpoint["if_id"],
+                        "mtu": 1436,
+                        "link_index": 2,
+                        "flags": ["UP"],
+                        "linkinfo": {
+                            "info_kind": "xfrm",
+                            "info_data": {"if_id": endpoint["if_id"]},
+                        },
+                    }
+                ]
+            if "addr" in args:
+                return [
+                    {
+                        "addr_info": [
+                            {
+                                "local": endpoint["local_inner_ip"],
+                                "prefixlen": ipaddress.ip_network(endpoint["cidr"]).prefixlen,
+                            }
+                        ]
+                    }
+                ]
+            if "neigh" in args:
+                return [{"dst": endpoint["remote_inner_ip"], "state": ["PERMANENT"]}]
+            raise AssertionError(args)
+
+        def output(args):
+            if args[0] == "ip":
+                return json.dumps((state.ip_reader or ip_rows)(args))
+            if args[0] == "systemctl":
+                return "active"
+            if args[0] == "ufw":
+                return "Status: active"
+            if args[0] == "sysctl":
+                return ordinary.REQUIRED_SYSCTLS.get(args[-1], "0")
+            if args[0] == "swanctl":
+                assert args[1:] == ["--list-conns", "--raw"]
+                return "list-conn event {" + " ".join(t["name"] + " {}" for t in tunnels) + "}"
+            if args[0] == "vtysh":
+                return frr.read_text()
+            if args[0] == "iptables-save":
+                return "ufw-before-input\n" + "\n".join(
+                    f"-A ufw-user-{direction} -{flag} {e['name']} -j ACCEPT"
+                    for e in endpoints
+                    for direction, flag in (("input", "i"), ("output", "o"))
+                )
+            raise AssertionError(args)
+
+        monkeypatch.setattr(ordinary, "_output", output)
+        state.ip_rows = ip_rows
+        return state
+
+    return prepare
+
+
+@pytest.fixture
+def ordinary_operation_guest(monkeypatch, tmp_path):
+    """Explicit guest-manager boundary for host-independent orchestration tests."""
+    from nebius_vpngw import ordinary_operations as ops
+
+    boot = tmp_path / "operation-boot"
+    boot.write_text("12345678-1234-1234-1234-123456789012")
+    monkeypatch.setattr(ops, "BOOT", boot)
+    monkeypatch.setattr(ops, "JOURNAL", tmp_path / "ordinary" / "operation.json")
+    monkeypatch.setattr(ops, "ROUTING_LOCK", tmp_path / "operation-routing.lock")
+    monkeypatch.setattr(
+        ops,
+        "identity",
+        lambda pid=None: {"pid": pid or os.getpid(), "start": "1", "boot": ops.BOOT.read_text()},
+    )
+
+    class GuestManager:
+        on_service = None
+
+        def __init__(self, deadline, **kwargs):
+            self.deadline = deadline
+
+        def preflight(self):
+            pass
+
+        def environment(self):
+            return {"network": self.network(), "unit_files": {}}
+
+        def network(self):
+            return {"inputs": {}, "links": [{"name": "eth0"}]}
+
+        def unit(self, name):
+            return {"missing": False}
+
+        def stopped(self, name):
+            return True
+
+        def quiet(self, names):
+            return True
+
+        def management_admitted(self):
+            return True
+
+        def unit_finished(self, effect):
+            return self.unit_settled(effect)
+
+        def unit_settled(self, effect):
+            return True
+
+        def system(self, method, *args):
+            if method == "EnqueueUnitJob":
+                if self.on_service is not None:
+                    self.on_service(args[2], args[1])
+                return {
+                    "type": "uososa(uosos)",
+                    "data": [1, "/job/1", args[1], "/unit/1", args[2], []],
+                }
+            return {"type": "", "data": []}
+
+    monkeypatch.setattr(ops, "Manager", GuestManager)
+    monkeypatch.setattr(ops, "install_startup_guard", lambda: None)
+    from nebius_vpngw.agent import ordinary
+
+    monkeypatch.setattr(ordinary, "Manager", GuestManager)
+    return GuestManager
 
 
 @pytest.fixture(autouse=True)
@@ -123,3 +295,19 @@ def sample_config() -> dict:
             }
         ],
     }
+
+
+@pytest.fixture
+def ordinary_handoff_preview(monkeypatch):
+    from unittest.mock import Mock
+
+    from nebius_vpngw.deploy import ordinary_handoff
+
+    inspector = Mock(return_value={"journal": "1" * 64, "environment": {}})
+    monkeypatch.setattr(ordinary_handoff, "inspect", inspector)
+    monkeypatch.setattr(
+        ordinary_handoff,
+        "reserve",
+        Mock(side_effect=AssertionError("dry-run may not reserve migration admission")),
+    )
+    return inspector

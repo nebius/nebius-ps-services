@@ -16,7 +16,7 @@
         1,
         2
       ],
-      "after": "Start here",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -26,7 +26,7 @@
         2,
         4
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -35,7 +35,7 @@
       "lessons": [
         4
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -44,7 +44,7 @@
       "lessons": [
         7
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -53,7 +53,7 @@
       "lessons": [
         9
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -71,7 +71,7 @@
       "lessons": [
         11
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -80,7 +80,7 @@
       "lessons": [
         13
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -89,7 +89,7 @@
       "lessons": [
         14
       ],
-      "after": "Mental model",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -98,7 +98,7 @@
       "lessons": [
         14
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -107,7 +107,7 @@
       "lessons": [
         15
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -116,7 +116,7 @@
       "lessons": [
         10
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     }
   ]

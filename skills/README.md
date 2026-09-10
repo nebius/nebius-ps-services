@@ -389,8 +389,11 @@ and `PUBLICATION-REVIEW.md`. Its reusable light palette, wide responsive frame
 and persistent desktop TOC provide the standard reading experience.
 Invoke it explicitly with `$create-learning-course`; implicit invocation is
 disabled because the workflow can create or revise many local files.
-The workflow aligns outcomes, prerequisite sequencing, complete concept
-explanations, worked examples, guided practice and transfer assessment.
+Every lesson has a conceptual title and follows Objective, How it works,
+Practice and Mental model. Connected explanations introduce concepts and
+unfamiliar abbreviations in context and contain a meaningful core diagram;
+the final mental model summarizes prior teaching. The workflow preserves
+worked examples, guided practice, feedback and transfer assessment.
 Source parity, navigation, practical-work accuracy, visual accessibility and
 publication safety are separate checks. Domain-specific languages, hardware
 and runtime requirements remain course-profile choices. The source kit

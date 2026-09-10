@@ -77,3 +77,12 @@ standards or product behavior. Record exact compatibility/test evidence in
 author review records; do not put research-review datelines in learner-facing
 Where to Go Next sections. No source here justifies a guaranteed learning,
 performance or accessibility outcome without the relevant evaluation.
+
+## Format And Evidence Boundary
+
+The four lesson headings, conceptual title convention and requirement for a
+core diagram in each explanation are this authoring kit's presentation
+contract. Research-informed practices such as worked examples, retrieval and
+integrated verbal/visual explanation support teaching choices; they do not
+prove that these exact labels guarantee better learning. Review complete prose
+and diagram meaning separately from structural compliance.

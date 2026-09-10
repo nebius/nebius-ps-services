@@ -4,13 +4,17 @@ Driver, CUDA runtime, compiler toolkit, and PyTorch versions answer different qu
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 1’s preflight explanation of the device, driver, runtime and compiler before the first compatibility check. Lesson 2 later explains their version and loading relationships in depth; do not treat the reported version numbers as interchangeable.
+**Theory preparation:** Read Lesson 1 for the host/device boundary. This guide defines the software layers needed for the first check; Lesson 2 explains compilation and compatibility in depth.
 
 Use the approved Fundamentals environment on one H100. The NVIDIA management utility and CUDA compiler may have different availability. A missing compiler is relevant to building custom code but does not automatically prevent an installed PyTorch wheel from running.
 
 H100 is compute capability 9.0. Ordinary portable kernels should contain compatible SM90 code or PTX that the installed driver can translate. Architecture-accelerated instructions such as selected SM90a features require an explicit non-forward-compatible target and must be isolated.
 
 ## Concepts and code path
+
+A **preflight** is a readiness check before an experiment. Here it answers whether this environment can execute a small PyTorch operation on the allocated H100. The driver connects software to the GPU; the CUDA runtime provides allocation and launch services; the toolkit includes the compiler used to build CUDA source. These components have separate version numbers.
+
+Read each report for its purpose: `nvidia-smi` reports device/driver information, `torch.version.cuda` identifies PyTorch's CUDA build, and `nvcc --version` reports an available compiler. Neither of the first two proves that a compiler is installed, and a compiler version does not prove a successful build. The final framework operation supplies the execution check.
 
 The script obtains PyTorch's version, its associated CUDA runtime version, compiled architecture list, a bounded driver query, and the compiler release when available. It executes a simple CUDA tensor operation as a runtime check. It does not inspect a binary's selected PTX/SASS image or compile an extension.
 

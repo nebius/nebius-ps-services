@@ -4,7 +4,7 @@ A CUDA Graph is a reusable plan of device operations and their dependencies. Cap
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 4–5 for the elementwise workload, capture versus compilation, stable storage, warm-up and CUDA Graph replay. Apply Lesson 2’s completion boundary and validate replayed output rather than assuming capture preserves updated inputs.
+**Theory preparation:** Read Lessons 4–5 for compilation versus graph capture, stable storage and replay. Apply Lesson 2's completion boundary. The matrix-multiplication and SiLU workload is explained below.
 
 Use one H100 and the approved environment. Review stream ordering and tensor lifetime. The supplied experiment has one input shape and does not implement shape buckets, dynamic routing, or an eager fallback service.
 
@@ -12,7 +12,7 @@ Fast repeated H100 inference or training steps can become CPU-launch limited, ma
 
 ## Concepts and code path
 
-The program allocates resident tensors, warms the workload, captures its operations in a CUDA Graph, and replays the captured graph repeatedly. Captured operations reference stable storage. Correctness compares replay output with the eager calculation for the supplied input; returning a Python tensor does not recreate the captured computation on each replay.
+The program warms and captures a fixed-shape matrix multiplication followed by SiLU. Replay uses the captured input and output storage. Rebinding a Python variable does not change those addresses. The supplied check compares replay with eager execution for the original input. Copying new values into the static input is the explicit extension in Practice; the baseline does not test changing inputs, graph updates or shape routing.
 
 ## Practice
 

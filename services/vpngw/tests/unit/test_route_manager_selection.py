@@ -145,6 +145,38 @@ def test_route_next_hops_use_exact_configured_instance_lookups(
     ]
 
 
+def test_route_next_hops_use_real_grpc_request_serializer() -> None:
+    from nebius.api.nebius.common.v1 import metadata_pb2
+    from nebius.api.nebius.compute.v1 import instance_pb2
+
+    class Channel:
+        def unary_unary(self, method, request_serializer, response_deserializer, **kwargs):
+            def call(request):
+                # Exercise the generated stub's actual serializer, not a fake
+                # accepting both the facade and protobuf request representations.
+                raw = request_serializer(request)
+                decoded = metadata_pb2.GetByNameRequest.FromString(raw)
+                assert decoded.parent_id == "project-test"
+                assert decoded.name == "gateway-0"
+                return instance_pb2.Instance(
+                    metadata=metadata_pb2.ResourceMetadata(
+                        id="compute-0", name="gateway-0", parent_id="project-test"
+                    )
+                )
+
+            return call
+
+    plan = SimpleNamespace(
+        iter_instance_configs=lambda: (SimpleNamespace(hostname="gateway-0", instance_index=0),)
+    )
+    assert (
+        RouteManager(project_id="project-test")._find_gateway_private_allocations_by_index(
+            Channel(), plan
+        )
+        == {}
+    )
+
+
 def test_static_remote_prefixes_union_connection_and_enabled_member_tunnels() -> None:
     connection = {
         "remote_prefixes": ["10.10.0.0/24"],

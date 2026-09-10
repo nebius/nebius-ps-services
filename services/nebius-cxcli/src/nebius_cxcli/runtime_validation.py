@@ -44,6 +44,12 @@ from .soperator_registration import (
     validate_soperator_registration,
 )
 from .soperator_release import SOPERATOR_UPSTREAM_REPOSITORY
+from .soperator_values import (
+    EXPLICIT_VALUES_FIELD,
+    explicit_values,
+    validate_feature_values,
+    validate_input_values,
+)
 
 _ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -1282,6 +1288,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "namespace",
                 "release-name",
                 "values",
+                EXPLICIT_VALUES_FIELD,
             }
         )
         if unknown_keys:
@@ -1290,6 +1297,12 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             )
 
         chart_id = component_type_id(raw_chart)
+        if EXPLICIT_VALUES_FIELD in raw_chart:
+            if chart_id != "soperator":
+                raise ValueError("values-explicit-paths is reserved for Soperator")
+            validate_input_values(explicit_values(raw_chart))
+        if chart_id == "soperator" and raw_chart.get("enabled"):
+            validate_feature_values(raw_chart.get("values", {}))
         if not chart_id:
             raise ValueError(f"apps.charts[{index}].id is required")
         if not _ID_PATTERN.fullmatch(chart_id):

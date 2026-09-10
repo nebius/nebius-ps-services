@@ -68,6 +68,9 @@ target-wins jail/rootfs transition and its retained storage boundary.
 
 ## Public Lifecycle
 
+Post-Flux ExternalSecret readiness uses the exact `external-secrets.io` API
+group from `apiVersion`; this field is a Kubernetes group/version, not a URL.
+
 ```text
 new target -------- soperator install [--release latest|X.Y.Z] ----> managed
 existing target --- soperator discover [raw scope] ----------------> information report
@@ -117,9 +120,17 @@ verification observed 11/11 Ready Kubernetes v1.35.6 nodes, the complete
 19-member Flux release graph and all 16 frozen sources current and Ready, two
 GPU workers exposing driver 580.159.04 plus CUDA 12.9 and required Jail
 libraries, an UP Slurm controller with two idle nodes, restored scheduling, and
-a terminal complete campaign receipt. The
-cxcli-managed/Terraform full-stack path remains source/test-supported and awaits
-its separately authorized live trial.
+a terminal complete campaign receipt.
+
+A separate managed/Terraform lab campaign completed on 2026-09-09. Installation
+of Soperator 4.1.5 on Kubernetes 1.34 completed through supported resume; the same
+cluster then completed its upgrade to Soperator 4.1.7 and Kubernetes 1.35.
+Independent verification found 11 Ready nodes, 16 allocatable GPUs, 24 Ready
+HelmReleases, 21 completed native check executions, restored desired schedules,
+and released maintenance. A normal-user job verified arithmetic on all 16 GPUs
+across both workers. This validates supported install recovery and the managed
+upgrade; it does not establish a fresh clean-install rerun with the final source,
+1,000-node behavior, or a comparative maintenance-time improvement.
 
 <!-- FEATURE: FEAT-013 reqs=REQ-013 status=ready delivery=unassessed priority=P0 version=11 -->
 ### FEAT-013: Dynamic official release authority
@@ -244,7 +255,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-013 -->
 
-<!-- FEATURE: FEAT-014 reqs=REQ-014 status=ready delivery=unassessed priority=P0 version=10 -->
+<!-- FEATURE: FEAT-014 reqs=REQ-014 status=ready delivery=unassessed priority=P0 version=12 -->
 ### FEAT-014: Capability-validated thin adapter
 
 #### Requirements Covered
@@ -263,7 +274,7 @@ capabilities, validate adapter values against that contract, and reject any
 adapter-rendered resource outside the ownership allowlist. Keep upstream image,
 script, chart, active-check, and dependency intent unchanged unless a contract
 explicitly defines a supported value input. Onboarding projects only bounded,
-release-neutral worker, partition, and optional accounting/exporter/REST
+release-neutral worker, partition, and optional accounting/exporter
 service topology from the live SlurmCluster and NodeSet resources. Target
 profile defaults hydrate that projection in render memory, but adopted worker
 NodeSets replace profile scheduling defaults with the exact discovered Nebius
@@ -271,11 +282,17 @@ node-group selector or required affinity. A missing or unusable discovered
 placement fails before render rather than leaving target workers unschedulable.
 Source images, arbitrary environment values, init containers, annotations,
 secrets, and volume definitions are never copied into source configuration or
-reused as target-release authority. When REST is enabled for a target whose
-shared `slurm.conf` would expose the controller-only `MetricsType` directive to
-`slurmrestd`, materialization disables controller-native OpenMetrics so REST
-remains functional; upstream exporter presence remains the independently
+reused as target-release authority. REST is required because upstream SConfig
+uses it to apply Slurm configuration. Materialization enables the internal
+service and rejects explicit disablement or zero replicas. The shared
+`slurm.conf` would expose the controller-only `MetricsType` directive to
+`slurmrestd`, so materialization disables controller-native OpenMetrics; upstream exporter presence remains the independently
 preserved service-topology choice.
+GPU materialization fills an absent `nodeConfig.static` Gres declaration from
+the selected GPU count independently of CPU topology resizing. It preserves
+already fitting CPU topology, including explicit Gres declarations. GPU visibility in
+Kubernetes does not establish Slurm registration or workload acceptance.
+
 The adapter maps only the verified digest-pinned jail image from the frozen
 official release into the upstream `images.populateJail` contract. It rejects
 any cxcli rootfs-image override so release ownership remains singular.
@@ -301,7 +318,7 @@ values, resources, or graph shapes fail closed. Registration tests prove that
 arbitrary live pod payloads stay out of configuration while projected topology
 renders a complete target-profile NodeSet contract, preserves optional service
 presence, binds adopted workers to discovered node-group identities, and emits
-the REST/OpenMetrics compatibility setting only when REST is enabled.
+the required REST service with its controller OpenMetrics and JWT startup settings.
 
 #### Validation Plan
 
@@ -336,7 +353,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-014 -->
 
-<!-- FEATURE: FEAT-015 reqs=REQ-015 status=ready delivery=unassessed priority=P0 version=19 -->
+<!-- FEATURE: FEAT-015 reqs=REQ-015 status=ready delivery=unassessed priority=P0 version=46 -->
 ### FEAT-015: Canonical Soperator CLI lifecycle
 
 #### Requirements Covered
@@ -349,6 +366,144 @@ Fresh installation, adoption, release change, and read-only inspection need
 one unambiguous command and operation contract.
 
 #### Design Details
+
+Fresh install uses the private typed `project_creation.py` workflow shared with
+the generic create command. The CLI constructs its wizard and I/O dependencies
+explicitly; the application workflow does not import the composition root.
+The jail-log collector uses the existing umbrella post-render boundary to bind
+its node affinity and tolerations to the compiled system node filter and its
+read-only jail host path to the exact active PVC's protected adapter PV. The
+placement intersects the system and protected volume node constraints. The
+binding is derived again after jail-slot selection during every render. Exact
+tests of the upstream affinity and named jail volume fail on source drift;
+other collector values, commands, images, init containers and readiness remain
+unchanged. Missing, ambiguous or non-local storage authority fails before apply.
+The shared logs override cannot provide this binding because it replaces the
+complete values of both jail and node collectors.
+
+A closed interrupted-install collector repair changes only the umbrella's
+existing collector patch. It requires the same completed source/storage prefix,
+incomplete apply intent, unchanged scheduling gate and unstarted acceptance as
+the other input repairs, but authenticates the exact never-successful collector
+release and frozen third-party chart. It preserves completed native bootstrap
+checks and all prior repair receipts. An acknowledged suspended release with
+native uninstall evidence may discharge a queued retry only after revalidating
+its exact chart reference, version, values digest and frozen artifact identity.
+No source archive, node label, filesystem, shared collector configuration or
+successful check evidence is rewritten to make the installation pass.
+
+The same sealed collector repair can recover a native `MissingRollbackTarget`
+left by a failed first upgrade. Before opening that child stage, require its
+exact UID, frozen HelmChart artifact, failed revision/configuration, acknowledged
+suspension, no successful release history, and a current fully Ready owned
+Deployment. Request a single native force/reconcile using a deterministic token
+bound to UID, source artifact and configuration digest. Do not set Helm resource
+replacement or disable waits. Preserve the token across resume, wait for native
+acknowledgment, and retain normal terminal failure and readiness checks. Other
+children and failure classes do not enter this continuation.
+
+A closed GPU/maintenance successor can admit the exact failed initial check
+acceptance frontier when generated NodeSet static configuration omits its GPU
+count. Require matching live NodeSet UID, source and missing static count,
+unchanged worker resources and storage, no accepted or submitted check jobs,
+and the original active root-only full-worker reservation. Derive only the
+missing `Gres` token through the canonical materializer; update the values record
+and matching umbrella inline values together. Seal the original reservation
+fingerprint and prior checks receipt with the existing repair ancestry. Import
+only the completed source/storage prefix and replay declarative apply; preserve
+all invalid prior restoration and downstream evidence without treating it as
+success. The new checks epoch adopts the same reservation under its seal,
+retains its release obligation and rejects any changed fingerprint. The check
+policy digest binds all compiled values, so the missing-count correction creates
+a new policy identity. Reconstruct the exact predecessor files from the sealed
+reversible delta, verify both file maps and the forward materializer, and prove
+that only the policy's values digest changed. Bind the predecessor and successor
+policy identities in the reservation handoff; never rewrite its admission seal
+or copy acceptance results. No reservation recreation, arbitrary input replacement
+or manual Slurm edit is permitted.
+
+Only the CLI adapter parses component/version tokens;
+install supplies an exact frozen release and returns the config path directly.
+Initial rendering defers the managed cluster identity used by upstream
+observability until Terraform has created it. The post-Terraform Flux refresh
+requires the immutable cluster ID through the catalog module output name; root
+output prefixes are applied exactly once. A missing fabric on a profile-owned
+GPU cluster remains a required prompt after shape selection when regional
+Capacity Dashboard advice is unavailable. A fabric already derived from a live
+capacity choice stays automatic. Missing regional capacity coverage is unknown,
+not confirmed zero; reservation policy remains enforced by the provider.
+Install suppresses the generic deploy hint during its internal render. The
+Object Storage install lease normalizes HTTP metadata header names at the read
+boundary, rejects ambiguous duplicate names, and keeps exact owner values,
+ETag, expiry, and immutable cluster binding checks.
+The MK8s module exposes configured service-account keys at plan time; only
+the account IDs remain apply-time values. Initial observability IAM grants
+therefore use the ordinary full Terraform plan without a targeted bootstrap.
+Each configured node-account group receives one project-scoped `editor`
+permit for upstream metrics and log ingestion. The vendor names
+`monitoring.metrics.writer` and `logging.logs.writer` describe permissions,
+not assignable roles. The supported general editor role grants wider project
+resource management; no tenant grant or separate credential is introduced.
+Install ownership includes the exact generated observability IAM addresses for
+enabled Soperator node groups with configured accounts. Unknown root resources,
+deletes and replacements are rejected; root IAM changes alone cannot satisfy
+the fresh infrastructure requirement.
+The full MK8s, SFS, and Soperator field wizard runs without generic component
+selection or an editable release version. Fresh install offers no optional-app
+questions, generic target-observability prompts, or `--app` option. The shared
+field runner presents Infrastructure, Soperator configuration with the frozen
+upstream release, and Required platform or integration components. Optional
+ordinary apps are added afterward through `component add`. The internal
+`apps.charts[id=soperator]` row remains lifecycle intent, never a selectable
+catalog app. Worker autoscaling retains MK8s capacity ownership and upstream
+NodeSet replica mapping. Enabling autoscaling exposes a separate per-shard
+ephemeral-worker choice; bulk autoscaling does not opt shards into ephemeral
+mode. Disabling autoscaling clears its bounds and ephemeral mode. Profiles,
+placements, and storage retain their adapter mappings. The existing adapter
+maps retained fields to the selected upstream release; unsupported settings fail
+explicitly.
+The selected worker profile is applied before initial normalization. GPU helper
+requirements are reconciled after field changes across every group on a target.
+The fixed bundle derives external GPU/network and optional integration helpers
+from configuration, separately from install ordering. Ordering-only selection
+is suppressed only for app types whose enabled instances all belong to
+Soperator targets; mixed or ambiguous ownership retains generic requirements.
+Upstream cert-manager
+must remain enabled and no standalone duplicate is selected. Frozen optional
+release coverage is a verified superset; wizard choices select its subset.
+Public Nebius Grafana is the fresh-install default. Optional local Grafana
+and its Gateway, and the additional Nebius observability agent, are selected
+independently after installation under FEAT-030. The existing Flux graph post-render
+patch disables the upstream VM-stack Grafana child. The separate cxcli agent
+excludes Soperator, Soperator-system, monitoring-system, and logs-system
+namespaces from generic log and metric collection while retaining ordinary
+workloads and traces. Upstream Soperator 4.1.7 uses OpenTelemetry collectors,
+VictoriaMetrics, and VictoriaLogs, not the nebius-observability-agent-helm
+package. These namespace exclusions do not establish that cluster-wide scrape
+jobs have disjoint metrics. Declining app field customization preserves the
+selected apps and defaults.
+Install reuses the upgrade progress renderer with an install prefix, scoped
+release/auth/provider/render/plan phases, elapsed terminal state rows, and
+bounded stable stderr records for redirected output. Cached lookups stay quiet;
+remote-call phases sit inside exception handlers so handled provider failures
+still fail the displayed phase. Project validation classifies its returned
+outcome. Authentication ownership, permissions, retries, credential recovery,
+plan approvals, leases, and resume semantics remain unchanged. Progress pauses
+for prompts and nested displays and cannot change operation outcomes.
+Subnet discovery and networking preflight read effective CIDRs from
+`status.ipv4_private_pools[*].cidrs`. Explicit authored CIDRs retain precedence;
+prefix allocations use their resolved status ranges. Inherited or omitted
+private-pool specifications do not establish subnet-owned CIDRs. The deprecated
+flat status field is not read or retained as a compatibility fallback.
+Compute platform names and complete preset resources/clustering metadata are
+read together using the paginated project-scoped List API and cached only after
+the entire inventory succeeds. Preset lookup never repeats GetByName for old
+or unavailable shapes; absence in a complete inventory remains distinct from
+a failed read. Failed reads do not poison the preset-choice cache.
+After a wizard field changes, the existing dependency expander propagates
+managed node-group shapes before boot-disk refresh. The unchanged previous
+inputs remain available to distinguish generated values from supported custom
+helper disk overrides. Explicit platform choices are never substituted.
 
 Expose exactly six public commands in canonical help order: `soperator
 install`, `soperator discover`, `soperator onboard`, `soperator upgrade`,
@@ -445,7 +600,15 @@ switch backends. Both paths reuse the common official Soperator release/Flux
 engine; only the infrastructure mutation adapter differs. Operation-owned Slurm maintenance begins once and stays
 active through release reconciliation, control-plane-first Kubernetes hops,
 node-group OS/driver rolling updates, per-hop provider readiness, and final
-generated Soperator/Kubernetes/GPU validation. Failed segments leave
+generated Soperator/Kubernetes/GPU validation. Managed node-template children delegate only their own
+target's Soperator graph smoke check through the private campaign context;
+node, GPU, RDMA and other deployment checks still run per group. The parent
+refreshes exact frozen sources before mandatory final graph and runtime proof.
+This avoids waiting on artifacts that a suspended HelmChart cannot rebuild
+after source-controller replacement, as described by the
+[Flux HelmChart suspension contract](https://fluxcd.io/flux/components/source/helmcharts/#suspending-and-resuming).
+Standalone commands, other owners and other targets retain required graph
+checks even when public validation-skip flags are supplied. Failed segments leave
 maintenance active and are retried from their exact receipt ledger; only full
 completion restores partitions and releases operation-owned held jobs. The
 maintenance entry has a durable `entering` state: every partition and job
@@ -485,7 +648,16 @@ remain visible in `soperator status` without treating history as an active
 operation.
 The campaign also freezes the initial config-plus-render-owned generated-file
 snapshot and exact provider node-group ID set. Every recovery fence rejects
-foreign generated-file or provider-inventory drift. Provider node groups may
+foreign generated-file or provider-inventory drift. The render-owned inventory
+excludes Terraform runtime caches, local state, workspace state, state backups
+and state locks, as well as campaign and native check lifecycle receipts.
+Rendering preserves these artifacts across directory promotion without
+following provider-cache symlinks. Configuration and `.terraform.lock.hcl`
+remain in the fingerprint. A durable applied transition is verified against
+its exact config-plus-generated postimage; planned transitions also require
+the matching fully materialized transaction generation. Runtime changes to a
+completed transaction do not invalidate an applied configuration receipt.
+Provider node groups may
 leave their desired Kubernetes version empty to inherit the control-plane
 major/minor; admission derives that effective source version from actual node
 status while preserving any explicit desired version as authoritative. This
@@ -524,7 +696,12 @@ approval. An interrupted upgrade reloads its frozen active intent when
 the same approved upgrade command is rerun. Long-running release and full-stack
 handoffs regenerate their temporary kubeconfig from that immutable cluster
 identity with renewable current-Python exec authentication rather than copying
-an existing context's launcher. If an external edit invalidates the current
+an existing context's launcher. For managed targets, resolve a missing cluster
+ID from the exact generated Terraform output with backend initialization disabled;
+the full-stack planner independently compares the provider's named cluster ID.
+Both parent and release-child handoffs use this path. External targets must
+supply their registered cluster ID and cannot read Terraform state.
+If an external edit invalidates the current
 cxcli executable or module, the supervisor treats it like a process
 interruption: it exits without terminalizing the main workload or retrying a
 missing local program, and the same approved command resumes the receipt after
@@ -583,16 +760,82 @@ Nebius SDK cleanup uses the SDK-owned runtime and native close boundary. cxcli
 does not supervise a borrowed loop or filter shutdown diagnostics, so actual
 cleanup failures remain observable and successful finalization stays quiet.
 
-`install --resume --dry-run --replan` is a stale, never-executed pre-execution
-plan refresh, not partial-apply recovery. It first requires the saved receipt to be readable,
-schema-valid, exactly `planned`, and free of `startedAt`, `infraCompleteAt`, and
-`completedAt`. It preserves the saved project, managed target, configuration,
-generated manifest, and frozen release authority, builds and validates the
-replacement Terraform plan separately, and publishes the replacement plan and
-receipt only after validation succeeds. The replacement receipt derives a new
-approval fingerprint; the prior fingerprint cannot authorize it. Any missing,
-corrupt, executing, failed, partially applied, complete, or ambiguous receipt
-fails before Terraform planning or other project or cloud work.
+`install --resume --dry-run --replan` refreshes a never-executed `planned`
+receipt or recovers a failed infrastructure apply with `startedAt`, `failedAt`,
+and `failureType`, without `infraCompleteAt` or `completedAt`. Executing,
+completed, corrupt, and ambiguous receipts fail closed. Both paths preserve
+project, target, configuration, manifest, and frozen release authority under
+the existing install lease. Failed-apply recovery verifies the exact prior
+approved binary, preserves infrastructure/shared-group addresses and known
+desired values and IDs, and binds observed partial IDs into the replacement
+approval. Comparison uses the installed provider schema to exclude computed-only
+status and metadata; optional/computed inputs and explicit resource identity
+fences remain enforced. Unknown planned values may resolve after creation. Failed recovery regenerates the Terraform root into temporary storage
+and verifies frozen module sources, tfvars, and all root artifacts except
+`main.tf`. Only that root wiring file is transactionally replaced, with config
+and manifest compare-and-swap fences; Terraform state, binary plans, provider
+cache, Flux, and lifecycle reports are preserved. Previously uncreated access
+permits may receive corrected renderer-owned addresses only within the original
+project and retained group IDs. Removing an existing grant, deleting or replacing
+resources, changing known infrastructure settings, or expanding ownership scope
+fails closed. Only validated recovery may have IAM-only or no-op changes.
+A content-free failed receipt is archived by digest before atomic plan/receipt
+publication; no secret-bearing plan copy is archived. Recovery provenance is
+part of the new approval fingerprint and its archive is verified on resume.
+Further replanning retains those fences. Earlier fingerprints cannot approve
+the new plan; publication failure restores the previous pair.
+
+Install execution carries an explicit absent source release into reconciliation.
+An empty frozen source is distinct from an unspecified source: the latter may
+use live discovery, while install resume keeps its original strategy even after
+the target main release appears. A live version outside the frozen source/target
+lineage fails before mutation.
+
+After infrastructure completes, canonical install resume may repair the known
+pinned monitoring-dashboard chart separator failure before the main release
+starts. This is a delivery correction under the original approval, not an
+infrastructure replan. It requires the exact failed child UID, chart digest,
+version and error, no successful child history, an untouched scheduling gate,
+and a suspended, unstarted main release with no SlurmCluster. It transforms the
+saved compiled manifests: disable only that dashboard child, remove its exact
+source and graph row, and deliver seven ConfigMaps from the verified upstream
+source through the existing post-Flux adapter. All other values and app files
+retain their approved bytes. The predecessor operation anchor seals the repair
+receipt hash before atomic file publication. Resume verifies that seal and the
+replacement file hashes, imports only the authenticated completed prefix, and
+binds a generation-one successor. The staged executor suspends and quiesces the
+exact retired child before the umbrella removes it. Failed receipts and repair
+authority survive later rendering; foreign identities and unrelated deltas fail
+closed. Fresh installs use the same digest-bound dashboard adapter directly.
+
+An interrupted first checks installation may admit an active-jail binding repair
+after main release creation and before acceptance. Bind native check volumes and
+the hardcoded reservation CronJob claim to the existing approved jail PVC. Only
+the compiled values record and matching umbrella may change; source, graph,
+adapter, infrastructure, optional apps and prior repair files remain unchanged.
+Authenticate any dashboard ancestor and seal the contiguous successor on its
+predecessor anchor before publication. Reuse the gated empty scheduling journal
+and import only the completed source/storage prefix. After suspending writers,
+the executor may set a one-second Job deadline on the admitted exact read-only
+wait hook under UID/resource-version and lease fences. It fails the old hook;
+Flux owns failed-install uninstall and retry. A later hook UID is never ended
+using old admission evidence. No check status, data or infrastructure is reset.
+A suspended checks release with current generation acknowledgment, current
+InstallFailed and UninstallSucceeded conditions, and matching admitted UID/source
+may retain ProgressingWithRetry after uninstall. Treat that exact completed
+remediation as quiescent; reject active actions, stale conditions, successful
+history, upgrades and releases without the explicit checks repair admission.
+
+The same interrupted apply frontier may admit a separate sealed REST dependency
+repair when frozen inputs omit the enable flag and the live service is absent.
+The closed delta enables REST, disables controller-native OpenMetrics and adds
+only the established JWT wait to the exact existing controller jail mount gate.
+It preserves REST size and placement, source versions, checks, workers and
+storage. Every ancestor hash link and predecessor seal is verified recursively;
+each invocation admits at most one successor. The upstream controller creates
+its own internal service and authentication material, and SConfig performs the
+reconfigure. No direct REST service, manual Slurm reconfigure or state rewrite
+is an accepted replacement for this product transition.
 
 Hardware platform, hardware preset, CPU/GPU kind, GPU-cluster, reservation, and
 fabric changes are not full-stack upgrade dimensions. Their canonical surface
@@ -619,7 +862,9 @@ product-specific topology and state model.
 
 #### Implementation Boundaries
 
-Generic project commands reject Soperator payloads. Onboard performs read-only
+Generic destructive and Terraform mutation commands reject protected Soperator
+resources. Ordinary app operations follow FEAT-030 within the accepted
+protected baseline and existing lifecycle fencing. Onboard performs read-only
 Nebius and Kubernetes discovery, verifies the exact installed official source,
 then writes only the local registration and redacted discovery evidence. It
 does not select an upgrade target or mutate the cluster.
@@ -671,7 +916,11 @@ status remain read-only views over registered targets and operation evidence.
 #### Implementation Evidence
 
 The install, onboard, upgrade, discover, status, scratch-render, admission, and
-protected handoff surfaces are implemented. The developer-only CLI contract v3
+protected handoff surfaces are implemented. Install and generic create share
+the typed creation workflow, with explicit CLI-owned dependencies and no
+module-global result handoff. Install passes the frozen release directly and
+retains field wizards for its fixed component bundle.
+The developer-only CLI contract v4
 pins the group description plus every command description, positional argument,
 option help string, structural flag property, default, paired form, and selected
 epilog clause, and the built-wheel verifier rechecks that contract from the
@@ -693,7 +942,24 @@ status, and removal of discover preview selectors are implemented by FEAT-024.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema migration.
+Offline regression tests cover real project creation for CPU, GPU, and mixed
+profiles, retained upstream options, conservative mixed-target ownership, and
+GPU helper reconciliation across both node-group orders. Progress tests cover
+creation versus reuse, nested display cleanup, cancellation, handled provider
+errors, quiet cache hits, partial name resolution, and renderer/classifier
+failures without changing operation outcomes. The isolated installed-wheel
+verifier checks all 46 public CLI surfaces and the hidden credential surface.
+Real SDK response tests cover explicit, prefix-allocated, inherited, and
+omitted subnet pools without deprecated getters, complete paginated preset
+metadata, and inventory failure recovery without partial cache publication.
+Actual CPU and GPU field-wizard tests prove group propagation before disk
+recommendations and preservation of supported helper disk overrides.
+A scoped read-only provider replay returned selected CPU/GPU presets across
+repeated lookups and resolved project subnets without failed progress rows or
+SDK deprecation warnings. The replay used current-session authentication; it
+is not proof of the user's terminal authentication context.
+These are local and provider-read checks; live Nebius installation and the full
+lifecycle acceptance boundary remain outside this evidence.
 
 <!-- /FEATURE: FEAT-015 -->
 
@@ -1343,7 +1609,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-022 -->
 
-<!-- FEATURE: FEAT-023 reqs=REQ-023 status=ready delivery=unassessed priority=P0 version=41 -->
+<!-- FEATURE: FEAT-023 reqs=REQ-023 status=ready delivery=unassessed priority=P0 version=42 -->
 ### FEAT-023: Same-MK8s protected data-plane handoff
 
 #### Requirements Covered
@@ -1482,7 +1748,7 @@ upstream ownership intact while preventing its GPU worker init path from
 waiting on `topology-node-labels` when the discovered cluster has no selected
 topology producer. Enabling a topology profile remains the sole path that
 selects `topology/tree` or `topology/block` and their label contract.
-When the adopted topology enables the upstream REST service, the controller's
+The upstream REST service is required for SConfig; the controller's
 existing jail mount gate additionally waits until the protected jail
 `slurm.conf` contains both `AuthAltTypes=...auth/jwt` and an
 `AuthAltParameters=...jwt_key=...` directive. This keeps the upstream
@@ -1867,7 +2133,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-023 -->
 
-<!-- FEATURE: FEAT-024 reqs=REQ-024 status=ready delivery=unassessed priority=P0 version=5 -->
+<!-- FEATURE: FEAT-024 reqs=REQ-024 status=ready delivery=unassessed priority=P0 version=7 -->
 ### FEAT-024: Verified lifecycle closure and protected destruction
 
 #### Requirements Covered
@@ -1902,11 +2168,20 @@ canonical `sfs` variant records filesystem IDs, mount tags, node-group
 attachments, and PVC/PV bindings. The optional `vm-nfs`
 variant records the explicit VM, address, disk/attachment, allocation, and
 export identity. Exactly one variant is valid, deterministic, and digest-bound
-to every mutable operation. For onboarded local-SFS layouts, retained PV/PVC
+to every mutable operation. For managed and onboarded local-SFS layouts, retained PV/PVC
 records supply the Kubernetes binding and exact physical filesystem IDs are
 resolved from matching `READ_WRITE` MK8s node-group attachments. Dynamic
 compute-disk CSI handles are not SFS identities, and every resolved filesystem
 is read through the Nebius API before admission proves its immutable identity.
+Select that discovery path from live local-PV bindings, independently of whether
+the source configuration declares SFS components. Configured roles must have
+retained bindings and the snapshot must identify the exact node groups. CSI
+handle discovery applies only to a CSI-backed layout; local SFS never needs a
+CSI volume handle.
+Forward configured role-to-mount-tag bindings through discovery. Join exact
+declared tags to Nebius attachments without stripping prefixes or guessing role
+names. Require unique tag assignments; record the protected role and actual
+mount tag separately with the same authoritative filesystem and node-group IDs.
 Protected-state volume capture selects PVC/PV pairs by receipt-bound exact names
 whenever the physical-SFS receipt has a Kubernetes binding, so release-era
 dynamic PVCs with similar role names cannot make the retained local-SFS identity
@@ -2065,7 +2340,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-024 -->
 
-<!-- FEATURE: FEAT-025 reqs=REQ-025 status=ready delivery=unassessed priority=P0 version=6 -->
+<!-- FEATURE: FEAT-025 reqs=REQ-025 status=ready delivery=unassessed priority=P0 version=7 -->
 ### FEAT-025: Recoverable project generations and credential compensation
 
 #### Requirements Covered
@@ -2112,6 +2387,14 @@ preimages. Any concurrent edit fails closed without partial writes, merge, or
 automatic retry; a later operator rerun takes fresh snapshots and fills only
 values that remain unset. Snapshot contents stay in memory and are never added
 to the content-free generation journal.
+
+Canonical runtime permission reconciliation is a separate explicit `auth`
+action, described in the runtime-auth appendix. Its project-only admin role
+supports Terraform-owned IAM and service-account attachment. Ordinary cached
+commands and CI imports validate the strict identity read-only; they never
+repair permissions. Reconciliation binds the cached service-account ID and
+creates desired project authority before deleting obsolete managed permits.
+This changes role desired state, not credential compensation or key rotation.
 
 IAM bootstrap uses a separate owner-only v2 credential journal and a typed
 delivery adapter. Before delivery, it records only a destination digest,
@@ -2742,6 +3025,974 @@ collection, component classification, correlation, ordering, and pair recovery
 were repaired and reverified. No live cluster was contacted.
 
 <!-- /FEATURE: FEAT-029 -->
+
+<!-- FEATURE: FEAT-030 reqs=REQ-028 status=ready delivery=verified priority=P0 version=2 -->
+### FEAT-030: Ordinary app workflows on Soperator MK8s targets
+
+#### Requirements Covered
+
+- REQ-028: Manage ordinary MK8s apps on Soperator clusters.
+
+#### Context Evidence
+
+The generic catalog already supplies ordinary MK8s apps. Soperator uses a
+frozen upstream Flux graph; its VM-stack Grafana is disabled at the existing
+post-render boundary. Upstream telemetry uses VictoriaMetrics and OpenTelemetry,
+not the separate generic Nebius agent. Before this change, generic guards
+rejected whole Soperator configurations and full rendering replaced shared
+generated roots.
+
+#### Design Details
+
+Keep fresh-install selection fixed to infrastructure, upstream Soperator, and
+configuration-derived prerequisites. Remove install `--app` and optional-app
+questions; optional ordinary apps use `component add` after installation.
+Grafana retains its dashboards, Gateway, and authorized project read endpoints
+without adding the collector. Additional telemetry requires an enabled collector
+row on the exact Soperator target in both selection and materialization; a
+target switch alone cannot select it. Newly authored contradictory telemetry
+intent fails with component-add guidance. Collector removal clears the switch.
+Signal summaries use the same effective collector policy and retain independent
+upstream metrics/logs. Ordinary MK8s behavior stays target-local and unchanged.
+Render the selected-region upstream OpenTelemetry logs endpoint explicitly.
+
+Keep protected Soperator rows available during ordinary selection filtering and
+dependency expansion even though those rows are absent from picker entries.
+Retain dynamically required GPU/network, secret, and storage integration helpers;
+ordering alone never selects apps. Keep frozen resume artifacts and selections
+unchanged; there is no schema migration or live uninstall.
+
+Use the existing component add/remove, render, deploy, Flux apply, and Helm
+upgrade commands. Internally distinguish ordinary app resources from protected
+Terraform and the frozen Soperator graph before compilation. Publish ordinary
+resources in their own target bundle and retain accepted protected preimages,
+shared resource ownership, and lifecycle artifacts. Reject protected config or
+artifact drift rather than advancing its baseline from an ordinary render.
+Scope resource and Helm identities, including shared sources and namespaces,
+before apply; never adopt a foreign release. Use existing atomic project
+publication and cluster identity/fencing boundaries. App deployment skips
+Terraform and Slurm hooks. Existing ordinary-project behavior is unchanged.
+
+Fresh lifecycle applies ordinary prerequisites and readiness before GPU checks
+and the protected graph. Dedicated upgrade and recovery preserve unrelated app
+resources and saved selections. Onboarded upstream Grafana remains untouched.
+Component removal is configuration-only under existing semantics; ordinary
+apply does not prune live objects omitted from a later bundle.
+
+#### Selected Option
+
+Resource-scoped ordinary MK8s app operations within existing commands.
+
+#### Alternatives Considered
+
+Special Soperator app commands, fixed optional-app allowlists, and new approval
+flags were rejected because ordinary apps retain normal MK8s semantics.
+
+#### Implementation Boundaries
+
+Selection and observability policy, Flux and generated manifest ownership,
+atomic render publication, existing CLI adapters, lifecycle ordering, tests,
+help, README, and changelog. No new dashboard import or cloud provisioning.
+
+#### Test-First Success Criteria
+
+The actual install field runner contains no optional-app or generic observability
+prompts and labels Soperator separately from ordinary Apps. Default install
+emits no local Grafana or extra agent; later selections work independently on
+their exact targets, including after dependency filtering. Removed `--app` fails
+before side effects. Autoscaling, ephemeral nodes, placements, and storage
+choices reach the selected upstream chart. Ordinary app render/apply never changes protected bytes or
+calls Terraform or Slurm, and protected drift or collisions fail before apply.
+
+#### Validation Plan
+
+Inspect actual generated objects and protected file hashes across ordinary
+changes, mixed targets, fresh install, upgrade, recovery, and failed publication.
+
+#### Test Plan
+
+Run focused selection, rendering, manifest, CLI, identity, publication, and
+lifecycle tests, then project quality and isolated wheel CLI gates.
+
+#### Evaluation Plan
+
+Prove source and package behavior independently. Do not infer live ingestion,
+Public Grafana query success, or successful installation from offline tests.
+
+#### Rollout And Rollback
+
+No automatic live migration or adoption. Existing lifecycle receipts remain
+protected. Revert the source change if validation fails; do not mutate cloud
+resources to compensate for a source defect.
+
+#### Done Definition
+
+All REQ-028 criteria have implementation and focused verification evidence,
+operator docs agree, and no unrelated dirty work is overwritten.
+
+#### Implementation Evidence
+
+`ordinary_apps.py` owns protected baseline acceptance, app-only compilation,
+atomic publication, static and live resource ownership, immutable target
+bindings, and shared lifecycle fencing. `app_mutation.py` propagates authority
+to mutation and retry boundaries. Existing CLI commands delegate ordinary app
+work to that owner; protected lifecycle completion accepts the baseline and
+staged upgrades preserve ordinary resources and runtime selections. Ordinary
+apply requires existing Flux controllers and skips Terraform and Slurm hooks.
+Existing namespace resources and their matching Kustomization references are
+omitted from the private apply snapshot; the saved generated bundle remains
+unchanged. Reference matching handles the renderer's relative path notation.
+
+Fresh installation now fixes core selection in `project_creation.py`, removes
+`--app` and both optional-app questions, and presents separate infrastructure,
+upstream Soperator, and required-component field groups. The actual field runner
+suppresses generic observability prompts and preserves the frozen release,
+backtracking, and upstream configuration. Autoscaling and ephemeral-worker
+choices are separate, including after bulk autoscaling. Observability selection,
+materialization, signal summaries, and mixed-target wizard notices share exact
+target requirements. Ordinary filtering retains the protected Soperator row
+after ordinary target binding. Saved resume configuration remains unchanged.
+Observability rendering retains cxcli Grafana dashboards and reads while
+selecting the upstream logs endpoint by region. Flux and MysteryBox generation separate ordinary resources from the
+protected graph and order shared stores and external secrets before consumers.
+README, changelog, CLI help, and the canonical CLI contract describe this same
+workflow and configuration-only removal behavior.
+
+#### Verification Evidence
+
+The install-boundary alignment passed 924 regression tests across the full CLI
+and prompt-interruption suites plus observability, Soperator install policy,
+CLI contracts, upstream adapters, telemetry, ordinary apps, and documentation.
+Checks cover CPU/GPU/mixed creation, required GPU/network and notifier helpers,
+optional-app exclusion, removed-option rejection before writes, saved-plan
+resume, explicit ephemeral choices, backtracking/quit, exact-target selection
+and notices, disabled signals, and protected ordinary add/remove/render flows.
+Sixteen real Helm renders of the official Soperator 4.1.7 umbrella and NodeSet
+charts passed from eight actual CPU/GPU worker-wizard configurations. The cached
+source tree was checked against its accepted frozen manifest before rendering.
+An isolated wheel passed dependency checks and all 46 public plus one hidden
+CLI surfaces; installed changed modules matched source bytes. Ruff lint,
+Markdown lint, diff checks, and the format (30/45), mypy (490/493), and CLI
+architecture (1,194/1,199) ratchets passed. Independent changed-scope code and
+security review found no remaining blocker. These are offline source, chart,
+and package checks; no live installation, ingestion, or Grafana query was run.
+
+The preceding ordinary-app alignment passed 502 focused tests after repairing dangling
+Kustomization references when an app namespace already exists. The added
+real-render-to-apply regression failed before the repair, then passed for
+both new and existing namespaces, checking every retained resource path and
+unchanged saved bundle bytes. The full-suite baseline before this repair
+passed 3,407 tests with one deselection and 71.62% combined line and branch
+coverage, satisfying the global and all five critical-module floors. That
+full-suite coverage run was not repeated for this bounded repair. Focused
+tests exercise independent app
+selections, real CLI add/remove/render and ordinary Helm upgrade, protected
+config and artifact preimages, mixed targets, immutable identities, publication
+races, local and remote lifecycle fencing, resource and Secret ownership,
+readiness ordering, lifecycle preservation, and three regional logs endpoints.
+
+Ruff lint, the formatting ratchet (30 existing offenders against 45 allowed),
+the mypy ratchet (490 errors against 493 allowed), CLI architecture (1,194
+definitions against 1,199 allowed), Markdown lint, and diff checks passed.
+The new ordinary app and mutation authority modules also passed direct mypy.
+An isolated Python 3.12 wheel passed dependency checks and all 46 public plus
+one hidden CLI contract checks; bundled portable catalog, settings, and wizard
+content matched current source. Final changed-scope code and security review
+found no remaining material issue. No live installation, metrics ingestion,
+Public Grafana query, or cluster lifecycle result is claimed from these checks.
+
+<!-- /FEATURE: FEAT-030 -->
+
+<!-- FEATURE: FEAT-031 reqs=REQ-029 status=ready delivery=implemented priority=P0 version=39 -->
+### FEAT-031: Operation-scoped check deferral and fresh acceptance
+
+#### Requirements Covered
+
+- REQ-029: Defer disruptive checks with validated Soperator handoff.
+
+#### Context Evidence
+
+Upstream 4.1.7 mixes bootstrap and exclusive diagnostics in ActiveChecks. Suspend does not suppress runAfterCreation and its readiness hook ignores waitForChecks.enabled. The previous wizard disabled checks persistently; existing lifecycle retains maintenance until customer release.
+
+#### Design Details
+
+The diagnostic maintenance redesign preserves the existing job-policy owner.
+Phases are job-policy handling, isolated maintenance, fresh acceptance,
+recurring-schedule restoration, authorized admission handoff and ready.
+Job-policy handling retains all TUI actions and guarded requeue-hold-all;
+wait is not an unconditional prerequisite. Passive checks and operational hooks
+remain effective until all user allocations and cleanup leave the scope.
+Pending/held jobs are permitted throughout maintenance and acceptance.
+
+Compile frozen source and target policies separately. Classify complete native
+scripts/configuration, preserve operational/bootstrap execution, and suppress
+only proven diagnostic entries using the upstream reservation exclusion after
+isolation. A fresh installation omits those reviewed entries until acceptance,
+so no diagnostic execution depends on creating the reservation first.
+Unknown passive behavior selects enabled-with-warning before mutation; partial
+suppression requires verified restoration. Apply phase overlays to the actual
+umbrella inline values and matching evidence, preserving desired configuration.
+
+Use whole-cluster isolation initially. Maintain a declarative and runtime
+admission barrier independent of the diagnostic reservation: ordinary partitions
+closed, native hidden partition restricted to the verified checks group, and
+identity-bound holds for existing ordinary pending jobs eligible for it.
+Preserve policy-owned/user/admin holds and freeze every newly acquired hold.
+Restore passive execution with fresh applicability-aware evidence, then run
+bounded native acceptance while recurring schedules remain suspended.
+After acceptance, delete the exact reservation under the independent barrier,
+restore desired schedules and verify readiness, durably authorize admission,
+and delegate existing job-policy hold restoration to its canonical owner.
+Reservation deletion must not implicitly release jobs. All admission-release
+paths require final authorization; interrupted release resumes remaining steps.
+
+Receipt phases retain scope, source/configuration digests, exact pre/postimages,
+observed suppression/restoration, fallback reasons and acceptance bindings.
+Owned drift is reconciled under the operation lease with bounded calls and
+existing forward supervision; no new global timeout or infrastructure rewind.
+Authority/isolation ambiguity and real health failures block dependent steps.
+Resume never reinterprets prior job choices or accepts stale/skipped diagnostics.
+The existing active-only deferral is the safe passive-unsupported fallback;
+blanket runner shutdown is rejected. No new services, public flags or shims.
+New operations use the new receipt contract; old operations finish with their
+original executable. Live barrier qualification precedes release. Synthetic
+1,000-node tests prove bounded work, not a measured maintenance speedup.
+
+The shared phase compiler and lifecycle coordinator own these overlays. The
+existing job-policy journal transfers its complete partition inventory, including
+originally closed partitions and ACLs, to the admission owner. Infrastructure
+restoration delegates partition writes to that owner and continues restoring its
+own drains. The campaign records the complete inventory before its first mutation.
+Fresh passive acceptance observes the unchanged native periodic and job-hook
+runner, verifies a post-restoration start boundary and exact worker/Slurm-attempt
+identity, and preserves bounded per-worker evidence across interruption. Opaque
+rendered target configuration remains frozen when behavior is unreviewed.
+Freeze each reviewed diagnostic's proof role in the passive policy digest.
+GPU health, boot disk and memory require positive child-log measurements when
+applicable; native wrapper success without those measurements blocks acceptance.
+GPU-busy and optional NVMe scripts provide supporting native completion only:
+query/discovery errors can be hidden by their own implementation. A native skip
+is not proof of hardware absence. Record limited completion or skip separately,
+never as PASS or required measurement coverage, and summarize limitations once
+per script rather than per worker. Required fresh active acceptance remains
+unchanged. Read bounded, stable native child logs bound to the runner interval,
+worker and Slurm attempt; keep only log digests in receipts.
+Final admission freezes a bulk partition-configuration intent bound to its durable
+authorization, desired-policy digest and READY configuration. Persist releasing
+status before applying READY; permit only complete frozen before/after rows while
+that intent is active. Apply and prove the declarative configuration first, then
+complete runtime State/ACL restoration and retire the temporary allowances after
+full final proof. Interrupted or partial reconciliation resumes through normal
+lifecycle reproof without recapturing or broadening the original ownership.
+The existing native execution and recovery contracts below retain these phase
+and ownership boundaries.
+
+Use a frozen-source policy compiler, verified Helm execution render and native-template acceptance runner
+with injected Kubernetes/Slurm transports, composed by the existing fenced
+operation reconciler. Classify scripts/dependencies into bootstrap, scheduling
+prerequisites, diagnostics and recurring work; reject unknown capabilities before
+mutation. Enable framework defaults, derive its controller and remove the ineffective
+wait field; explicitly propose enabling saved disabled policies without guessing
+which overrides were intentional. Retain CPU/platform exclusions.
+
+Quiesce source diagnostics before scheduling disruption: suspend schedules,
+suppress creation triggers, stop declarative reversion and wait for existing jobs.
+Every suspended declarative writer must acknowledge its current generation
+before check mutation. Target handoff uses the same rendered-graph umbrella
+resolver as staged apply, including canonical inline values. A suspended writer
+whose controller cannot acknowledge the current generation remains blocked;
+absence of a Reconciling condition cannot authorize forward progress.
+
+Apply temporary target values to the exact umbrella HelmRelease inline values
+and matching values ConfigMap in common staged/stable documents. The staged
+executor supplies its resolved umbrella identity; missing, duplicate, or drifted
+inline values fail before mutation. The ConfigMap is evidence and is not a
+valuesFrom source for the generated umbrella. Saved desired values remain
+unchanged. The orchestration-only outer HelmRelease disables Helm resource
+waiting for install and upgrade in both saved render and operation copies.
+Upstream child Helm waits and hooks remain enabled, and cxcli retains every
+explicit child stage, dependency-health, Slurm and fresh-check acceptance gate.
+This avoids waiting on intentionally suspended child custom resources; it does
+not cancel an already running Helm action or establish live recovery. Native checks and the auxiliary reservation CronJob use the same active jail
+claim as Slurm and NodeSets. The thin child postrenderer tests the upstream
+hardcoded claim before replacing it. Operation copies additionally suspend the
+auxiliary CronJob; upgrade source quiescence proves its Helm ownership, journals
+its UID and waits for its running Jobs. Handoff verifies its steady schedule and
+active claim as well as native check schedules. Ordinary partitions remain DOWN
+through fresh acceptance and recurring restoration; the native hidden partition
+opens only for the exclusive checks group. Restore infrastructure-owned drains
+under the retained reservation, and admission-owned partition preimages only
+after final authorization.
+Native check template validation follows the pinned controller renderer: the
+`munge-key` Pod volume references the `<cluster>-munge` Secret. These are distinct
+identities; require the exact key path, read-only mounts and native file modes.
+Slurm normalizes an unlimited reservation to a 365-day duration in `scontrol`
+output. Validate that native representation, rather than expecting the input
+keyword back. Keep active-state, complete node/core coverage, permitted users
+and flags, and the exact reservation fingerprint mandatory.
+Reservation identity reads explicitly set `SLURM_TIME_FORMAT=standard` and
+`TZ=UTC`, then use the canonical complete-field parser. Check ownership requires
+valid full-second start and end timestamps; date-only or custom-format output
+cannot establish a fingerprint. Upgrade preimage capture uses the same display
+settings. Existing active receipts are never rewritten to change their identity.
+
+A shared read-only scheduling verifier checks live ActiveChecks, their generated
+CronJobs and the auxiliary schedule before install restoration and between upgrade
+segments. Generated CronJobs must belong to the exact SlurmCluster UID. Nonterminal
+diagnostic Kubernetes Jobs and queued or running Slurm diagnostics block progress;
+bootstrap exceptions require exact CronJob ownership and verified native execution.
+Retained suspended diagnostic Jobs are quiet only after controller acknowledgement,
+zero active or terminating Pods and an independent check that no owned Pod remains
+live; submitted Slurm work is checked separately.
+Only the current operation's recorded executable and Job identity may resume
+acceptance. The compiler fills omitted schedules from the served ActiveCheck CRD defaults in
+the verified upstream release. Missing or conflicting defaults fail closed.
+Final restoration checks exact cron expressions and time zones, not
+only suspension flags. Auxiliary scheduling is projected from the already hashed
+upstream source and desired values without changing the frozen policy identity.
+GPU acceptance selects the frozen provider node-group ID retained separately from
+logical labels, rejecting missing IDs and preventing alias collisions.
+
+One checks-maintenance composition owns initial execution, interrupted recovery
+and completed verification of restoration. The parent creates its campaign
+receipt before lazily initializing the checks owner or invoking maintenance
+callbacks. Source-check compilation includes the rendered Slurm cluster name
+required by pinned native login scripts; it remains stable across rootfs-slot
+promotion. Initialization failure reporting cannot precede campaign durability.
+The render lifecycle inventory preserves campaign source, target and catch-up
+check receipts and excludes them from configuration snapshots and render plans.
+Their creation and updates cannot invalidate the campaign's frozen input state.
+The release resolver retains sealed selector and exact-release snapshots by digest
+in its existing private source cache. An admitted campaign digest selects only
+matching content, including a matching sealed discovery entry; cache age grants
+no replacement authority. Rehydration verifies the source and release identity.
+A cold OCI chart cache pulls the frozen manifest digest instead of the mutable
+version tag and still verifies both manifest and package digests.
+The parent forwards the same digest to checks, release preflight and release
+execution, including validation against a resumed child intent. Missing, tampered
+or conflicting content fails before maintenance; no campaign digest is rewritten
+and mutable chart tags are not resolved to substitute artifacts on resume.
+Both execution paths prepare or reuse the owned reservation and establish the
+independent admission barrier before invoking the existing infrastructure owner.
+That owner delegates partition restoration to the final admission transition. Verification is read-only and requires
+the bound reservation plus observed partition states, or exact durable release
+evidence and partition states after the reservation has been released. That
+advanced checkpoint must not re-enter reservation preparation or topology repair;
+it resumes only the pending policy handoff.
+Infrastructure-only evidence cannot satisfy this combined transition. A saved
+false completion is retained in the predecessor lineage and replayed from an
+authenticated successor; receipts are not edited or removed to manufacture a
+retry. Live validation includes a controlled CLI interruption at restoration and
+canonical resume, in addition to reservation, partition and GPU postconditions.
+
+Execute target-required creation checks using upstream dependency semantics. Defer
+the Kubernetes srun prerequisite until scheduling is ready. Use the upstream
+reservation branch, one deterministic native Job per expected worker with exact
+allocation and original controller linkage; never the bulk name-cancelling launcher.
+Queue all workers with a 200 concurrency ceiling reduced by smaller upstream limits.
+Worker pinning uses supported `#SBATCH --nodelist` and `--nodes` directives,
+inserted after the native directive header and before its first executable line.
+Retain every upstream script byte, entrypoint, image and controller annotation.
+The immutable Job template owns a bounded script annotation, projected read-only
+through the existing batch-script mount. Include its bytes in executable identity
+and deterministic job naming; verify the native source ConfigMap before deriving
+the allocation. No separate mutable script resource or launcher is introduced.
+
+For an unfinished acceptance with obsolete worker-selection variables, the
+fenced executor can retire only exact submitted Job identities, native templates,
+script authorities and epochs with unambiguous, successful, terminal Slurm
+evidence inside the original reservation. Atomically retain the original entries
+and observed results before removing their active acceptance slots. Keep their
+Jobs and the native initial creation guard. New allocation-bound jobs rerun the
+diagnostics; retired results never count as acceptance and expected worker names
+are never reassigned. Unknown, changed, running, failed or ambiguous submissions
+remain blocked. Interruption after retirement resumes with fresh deterministic
+names; uncertain creation is never blindly repeated.
+
+Journal target/policy hashes, Job UIDs and all Slurm IDs; independently require
+terminal success and exact coverage. Reconcile ambiguous submission before retry.
+After all readiness and fresh acceptance gates pass, close temporary diagnostic
+authorization to root only. Persist reservation release intent bound to the owner
+operation, checks operation, policy, reservation fingerprint, principal UID and
+accepted allocation/jobs digest. Delete only that owned reservation and record
+completion after authoritative absence. Only then restore steady recurring
+schedules. Native submitters exclude RESERVED nodes; unsuspending earlier can
+immediately launch missed Cron runs with no eligible workers. The full-stack
+campaign supplies the release callback and records its own maintenance events;
+a release child never deletes a parent-owned reservation. Existing customer job
+holds remain until steady policy and product readiness pass.
+
+On interruption, a matching intent can reconcile deletion completed before the
+receipt write. Absence without intent, a recreated reservation, changed accepted
+evidence or lost job holds stops recovery. Keep the checks phase accepted until
+policy restoration actually converges. A completed release cannot recreate the
+barrier or rewind infrastructure. Reprove earlier completed stages against this
+advanced checkpoint, then finish the policy handoff and existing held-job release.
+
+For a prior failed restoration, admit only exact late native CronJob executions
+whose terminal failure, owner UID, schedule timestamp, upstream executable/script,
+missing Slurm submission and zero-eligible-node logs match accepted maintenance.
+Bind the checks Helm owner, source digest and rendered read-only wait hook.
+The existing staged executor suspends writers before ending that exact old hook
+with a bounded deadline, then reapplies temporary check policy. A retained
+ProgressingWithRetry condition is quiescent only for that admitted checks writer
+when suspension and every terminal condition acknowledge the current generation,
+Helm reports a completed deployed rollback of the same release/chart/source,
+and an independent OCI artifact read matches the admitted digest. The new
+rollback revision need not contain the optional OCI digest: require its immediately
+preceding failed upgrade and a prior superseded revision with matching rollback
+values, release identity, chart version and admitted OCI digest. Match the failed
+upgrade values to lastAttemptedConfigDigest. The pinned OCIRepository ref and
+its current Ready artifact revision must match that manifest digest; the separate
+artifact digest is an archive checksum and does not supply OCI manifest identity. Pending actions,
+Stalled, changed identity/source and incomplete rollback remain blocked. This
+recognizes completed remediation without declaring the failed release Ready.
+A dedicated parent-bound execution runs fresh native checks under the original reservation;
+earlier accepted and failed jobs remain evidence. Native controller observation
+must consume the fresh results. No status patch, result import, unsupported
+scheduling field or hook-success bypass is used. Bind recovery evidence into the
+reservation handoff. Both install and campaign use the same staged recovery and
+release order. Report policy-stage progress and pending restoration; timing
+comparisons remain a separate live evaluation.
+
+Both graph-owned and direct-native readiness separate retained terminal scheduled
+check Pods from service Pod readiness. A failed Pod is history only when its
+controller owner matches the exact terminal Job UID, that Job matches the exact
+CronJob UID, and the CronJob is owned by the current SlurmCluster UID. Require
+native component labels, the same-name ActiveCheck's cluster reference and its
+Helm owner among the already validated releases. Missing or ambiguous inventory,
+changed ownership, deleting resources and active or terminating Jobs remain
+blocking. History never supplies a successful result: required ActiveCheck gates
+and operation-bound fresh acceptance remain authoritative. Keep failed Pods in
+readiness observations and preserve their Jobs, logs and native status.
+The native auxiliary extensive-check CronJob is Helm-owned rather than
+SlurmCluster-owned. Its terminal history requires that exact Helm owner, the
+fixed auxiliary identity and its declared extensive-check target belonging to
+the same release and cluster. Pending auxiliary Pods remain blocking.
+
+The common staged/stable materializer binds the auxiliary chart's hardcoded
+Slurm ConfigMap and munge Secret names to the approved cluster name, in addition
+to its approved jail claim. New graph rendering uses the same transformation.
+Test the exact native volume positions and original references before replacing
+them; reject custom conflicting postrenderers. Frozen inputs and historical
+repair recipes remain unchanged. No alias resource or Secret-content mutation
+is introduced.
+
+For accepted catch-up recovery, the auxiliary repair admits only one exact
+never-started Job/Pod under the original root-only reservation. Prove the frozen
+checks Helm owner and source digest, native rendered executable, original
+CronJob template and both missing-reference mount events. Journal the complete
+binding before staged application. After writer suspension, revalidate owner,
+Job and Pod identity and absence of execution, persist termination intent, then
+set only that Job's deadline. A resumed intent cannot terminate a Pod that has
+since started. Require native DeadlineExceeded with no active or terminating
+Pods, then verify the corrected quiet CronJob. Preserve terminal history and all
+accepted native results; bind the completed auxiliary recovery into maintenance
+release. Steady-policy verification includes both corrected references.
+
+Native output is ephemeral: the pinned upstream cleanup removes files older than
+60 minutes. Re-read and validate actual output until maintenance release. After
+the existing release record is complete, authenticate its full acceptance digest,
+operation, policy, principal, reservation preimage and recovery bindings; prove
+reservation absence, then use the bound PASS verdict and output digest. Continue
+live Job UID, executable, completion, check authority and Slurm accounting checks.
+For a recovery child, require its entire receipt digest, exact operation/path and
+policy to match the accepted result inside that same parent release binding.
+This is one lifecycle transition, with no missing-file fallback or receipt rewrite.
+A missing seal, changed evidence or recreated reservation remains blocking.
+
+Deployment smoke uses the authoritative generated target release graph and the
+shared product-readiness predicate. Validate exactly one main workload before
+Kubernetes reads, bind the target/context, and reject graph drift during the
+observation. Preserve the canonical deployment report path and schema. The
+validator performs observations only: no old-chart jail-name inference, bootstrap
+Job recovery or storage mutation. Explicit Slurm acceptance commands retain their
+separate workload-execution purpose.
+
+Final campaign policy application and catch-up recovery supply the staged
+executor with main-workload authority persisted in the existing campaign receipt.
+Require the exclusive campaign lease, matching intent and exact cluster identity,
+active maintenance, and the graph-observed release UID and frozen source revision.
+An identical observation is idempotent; only a newer observed generation of that
+same identity can refine the binding. Corruption, source/UID substitution, stale
+generations and lost authority stop the operation. Keep the shared main-workload
+readiness and terminal-failure predicates unchanged. Focused production-callback
+tests exercise the real staged wait and durable receipt through both entry paths;
+source verification does not by itself establish completed live handoff.
+
+Before final runtime validation, replay the deferred-policy stages under the
+existing maintenance barrier so interrupted later releases can resume before the
+full graph must be Ready. Prove source-writer adoption only after the staged apply
+has resumed target writers and effective diagnostic deferral is verified; retain
+exact writer UID and ownership checks. Reload the durable campaign receipt after that boundary
+to retain newly frozen main authority. Keep full graph, capacity and GPU proof
+before fresh acceptance; a failed proof cannot admit diagnostics or users. For an
+already accepted interruption, authenticate acceptance and complete the existing
+schedule handoff before graph reproof, without recreating released reservations
+or resubmitting acceptance jobs. Recovery tests cover interrupted quiet apply,
+interrupted accepted restoration, retained authority and an unready graph.
+
+#### Selected Option
+
+Temporary operation policy and fresh validated handoff using upstream resources; no new service or chart fork.
+
+#### Alternatives Considered
+
+Permanent disablement weakens bootstrap/health. Background-only validation weakens handoff. Bulk submission under reservations skips workers and can cancel same-name jobs.
+
+#### Implementation Boundaries
+
+Wizard/child materialization, source-aware checks policy and runner, staged Flux input, existing release reconciler and scheduling journal. CLI composes transports and reports progress. The campaign module selects parent-owned graph validation from the supplied transition store and owner; CLI context remains transport wiring.
+
+GPU wizard profiles use `55Gi` instead of the undersized `10Gi` default.
+The canonical materializer also fills a missing GPU worker
+`slurmd.resources.ephemeralStorage` with `55Gi`, matching both pinned upstream
+GPU examples. Explicit allowances, CPU, memory, GPU, mounts and provider disks
+remain unchanged. Native `/tmp` stays accounted as pod ephemeral storage; no
+new shared filesystem, host-path bypass or image fork is introduced.
+A distinct initial-install storage repair admits only the exact `10Gi` to `55Gi`
+delta for the former eight-GPU default
+in the matching ConfigMap and umbrella values. Its predecessor must have reached
+fresh acceptance after complete maintenance restoration. Admission proves the
+native submitter UID and executable, Slurm accounting identity and allocation,
+durable kubelet termination and successful-eviction records, and the replacement
+pod's native NodeSet ownership. Read only a bounded journal window through the
+existing read-only NVIDIA host root mount; bind trusted journal unit and boot
+fields to the current Kubernetes Node UID and boot identity. Require one exact
+old pod UID, termination during the failed job's execution interval, and a
+matching successful eviction within ten seconds. Bound records and bytes;
+missing, truncated or ambiguous records stop admission. Require the pinned upstream passive checks controller to have logged usage
+above 100 percent in the same pod and namespace within ten seconds before the
+termination. Bind controller Deployment/ReplicaSet/Pod ownership, manager image
+and unchanged container identity; reject missing, unrelated or within-limit
+reports. No Kubernetes Event retention assumption or private diagnostic capture
+supplies recovery authority. The new generation retains all predecessor evidence and
+the exact original reservation. A separate write-ahead recovery record retires
+only the proven orphan, requires failed terminal accounting, and closes temporary
+check authorization before replaying apply. Completed submitters and old results
+remain evidence; no old result satisfies the successor's fresh acceptance.
+Missing or ambiguous identity, foreign running work and changed reservation
+authority stop recovery. An already expired controller job record is resolved
+through authoritative Slurm accounting, not inferred success.
+
+The infrastructure adapter also declares one versioned `AppArmorProfile` for
+the exact `/usr/bin/enroot-nsenter` executable, using the pinned upstream
+Security Profiles Operator API. A named unconfined profile grants `userns`
+without disabling the host-wide restriction. The existing upstream operator
+owns profile files, kernel loading and removal. No additional collector,
+controller, privileged loader or upstream diagnostic fork is introduced.
+The storage barrier and initial staged control bundles defer this CR until its
+upstream owner and API are ready. The staged executor then applies the exact
+profile and requires `Installed` node statuses with that profile's UID on every
+ready node before opening the main workload. Conflicting profile identity,
+permission, owner, duplicate or incomplete node coverage stops progress.
+
+A separate initial-install repair admits only an additive profile document in
+the existing adapter, preserving every previous byte and all values. Admission
+binds the terminal failed native submitter, execution epoch, exact Slurm
+allocation, worker UID, read-only native host mount and Node boot identity.
+The native output must confirm import completion followed by namespace failure;
+the trusted kernel journal must record the matching Enroot process transition
+and capability denial in that failure window. Foreign live Slurm work stops
+admission. The sealed successor closes temporary check authorization, retains
+the original reservation and failed evidence, and replays apply and all fresh
+acceptance. The repair never manually marks a check successful.
+
+GPU NodeSets bind `configMapRefSupervisord` to upstream's
+`custom-supervisord-config`, which owns Docker startup. A read-only subPath mount
+projects `image-storage/daemon.json` at `/etc/docker/daemon.json`. A jail
+sub-mount gives each Pod an `emptyDir` image cache at `/mnt/image-storage`,
+matching the native data-root through the jail. Native jail initialization
+already shares `/run`; no host Docker socket, public listener or additional
+daemon is introduced. CPU NodeSets and declared resources remain unchanged.
+Explicit conflicting Supervisor or volume bindings fail before rendering.
+
+The initial Docker repair requires the native Docker NCCL submitters to be
+complete but their Slurm allocations to have failed with the missing Unix-socket
+error on every expected GPU worker. Admission binds exact Job, worker and
+NodeSet UIDs, executable epochs, allocations, absent default Supervisor wiring,
+pinned native configuration bytes and chart ownership. It rejects active Slurm
+work and changes to storage or resources. The only generated delta is the
+matching values ConfigMap and outer inline values; its inverse must reproduce
+the predecessor bytes. The sealed successor closes temporary check access,
+adopts the original reservation and reruns apply and fresh acceptance without
+importing prior results. Upstream singleton checks retain singleton semantics;
+checks declared per-worker must cover every required worker and GPU allocation.
+
+Before acceptance, Docker recovery also restores only idle Slurm drains whose
+native reason identifies the sealed failed Docker job. It re-proves the failed
+Job UID, execution, accounting and upstream final-state handled timestamp, so
+the old reaction cannot be replayed as a new failure. A queued bootstrap probe
+must match the current operation, Job UID, Pod submitter address, native command,
+principal and reservation. The existing probe-quiescence path suspends that
+Job, waits for its Pod to stop, cancels only the exact pending Slurm submission
+and verifies cancellation without any allocated resources. Failed evidence and
+the original reservation remain intact.
+
+Drain restoration requires the corrected native NodeSet ownership and bindings,
+Ready workers, no current Kubernetes hardware or pressure fault, the pinned
+mounted daemon settings, both runtime sockets and a Supervisor-owned Docker
+process. Write-ahead per-worker intents permit only the attributed `UNDRAIN`
+transition. After all workers are restored, the acceptance owner authorizes the
+check principal and resumes the same native Job, requiring a new Pod UID.
+Normal same-operation resume revalidates already completed bootstrap checks;
+cancelled probe submissions cannot satisfy acceptance. Interruption retains the
+recovery intent, and unrelated workloads, changed drains or lost identity stop
+recovery. No native failure reaction, status or diagnostic is rewritten.
+
+Native diagnostic acceptance reads the pinned submitter's exact output path,
+bounded to 4 MiB, only after native Job identity and Slurm allocation validation.
+Health-checker reports require PASS and successful enabled tests and subchecks;
+the extensive check requires all six ordered phases. The CUDA sample phase and
+standalone check require exactly deviceQuery, vectorAdd, simpleMultiGPU and
+p2pBandwidthLatencyTest: each enabled command must exit zero without an error.
+Those native command-only tests have null subchecks; missing, duplicate,
+disabled or substituted commands are rejected, and other diagnostics still
+require their enabled subchecks. Docker NCCL requires its
+completed collective, all allocated GPUs, validation enabled, zero out-of-bounds
+results and positive transfer bandwidth. The receipt stores a structured verdict
+and output digest. Reverification rereads the same output; prior receipts without
+diagnostic evidence cannot silently become acceptance. Native scripts remain
+unchanged, including their upstream zero-exit handling of ERROR.
+
+The managed H200 128-vCPU preset uses two sockets, 32 cores per socket and two
+threads per core. All 128 CPU IDs remain available to Slurm jobs. Its Kubernetes
+CPU-time quota is independent of physical CPU affinity and is not translated into
+`CpuSpecList`; native MLC bandwidth matrices bind all hardware threads. Unknown
+platforms do not inherit this mapping, registered targets retain their existing
+projection, and explicit conflicting H200 topology fails validation.
+
+Initial topology recovery binds the falsely completed native IB/GPU jobs to
+their exact cross-NUMA affinity errors, allocations, worker/NodeSet identities,
+physical topology, source, storage and prior sealed generation. Its only values
+change is `nodeConfig.static` in the two matching compiled value representations;
+the inverse must reproduce the predecessor bytes. It closes temporary check
+authorization and rechecks quiescence before adopting the original reservation.
+After native reconciliation, the maintenance owner verifies the corrected
+physical topology and unchanged effective CPU allowance. It refreshes the same
+full-node reservation only if needed, permits only the mathematically derived
+physical core and CPU totals to change, and retains both original and corrected
+fingerprints with complete timestamp evidence. Verification cannot perform this
+transition. Resume validates the recorded transition and ordinary temporary
+check authorization; no prior diagnostic result is imported into the new epoch.
+
+The initial topology repair recipe remains immutable for verification of sealed
+history. A successor CPU-mask repair binds the exact native memory bandwidth
+thread-binding error and successful latency test, complete job/allocation
+identity, full parent-container CPU access and the predecessor generation.
+It removes only the generated specialization from both compiled value copies,
+preserving CPU-time, memory, scratch, GPU and storage allocations. The same
+NodeSet admission implementation verifies native chart, source, storage and
+ancestry for both repairs. After closing temporary authorization and proving
+quiescence, it adopts the original reservation and requires 128 effective Slurm
+CPUs before replaying all required native checks. Every original reservation
+field, including full timestamps and physical totals, remains unchanged.
+
+The canonical NodeSet materializer binds the upstream `slurm-scripts` ConfigMap
+at the native and jail paths, with read-only executable permissions, and retains
+the node-local job metrics directory for installed and registered targets.
+The initial-install runtime repair admits only a missing-mount delta in the
+matching values ConfigMap and outer inline values after full maintenance restore
+and interrupted fresh acceptance. Its successor imports only immutable source
+and storage barriers and replays declarative apply; no acceptance is imported.
+The predecessor seal includes exact Job/Pod identities, native executable,
+Slurm submitter address, full submission timestamps, reservation and prolog drain
+timestamps. The successor journals suspension intent, suspends the recorded Job,
+proves all its Pods stopped, and cancels only a still-pending sealed Slurm ID.
+It restores root-only authorization and adopts the original reservation with
+both policy identities authenticated through the reversible values delta.
+After apply, it verifies upstream ConfigMap identity, native Pod paths normalized
+by the upstream renderer, mounted script hashes and executable target-file
+permissions, dereferencing the projected ConfigMap links. Write-ahead `UNDRAIN` intents clear only the attributable
+prolog drains, preserve base node state and reconcile interruption without
+repeating a completed mutation. Fresh native acceptance precedes customer release.
+Changed identities, foreign work or drains, ambiguous submissions, partial
+mount deltas and missing evidence fail closed. Failed receipts, Jobs and sealed
+submission evidence are retained.
+
+#### Test-First Success Criteria
+
+Red regressions demonstrate permanent defaults, lost staged policy, stale acceptance, missing coverage and premature customer release before fixes.
+
+#### Validation Plan
+
+Inspect actual official renders, policy/journal identities, mutation ordering, source and installed-package behavior.
+
+#### Test Plan
+
+Profile/back/quit wizard cases; staged/stable transforms; running checks, reservation drift, pending customer jobs, existing drains, partial submission, missing accounting, full worker coverage and interruption at every phase.
+
+#### Evaluation Plan
+
+Run declared live install/upgrade trials separately from offline evidence. Compare phase timing using identical target and final acceptance policy.
+
+#### Rollout And Rollback
+
+New operations use the canonical policy. The exact terminal allocation recovery
+above retains its audit evidence; other incompatible started receipts fail safely.
+Interrupted operations preserve maintenance and recover forward with exact authority.
+
+#### Done Definition
+
+Source, package and documentation align; acceptance precedes customer release and restored policy is independently proven. Live performance claims require live evidence.
+
+#### Implementation Evidence
+
+Passive proof roles are frozen with reviewed source and enabled scripts. The
+worker observer verifies bounded, stable child logs from the native execution;
+GPU-health reports reuse the active acceptance validator for enabled tests and
+subchecks. Disk and memory require positive measurements. GPU-busy and optional
+NVMe completion or skips remain supporting evidence with visible, durable,
+once-per-script limitations and separate coverage. Wizard, child-chart and
+upgrade-plan guidance use the same phase policy and preserve job-policy choices.
+Periodic acceptance evaluates the frozen Slurm health-check node-state selector
+against stable live worker facts. Inapplicable periodic execution is recorded
+without PASS and cannot waive native job-hook evidence. Baseline collection
+retains each completed sweep's valid worker observations, retries missing
+workers and preserves replacement-identity reproof; one busy worker no longer
+requires restarting progress for the whole cluster.
+
+Local alignment regressions cover the umbrella wait boundary, inline-value
+writer handoff, missing or stale suspension acknowledgement, GPU registration
+defaults and retained IAM permit constraints. They do not establish live
+installation, upgrade or workload acceptance.
+
+The checks policy compiler freezes source, desired values, required dependency
+order and native Helm-rendered execution. The executor pauses exact source
+writers, rechecks inventory after reconciliation, journals native per-worker Jobs,
+checks complete GPU allocation and Slurm accounting, and binds acceptance to CR
+UID/generation, script ConfigMap UID/content and the created Job executable.
+
+For native login checks with a fixed default Service hostname, the source-aware
+binder reads the exact frozen upstream script and substitutes only that host
+with the validated cluster-specific login hostname through the chart command
+value. It preserves every other script byte, image, argument and native check
+behavior. Render, upgrade preflight and policy verification share the binding;
+commands must equal the independently derived source command. Source archives
+are never modified and no compatibility Service or SSH wrapper is introduced.
+An interrupted first install may publish only the matching compiled values and
+outer inline-values delta before acceptance, bound to the exact failed checks
+child, source snapshot, active jail, unchanged scheduling gate and recursively
+verified repair ancestors. The new identity repair retains its own receipt and
+anchor seal. Native failed-install recovery remains responsible for old jobs.
+Local regressions and exact pinned Helm renders precede a declared live replay;
+only successful native bootstrap and later full acceptance establish delivery.
+The full-stack coordinator owns deferral across release and later infrastructure
+segments and final acceptance under the same maintenance reservation. Customer
+release follows verified steady policy and authorization restoration; interrupted
+reservation deletion reconciles its durable intent without recreating the barrier.
+
+Install preflight runs before backend/Terraform execution; initial project IAM
+setup still precedes this preflight. Upgrade planning proposes enabling saved
+checks policies and removes ignored wait/partition knobs before maintenance.
+Equal-release changes use in-place reconciliation when policy or later
+infrastructure requires fresh acceptance. Wizard profiles retain CPU/platform
+exclusions and default to the upstream framework and controller enabled.
+
+#### Verification Evidence
+
+A focused review reproduced allocation-only periodic acceptance stalls and lost
+partial baseline progress with four failing regression cases. The same cases
+pass after bounded repairs. All 223 relevant observer, probe, execution,
+campaign, catch-up, handoff, phase and admission tests pass, including state
+selectors, changing applicability, mandatory job-hook evidence and the existing
+1,000-worker transport/write bound. Scoped Ruff checks and the type-debt ratchet
+pass. These are offline results; no new live qualification is claimed.
+
+The subsequent alignment rejects wrapper-only success, absent GPU reports,
+empty tests, skipped/missing subchecks, unavailable disk/memory measurements,
+stale/concurrently rewritten child logs and supporting-to-required proof
+substitution. Tests cover the standalone worker payload with no cxcli install
+and durable warning deduplication across workers/resume. Pinned 4.1.5 and 4.1.7
+compile four required and two supporting enabled passive diagnostics each.
+The locked wheel passed dependency checks, exact parity for 18 scoped modules
+and all 46 public plus one hidden CLI surface. Final review found no concrete
+remaining source blocker; fresh live qualification remains pending.
+
+The phase/admission redesign passed 1,218 focused checks, CLI, install, upgrade,
+Slurm-policy, Flux and quality regressions. Tests exercise full partition-preimage
+transfer, original closed states and ACLs, independent reservation deletion,
+foreign holds, interrupted partition writes and job release, passive fallback
+restoration, worker replacement and stale evidence. The 1,000-worker fixture
+verifies a 16-worker transport ceiling and linear private receipt writes.
+Both pinned 4.1.5 and 4.1.7 passive bundles compile with six reviewed enabled
+diagnostics and 22 frozen native files. The isolated locked wheel imports the
+new modules with exact source parity and renders install/upgrade help. Scoped
+Ruff, Markdown lint, format and CLI architecture gates pass; the type-debt
+ratchet remains below its existing ceiling. Current delivery is implemented;
+fresh live install/upgrade barrier qualification and timing remain pending.
+The prior lab campaign below cannot satisfy that release qualification.
+
+Earlier native-shaped executor and campaign tests cover allocation, cancellation, missing
+accounting, uncertain creation, interruption, restored-policy reproof, executable
+substitution, script drift, late source inventory and multi-object kubectl output.
+All 18 official 4.1.7 Helm renders passed across CPU/GPU/mixed profiles and desired,
+install and upgrade phases. The broader changed-surface run passed 1,716 tests; a subsequent two-case
+install preflight test proved unsupported checks fail before execution authority
+or deployment. An isolated locked wheel passed dependency checks, imported all
+five new checks modules and verified 46 public plus one hidden CLI surface.
+Ruff lint, format and CLI architecture ratchets passed. The type ratchet passed
+with 489 existing findings versus 490 in the task-start snapshot, below its 493
+ceiling. These offline checks do not by themselves establish live delivery or
+performance improvement.
+
+The separately declared managed lab campaign completed on 2026-09-09 through
+supported install resume and a subsequent full-stack upgrade from Soperator
+4.1.5/Kubernetes 1.34 to Soperator 4.1.7/Kubernetes 1.35. Final policy application
+and interrupted restoration used the campaign-owned main-workload binding.
+Independent verification matched all 21 native executions across 14 check types,
+including 15 Slurm jobs with successful accounting and native PASS results.
+Desired schedules and passive health checks were restored, maintenance was
+released, and a normal-user job verified arithmetic across two workers and all
+16 GPUs. The final upgrade ran with its frozen source unchanged. A fresh clean
+install with that final source, 1,000-node operation and comparative timing remain
+unverified. This lab evidence predates the phase/admission redesign and does not
+qualify its new source or receipt contract.
+
+<!-- /FEATURE: FEAT-031 -->
+
+<!-- FEATURE: FEAT-032 reqs=REQ-030 status=ready delivery=verified priority=P1 version=3 -->
+### FEAT-032: Dedicated Soperator values and runtime prerequisites
+
+#### Requirements Covered
+
+- REQ-030: Configure dedicated Soperator installation completely.
+
+#### Context Evidence
+
+At implementation start, the dedicated creation workflow used frozen official
+releases and a packaged wizard policy, but inferred ownership from value equality.
+Backup routing wrote overrideValues while upstream read values, and the runtime
+namespace followed the umbrella. Shared SSSD propagated only enablement.
+
+#### Design Details
+
+Add install-only `--values-file` with strict single-document mapping parsing.
+Merge before prompting, record explicit JSON Pointer paths as chart-row
+`values-explicit-paths` metadata and preserve them through materialization,
+pruning and upgrade. Lists are atomic. Validate supported routing/helper fields,
+protected ownership and frozen child schemas/templates; upstream open maps retain
+their documented limits. Saved effective configuration remains plan authority.
+Reject direct dependency and raw observability overrides in this input path: the
+upstream replacement branches can discard required defaults. Also reject
+adapter-owned dependency environment flags rather than silently replace input.
+
+Complete conditional backup bucket/endpoint, schedule, daily-retention and Secret
+reference questions using frozen chart defaults. Correct backup.config.values and
+derive runtime namespaces from rendered consumers. Extend the shared SSSD helper
+with sssdConfSecretRefName and sssdLdapCAConfigMapRefName, lowering them into service
+and NodeSet values and removing helper data from rendered values.
+
+Reuse backup runtime environment/masked inputs. Add target-scoped SSSD config-file
+and LDAP-CA-file environment inputs, with interactive file-path prompts. Deliver
+sssd.conf in a Secret and optional ca.crt in a ConfigMap before consumers start.
+Persist references only. Reuse complete objects; reject incomplete objects; create
+absent objects with per-write authority checks and explicit target context.
+
+#### Selected Option
+
+Values-only fresh-install input and runtime files extend existing ownership with
+one canonical saved configuration and no second lifecycle.
+
+#### Alternatives Considered
+
+Whole-deployment input expands infrastructure authority unnecessarily. Reopening
+generic chart selection duplicates lifecycle ownership. References-only SSSD does
+not complete a fresh installation; SecretStash provisioning and rotation are
+separate features.
+
+#### Implementation Boundaries
+
+Own the dedicated creation/input path, wizard policy, explicit value preservation,
+upstream adapter and existing pre-Flux runtime prerequisites. Keep catalog,
+infrastructure selection, release/image/storage protection and resume authority.
+
+#### Test-First Success Criteria
+
+- TDD-001: Input settings survive actual wizard and normalization paths, including default-equal values, lists and false; invalid inputs fail before dependent work.
+- TDD-002: Frozen umbrella and child renders contain the chosen backup destination, schedule, retention and runtime references in the consumer namespace.
+- TDD-003: Service/worker SSSD references agree, helpers do not leak, runtime contents remain unpersisted and loss of authority prevents each write.
+
+#### Validation Plan
+
+Run focused tests and applicable lint, typing, architecture, docs and wheel CLI
+checks, followed by changed-surface align and independent read-only risk review.
+
+#### Test Plan
+
+Cover interactive/noninteractive creation, input conflicts, repeated config
+round-trips, resume/replan, upgrade preservation, upstream renders, runtime reuse,
+missing inputs, incomplete objects, namespace routing and lease loss.
+
+#### Evaluation Plan
+
+Source and package evidence demonstrate implementation only. Live backup/restore
+and directory resolution need a separately authorized non-production trial.
+
+#### Rollout And Rollback
+
+The new flag is opt-in; metadata is additive and never inferred for historical
+configs. No migration or compatibility shim is introduced. Existing immutable
+plans remain unchanged. Do not rotate or overwrite live credentials.
+
+#### Done Definition
+
+All requested paths are implemented and focused checks and independent review
+pass; operational validation limits are explicit.
+
+#### Implementation Evidence
+
+Implemented fresh-install `--values-file` in the dedicated CLI/project creation
+path and `soperator_values.py`. Explicit paths survive wizard confirmation,
+pruning, config normalization and upgrade; frozen input checks reject protected
+ownership and unsupported routes. Generic catalogs remain separate.
+
+Completed backup and shared SSSD wizard/reference lowering. Backup uses
+`backup.config.values`; runtime prerequisites derive consumer namespaces from the
+frozen umbrella render. `soperator_runtime_objects.py` provides create-only
+operations with explicit context, per-write authority and sanitized failures.
+Backup and SSSD delivery reuse complete objects, reject incomplete objects and
+keep runtime files/content outside saved configuration. Both install and upgrade
+use the same pre-Flux prerequisite boundary.
+
+Planning validates effective child values with verified upstream and dependency
+chart packages. README, changelog and the packaged CLI contract describe the
+new input, required runtime files and supported configuration boundaries.
+Both values and runtime file reads validate an opened regular-file descriptor
+before a bounded UTF-8 read; FIFOs/devices cannot block waiting for a writer.
+Consumed feature enablement must be boolean, and required checks/ActiveChecks
+cannot be disabled through advanced input.
+
+#### Verification Evidence
+
+The 18-file regression selection passed 1,208 tests. The final ownership and
+route restrictions then passed all 62 focused input/runtime/artifact tests.
+Tests include actual wizard/default pruning, repeated normalization and version
+changes, resume rejection before file reads, target-bound runtime writes and
+lease loss between namespace and Secret creation. An unmodified, hash-verified
+upstream 4.1.8 fixture proves final backup Schedule settings and service/NodeSet
+SSSD references; an actual Helm schema rejection proves safe child diagnostics.
+
+Changed Python lint and format checks, Markdown lint, diff checks and the CLI
+architecture ratchet (1,191/1,199 definitions) passed. Mypy reports the same 490
+diagnostics as the task-start source, with no added or removed diagnostics.
+An isolated rebuilt wheel passed dependency checks and all 46 public plus one
+hidden CLI contract checks. Independent read-only risk review found no remaining
+blocker after the ownership restrictions.
+
+The subsequent explicit alignment pass repaired two input-validation defects:
+blocking special-file reads and late rejection of malformed/disabled required
+component enablement. Twelve new negative cases reproduced the failures before
+repair; all thirteen focused cases pass after repair, including an existing
+required-controller rejection. The final 17-file selection passed 1,014 tests.
+Independent runtime/security and value-ownership reviewers confirmed both fixes;
+lint, format, Markdown and diff checks pass, with the same 490 mypy diagnostics.
+
+Evidence is offline source, frozen-chart and installed-package validation.
+No live infrastructure was changed; backup/restore and directory authentication
+remain separate operational validation.
+
+<!-- /FEATURE: FEAT-032 -->
 
 <!-- maintain-project-specs:design:end -->
 
@@ -5834,11 +7085,16 @@ Flux render:
   service account than `mysterybox-sa`, or references a Nebius authorized public key that
   is no longer readable.
 - IAM reconciliation requires exactly one `nebius-cxcli-sa`, exactly the project
-  `editor` role, no permit on another resource scope, and no unexpected member in its
-  deterministic permit group. Conflicting same-name identities fail closed. First-time
-  creation and recovery use the existing operator identity and require Nebius IAM
-  `admin`; continuing product work uses only the canonical project `editor` service
-  account.
+  `admin` role, no permit on another resource scope, and no unexpected member in
+  its deterministic group. Project admin is required by rendered observability
+  IAM and MK8s service-account attachment; no tenant grant is created. Cached
+  commands validate this contract read-only before provisioning. Insufficient
+  permissions direct the operator to explicit targeted `auth`, never automatic
+  role elevation or rotation of a healthy key. That explicit command validates
+  the key and cached service-account ID, then uses operator IAM authority to
+  create the desired project permit before deleting exact obsolete managed
+  project permits. Foreign identity, scope, or membership blocks mutation.
+  Healthy admin caches require no operator authentication.
 - Operator token discovery first asks the active Nebius CLI profile for a cached token
   with browser authentication disabled. When that attempt fails and stdin is interactive,
   cxcli retries once through the CLI's normal browser flow and
@@ -5853,7 +7109,7 @@ Flux render:
   environment only when the marker equals the resolved project and strict live identity
   validation succeeds through read-only IAM calls, then imports it into the runner-local
   v2 cache without issuing a replacement authorized key or attempting IAM repair under
-  the runtime editor identity.
+  the runtime identity.
 
 Terraform runtime auth:
 

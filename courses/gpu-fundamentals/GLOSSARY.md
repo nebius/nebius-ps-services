@@ -61,3 +61,10 @@
 - **Fabric:** the connected links and switches carrying traffic among endpoints.
 - **Subnet manager:** the operator-owned InfiniBand service responsible for discovering and configuring subnet paths.
 - **ECN / CNP / PFC:** congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.
+
+## Architecture vocabulary
+
+- **GPC (graphics processing cluster):** A hardware group containing TPCs; the Hopper architecture description also uses GPU processing cluster.
+- **TPC (texture processing cluster):** A hardware group containing two SMs on H100.
+- **SMSP (SM subpartition):** One of four scheduling and execution subdivisions within an H100 SM.
+- **Resident thread:** A thread assigned to an SM that keeps its register values and tracks its progress through the kernel. It remains resident while its warp waits for data or its next turn to execute.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -47,6 +48,7 @@ from .mysterybox_eso import (
     mysterybox_eso_extra_objects_for_target,
 )
 from .nfs_csi import NFS_CSI_APP_ID, nfs_instance_id_for_target
+from .observability import soperator_target_refs
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 from .soperator_adapter import (
@@ -61,6 +63,7 @@ from .soperator_adapter import (
     render_soperator_monitoring_dashboard_documents,
     soperator_monitoring_dashboards_require_post_flux,
 )
+from .soperator_checks_login import bind_checks_login
 from .soperator_child_charts import SOPERATOR_APP_ID
 from .soperator_flux_graph import (
     render_soperator_flux_graph_documents,
@@ -717,6 +720,7 @@ def _materialize_soperator_observability_values(
     if not isinstance(opentelemetry, dict):
         raise ValueError("Soperator values.observability.opentelemetry must be a mapping")
     opentelemetry["enabled"] = True
+    opentelemetry["publicEndpoint"] = f"dns:///write.logging.{region}.nebius.cloud.:443"
     vm_stack = observability.setdefault("vmStack", {})
     if not isinstance(vm_stack, dict):
         raise ValueError("Soperator values.observability.vmStack must be a mapping")
@@ -777,6 +781,7 @@ def _configured_app_release_specs(
     config: Any,
     *,
     component_output_values: dict[str, Any] | None = None,
+    ordinary_only: bool = False,
 ) -> list[dict[str, Any]]:
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
@@ -795,6 +800,8 @@ def _configured_app_release_specs(
                 if not isinstance(raw_chart, dict):
                     continue
                 entry_id = str(raw_chart.get("id", "")).strip().lower()
+                if ordinary_only and entry_id == SOPERATOR_APP_ID:
+                    continue
                 if not entry_id or not bool(raw_chart.get("enabled", False)):
                     continue
                 entry = entry_by_id.get(entry_id)
@@ -995,6 +1002,9 @@ def _configured_app_release_specs(
                         values_node,
                         release=release_snapshot,
                     )
+                    soperator_upstream_values = bind_checks_login(
+                        soperator_upstream_values, Path(frozen.source.source_dir)
+                    )
                     soperator_adapter_docs, _ = render_soperator_adapter_documents(
                         values_node,
                         release=release_snapshot,
@@ -1024,6 +1034,7 @@ def _configured_app_release_specs(
                     graph_patches = soperator_graph_post_render_patches(
                         release_snapshot,
                         soperator_upstream_values,
+                        adapter_documents=soperator_adapter_docs,
                     )
                     existing_patches = list(chart_node.get("post_render_patches") or [])
                     chart_node["post_render_patches"] = [*existing_patches, *graph_patches]
@@ -1530,7 +1541,8 @@ def _render_flux_app_helm_releases(
                 values=release["values"],
                 depends_on=release.get("depends_on") or None,
                 post_render_patches=release.get("post_render_patches") or None,
-                disable_wait=_release_has_managed_mysterybox_external_secret(release["values"]),
+                disable_wait=is_soperator
+                or _release_has_managed_mysterybox_external_secret(release["values"]),
                 labels=(
                     {SOPERATOR_LIFECYCLE_LABEL: SOPERATOR_LIFECYCLE_RECREATABLE}
                     if is_soperator
@@ -1943,11 +1955,13 @@ def _render_post_flux_mysterybox_eso_resources(
     *,
     config: Any,
     target_ref: str,
+    scope: str = "all",
     component_output_values: dict[str, Any] | None,
 ) -> None:
     objects = mysterybox_eso_extra_objects_for_target(
         config,
         target_ref=target_ref,
+        scope=scope,
         component_output_values=component_output_values or {},
     )
     state.write_post_flux_docs(Path("post-flux-mysterybox-eso.yaml"), objects)
@@ -1958,6 +1972,7 @@ def render_flux(
     paths: ProjectPaths,
     *,
     component_output_values: dict[str, Any] | None = None,
+    ordinary_only: bool = False,
 ) -> list[Path]:
     legacy_dirs = [
         path
@@ -1975,6 +1990,7 @@ def render_flux(
     release_specs = _configured_app_release_specs(
         config,
         component_output_values=component_output_values,
+        ordinary_only=ordinary_only,
     )
     cluster_target_refs = enabled_cluster_target_refs(config)
     if cluster_target_refs:
@@ -1988,17 +2004,61 @@ def render_flux(
             )
         for target_ref in cluster_target_refs:
             target_paths = replace(paths, flux_dir=flux_target_dir(paths, target_ref))
+            target_specs = release_specs_by_target.get(target_ref, [])
+            # Soperator owns the target root. Ordinary charts have a separate
+            # resource bundle, including on the first lifecycle render.
+            split_target = ordinary_only or bool(soperator_target_refs(config))
+            if split_target:
+                ordinary_paths = replace(target_paths, flux_dir=target_paths.flux_dir / "ordinary")
+                ordinary_state = _FluxRenderState(paths=ordinary_paths)
+                _render_flux_app_helm_releases(
+                    ordinary_state,
+                    release_specs=[
+                        item for item in target_specs if item.get("entry_id") != SOPERATOR_APP_ID
+                    ],
+                )
+                _render_post_flux_mysterybox_eso_resources(
+                    ordinary_state,
+                    config=config,
+                    target_ref=target_ref,
+                    scope="ordinary",
+                    component_output_values=component_output_values,
+                )
+                _finalize_flux_render_state(ordinary_state)
+                owner = hashlib.sha256(
+                    json.dumps(
+                        [to_plain_data(config).get("client_info", {}), target_ref], sort_keys=True
+                    ).encode()
+                ).hexdigest()
+                for ordinary_file in ordinary_state.files:
+                    if ordinary_file.name == "kustomization.yaml":
+                        continue
+                    docs = list(yaml.safe_load_all(ordinary_file.read_text()))
+                    for doc in docs:
+                        if isinstance(doc, dict):
+                            doc.setdefault("metadata", {}).setdefault("annotations", {})[
+                                "cxcli.nebius.com/app-owner"
+                            ] = owner
+                    ordinary_file.write_text(_multi_doc_yaml(docs))
+                written.extend(ordinary_state.files)
+                if ordinary_only:
+                    continue
+                target_specs = [
+                    item for item in target_specs if item.get("entry_id") == SOPERATOR_APP_ID
+                ]
             state = _FluxRenderState(paths=target_paths)
             _render_flux_app_helm_releases(
                 state,
-                release_specs=release_specs_by_target.get(target_ref, []),
+                release_specs=target_specs,
             )
-            _render_post_flux_mysterybox_eso_resources(
-                state,
-                config=config,
-                target_ref=target_ref,
-                component_output_values=component_output_values,
-            )
+            if not ordinary_only:
+                _render_post_flux_mysterybox_eso_resources(
+                    state,
+                    config=config,
+                    target_ref=target_ref,
+                    scope="protected" if split_target else "all",
+                    component_output_values=component_output_values,
+                )
             _finalize_flux_render_state(state)
             written.extend(state.files)
         return written

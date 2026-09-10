@@ -6,7 +6,3 @@ topology, sharing, and health evidence before attempting optimization.
 The course uses Python and PyTorch, one full non-MIG H100 for local effects,
 and two one-GPU Slurm nodes only for collective mechanics. Operational labs are
 read-only and do not reconfigure the GPU or cluster.
-
-## Beginner entry and advanced progression
-
-The opening lesson introduces the subject, explains why it is useful and describes its main workflow before introducing advanced requirements. Beginners build vocabulary and work through the small example first; experienced readers can use the entry checkpoint and then follow the detailed optimization path. A conceptual CPU exercise, where provided, does not replace the later H100 evidence requirements.

@@ -144,6 +144,146 @@ For shorter starting points, see the [static routing example](examples/static-ex
 nebius-vpngw apply --local-config-file my-vpn.config.yaml
 ```
 
+Existing ordinary and HA gateways are updated in place. Configuration and saved
+state formats, VM/allocation identities, SSH trust, and HA ownership rules are
+preserved. An older agent can be upgraded even when it lacks the new ordinary
+confirmation capability. An actual update may interrupt VPN traffic.
+
+Preview updates before scheduling them:
+
+```bash
+export VPNGW_AGENT_WHEEL=/path/to/nebius_vpngw-VERSION-py3-none-any.whl
+nebius-vpngw apply --local-config-file my-vpn.config.yaml --dry-run
+nebius-vpngw apply --local-config-file my-vpn.config.yaml \
+  --approve-disruption <DISRUPTION_DIGEST>
+```
+
+Use the same wheel and configuration for preview and execution. Potentially
+disruptive changes require an interactive confirmation that defaults to **No**,
+or the exact digest from that preview. A changed predecessor invalidates approval;
+review a new preview before retrying. HA migration and other lifecycle operations
+retain their existing effect-specific approvals; direct `apply` may require both
+the lifecycle digest and the disruption digest. The `vm-ha` command retains its
+existing combined review and approval workflow.
+
+Infrastructure planning reads each existing gateway's boot disk from its Compute
+attachment, including renamed disks. Missing, inaccessible or mismatched disk
+evidence stops apply before deployment; it never becomes a new-VM creation plan.
+
+A healthy unchanged apply checks the installed artifact and local runtime without
+reinstalling packages, rewriting config, or restarting services. Compatible Python
+dependencies are retained. When a dependency change is required on an existing
+gateway, local `uv` resolves and downloads an exact compatible wheel set before
+approval; the plan lists those changes and rejects conflicts with retained software.
+Selected distro-provided dependencies are installed without removing their
+package-manager-owned files. HA replacement plans inspect only retained members;
+a newly created replacement is not compared with the retired VM's boot state.
+
+Ordinary apply confirms the exact config and installed agent after required local
+IPsec, FRR, firewall, XFRM, and routing checks. Peer ping, established SAs, and BGP
+sessions are separate connectivity evidence. Failure exits nonzero, identifies
+completed/failed/unattempted gateways, and stops later deployments. A failed update
+may have changed the failed gateway; it is not rolled back automatically. Inspect
+its service/cloud-init logs and current state, then review a fresh plan.
+
+For ordinary static tunnels sharing an identical remote prefix on the same VM,
+the last enabled tunnel in resolved configuration order remains the forwarding
+owner. The `active` and `passive` labels do not introduce static-route metrics or
+ECMP. Verification checks that selected owner and rejects stale remote routes on
+superseded interfaces; legitimate kernel-connected inner subnets remain allowed.
+Distinct overlapping prefixes keep their separate routes. Historical claims are
+retained for safe cleanup and recovery even when a tunnel is not the selected owner.
+
+For ordinary static tunnels, preview lists obsolete IPv4 remote routes that apply
+can safely retire. Approval binds the saved configuration, exact route and current
+XFRM interface identity. Apply removes those routes before reusing tunnel interfaces
+and verifies their absence before success and on later unchanged checks. Removing,
+disabling or reordering tunnels and changing their prefixes use the same workflow.
+Interfaces and addresses remain in place; connected, FRR and unrelated routes are
+preserved by the retirement step; existing APIPA and table-220 hygiene still runs
+afterward. Ambiguous ownership or custom route shapes block cleanup.
+
+Keep `last-applied.json` and the private ordinary operation records intact. An
+unchanged or route-equivalent upgrade from 0.6.0 can proceed without retirement
+history; missing or corrupt evidence cannot authorize route removal. Interrupted
+updates retain both predecessor and prospective successor ownership for a newly
+approved retry. A route that reappears after verified retirement blocks success
+unless a new desired tunnel legitimately uses it. Agent background reconciliation
+does not authorize retirement by itself.
+
+If an update saves its verification proof but loses the final reply, a freshly
+approved retry verifies and binds that proof to its new operation before completing.
+The SSH runner streams its source and request through bounded stdin, so package
+growth does not exceed the gateway's command-argument limit. Source upload counts
+toward the existing remote deadline.
+
+Ordinary updates use a durable operation guard as well as process locks. If a
+command process group, service job or Netplan change outlives its caller, apply fails within its deadline
+and further ordinary mutations remain blocked. A new preview can offer recovery
+only after the previous writers and delegated work are conclusively settled;
+that recovery requires fresh disruption approval. A dead process, empty job list,
+or reboot alone does not clear the guard. Preserve
+`/var/lib/nebius-vpngw/ordinary/operation.json` when diagnosing an unresolved update.
+Do not delete it or run another deployment tool to bypass admission.
+
+Existing ordinary management services are stopped before package/config changes.
+A persistent startup condition also protects previous-release services if the VM
+reboots during an incomplete upgrade. The exact new agent can start and wait for
+the operation to finish. Ordinary-to-HA conversion holds this exclusion until the
+existing HA checks prove the retained node passively fenced on the exact operation;
+interrupted conversion continues through the existing HA recovery workflow.
+Package approval remains valid across the handoff's own journal and service-stop
+changes. Other package, configuration, dependency or target drift requires a new
+preview and approval. A pending handoff is recovered even when all approved package
+writes have finished; a completed handoff does not block healthy HA convergence.
+
+If an unfinished conversion has already published its HA marker, the retained
+host's package can be repaired under HA authority, including when product imports
+are damaged. This requires fresh approval, both exact migration apply locks,
+current-boot forwarding exclusion and settled controller, credential and cloud
+operation records. The repair preserves configuration, credentials and cloud
+identity, keeps an independent cold guard, and resumes the canonical controller
+only after package verification. Unknown authority or an unresolved writer blocks
+repair. Completed deployments keep their existing ordinary or HA update workflow.
+
+Older external CLI/manual mutations must not run concurrently with an upgrade.
+Normal Ubuntu networkd gateways retain their configuration and identity formats.
+
+The isolated Ubuntu systemd/networkd regressions run on PRs and gate release
+publication. They cover delegated work and startup admission; live ordinary and HA
+upgrade canaries still provide separate deployment evidence.
+
+The FRR bootstrap ordering fix applies to newly created or explicitly recreated
+VMs. It does not rerun cloud-init on existing gateways. For a VM with failed
+bootstrap, inspect `cloud-init status --long` and `/var/log/cloud-init-output.log`,
+identify the failed step, and plan its recovery explicitly before retrying apply.
+The management public-key file must contain one OpenSSH key matching the selected
+client identity. Bootstrap quotes that record to preserve YAML-sensitive comments;
+multi-key files fail before provisioning.
+
+Agent services wait for the first resolved configuration before starting. If an
+older bootstrap left the management agent waiting to restart, an approved apply
+can stop it through the operation journal before installation. Planning verifies
+FRR's optional failure-handler definitions; an absent handler is recorded in the
+approval evidence, while executable handlers and unresolved jobs block changes.
+Bootstrap reports the agent as running only after an exact successful service
+check; a configured-but-inactive agent is not reported as active.
+
+Dependency inspection evaluates the gateway's environment and selected extras
+before checking dependency sources. Unselected documentation or platform extras
+do not block reapply; active direct URL dependencies still require a separately
+built wheel set.
+
+After an ordinary apply publishes managed SSH trust, `vm-ha` can import that
+exact identity into the HA deployment as part of its approved migration. The
+displayed plan includes managed trust publication and is revalidated before
+execution. Existing trust repair and destructive recreation still require their
+explicit workflows.
+
+For an absent standby that needs a product-generated SSH key, approval binds the
+generation intent alongside the exact retained trust. Dry-run does not save a
+key. Approved execution publishes the generated key's exact pin before connecting.
+
 ### 6. Configure local routes
 
 ```bash
@@ -2800,6 +2940,12 @@ Agent synchronizes UFW rules with active tunnels:
 - Use `${VAR}` placeholders in config
 - Rotate PSKs regularly
 
+Environment references must be available in the shell that runs each command.
+Variables set in a different terminal or a temporary test process are not carried
+into later invocations. `apply` reports missing names and exits before deployment;
+load the existing peer PSKs and retry. Do not generate replacement PSKs to repair
+an unset variable on an existing tunnel.
+
 **Example:**
 
 ```bash
@@ -3206,6 +3352,9 @@ ps aux | grep "python3 -m nebius_vpngw.agent.main"
 ## Development
 
 ### Agent Development
+
+The renderer writes PSK-bearing `swanctl.conf` through the atomic mode-`0600`
+secret writer. Preview rendering retains those bytes in memory without writing files.
 
 **Modify agent code:**
 

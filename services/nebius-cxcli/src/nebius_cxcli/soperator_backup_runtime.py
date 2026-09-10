@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
-import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from getpass import getpass
 from typing import Any
-
-import yaml
 
 from .component_defaults import read_component_path
 from .component_instances import component_instance_id, component_type_id
 from .deploy_targets import app_chart_target_ref
 from .runtime_config import to_plain_data
+from .soperator_runtime_objects import RuntimeObjects
 
 SOPERATOR_COMPONENT_ID = "soperator"
 SOPERATOR_BACKUP_VALUES_KEY = "soperator-backup-config"
@@ -31,7 +28,6 @@ KUBE_CONTEXT_ENV = "NEBIUS_CXCLI_TARGET_KUBE_CONTEXT"
 class SoperatorBackupSpec:
     target_ref: str
     namespace: str
-    release_name: str
     secret_name: str
     access_key_id_key: str
     secret_access_key_key: str
@@ -97,6 +93,7 @@ def soperator_backup_release_specs(
     payload_or_config: Any,
     *,
     target_ref: str = "",
+    namespace: str = "",
 ) -> tuple[SoperatorBackupSpec, ...]:
     normalized_target_ref = str(target_ref or "").strip().lower()
     active_rows: list[tuple[dict[str, Any], str]] = []
@@ -117,11 +114,7 @@ def soperator_backup_release_specs(
         specs.append(
             SoperatorBackupSpec(
                 target_ref=row_target_ref,
-                namespace=str(row.get("namespace") or "soperator").strip() or "soperator",
-                release_name=str(
-                    backup_values.get("fullnameOverride") or "soperator-jail-backup"
-                ).strip()
-                or "soperator-jail-backup",
+                namespace=namespace,
                 secret_name=str(secret.get("name") or "jail-backup").strip() or "jail-backup",
                 access_key_id_key=str(
                     secret_keys.get("accessKeyID") or "aws-access-key-id"
@@ -150,161 +143,6 @@ def _kubectl_env(extra_env: Mapping[str, str] | None) -> dict[str, str]:
     if extra_env:
         env.update({str(key): str(value) for key, value in extra_env.items()})
     return env
-
-
-def _target_kube_context(extra_env: Mapping[str, str] | None) -> str:
-    explicit_context = str((extra_env or {}).get(KUBE_CONTEXT_ENV) or "").strip()
-    if explicit_context:
-        return explicit_context
-    env_context = str(os.environ.get(KUBE_CONTEXT_ENV) or "").strip()
-    if env_context:
-        return env_context
-    kubeconfig_value = str(
-        (extra_env or {}).get("KUBECONFIG") or os.environ.get("KUBECONFIG") or ""
-    )
-    kubeconfig_paths = (
-        tuple(item for item in kubeconfig_value.split(os.pathsep) if item)
-        if kubeconfig_value
-        else (os.path.expanduser("~/.kube/config"),)
-    )
-    for kubeconfig_path in kubeconfig_paths:
-        try:
-            with open(kubeconfig_path, encoding="utf-8") as handle:
-                payload = yaml.safe_load(handle)
-        except (OSError, yaml.YAMLError):
-            continue
-        context = str(_mapping(payload).get("current-context") or "").strip()
-        if context:
-            return context
-    return ""
-
-
-def _kubectl_command(
-    args: Sequence[str],
-    *,
-    extra_env: Mapping[str, str] | None,
-) -> list[str]:
-    command = ["kubectl"]
-    context_name = _target_kube_context(extra_env)
-    if context_name:
-        command.extend(["--context", context_name])
-    command.extend(str(arg) for arg in args)
-    return command
-
-
-def _first_non_empty_line(text: str) -> str:
-    for line in text.splitlines():
-        line = line.strip()
-        if line:
-            return line
-    return ""
-
-
-def _run_kubectl(
-    args: Sequence[str],
-    *,
-    extra_env: Mapping[str, str] | None,
-    input_text: str | None = None,
-    timeout: int = 120,
-) -> subprocess.CompletedProcess[str]:
-    command = _kubectl_command(args, extra_env=extra_env)
-    completed = subprocess.run(
-        command,
-        env=_kubectl_env(extra_env),
-        input=input_text,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    if completed.returncode != 0:
-        detail = _first_non_empty_line(completed.stderr or completed.stdout or "")
-        raise RuntimeError(f"{' '.join(command)} failed: {detail or completed.returncode}")
-    return completed
-
-
-def _apply_manifest(
-    manifest: Mapping[str, Any],
-    *,
-    extra_env: Mapping[str, str] | None,
-) -> None:
-    rendered = yaml.safe_dump(dict(manifest), sort_keys=False)
-    _run_kubectl(["apply", "-f", "-"], extra_env=extra_env, input_text=rendered)
-
-
-def _ensure_namespace(namespace: str, *, extra_env: Mapping[str, str] | None) -> None:
-    _apply_manifest(
-        {
-            "apiVersion": "v1",
-            "kind": "Namespace",
-            "metadata": {"name": namespace},
-        },
-        extra_env=extra_env,
-    )
-
-
-def _secret_has_keys(
-    *,
-    namespace: str,
-    name: str,
-    keys: Sequence[str],
-    extra_env: Mapping[str, str] | None,
-) -> bool:
-    command = _kubectl_command(
-        ["-n", namespace, "get", "secret", name, "-o", "json"],
-        extra_env=extra_env,
-    )
-    completed = subprocess.run(
-        command,
-        env=_kubectl_env(extra_env),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if completed.returncode != 0:
-        if _kubectl_not_found_error(completed):
-            return False
-        message = _first_non_empty_line(completed.stderr or completed.stdout or "")
-        raise RuntimeError(f"{' '.join(command)} failed: {message or completed.returncode}")
-    try:
-        payload = json.loads(completed.stdout or "{}")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{' '.join(command)} returned invalid JSON") from exc
-    data = payload.get("data")
-    if not isinstance(data, Mapping):
-        return False
-    return all(str(key) in data for key in keys)
-
-
-def _kubectl_not_found_error(completed: subprocess.CompletedProcess[str]) -> bool:
-    detail = completed.stderr or completed.stdout or ""
-    for candidate in (completed.stdout, completed.stderr):
-        try:
-            payload = json.loads(candidate or "{}")
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, Mapping) and str(payload.get("reason", "") or "") == "NotFound":
-            return True
-    normalized = detail.lower()
-    return "error from server (notfound)" in normalized or '"reason":"notfound"' in normalized
-
-
-def _apply_secret(
-    *,
-    namespace: str,
-    name: str,
-    string_data: Mapping[str, str],
-    extra_env: Mapping[str, str] | None,
-) -> None:
-    _apply_manifest(
-        {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "type": "Opaque",
-            "metadata": {"name": name, "namespace": namespace},
-            "stringData": dict(string_data),
-        },
-        extra_env=extra_env,
-    )
 
 
 def _target_env_names(base_name: str, target_ref: str) -> tuple[str, ...]:
@@ -381,37 +219,44 @@ def _secret_material(
 def ensure_soperator_backup_runtime_secrets(
     payload_or_config: Any,
     *,
+    namespace: str,
+    assert_authority: Callable[[], object],
     extra_env: Mapping[str, str] | None,
     target_ref: str = "",
     prompt: bool = False,
     emit: Callable[[str], None] | None = None,
 ) -> None:
-    """Create runtime-only Kubernetes Secrets required by Soperator jail backups."""
-    specs = soperator_backup_release_specs(payload_or_config, target_ref=target_ref)
-    if specs and not shutil.which("kubectl"):
+    """Create absent Secrets in the rendered backup consumer's namespace."""
+    specs = soperator_backup_release_specs(
+        payload_or_config, target_ref=target_ref, namespace=namespace
+    )
+    if not specs:
+        return
+    if not shutil.which("kubectl"):
         raise RuntimeError("kubectl is required to deploy Soperator jail backup runtime Secret")
+    runtime = RuntimeObjects(extra_env=extra_env, assert_authority=assert_authority)
     for spec in specs:
-        _ensure_namespace(spec.namespace, extra_env=extra_env)
         required_keys = (
             spec.access_key_id_key,
             spec.secret_access_key_key,
             spec.backup_password_key,
         )
-        if _secret_has_keys(
-            namespace=spec.namespace,
-            name=spec.secret_name,
-            keys=required_keys,
-            extra_env=extra_env,
-        ):
+        if runtime.complete("Secret", spec.namespace, spec.secret_name, required_keys):
             continue
-        _apply_secret(
-            namespace=spec.namespace,
-            name=spec.secret_name,
-            string_data=_secret_material(spec, extra_env=extra_env, prompt=prompt),
-            extra_env=extra_env,
-        )
+        material = _secret_material(spec, extra_env=extra_env, prompt=prompt)
+        runtime.create("Secret", spec.namespace, spec.secret_name, material)
         if callable(emit):
             emit(f"Created Soperator backup Secret `{spec.secret_name}`.")
+
+
+def preflight_soperator_backup_inputs(
+    payload_or_config: Any, *, target_ref: str, prompt: bool
+) -> None:
+    """Check fresh-cluster input availability before Terraform, without persisting it."""
+    for spec in soperator_backup_release_specs(payload_or_config, target_ref=target_ref):
+        # Interactive credentials are collected once, at the runtime boundary.
+        if not prompt:
+            _secret_material(spec, extra_env=None, prompt=False)
 
 
 __all__ = [

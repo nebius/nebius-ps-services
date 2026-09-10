@@ -489,21 +489,12 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
         "from": "soperator_topology_profiles",
         "args": {"default": "disabled"},
     }
-    assert soperator_wizard_fields["values.soperator-activechecks.enabled"] == {
-        "default": False,
-        "write_default_to_config": True,
-        "type_hint": "bool",
-    }
-    assert soperator_wizard_fields["values.soperator-activechecks.waitForChecks.enabled"] == {
-        "default": False,
-        "write_default_to_config": True,
-        "type_hint": "bool",
-    }
-    assert soperator_wizard_fields["values.soperator-checks.enabled"] == {
-        "default": False,
-        "write_default_to_config": True,
-        "type_hint": "bool",
-    }
+    for field in (
+        "values.soperator-activechecks.enabled",
+        "values.soperator-activechecks.waitForChecks.enabled",
+        "values.soperator-checks.enabled",
+    ):
+        assert field not in soperator_wizard_fields
     assert soperator_wizard_fields["values.soperator-dcgm-exporter.enabled"] == {
         "default": False,
         "write_default_to_config": True,
@@ -586,7 +577,7 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
     )
     assert "autoscaling_input" not in cpu_profile["mk8s"]["worker_nodesets"][0]
     assert "srunReadyPartition" not in cpu_profile["chart"]["values"]["soperator-activechecks"]
-    assert cpu_profile["chart"]["activechecks"]["srunReadyPartition"] == "cpu"
+    assert "activechecks" not in cpu_profile["chart"]
     assert (
         cpu_profile["chart"]["values"]["soperator-activechecks"]["checks"]["wait-for-topology"][
             "runAfterCreation"
@@ -594,7 +585,7 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
         is False
     )
     profile = soperator_settings.nodesets.profiles["nebius-gpu-v1"]
-    assert profile["chart"]["activechecks"]["srunReadyPartition"] == "hidden"
+    assert "activechecks" not in profile["chart"]
     assert profile["placements"]["worker"]["kind"] == "slurm-worker-nodeset"
     assert profile["placements"]["worker"]["default_node_group_kind"] == "gpu"
     assert (
@@ -713,9 +704,9 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
     assert soperator_family.isdisjoint({chart.name for chart in sources.helm_charts})
 
     soperator_defaults = {default.target_path: default.value for default in soperator.defaults}
-    assert soperator_defaults["values.soperator-activechecks.enabled"] is False
-    assert soperator_defaults["values.soperator-activechecks.waitForChecks.enabled"] is False
-    assert soperator_defaults["values.soperator-checks.enabled"] is False
+    assert soperator_defaults["values.soperator-activechecks.enabled"] is True
+    assert "values.soperator-activechecks.waitForChecks.enabled" not in soperator_defaults
+    assert soperator_defaults["values.soperator-checks.enabled"] is True
     assert soperator_defaults["values.soperator-notifier.enabled"] is False
     assert (
         soperator_defaults["values.soperator-notifier.slack.existingSecret"]
@@ -3006,9 +2997,10 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
                 "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
             },
             "auto_select_first": True,
-            "skip_prompt_if_no_choices": True,
+            "skip_prompt_if_no_choices": False,
         },
-        "prompt": False,
+        "required": True,
+        "type_hint": "string",
     }
     for field in (
         "worker_cpu_total_nodes",

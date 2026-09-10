@@ -44,7 +44,7 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 #### Acceptance Criteria
 
 - AC-001: Every course provides mission, syllabus, detailed lessons, self-contained HTML, glossary, resources, versions, publication review, labs, Slurm launchers, validation, and cluster-smoke guidance.
-- AC-002: Lessons retain a conceptual opening, objective, prerequisite bridge, recall, purpose, mental model and mechanism, followed only by Practice labs links for applied work. The linked labs own hardware context, worked practice, trade-offs, evidence, interpretation, troubleshooting, answers and review.
+- AC-002: Every lesson uses a concise conceptual title and the ordered sections Objective, How it works, Practice labs and Mental model. How it works integrates definitions, useful prerequisite connections, purpose and causal explanation, with at least one relevant diagram inside that section. The final Mental model summarizes already-explained concepts. The linked labs own hardware context, worked practice, trade-offs, evidence, interpretation, troubleshooting, answers and review.
 - AC-003: Every topology, execution, memory, scheduling, or parallelism concept has an accessible responsive inline diagram.
 - AC-004: Public course claims use legitimate current official/vendor references collected at the end of each HTML course.
 - AC-005: Do not publish source-coverage tables, course-history comparisons, previous-course names, migration notes, or historical learning records. Explain advanced topic limitations in the lessons themselves.
@@ -66,7 +66,9 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 - AC-012: Diagram labels, quantities and connector relationships accurately
   represent the adjacent lesson or lab explanation. Declare overview layouts explicitly rather
   than inferring semantics from titles; distinguish sequence, comparison,
-  containment and overlap, and identify schematic or modeled quantities.
+  containment and overlap, and identify schematic or modeled quantities. For timelines,
+  state the reading direction and explain in plain language when box heights
+  and gaps do not represent elapsed time.
 - AC-007: Keep only a short estimated-guided-hours label in the banner and
   concise course metadata. Do not expose time formulas, minute allocations,
   duration-calculation tables, or a guided-learning-plan section.
@@ -101,6 +103,15 @@ Engineers need an H100-centered mental model connecting the software stack, exec
 - AC-001: The course covers driver/runtime/toolkit/PTX/SASS/framework compatibility, H100 execution, SIMT, memory, timing, precision, Tensor Cores, roofline, and NCCL.
 - AC-002: It adds practical compatibility, scheduling/tail, and read-only health evidence without reconfiguring the GPU.
 - AC-003: Blackwell and later behavior is clearly comparative and not part of the runnable H100 contract.
+- AC-004: Lesson 1 introduces an H100 SXM 80 GB overview containing only SMs,
+  L2 and HBM before the single-SM diagram. Explain GPC/TPC/SM/SMSP containment,
+  grid/block/warp/thread grouping, enabled hardware counts and resource-limited
+  residency without equating threads with cores or launch size with concurrency.
+  Distinguish the 32-block hardware ceiling from the two-block thread-capacity
+  limit for 1,024-thread blocks, with a block-size comparison and explicit
+  register/shared-memory qualifications. Define resident work through concrete
+  SM placement, reserved registers/shared memory and a waiting-versus-executing
+  warp example; distinguish residency from simultaneous instruction execution.
 
 #### Negative Criteria
 
@@ -292,8 +303,9 @@ topic summaries or unexplained lab code.
 
 #### Acceptance Criteria
 
-- AC-001: Every lesson provides a substantive conceptual opening, prerequisite
-  bridge, purpose, mental model and mechanism. Its linked labs preserve the
+- AC-001: Every lesson states its objective first, then provides a substantive
+  How it works explanation and a concise final mental model. Integrate useful
+  prerequisite connections and purpose into the explanation. Its linked labs preserve the
   H100-specific consequences, concrete examples, trade-offs, evidence
   interpretation, failure analysis and review prompts as applied instruction.
   Moving applications never removes prerequisite definitions from lessons.
@@ -316,7 +328,7 @@ topic summaries or unexplained lab code.
 - AC-006: Runnable lab capabilities, diagrams, learner guides, glossary and
   exercises remain complete and reachable in HTML. A file existing on disk
   alone does not establish integration.
-- AC-009: Every course opens with substantive beginner-accessible what/why/how explanations, a complete contextual workflow diagram, defined vocabulary, a small worked example and a clear beginner-to-advanced route before advanced requirements. LLM Training explains learning through parameter updates; Inference explains using fixed parameters to generate outputs. Practical introductory exercises use existing labs where sufficient and small CPU/H100 PyTorch mechanics where needed.
+- AC-009: Every course opens with substantive what/why/how explanations accessible without prior subject expertise, a complete contextual workflow diagram, defined vocabulary and a small worked example before advanced requirements. Use one prerequisite-based learning sequence throughout the catalog; omit separate routes or filler commentary for new learners and experienced engineers. LLM Training explains learning through parameter updates; Inference explains using fixed parameters to generate outputs. Practical introductory exercises use existing labs where sufficient and small CPU/H100 PyTorch mechanics where needed.
 - AC-010: Useful topics from supplied compact reference material are integrated into their owning course: concepts stay in lessons and applied procedures belong in linked labs, with disputed terminology refined against official sources. Reference comparisons and coverage inventories remain outside learner publications. The compact GPU overview distinguishes physical memory/SM resources from logical grids, blocks, warps and threads; SM subpartitions are not whole-GPU quadrants.
 - AC-008: Each course follows a prerequisite-first lesson sequence from entry
   concepts through practical mechanisms to an integrative capstone. Introduce
@@ -326,7 +338,9 @@ topic summaries or unexplained lab code.
 
 - AC-011: Consolidate repeated full topics or experiments that teach the same objective without adding a distinct competency. Preserve useful refreshers, previews, deeper applications, controls and capstone assessments, explicitly explaining the added purpose. Carry every unique explanation, safety check and practical capability into the retained owner before removing a duplicate.
 
-- AC-012: Every lesson introducing a core technology or concept begins with a plain-English definition before objectives, applications, use cases or optimization advice. Apply the same rule at the first substantive introduction of each new technique, technology or subtopic within a lesson, practical guide or optional study entry. Explain what kind of thing it is, its basic operation and essential components, expand important acronyms on first use, and distinguish easily confused concepts. A previously taught prerequisite may receive a brief contextual reminder; a passing reference need not repeat a full explanation. Existing substantive course-entry explanations may satisfy the opening; a glossary link, acronym expansion or statement of benefits alone does not. Preserve the detailed mechanisms, worked examples and labs after each definition.
+- AC-012: After the initial Objective, every lesson begins How it works with a plain-English definition before applications, use cases or optimization advice. Apply definition-before-application at each new topic within lessons, guides and optional study. Explain what it acts on, its components, causal steps and result; expand unfamiliar abbreviations such as Parallel Thread Execution (PTX) at first meaningful use, without requiring expansions of common CPU/GPU terms. Connect prerequisites in prose without standalone Prerequisite bridge, Recall or Why it matters fields. Preserve substantive course-entry explanations, mechanisms, examples and labs; a glossary link, acronym expansion or statement of benefits alone does not suffice.
+
+- AC-014: All lesson titles describe their central subject rather than listing technologies or implementation components. Syllabus, lesson links and generated navigation use the same title. How it works includes at least one accessible diagram that explains the lesson's core mechanism, with explicit arrow/containment/comparison meaning and adjacent prose. Mental model comes last and introduces no unexplained concept.
 
 - AC-013: Each course ends with an optional self-study section without a displayed research-review date introducing current technologies and advanced concepts through concise plain-English descriptions, a concrete study question, official public references, and explicit hardware/maturity boundaries. Distinguish recent developments from established advanced ideas; researched documentation does not qualify dependencies or target execution. Preserve required lessons, labs and guided hours.
 
@@ -346,6 +360,11 @@ terminology and formatting, precise units and agreement with the supplied code.
 Inspect topic introductions within those materials as well as lesson openings:
 before its first application, a learner must be able to explain what the new
 concept is and how its essential parts relate.
+
+For each How it works section, follow the causal sequence from its starting condition to
+its result. Check that the prose identifies the acting components, explains
+dependencies and completion, and introduces the quantities used in examples.
+Review diagram arrows and captions against that same sequence.
 
 #### Test Method
 
@@ -410,7 +429,7 @@ experiment, outputs and transferable lesson before running or adapting it.
   owning lab. Consolidate only actual duplication with that guide; retain
   distinct calculations, qualifications, controls and advanced extensions.
   Shared labs separate initial practice from later prerequisite-gated revisits.
-  Lessons finish with exact linked lab titles, with no parallel applied
+  Lessons include exact linked lab titles before their final Mental model, with no parallel applied
   sections. Conceptual figures remain with theory; applied figures move with
   their lab context, with one explicit primary home and working cross-links.
 

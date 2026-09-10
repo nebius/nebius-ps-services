@@ -26,22 +26,22 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 | Lesson | Topic | Competency to build | Practice at this stage |
 | --- | --- | --- | --- |
-| 1 | Understand model training and its learning objective | Distinguish training objectives and identify which parameters should change | Lab 32 learning mechanics; read-only previews: Labs 01, 05–07 |
-| 2 | Build causal batches with tokens, labels, masks, and packing | Construct labels, causal boundaries and valid-token accounting correctly | Lab 25 planning/mask checks; inspect Lab 13, whose loss/gradient checks follow Lesson 4 |
-| 3 | Trace a decoder-only transformer | Trace token tensors through attention and feed-forward layers to logits | Inspect Lab 01 forward shapes; full execution in Lesson 4 |
-| 4 | Execute a correct training step | Connect loss, gradients and optimizer state in one valid update | Labs 01 and 13; revisit Lab 25 mask structure; preview Lab 02 |
-| 5 | Evaluate, checkpoint, and resume exactly | Restore every state component needed for an equivalent continuation | Lab 24 |
-| 6 | Build a training memory ledger | Attribute peak memory to persistent state and transient activations | Inspect Lab 21's memory accounting; run precision variants in Lesson 7 |
-| 7 | Use BF16, FP16, and FP8 without losing the signal | Select formats while preserving finite gradients and useful learning signal | Lab 21; optional qualified Lab 22 |
-| 8 | Trade accumulation and recomputation for memory | Distinguish effective-batch accumulation from activation recomputation | Labs 02 and 14 as separate matched-work comparisons |
-| 9 | Prevent input-pipeline starvation | Diagnose GPU starvation without changing which samples are consumed | Lab 26 |
-| 10 | Profile fused operations and CUDA Graphs in training | Optimize a stable local update using fusion, compilation and graph replay | Lab 30 operator profile, then Lab 27 |
-| 11 | Choose DDP and FSDP2 from state placement | Choose replicated or sharded state and normalize distributed gradients | Labs 00, 03, 04 |
-| 12 | Understand TP, PP, CP, and EP mechanics | Trace tensor, pipeline, context and expert partitioning on bounded examples | Labs 12, 19, 29 |
-| 13 | Overlap communication with useful backward work | Explain when ready gradients can communicate alongside useful backward work | Lab 28 readiness, then Lab 33 real DDP buckets/hooks |
-| 14 | Perform SFT and LoRA with explicit savings | Apply supervision and adapter parameterization with explicit memory accounting | Labs 05, 13 |
-| 15 | Understand GRPO objective and system loop | Explain grouped reward, policy ratios and the rollout-to-update loop | Labs 06, 07 |
-| 16 | Deliver a causal training optimization report | Connect step evidence and one controlled change to a scoped decision | Reuse Lab 30 profiling skills; profile Lab 31's matched workload separately; run the Lab 31 campaign; optional matmul-only utilization, not full-model MFU |
+| 1 | Model learning and training objectives | Distinguish training objectives and identify which parameters should change | Lab 32 learning mechanics; read-only previews: Labs 01, 05–07 |
+| 2 | Causal training data | Construct labels, causal boundaries and valid-token accounting correctly | Lab 25 planning/mask checks; inspect Lab 13, whose loss/gradient checks follow Lesson 4 |
+| 3 | Decoder architecture and information flow | Trace token tensors through attention and feed-forward layers to logits | Inspect Lab 01 forward shapes; full execution in Lesson 4 |
+| 4 | The parameter-update lifecycle | Connect loss, gradients and optimizer state in one valid update | Labs 01 and 13; revisit Lab 25 mask structure; preview Lab 02 |
+| 5 | Training evaluation and recovery | Restore every state component needed for an equivalent continuation | Lab 24 |
+| 6 | Training memory and state lifetimes | Attribute peak memory to persistent state and transient activations | Inspect Lab 21's memory accounting; run precision variants in Lesson 7 |
+| 7 | Numerical precision in training | Select formats while preserving finite gradients and useful learning signal | Lab 21; optional qualified Lab 22 |
+| 8 | Memory savings through accumulation and recomputation | Distinguish effective-batch accumulation from activation recomputation | Labs 02 and 14 as separate matched-work comparisons |
+| 9 | Training input readiness | Diagnose GPU starvation without changing which samples are consumed | Lab 26 |
+| 10 | Training execution optimization | Optimize a stable local update using fusion, compilation and graph replay | Lab 30 operator profile, then Lab 27 |
+| 11 | Distributed training-state ownership | Choose replicated or sharded state and normalize distributed gradients | Labs 00, 03, 04 |
+| 12 | Model partitioning and communication | Trace tensor, pipeline, context and expert partitioning on bounded examples | Labs 12, 19, 29 |
+| 13 | Gradient readiness and communication overlap | Explain when ready gradients can communicate alongside useful backward work | Lab 28 readiness, then Lab 33 real DDP buckets/hooks |
+| 14 | Parameter-efficient adaptation | Apply supervision and adapter parameterization with explicit memory accounting | Labs 05, 13 |
+| 15 | Reward-guided policy optimization | Explain grouped reward, policy ratios and the rollout-to-update loop | Labs 06, 07 |
+| 16 | Evidence-based training optimization | Connect step evidence and one controlled change to a scoped decision | Reuse Lab 30 profiling skills; profile Lab 31's matched workload separately; run the Lab 31 campaign; optional matmul-only utilization, not full-model MFU |
 
 ## Readiness checkpoints
 

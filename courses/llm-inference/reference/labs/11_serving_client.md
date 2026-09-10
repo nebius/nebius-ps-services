@@ -4,11 +4,13 @@ A serving system's performance includes request handling and completion delivery
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 6–7 for HTTP/JSON, bounded client threads, endpoint readiness, completion latency and shared-interval throughput. Reuse Lessons 1–5 for artifact, sampling and workload identity. The Lesson 6 visit inspects lifecycle; first measure requests after Lesson 7.
+**Theory preparation:** Read Lessons 6–7 for HTTP/JSON, client/server boundaries, endpoint readiness, completion latency and shared-interval throughput. Reuse Lessons 1–5 for artifact, sampling and workload identity. The Lesson 6 visit inspects lifecycle; first measure requests after Lesson 7.
 
 Qualify the vLLM container, model, and client environment. The supplied launcher owns server startup, readiness, client execution, metric snapshots, and cleanup. Teaching HTTP remains loopback-only; no public endpoint is required.
 
 ## Concepts and code path
+
+A bounded thread pool overlaps blocking HTTP requests. Requests use a 120-second timeout. Request errors abort the run, and every response must report a positive completion-token count before results are written.
 
 The client schedules requests with a concurrency limit, records completion durations, and counts generated tokens returned by the service. The campaign wall clock supports aggregate requests/s and output tokens/s. This nonstreaming route does not expose the first token's arrival time or individual token intervals.
 

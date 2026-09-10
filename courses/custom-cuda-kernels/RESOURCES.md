@@ -22,3 +22,4 @@
 - [CMake CUDA architectures](https://cmake.org/cmake/help/latest/prop_tgt/CUDA_ARCHITECTURES.html)
 - [CMake CUDA architecture initialization](https://cmake.org/cmake/help/latest/variable/CMAKE_CUDA_ARCHITECTURES.html)
 - [Slurm sbatch](https://slurm.schedmd.com/sbatch.html)
+- [PTX and target-specific code generation](https://docs.nvidia.com/cuda/parallel-thread-execution/)

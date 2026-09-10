@@ -12,17 +12,17 @@ from test_course_review_fixes import load_lab
 def test_first_lesson_has_substantive_beginner_entry(course):
     builder = load_builder()
     _, _, lessons = builder.parse_course(ROOT / course / "COURSE.md")
-    entry = lessons[0]["Start here"]
+    entry = lessons[0]["How it works"]
     assert len(entry.split()) >= 350
     assert all(term in entry for term in ("### What", "### Why", "### How", "### Try"))
     rendered = builder.lesson_markup(lessons[0], 1)
-    assert rendered.index("Start here") < rendered.index("Objective")
+    assert rendered.index("Objective") < rendered.index("How it works")
     assert builder.block(entry) in rendered
     manifest = json.loads(
         (ROOT / course / "reference/visual-manifest.json").read_text()
     )
     assert any(
-        row["lessons"][0] == 1 and row["after"] == "Start here"
+        row["lessons"][0] == 1 and row["after"] == "How it works"
         for row in manifest["diagrams"]
     )
 
@@ -39,16 +39,16 @@ def test_training_intro_changes_weight_and_improves_held_out_predictions():
     assert result["weight_after_inference"] == result["final_weight"]
 
 
-def test_validator_tracks_optional_intro_diagram_without_requiring_it_everywhere():
+def test_validator_tracks_explanation_diagram_inside_its_section():
     with load_lab("tools/validate_course_template.py") as module:
         parser = module.Parser()
         parser.feed(
             '<section class="lesson" id="entry">'
-            '<div class="start-here">Beginner explanation</div>'
-            '<figure id="detail-entry"></figure></section>'
+            '<div class="how-it-works">Beginner explanation'
+            '<figure id="detail-entry"></figure></div></section>'
         )
-        assert parser.figures["detail-entry"] == ("lesson:1", "start-here")
-        assert "start-here" not in module.LESSON_CLASSES
+        assert parser.figures["detail-entry"] == ("lesson:1", "how-it-works")
+        assert "how-it-works" in module.LESSON_CLASSES
 
 
 def test_inference_intro_has_fixed_weights_and_explicit_stopping():
@@ -90,7 +90,11 @@ def test_reference_bridges_are_explained_not_just_named():
         "gpu-fundamentals": ("memory-controller activity", "one-second"),
         "llm-training": ("stochastic rounding", "HFU", "recomputation"),
         "llm-inference": ("radix tree", "EAGLE", "Medusa", "GenAI-Perf"),
-        "custom-cuda-kernels": ("host-facing API", "source package", "consumer"),
+        "custom-cuda-kernels": (
+            "host-facing application programming interface (API)",
+            "source package",
+            "consumer",
+        ),
     }
     for course, terms in requirements.items():
         content = (ROOT / course / "COURSE.md").read_text()

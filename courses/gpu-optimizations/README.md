@@ -67,10 +67,6 @@ sbatch slurm/single_gpu.sbatch labs/01_timing_basics.py --profile smoke
 Use the Nsight launchers only after the baseline and question are frozen. The
 two-node launcher supports preflight, the Lab 17 PyTorch communication sweep, distributed scaling and overlap. Lab 18 uses the separate MPI-aware `slurm/nccl_tests.sbatch` launcher after the external NVIDIA NCCL Tests build has been qualified. Start with default transport selection, collect separate diagnostic and timing runs, and change only one job-local factor. RDMA and GPUDirect RDMA experiments are conditional; the course never configures the fabric.
 
-## Begin with the concepts
-
-Start with the first lesson's **Start here** section and its inline workflow diagram. It defines the subject and essential vocabulary, explains why it is useful, and walks through a small example before advanced engineering details. Follow the syllabus checkpoints for the beginner route; experienced readers can use those checkpoints to identify what they already understand.
-
 ## Continue learning
 
 After the core course, use [Where to Go Next](NEXT-STEPS.md) for optional

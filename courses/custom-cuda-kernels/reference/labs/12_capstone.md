@@ -6,7 +6,7 @@ Both paths compute `tanh(1.25*x + 0.5)` for each input element. An affine transf
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 14 for affine/tanh fusion, independent trials, counterbalanced order and acceptance limits. Lessons 3–5 supply references, tolerances, FMA/rounding and the traffic ledger; Lessons 4 and 9 supply sanitizer/profiler/resource checks. Freeze the supplied expression before the campaign.
+**Theory preparation:** Read Lesson 14 for a complete acceptance report and Lesson 5 for fusion and rounding. The affine/tanh fixture, reference and byte accounting are explained below.
 
 Use the completed SM90 build and one H100. Prepare the benchmark worksheet with the exact expression, FP32 tolerance, workload sizes, and acceptance metric. Sanitizer and profiler checks are separate required activities, not implied by the timing program.
 

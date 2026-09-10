@@ -4,13 +4,13 @@ Gradient readiness only creates an opportunity for overlap; DDP must group gradi
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 11–13 for DDP state, bucket readiness, communication hooks/futures, averaging, FP16/BF16 payloads and PowerSGD factors, error feedback and warm start. Reuse Lesson 7’s whole-state error checks and Lesson 13’s Tanh/SGD explanation. Complete Lab 28 and network qualification before the real-bucket trials.
+**Theory preparation:** Read Lessons 11–13 for DDP, gradient readiness, communication hooks, averaging and lossy compression. Reuse Lesson 7's relative L2 concept. Complete Lab 28 and network qualification before these trials.
 
 Complete Lessons 11–13, Lab 28's readiness model and the Optimizations networking workshop. Use the existing two-node launcher with one full H100 per node. The PyTorch 2.14 manifest remains the target; clean target qualification is separate. BF16 communication requires a supported NCCL newer than 2.9.6 and is an experimental framework API. No datasets or model downloads are needed. A pair of one-GPU nodes cannot demonstrate intra-node NVLink behavior.
 
 ## Concepts and code path
 
-The source constructs four Linear/Tanh stages in FP32, with 256-wide smoke or 1024-wide h100 layers. Both ranks generate the same global synthetic data from a fixed generator, then train on equal disjoint halves. MSE uses a mean, so averaging rank gradients matches the full global-batch objective. A copied reference model trains on the complete batch with plain SGD.
+The fixture has four FP32 Linear/Tanh stages, 256-wide for smoke and 1024-wide for h100. Tanh is the smooth hyperbolic tangent, bounded between -1 and 1. Each rank trains on an equal disjoint half of the same generated global batch. MSE uses a mean, so averaged rank gradients match the full-batch objective. Candidate and reference use plain SGD: `parameter -= learning_rate * gradient`. The independent reference evolves on the complete batch.
 
 DDP receives `--bucket-cap-mb` and exactly one registered hook. The hook wrapper logs public GradBucket indices and uncompressed bytes before delegating to the framework's averaging, FP16, BF16 or PowerSGD implementation. Those bytes describe original gradients, not network traffic. Buckets can rebuild during startup. PowerSGD uses error feedback and warm start; `--power-start` must be at least two, and warm-up must include a compressed step. The default start of two is a short mechanics setting, not a recommendation for real training.
 
@@ -43,6 +43,8 @@ sbatch slurm/nsys_ddp.sbatch --hook allreduce --bucket-cap-mb 0.1 --warmup 2 --i
 Reports are retained under a unique private `results/nsys-ddp-*` directory, one report per node. Correlate the measured-step ranges across both reports. An unavailable profiler leaves only this diagnostic gate pending.
 
 ## Check your results
+
+The bucket capacity is a hint. Inspect actual uncompressed bucket sizes after warm-up and rebuilding before interpreting communication timing.
 
 Inspect `trajectory` for every startup and measured step: candidate/reference global mean loss, gradient/parameter trajectory relative L2 error and `observed_buckets`. Require finite values, nonempty bucket observations and verified SGD updates. The allreduce result additionally requires `rtol=1e-5, atol=1e-6` agreement. Compression deliberately has no fabricated universal quality tolerance: `quality_status` stays pending for task convergence.
 

@@ -2,9 +2,13 @@
 
 This course builds the hardware and system model needed to explain GPU behavior before changing code. Every conclusion must connect workload shape, H100 resources, and measured evidence.
 
-## 1. Separate CPU work, GPU work, and orchestration
+## 1. CPU–GPU cooperation
 
-**Start here**
+**Objective**
+
+Decide which work belongs on the CPU, which belongs on the GPU, and where launch or transfer overhead dominates.
+
+**How it works**
 
 ### What this course is about
 
@@ -22,87 +26,158 @@ The CPU remains a good choice for small jobs, branch-heavy control logic, irregu
 
 The CPU is the host and the GPU is the device. Host RAM and the H100's high-bandwidth memory, or HBM, are distinct storage resources in the discrete-device model used here. A kernel is a function executed by GPU threads. A launch submits that work; it is not the same thing as copying its input data. A stream is an ordered queue of device work. PyTorch uses the tensor's device and the available implementation to dispatch an operation: CPU tensors use a CPU path; CUDA tensors use a GPU path when supported. Moving a tensor with `to("cuda")` transfers its data; it does not move the Python interpreter onto the GPU.
 
-The overview below separates two kinds of hierarchy. Physically, HBM/global allocations and the device-wide L2 cache serve many streaming multiprocessors (SMs). Each SM contains execution resources, registers and a unified L1/shared-memory resource. L1 caches data automatically; shared memory is explicitly managed temporary storage for cooperating threads in a block. They are not successive compulsory stops for every memory access. Logically, a launch creates a grid of blocks, each block contains threads, and groups of 32 threads form warps. The hardware schedules these groups onto SM resources. NVIDIA's four SM subpartitions are subdivisions inside one SM, not four quadrants of the whole GPU. Later lessons zoom into each relationship.
+### GPU architecture: based on H100 GPU
 
-A preflight is a small readiness check before an experiment. The driver connects the operating system to the GPU; the CUDA runtime supplies services such as allocation and launches; a compiler translates source into executable code. They are separate components, so their version numbers need not be identical. Use the environment setup and Lab 10 to check the allocated device and the framework's CUDA path before timing. `nvidia-smi` reports device/driver information, while a framework query reports the runtime it uses; neither alone proves that a source compiler is installed. Lesson 2 develops compilation and compatibility in detail.
+Start with three resources: **SMs compute, L2 caches, and HBM stores the large data set**. An SM (streaming multiprocessor) runs groups of GPU threads. L2 is an on-chip cache shared across SMs; it retains data to reduce requests to HBM. HBM (high-bandwidth memory) holds inputs, outputs and other large allocations. The first diagram shows just these three resources. It is a simplified data-access map, not a silicon floorplan or a sequence that every access must traverse.
 
-An elementwise operation applies a formula independently at each tensor position; multiplication followed by addition is a small example. A reference computes the intended answer so timing cannot reward missing or changed work. Floating-point arithmetic rounds values, so numerical acceptance needs a declared tolerance. Absolute tolerance permits a fixed difference near zero; relative tolerance scales with the reference magnitude. The elementwise rule is `abs(candidate - reference) <= atol + rtol * abs(reference)`. With reference 2, `atol=1e-6` and `rtol=1e-5`, the allowance is `2.1e-5`. Check all required outputs and reject non-finite values when the operation requires finite results. Pure copies of fixed values can instead require exact equality. A finite result alone does not establish agreement with a reference.
+Use the **H100 SXM 80 GB** as a concrete example. Its enabled resources differ from the H100 PCIe 80 GB, which has 114 SMs, and from the full GH100 die design, which has 144. The numbers below describe the SXM product, not every H100 allocation.
 
-Slurm is the workload manager that assigns cluster resources to jobs. The supplied `sbatch` commands submit batch scripts that run the lab inside an allocation; they do not run GPU work directly on the login host. Use the course environment and the allocated device reported by preflight. A smoke profile selects a smaller test workload, not a different proof of correctness or a CPU substitute. The runbook supplies the exact setup and launch procedure.
+| Physical resource | H100 SXM 80 GB |
+| --- | --- |
+| GPCs | 8 |
+| TPCs | 66 enabled in total; 2 SMs per TPC |
+| SMs | 132 |
+| SM subpartitions | 4 per SM; 528 in total |
+| 32-bit floating point (FP32) CUDA cores | 128 per SM; 16,896 in total |
+| Fourth-generation Tensor Cores | 4 per SM; 528 in total |
+| L2 cache | 50 MB |
+| HBM | 80 GB HBM3 |
 
-### Try a small example and choose your route
+### Hardware hierarchy: GPC → TPC → SM → SMSP
+
+Each arrow here means **contains**. GPC stands for **graphics processing cluster**; NVIDIA's Hopper architecture description also calls it a GPU processing cluster. TPC means **texture processing cluster**. These historical names describe groups of hardware even when the GPU is doing numerical computation. A GPC contains TPCs, each TPC contains two SMs, and each H100 SM contains four **SM subpartitions (SMSPs)**. The 66 enabled TPCs are a device total; dividing by eight does not describe an identical layout in every GPC.
+
+Each SMSP has a warp scheduler, registers and execution units. A scheduler chooses ready work; registers hold working values. FP32 CUDA cores perform ordinary single-precision arithmetic, while Tensor Cores perform supported matrix operations. They are physical execution units, not software threads. Level-one (L1) caching and explicitly managed shared memory share a resource within each SM. Shared memory is temporary storage for cooperating threads, not an obligatory stage between L2 and registers. The second diagram enlarges one SM to show these details.
+
+### Work hierarchy: grid → blocks → warps → threads
+
+A **thread** is one execution of the kernel with its own index and working values. A **block** contains threads that can cooperate, and a **grid** contains all blocks in one kernel launch. Within each block, hardware groups consecutive threads into **warps of 32**. Thus the programming hierarchy is grid → blocks → threads; including execution grouping gives grid → blocks → warps → threads. A thread does not contain warps. A partial final warp has unused lanes, and a warp never combines threads from different blocks.
+
+| Logical work or residency limit | H100, compute capability 9.0 |
+| --- | --- |
+| Grid | One per kernel launch; block count is chosen for the workload |
+| Threads per block | Up to 1,024, equivalent to 32 full warps |
+| Threads per warp | 32 |
+| Resident warps per SM | Up to 64, equivalent to 2,048 resident threads |
+| Resident blocks per SM | Up to 32; at most 2 with 1,024 threads per block. Other resource limits can reduce these counts |
+| Resident work across 132 SMs | At most 8,448 warps or 270,336 threads |
+
+Here, a block is **resident on an SM** when the GPU has placed it on that SM and reserved register space for its threads, plus any shared memory the block needs. The SM keeps their register values and tracks where they are in the kernel.
+
+For example, one resident warp may be waiting for a memory read while a scheduler lets another ready warp execute. Both remain resident. Therefore, **2,048 resident threads** means the SM can keep track of that many threads at once; their warps share the execution units over time rather than all executing an instruction in the same clock cycle. The thread, warp and block limits all apply together.
+
+A block's size is chosen by the program; it does not always contain 1,024 threads. With 1,024 threads per block, the 2,048-thread capacity allows at most 2 blocks per SM: 2,048 / 1,024 = 2. Each block uses 32 warps, so two blocks also reach the 64-warp limit. Smaller blocks can allow more blocks to reside together, up to the separate 32-block ceiling.
+
+| Threads per block | Upper bound on resident blocks per SM |
+| --- | --- |
+| 1,024 | 2 |
+| 512 | 4 |
+| 256 | 8 |
+| 128 | 16 |
+| 64 | 32 |
+| 32 | 32; the block-count limit applies |
+
+These bounds apply only the thread, warp and block limits. Register and shared-memory requirements can reduce how many blocks fit. For these block sizes, all of which are multiples of 32, calculate the smaller of 32 and 2,048 divided by the threads per block. At 32 threads per block, 32 resident blocks use only 1,024 threads: reaching the block limit does not necessarily fill the thread capacity. Smaller blocks therefore do not automatically keep more warps resident or improve performance.
+
+The grid can be much larger than the resident work: pending blocks wait for resources, so a GPU has no fixed lifetime total of grids, blocks or threads.
+
+For example, one kernel processing 1,048,576 values with one thread per value and 256 threads per block launches **one grid of 4,096 blocks**. Each block has 8 warps, giving 32,768 warps over the whole launch. Even if no other resource limits apply, the 2,048-thread limit permits only 8 such blocks per SM, or 1,056 across this GPU at once. The remaining blocks run as resources become available. This arithmetic describes work coverage and an upper bound, not a measured schedule.
+
+The overview and enlargement below connect the two hierarchies: blocks are placed on SMs, their warps use SMSP execution resources, and the SMs access data through the memory system. Lesson 3 develops scheduling in more detail; Hopper's optional thread-block clusters are introduced later as an additional grouping, not a requirement for an ordinary launch.
+
+### Execution and dependencies
+
+Start with ordinary program latency: a result is ready only after every required stage finishes. GPU execution adds explicit submission, transfer, device-execution, and synchronization stages to that familiar critical path.
+
+Follow one calculation from the application to its result. The CPU prepares the input and asks CUDA to run a kernel. CUDA submits the request to a stream, which keeps device operations in order. The GPU executes the kernel when its dependencies and resources allow. The CPU can continue before that execution finishes: returning from the launch means the work was submitted, not that the answer is ready.
+
+Where the data starts and where the answer is needed determine how much work this request involves. If the input is in host RAM, it must be copied to GPU memory before the kernel uses it. If the CPU needs the output, that output must be copied back after the kernel finishes. If the next operation also runs on the GPU, the output can stay there and become its input.
+
+This gives three useful timing comparisons:
+
+- **CPU time:** start before the CPU calculation and stop when its result is ready.
+- **Resident GPU time:** the inputs are already in GPU memory, and the result stays there. Measure the required device work through its completion. This isolates the computation from host-device transfer costs.
+- **Transfer-inclusive GPU time:** start with inputs on the CPU and stop when the CPU can use the returned result. Include the input copy, launch, device work, output copy and any required waiting.
+
+A timer stopped immediately after submission misses unfinished GPU work. A completed-work measurement waits for the result required by its chosen comparison. Lesson 8 explains how streams, events and synchronization establish that stopping point.
+
+Batching sends more useful work with each launch, so the launch cost is shared across more items. It can improve throughput, but collecting a batch may make an individual request wait longer and requires storage for more inputs and temporary results. Keeping data on the GPU across several operations can avoid paying the transfer cost each time.
+
+“The GPU is faster” is not an engineering rule. A GPU wins when enough independent work amortizes fixed overhead and when data can stay resident long enough to avoid repeated host-device movement. Interactive latency and batch throughput can therefore prefer different placements.
+
+### Try a small example
 
 Suppose a CPU operation takes 2 milliseconds. A resident GPU operation takes 0.3 milliseconds, but uploading inputs and obtaining the result add 3 milliseconds. For this hypothetical one-shot request the GPU path takes 3.3 milliseconds, so the CPU wins. If ten dependent operations keep intermediate data on the GPU, the same total transfer cost plus ten 0.3-millisecond operations is 6 milliseconds, compared with ten 2-millisecond CPU operations. These are teaching assumptions, not H100 measurements.
-
-Start with the compatibility check, then Lab 01 compares CPU, resident-GPU and transfer-inclusive execution of the same formula. Explain what each timer includes before interpreting a speedup. New learners then follow the software, execution and memory lessons in order. Experienced engineers can use this checkpoint: explain a launch versus a copy, a block versus an SM, and why keeping intermediate data resident can change the device decision.
-
-**Objective** Decide which work belongs on the CPU, which belongs on the GPU, and where launch or transfer overhead dominates.
-
-**Prerequisite bridge** Start with ordinary program latency: a result is ready only after every required stage finishes. GPU execution adds explicit submission, transfer, device-execution, and synchronization stages to that familiar critical path.
-
-**Why it matters** “The GPU is faster” is not an engineering rule. A GPU wins when enough independent work amortizes fixed overhead and when data can stay resident long enough to avoid repeated host-device movement. Interactive latency and batch throughput can therefore prefer different placements.
-
-**Mechanism** Separate three boundaries before comparing devices. CPU time includes the complete CPU operation. Resident GPU time assumes inputs and outputs are already on the device and measures only required device work. Transfer-inclusive GPU time includes copies, launches, synchronization, and result access. The CPU dispatches asynchronous commands into a stream; the driver and runtime enqueue work; the device executes later. Batching increases parallel work per launch, but it also increases queueing delay, temporary memory, and the amount of work tied to one completion point. Before the first benchmark, use warm-up runs to initialize the path without including setup in steady-state samples. A CUDA event is a marker placed in the device's work queue: record start and end around the selected device work and wait for the end before reading elapsed time. For a transfer-inclusive host measurement, wait for earlier work before starting the clock and for the requested result before stopping it. Repeat the experiment and compare distributions, not a single sample. These are the basic timing rules; Lesson 8 expands streams, copies and overlap.
-
-**Recall** A GPU is not a faster serial CPU; what workload property lets thousands of threads make progress together?
-
-**Mental model** The CPU schedules and prepares work while the GPU executes wide batches of similar operations. Transfers and kernel launches are explicit boundaries, so small jobs can spend more time crossing boundaries than computing.
 
 **Practice labs**
 
 - [Lab 01: Find the CPU–GPU crossover for vector work](reference/labs/01_cpu_gpu_crossover.md)
 - [Lab 10: Identify the software layer behind GPU execution](reference/labs/10_compatibility_stack.md)
 
-## 2. Read the driver, runtime, toolkit, PTX, SASS, and framework stack
+**Mental model**
 
-**What it is** The GPU software stack is the set of layers that turns an application into work the device can execute. A driver lets the operating system and programs communicate with the GPU. The CUDA runtime provides callable services—an application programming interface (API)—for allocating memory, submitting work and checking completion. The CUDA Toolkit supplies development tools, including the compiler that translates source code. PyTorch sits above these layers and selects implementations for tensor operations. A Python wheel is an installable package; it may bundle runtime libraries without including the full toolkit.
+The CPU schedules and prepares work while the GPU executes wide batches of similar operations. Transfers and kernel launches are explicit boundaries, so small jobs can spend more time crossing boundaries than computing.
 
-PTX is an intermediate GPU instruction language; SASS is target-specific machine code. A cubin contains compiled device code, while a fat binary can carry code for multiple targets. Just-in-time (JIT) compilation translates code when needed at load or execution time. Compute capability names a GPU's hardware feature level, not its driver or toolkit version. These separate meanings explain why matching one version number does not establish compatibility.
+## 2. GPU execution software layers
 
-**Objective** Explain which layer owns compilation, loading, compatibility, and execution.
+**Objective**
 
-**Prerequisite bridge** Lesson 1 identified a software boundary between submitted work and device execution. This lesson names every layer at that boundary so a version string or error can be assigned to an owner.
+Explain which layer owns compilation, loading, compatibility, and execution.
 
-**Why it matters** CUDA failures are often “repaired” at the wrong layer. Installing a local toolkit cannot fix an insufficient kernel-mode driver, and a new driver does not make a Python package contain missing CUDA libraries or kernels for the correct architecture.
+**How it works**
 
-**Mechanism** The kernel-mode NVIDIA driver controls the device. User-mode CUDA driver APIs load modules and launch kernels. A framework wheel may bundle a CUDA runtime and libraries independently of any developer toolkit installed on the host. `nvcc` compiles CUDA C++ into PTX, cubins, or a fat binary containing several targets. PTX is a virtual instruction representation that a compatible driver may JIT for a GPU; SASS is the final architecture-specific machine instruction stream. A prebuilt wheel can therefore execute without a local `nvcc`, while building an extension requires a compatible compiler and headers. DMA means direct memory access: a transfer engine moves data without CPU instructions copying each byte.
-A matrix product combines a row of one matrix with a column of another by multiplying corresponding entries and summing them. Multiplying shapes M×K and K×N produces M×N values; `[1, 2]` times the column `[3, 4]` produces 11. GEMM is the general matrix-multiplication operation, commonly written `C = alpha*A*B + beta*C`, with alpha and beta scaling its contributions. Here matrix multiplication combines rows and columns; later Python expressions use `@` for that operation and `*` for elementwise multiplication. The product alone costs approximately `2*M*N*K` floating-point operations under the usual multiply-plus-add convention. A projection applies such a matrix to change feature coordinates. Adding a length-N bias to each output row uses broadcasting: the same bias values apply across rows without requiring a separately authored row for each input.
+The GPU software stack is the set of layers that turns an application into work the device can execute. A driver lets the operating system and programs communicate with the GPU. The CUDA runtime provides callable services—an application programming interface (API)—for allocating memory, submitting work and checking completion. The CUDA Toolkit supplies development tools, including the compiler that translates source code. PyTorch sits above these layers and selects implementations for tensor operations. A Python wheel is an installable package; it may bundle runtime libraries without including the full toolkit.
 
-Lab 08 composes a projection, LayerNorm, bias, GELU and a reduction. Layer normalization (LayerNorm) subtracts the mean of a selected feature vector and divides by the square root of its variance plus a small positive epsilon; it can also apply learned scale and offset. This stabilizes the vector's scale. GELU, the Gaussian error linear unit, is the nonlinear function `x*Phi(x)`, where Phi is the cumulative probability of a standard normal variable. It suppresses strongly negative inputs and approaches the identity for strongly positive ones. Applying it after a projection creates a nonlinear transformation. Squaring the resulting elements and taking their mean reduces them to one scalar, a single numerical value. This lab uses the scalar as observable work, without training a model. BF16 stores each value in 16 bits, with a wide exponent range and fewer precision bits than FP32; here it fixes the workload representation, with accuracy comparisons reserved for Lesson 9.
+Parallel Thread Execution (PTX) is an intermediate GPU instruction language; SASS is target-specific machine code. A cubin contains compiled device code, while a fat binary can carry code for multiple targets. Just-in-time (JIT) compilation translates code when needed at load or execution time. Compute capability names a GPU's hardware feature level, not its driver or toolkit version. These separate meanings explain why matching one version number does not establish compatibility.
 
-PyTorch Profiler records framework operations and their CPU/device activity. Enable CPU and CUDA collection around a warmed, bounded operation chain, then associate framework entries with the kernels they submit. Self time excludes recorded child events; inclusive time includes them. A single framework operation may dispatch several kernels, and nested entries can overlap in attribution. Use the trace to explain the chain, not to reconstruct elapsed time by summing arbitrary rows. Profiling adds overhead; Lesson 1's unprofiled timing remains the performance boundary.
+Lesson 1 identified a software boundary between submitted work and device execution. This lesson names every layer at that boundary so a version string or error can be assigned to an owner.
 
-Compute capability identifies the GPU architecture features an executable targets. H100 has compute capability 9.0. An SM90 target provides ordinary code for that architecture; an SM90a target can use architecture-accelerated features with a narrower compatibility boundary. PTX compatibility still depends on a driver able to translate the supplied representation. These target names describe code requirements, not proof that an application has executed successfully.
+Consider a PyTorch operation on a CUDA tensor. PyTorch first selects an implementation, often from a library shipped with the framework package. That implementation uses CUDA runtime or driver APIs to arrange memory and submit GPU work. The user-mode driver loads the device code, while the kernel-mode NVIDIA driver manages access to the GPU. The device then executes the loaded kernel.
 
-**Recall** Which installed component communicates with the GPU, and which component supplies the compiler and development libraries?
+The code may have been compiled long before this call. The CUDA compiler, `nvcc`, translates CUDA C++ into target-specific device code, an intermediate representation called PTX, or a fat binary containing several versions. A cubin contains compiled device code; SASS names the final machine instructions. If the package supplies suitable PTX instead of a ready machine-code version, a compatible driver can compile it just in time for the GPU.
 
-**Mental model** PyTorch calls CUDA libraries and runtime APIs; kernels are distributed as machine code or PTX; the driver loads and executes compatible code. The driver and toolkit are related but not interchangeable version numbers.
+This explains why running and building have different requirements. A prebuilt framework wheel may include the CUDA runtime, libraries and kernels it needs, so running it does not necessarily require a local `nvcc`. Building a CUDA extension does require suitable compiler tools and headers. A toolkit installation cannot replace a missing or insufficient driver, and a new driver cannot add kernels absent from the package.
+
+The target also matters. H100 has compute capability 9.0. SM90 identifies ordinary code for that architecture; SM90a allows architecture-accelerated features with narrower compatibility. A driver must understand the supplied PTX version before it can translate it. These names describe compatibility requirements; they do not demonstrate that an application ran successfully.
+
+Data copies use a related hardware path. With direct memory access (DMA), a transfer engine moves the payload after software arranges the transfer, rather than requiring CPU instructions to copy every byte.
+
+CUDA failures are often “repaired” at the wrong layer. Installing a local toolkit cannot fix an insufficient kernel-mode driver, and a new driver does not make a Python package contain missing CUDA libraries or kernels for the correct architecture.
 
 **Practice labs**
 
 - [Lab 08: Map PyTorch operations to GPU activity](reference/labs/08_operator_to_kernels.md)
 - [Lab 10: Identify the software layer behind GPU execution](reference/labs/10_compatibility_stack.md)
 
-## 3. Map H100, GPCs, SMs, warps, and Tensor Cores
+**Mental model**
 
-**What it is** A GPU has physical execution resources, while a CUDA program describes logical workers. A thread is one worker executing the kernel; a block is a group of threads that can cooperate; a grid is the collection of blocks in one launch. Threads are organized into warps of 32, and a lane is one thread's position within its warp. A streaming multiprocessor (SM) is a physical unit that hosts blocks and executes their warps. Several SMs belong to a graphics processing cluster (GPC); an SM itself contains SM subpartitions (SMSPs) with scheduling and execution resources. These are different levels, not interchangeable names for GPU quadrants.
+PyTorch calls CUDA libraries and runtime APIs; kernels are distributed as machine code or PTX; the driver loads and executes compatible code. The driver and toolkit are related but not interchangeable version numbers.
+
+## 3. GPU execution architecture
+
+**Objective**
+
+Trace a PyTorch operation down to blocks scheduled on H100 streaming multiprocessors.
+
+**How it works**
+
+A GPU has physical execution resources, while a CUDA program describes logical workers. A thread is one worker executing the kernel; a block is a group of threads that can cooperate; a grid is the collection of blocks in one launch. Threads are organized into warps of 32, and a lane is one thread's position within its warp. A streaming multiprocessor (SM) is a physical unit that hosts blocks and executes their warps. A graphics processing cluster (GPC) contains texture processing clusters (TPCs), each with two SMs on H100; an SM itself contains four SM subpartitions (SMSPs) with scheduling and execution resources. These are different levels, not interchangeable names for GPU quadrants.
 
 Tensor Cores are specialized matrix-arithmetic units within an SM. Different launches need not assign corresponding blocks to the same SM; within an ordinary launch, each block remains on its assigned SM for its lifetime. The later Triton examples use a GPU-programming language and compiler whose program instances describe cooperating work, not a different physical GPU hierarchy.
 
-**Objective** Trace a PyTorch operation down to blocks scheduled on H100 streaming multiprocessors.
+The software stack loads a kernel, but the kernel still needs a physical execution model. Reuse the grid, block, and warp vocabulary whenever later lessons discuss occupancy, divergence, memory, or Tensor Cores.
 
-**Prerequisite bridge** The software stack loads a kernel, but the kernel still needs a physical execution model. Reuse the grid, block, and warp vocabulary whenever later lessons discuss occupancy, divergence, memory, or Tensor Cores.
+A kernel launch specifies a grid of blocks. The GPU assigns a block to an SM that has enough resources for it, and the block stays on that SM until it finishes. Other blocks can run alongside it if resources permit; blocks that do not yet fit wait. The grid describes all the work in the launch, not the amount executing at one instant.
 
-**Why it matters** A high-level operator can be slow because it dispatches an unexpected kernel, launches too little parallel work, creates a partial final wave, or uses the wrong instruction path. None of those causes is visible from the Python name alone.
+Within the SM, each block's threads are grouped into warps of 32 lanes. Scheduling and execution resources are divided among the SM's four subpartitions, or SMSPs. Schedulers select ready warp instructions, which use the appropriate arithmetic, memory or matrix units. Tensor Cores execute supported matrix instructions issued by warps; they are not a separate place to assign an entire Python operation.
 
-**Mechanism** HBM feeds memory controllers and L2; work is distributed through GPU processing clusters into streaming multiprocessors. A CUDA grid contains blocks, and each block remains on one SM for its lifetime. The SM partitions warp scheduling and execution across SMSPs; warps contain 32 lanes, while Tensor Cores execute supported matrix instructions issued by those warps. Registers are logically private to threads, and the unified L1/shared-memory capacity is divided by a configurable carveout. In Triton, a program instance and `BLOCK_SIZE` are analogous scheduling choices, not new hardware levels; `num_warps` controls how many warps cooperate in a program.
-Triton is a language and compiler for writing GPU operations using blocks of array elements. A program instance describes one logical block of work; `tl.program_id(0)` identifies that instance along the first grid dimension. To cover N elements with B logical elements per program, launch `ceil(N/B)` instances and form indices `program_id*B + [0, ..., B-1]`. A mask `index < N` disables out-of-range loads and stores. For N=1003 and B=256, four programs cover 1024 logical positions and the final 21 are masked. This is ceiling division and tail masking, not permission to access the extra positions.
+Threads keep working values in registers. Cooperating threads in a block can use shared memory, while global-memory requests use the cache and high-bandwidth memory (HBM) system. H100's configurable L1 (level-one cache)/shared-memory carveout divides a shared on-chip capacity between caching and explicitly managed storage. The GPC/TPC/SM hierarchy describes hardware containment; it is not a mandatory sequence through which each byte or instruction passes.
 
-In Lab 09, `BLOCK_SIZE` chooses B and `num_warps=4` requests four cooperating warps, or 128 threads, per program. A thread can handle several logical elements, so B is not the CUDA thread count. The JIT compiler specializes the operation before the warmed measurement. Predict coverage from B, retain masks, and vary B while keeping the four-warp setting fixed; explain occupancy only after Lesson 6.
+Triton expresses work using logical blocks of array elements. A program instance handles one such block, and `num_warps` controls how many warps cooperate in it. `BLOCK_SIZE` describes logical elements, not a new hardware level or necessarily one element per thread. The instance index, `tl.program_id(0)`, selects its portion of the input.
 
-**Recall** How many threads form an NVIDIA warp?
+For N elements and B elements per program, `ceil(N/B)` instances cover the input. Each forms indices `program_id*B + [0, ..., B-1]` and masks accesses where `index < N` is false. With N=1003 and B=256, four programs describe 1024 positions; the final 21 positions must not load or store data. The mask makes the final partial block safe.
 
-**Mental model** A kernel creates a grid of thread blocks. Blocks are assigned to SMs; each block contains warps of 32 threads; warp instructions use scalar, vector, memory, and matrix pipelines according to the instruction mix.
+A high-level operator can be slow because it dispatches an unexpected kernel, launches too little parallel work, creates a partial final wave, or uses the wrong instruction path. None of those causes is visible from the Python name alone.
 
 **Practice labs**
 
@@ -110,213 +185,312 @@ In Lab 09, `BLOCK_SIZE` chooses B and `num_warps=4` requests four cooperating wa
 - [Lab 09: Sweep logical work per Triton program](reference/labs/09_triton_launch_geometry.md)
 - [Lab 11: Separate lane utilization from grid-tail behavior](reference/labs/11_scheduler_tail.md)
 
-## 4. Follow data through registers, caches, shared memory, and HBM
+**Mental model**
 
-**What it is** The memory hierarchy is a set of storage locations with different capacities, access costs and sharing rules. Registers hold a thread's working values. Shared memory is fast on-chip storage explicitly managed by cooperating threads in a block. A cache automatically retains copies of recently accessed data: L1 is close to an SM and L2 is shared more broadly across the GPU. Device allocations in the global address space normally live in high-bandwidth memory (HBM). An address space describes which addresses code can refer to, not necessarily a distinct physical memory chip.
+A kernel creates a grid of thread blocks. Blocks are assigned to SMs; each block contains warps of 32 threads; warp instructions use scalar, vector, memory, and matrix pipelines according to the instruction mix.
+
+## 4. GPU memory hierarchy
+
+**Objective**
+
+Choose the nearest useful memory level and recognize when data movement dominates.
+
+**How it works**
+
+The memory hierarchy is a set of storage locations with different capacities, access costs and sharing rules. Registers hold a thread's working values. Shared memory is fast on-chip storage explicitly managed by cooperating threads in a block. A cache automatically retains copies of recently accessed data: L1 (level-one cache) is close to an SM and L2 (level-two cache) is shared more broadly across the GPU. Device allocations in the global address space normally live in high-bandwidth memory (HBM). An address space describes which addresses code can refer to, not necessarily a distinct physical memory chip.
 
 An allocation reserves storage for values. Temporal locality means reusing the same values soon; spatial locality means accessing nearby addresses. A spill places values that cannot stay in registers into thread-private local memory, which is backed by device memory despite its name. Understanding ownership and reuse comes before deciding where data should live.
 
-**Objective** Choose the nearest useful memory level and recognize when data movement dominates.
+Resident threads need storage for private values, block cooperation, cached reuse, and the full data set. These are distinct address spaces and lifetime contracts, not simply “fast” and “slow” memory.
 
-**Prerequisite bridge** Resident threads need storage for private values, block cooperation, cached reuse, and the full data set. These are distinct address spaces and lifetime contracts, not simply “fast” and “slow” memory.
+Trace a value used by a kernel. Its global-memory allocation normally lives in HBM. When a thread loads the value, caches may satisfy the request without another HBM access. The compiler keeps working values in registers where possible. If values spill into the thread's local-memory address space, they use device-backed storage and caching; the word “local” does not mean on-chip register storage.
 
-**Why it matters** Performance is often limited by repeated movement rather than arithmetic. Correctly naming where a byte lives reveals whether the next change should improve reuse, remove an intermediate, alter layout, or reduce the workload's memory footprint.
+A block can also load values into shared memory so its threads can reuse them. The program explicitly manages that storage and synchronizes cooperating threads before they consume each other's writes. Caches work differently: they retain data automatically and preserve the program's memory semantics. Shared memory is therefore an optional cooperation mechanism, not a compulsory stop between HBM and registers.
 
-**Mechanism** Registers hold compiler-managed thread values. Local memory is a per-thread address space but is generally backed by device memory and cached, so spills are not on-chip registers. Shared memory is explicitly allocated per block and requires synchronization for cooperative use. L1 and L2 caches capture temporal and spatial reuse without changing program semantics. HBM holds global allocations. In PyTorch, `memory_allocated` tracks live tensor storage while `memory_reserved` includes allocator-managed segments; neither tells you which values the kernel placed in registers or shared memory.
-A tensor view changes shape or indexing metadata while sharing existing storage. Its strides specify the storage-element step for each dimension. For a compact 2×3 matrix, strides `[3,1]` mean one row advances three elements and one column advances one. Transposing it produces a 3×2 view with strides `[1,3]`; the six stored values have not moved. `contiguous()` materializes a compact copy when the current layout is not already contiguous. Use shape, strides and element size to derive addresses and count input, output and temporary bytes. Count the copy separately before considering whether repeated later accesses repay it; Lesson 7 develops lane-level coalescing and that reuse trade-off.
+At the framework level, PyTorch's `memory_allocated` reports live tensor storage and `memory_reserved` includes segments held by its allocator. These quantities describe allocation ownership. They do not reveal which values a running kernel keeps in registers or shared memory.
 
-**Recall** Which memories are private to a thread, shared by a block, or visible device-wide?
+Indexing determines which stored value a load requests. A tensor view changes shape or indexing metadata while sharing storage. For a compact 2×3 matrix, strides `[3,1]` mean that moving one row advances three stored elements and moving one column advances one. A transpose produces a 3×2 view with strides `[1,3]`; the six values have not moved.
 
-**Mental model** Registers are thread-local, shared memory is explicitly managed per block, caches capture reuse, and HBM provides large capacity with much higher latency. Useful reuse should occur before data returns to HBM.
+When that layout is not contiguous, `contiguous()` can create a compact copy. The copy reads the old storage and writes new storage, so it adds data movement before later operations can benefit. Shape, strides and element size let you derive addresses and distinguish input, output and temporary bytes. Lesson 7 connects those addresses to the memory requests made by a warp.
+
+Performance is often limited by repeated movement rather than arithmetic. Correctly naming where a byte lives reveals whether the next change should improve reuse, remove an intermediate, alter layout, or reduce the workload's memory footprint.
 
 **Practice labs**
 
 - [Lab 04: Evaluate strided access and the cost of repacking](reference/labs/04_layout_and_coalescing.md)
 - [Lab 05: Contrast memory-oriented and compute-oriented work](reference/labs/05_roofline_microbench.md)
 
-## 5. Reason about SIMT divergence and independent work
+**Mental model**
 
-**What it is** Single instruction, multiple threads (SIMT) is CUDA's execution model: a warp issues an instruction for the threads participating in it. A branch chooses a path, such as the body of an if statement. Warp divergence occurs when threads in that warp choose different paths; the required paths run with different participating threads. An active mask records which lanes participate in an instruction. Predication similarly prevents selected lanes from committing an instruction's effect, while reconvergence brings paths back together.
+Registers are thread-local, shared memory is explicitly managed per block, caches capture reuse, and HBM provides large capacity with much higher latency. Useful reuse should occur before data returns to HBM.
+
+## 5. Parallel control flow
+
+**Objective**
+
+Explain how one warp handles branches and why imbalanced lanes waste issue opportunities.
+
+**How it works**
+
+Single instruction, multiple threads (SIMT) is CUDA's execution model: a warp issues an instruction for the threads participating in it. A branch chooses a path, such as the body of an if statement. Warp divergence occurs when threads in that warp choose different paths; the required paths run with different participating threads. An active mask records which lanes participate in an instruction. Predication similarly prevents selected lanes from committing an instruction's effect, while reconvergence brings paths back together.
 
 For example, if some lanes need a long calculation and others need a short one, finishing the short work does not make those lanes perform the long work for their neighbors. Divergence concerns cooperation within a warp. Unequal work between blocks and a partly filled final grid wave are different problems, even when all three leave some capacity unused.
 
-**Objective** Explain how one warp handles branches and why imbalanced lanes waste issue opportunities.
+A block becomes warps of 32 lanes. This lesson focuses on what happens when those lanes do not request the same instruction, while later tail analysis focuses on different blocks or ranks finishing at different times.
 
-**Prerequisite bridge** A block becomes warps of 32 lanes. This lesson focuses on what happens when those lanes do not request the same instruction, while later tail analysis focuses on different blocks or ranks finishing at different times.
+Imagine a warp reaching an `if` statement. Each thread evaluates the condition for its own data. If all participating threads choose the same branch, the warp can issue that branch's instructions with all those lanes active.
 
-**Why it matters** Divergence is commonly blamed for any uneven timeline. That diagnosis produces ineffective fixes when the real cause is block-duration skew, insufficient grid waves, memory dependencies, or rank imbalance.
+If the threads choose different branches, each path must still perform its required work. For one path, an active-lane mask selects the lanes that need those instructions; the other lanes do not contribute results. The other path runs with its own mask. Reconvergence brings the participating threads back to a common continuation. Time spent executing one path does not perform useful work for lanes assigned to the other.
 
-**Mechanism** SIMT presents independent thread state but issues a warp instruction over an active-lane mask. Uniform branches keep all relevant lanes active. Predication may execute a short conditional instruction while disabling lanes that should not commit a result. Longer divergent paths execute separately under complementary masks and reconverge at a compiler-defined point. Independent thread scheduling improves flexibility around synchronization, but it does not make divergent lane paths free or remove the need for correct warp-level synchronization.
+For a short conditional, the compiler may use predication: it issues an instruction but prevents selected lanes from committing its effect. This can avoid an explicit branch, yet inactive lanes still do not produce useful results. The exact instruction sequence depends on compilation.
 
-**Recall** Do 32 lanes in one warp have independent instruction streams?
+Independent thread scheduling gives the hardware more flexibility in tracking and scheduling threads around divergence and synchronization. It does not turn divergent paths into free parallel work. Code that exchanges values between lanes must still use the required warp-level synchronization; it cannot assume that all lanes always advance together.
 
-**Mental model** SIMT executes one instruction over active lanes. Divergent branch paths are executed with different lane masks, and the warp reconverges after the paths complete.
+Divergence is commonly blamed for any uneven timeline. That diagnosis produces ineffective fixes when the real cause is block-duration skew, insufficient grid waves, memory dependencies, or rank imbalance.
 
 **Practice labs**
 
 - [Lab 11: Separate lane utilization from grid-tail behavior](reference/labs/11_scheduler_tail.md)
 
-## 6. Use occupancy to hide latency rather than chase a maximum
+**Mental model**
 
-**What it is** Occupancy is the fraction of an SM's maximum supported warps that are resident at a time. Resident means their execution state has resources assigned; it does not mean they issue an instruction every cycle. An eligible warp is ready to issue its next instruction. Latency hiding means executing other eligible work while one warp waits, for example for a memory load to complete. More resident warps can provide more choices, but cannot remove a dependency within one calculation.
+SIMT executes one instruction over active lanes. Divergent branch paths are executed with different lane masks, and the warp reconverges after the paths complete.
+
+## 6. Occupancy and latency hiding
+
+**Objective**
+
+Relate registers, shared memory, block size, active warps, and latency hiding.
+
+**How it works**
+
+Occupancy is the fraction of an SM's maximum supported warps that are resident at a time. Resident means their execution state has resources assigned; it does not mean they issue an instruction every cycle. An eligible warp is ready to issue its next instruction. Latency hiding means executing other eligible work while one warp waits, for example for a memory load to complete. More resident warps can provide more choices, but cannot remove a dependency within one calculation.
 
 Instruction-level parallelism (ILP) means independent instructions within a thread can make progress without waiting for one another's results. For example, updating two independent accumulators (variables holding separate running results) offers more scheduling freedom than repeatedly updating one accumulator. This supplies ready work within a warp, whereas scheduling another resident warp supplies ready work from other threads. Keeping more independent values live can require more registers.
 
 Registers and shared memory limit how many blocks fit together. Register pressure is the demand for register storage; allocation granularity means resources are assigned in fixed-size units rather than arbitrary fractions. Spilling stores excess thread-private values in device-backed local memory. Occupancy is therefore a resource and scheduling measure, not the percentage of peak arithmetic achieved or a guarantee that increasing it makes the program faster.
 
-**Objective** Relate registers, shared memory, block size, active warps, and latency hiding.
+The hierarchy, memory and single-instruction, multiple-thread (SIMT) lessons identified SMs, registers, shared storage and active lanes. Occupancy now asks how those finite resources limit resident blocks and warps, and whether that residency is enough to hide waiting.
 
-**Prerequisite bridge** The hierarchy, memory and SIMT lessons identified SMs, registers, shared storage and active lanes. Occupancy now asks how those finite resources limit resident blocks and warps, and whether that residency is enough to hide waiting.
+Before a block can become resident, the SM must have room for its threads and warps, a free block slot, enough registers and enough shared memory. All these limits apply together. The resource that runs out first determines how many such blocks can reside on that SM.
 
-**Why it matters** A kernel needs enough independent ready work to cover instruction and memory latency. Chasing the maximum occupancy percentage can instead force spills, shrink useful tiles, or increase synchronization.
+Registers are used by individual threads, so a block with many threads can consume substantial register capacity even when each thread uses a modest number. Hardware allocates registers in fixed-size units, which can make a small source change cross a residency threshold. Shared-memory demand is counted per block. Reducing either demand helps residency only if it allows another block to fit within every remaining limit.
 
-**Mechanism** Residency is bounded simultaneously by threads, warps, blocks, registers, shared memory, and architecture limits. The tightest limit determines blocks per SM. Resident warps may be eligible, selected, or stalled on dependencies; “active” therefore does not mean “doing useful work this cycle.” Register allocation is per thread but consumes a finite SM register file in allocation units. Shared memory is per block. Reducing either may allow another block, but forced register caps can turn values into local-memory loads and stores backed by device memory.
-An output sentinel is a deliberately recognizable initial value that reveals an output location the kernel failed to write. NaN means “not a number”; it represents an undefined floating-point value and is not a finite result. In Lab 11, fill the output with NaN outside the timed interval, run and synchronize the kernel, then require every expected output to be finite and to match an independently calculated reference. A surviving sentinel detects incomplete writes; the reference detects incorrect written values. Infinity is also non-finite, so neither NaN nor infinity may count as a successful numerical result.
+Once blocks are resident, the scheduler chooses among their warps. A warp waiting for a load is resident but cannot issue a dependent instruction. Another warp with ready work may issue while it waits. This is latency hiding: the wait still exists, but independent work uses time that would otherwise be idle. A resident warp may be ready, selected to issue, or stalled; residency alone says nothing about useful work in a particular cycle.
 
-**Recall** Why can a warp that waits on memory allow another warp to run?
+Forcing fewer registers can backfire. Values that no longer fit may spill to device-backed local memory, adding loads, stores and new waits. A kernel with more resident warps can therefore run slower than one with fewer warps and less data movement.
 
-**Mental model** An SM keeps several warps resident and switches among ready warps. Registers, shared memory, threads, and block slots limit residency.
+A kernel needs enough independent ready work to cover instruction and memory latency. Chasing the maximum occupancy percentage can instead force spills, shrink useful tiles, or increase synchronization.
+
+For a simple resource example, suppose each 256-thread block needs 32 KiB of shared memory and an SM makes 64 KiB available to these blocks. Shared memory permits only two blocks, or 16 warps, even if the thread and register limits would allow more. Relative to a 64-warp ceiling, that is 16 / 64 = 25% theoretical occupancy. This hypothetical capacity calculation predicts what can fit, not which warps are ready or how fast the kernel runs.
 
 **Practice labs**
 
 - [Lab 09: Sweep logical work per Triton program](reference/labs/09_triton_launch_geometry.md)
 - [Lab 11: Separate lane utilization from grid-tail behavior](reference/labs/11_scheduler_tail.md)
 
-## 7. Make global memory accesses coalesced
+**Mental model**
 
-**What it is** Coalescing is the memory system's combination of addresses requested by active lanes of a warp into as few transactions as the access pattern allows. A transaction transfers a chunk of memory, so fetching scattered values can move more data than the useful values alone require. A stride tells how far the storage address advances when a logical index increases. Alignment means starting at a useful address boundary; a sector is a fixed-size portion used in memory-traffic accounting.
+An SM keeps several warps resident and switches among ready warps. Registers, shared memory, threads, and block slots limit residency.
+
+## 7. Memory access efficiency
+
+**Objective**
+
+Connect lane addresses to memory transactions and useful bandwidth.
+
+**How it works**
+
+Coalescing is the memory system's combination of addresses requested by active lanes of a warp into as few transactions as the access pattern allows. A transaction transfers a chunk of memory, so fetching scattered values can move more data than the useful values alone require. A stride tells how far the storage address advances when a logical index increases. Alignment means starting at a useful address boundary; a sector is a fixed-size portion used in memory-traffic accounting.
 
 A tensor view changes how indices refer to existing storage without copying its values. A copy creates new storage, possibly with a different layout. A contiguous tensor has a compact logical layout, but good coalescing still depends on which indices adjacent lanes actually access. This lesson connects those lane addresses to traffic, rather than treating contiguous storage as a universal performance switch.
 
-**Objective** Connect lane addresses to memory transactions and useful bandwidth.
+The memory hierarchy explains where data can live. Coalescing explains how one warp’s lane addresses are combined when those data must cross the global-memory interface.
 
-**Prerequisite bridge** The memory hierarchy explains where data can live. Coalescing explains how one warp’s lane addresses are combined when those data must cross the global-memory interface.
+Start with the addresses requested by one warp instruction. Suppose all 32 lanes read one 4-byte value, and lane `i` reads `base + 4*i`. The useful values occupy 128 consecutive bytes. If the base is suitably aligned, the memory system can cover them with a compact group of sectors and transactions. This does not imply a single 128-byte hardware transaction.
 
-**Why it matters** A kernel can request the same logical number of elements while causing very different physical traffic. Useful bandwidth counts bytes the algorithm needs; transaction traffic includes over-fetch and replay caused by the access pattern.
+Now separate adjacent lane addresses by a large stride. The warp still requests only 32 useful values, but those values lie in many different memory regions. More sectors must be fetched, including bytes no lane needs. An otherwise compact pattern can also require an extra sector when it starts across an alignment boundary. Coalescing concerns this grouping of lane requests, rather than only the total tensor size.
 
-**Mechanism** For a 32-lane warp reading 4-byte values, lane `i` reading base plus `4*i` covers one aligned 128-byte span, represented by the hardware as aligned sectors and transactions. A large stride spreads lanes across many spans. Misalignment can touch an extra sector. A PyTorch view changes metadata without copying storage, so its strides may expose an awkward lane mapping to the next kernel. Calling `contiguous()` materializes a copy; packing once is profitable only when later reuse saves more time than that copy costs.
+A PyTorch view can expose such a strided pattern without moving any values. The next kernel's mapping from lanes to tensor indices decides the addresses it actually requests, so a view is not automatically slow and contiguous storage is not automatically enough for good coalescing.
 
-**Recall** What address pattern occurs when lane `i` accesses element `i`?
+Repacking with `contiguous()` creates a copy when needed. It pays for an extra read and write now in exchange for potentially cheaper later accesses. That trade is useful only when the time saved by later operations exceeds the packing cost.
 
-**Mental model** Memory requests from a warp are combined into transactions. Adjacent, aligned lane addresses usually use fewer transactions than large strides or scattered access.
+A kernel can request the same logical number of elements while causing very different physical traffic. Useful bandwidth counts bytes the algorithm needs; transaction traffic includes over-fetch and replay caused by the access pattern.
 
 **Practice labs**
 
 - [Lab 04: Evaluate strided access and the cost of repacking](reference/labs/04_layout_and_coalescing.md)
 
-## 8. Time transfers, streams, and synchronization correctly
+**Mental model**
 
-**What it is** A CUDA stream is an ordered sequence of device work: operations in the same stream obey that order, while independent streams may overlap if resources permit. An event marks progress in a stream. The CPU can wait for an event, or another stream can wait for it to enforce a device-side dependency without blocking the CPU. Nonblocking submission means a host call can return before the requested operation finishes; it does not mean the operation is already complete.
+Memory requests from a warp are combined into transactions. Adjacent, aligned lane addresses usually use fewer transactions than large strides or scattered access.
+
+## 8. Asynchronous execution and timing
+
+**Objective**
+
+Measure asynchronous work and distinguish overlap from reordered timestamps.
+
+**How it works**
+
+A CUDA stream is an ordered sequence of device work: operations in the same stream obey that order, while independent streams may overlap if resources permit. An event marks progress in a stream. The CPU can wait for an event, or another stream can wait for it to enforce a device-side dependency without blocking the CPU. Nonblocking submission means a host call can return before the requested operation finishes; it does not mean the operation is already complete.
 
 Host-to-device (H2D) and device-to-host (D2H) transfers move data between CPU and GPU memory. Pinned host memory has pages held resident so transfers can use supported direct-memory-access paths; ordinary pageable memory can require staging. Copy engines perform transfers separately from arithmetic execution where supported. Double buffering uses two buffers so a producer can fill the next one while a consumer processes the current one, with events protecting safe reuse.
 
-**Objective** Measure asynchronous work and distinguish overlap from reordered timestamps.
+Lesson 1 separated submission from completion. Streams and events provide the ordering tools needed to make that distinction correct in programs with copies and multiple device operations.
 
-**Prerequisite bridge** Lesson 1 separated submission from completion. Streams and events provide the ordering tools needed to make that distinction correct in programs with copies and multiple device operations.
+Suppose a copy produces an input and a kernel consumes it. Putting both operations in one CUDA stream orders the kernel after the copy. The CPU may return from submitting them while the device is still working, but the stream preserves their required order.
 
-**Why it matters** Apparent overlap can be a timestamp illusion, and accidental synchronization can erase real overlap. Incorrect stream dependencies can also expose partially produced tensors or surface an earlier asynchronous error at an unrelated later call.
+If the producer and consumer use different streams, the program must connect them explicitly. Record an event in the producer's stream after its work. Make the consumer's stream wait for that event before using the result. Recording the event submits a marker; the event becomes complete only when the preceding work has reached it. A stream wait delays dependent device work, whereas a CPU wait delays the host until completion.
 
-**Mechanism** Operations in one CUDA stream are ordered. Different streams may overlap only when dependencies and hardware resources allow it. A consumer in another stream must wait on an event recorded after the producer, and tensors plus staging buffers must remain alive until their last asynchronous user completes. Host-to-device overlap requires pinned host memory, a nonblocking copy, a separate copy engine path, independent compute, and no hidden synchronization. A double buffer has fill, steady-state, and drain phases; reuse of a buffer must wait for both copy and compute users.
+Independent work can overlap when the hardware has resources for both operations. To overlap a host-to-device copy with computation, the copy needs suitable pinned host memory and asynchronous submission, a usable copy-engine path, and compute that does not depend on that same unfinished copy. Unintended synchronization can serialize the operations even when these conditions hold.
 
-**Recall** Does a normal GPU launch block the CPU until the kernel completes?
+Double buffering uses this independence across successive batches. First fill one buffer. Then compute on it while filling the other. Continue alternating, and finally wait for the remaining work to drain. A buffer cannot be overwritten while a copy or kernel still uses it; tensors and staging storage must stay alive through their last asynchronous use.
 
-**Mental model** CUDA streams order work within a stream while permitting independent work across streams. True copy/compute overlap also requires compatible hardware paths, pinned host memory, independent copy and compute work, and explicit producer–consumer dependencies.
+Timing follows the same dependencies. Device events can measure a defined interval in a stream. A host timer for the complete request must stop only after all work required by that request finishes, including any result transfer. Submission time alone measures how quickly the CPU queued work.
+
+Apparent overlap can be a timestamp illusion, and accidental synchronization can erase real overlap. Incorrect stream dependencies can also expose partially produced tensors or surface an earlier asynchronous error at an unrelated later call.
 
 **Practice labs**
 
 - [Lab 03: Measure pageable and pinned host transfers](reference/labs/03_transfer_and_pinning.md)
 - [Lab 07: Separate submission time from device completion](reference/labs/07_async_streams.md)
 
-## 9. Choose precision and Tensor Core paths deliberately
+**Mental model**
 
-**What it is** Floating-point formats represent numbers using a sign, an exponent and a fraction. The exponent controls range—how large or small a value can be—while the fraction controls precision, or the spacing between representable values. FP32, FP16 and FP8 use 32, 16 and 8 bits; BF16 means brain floating point 16 and distributes its bits differently from FP16. Rounding selects a representable approximation. Overflow exceeds the available range; underflow makes very small values lose precision or become zero.
+CUDA streams order work within a stream while permitting independent work across streams. True copy/compute overlap also requires compatible hardware paths, pinned host memory, independent copy and compute work, and explicit producer–consumer dependencies.
 
-Accumulation is the running combination of partial arithmetic results, such as sums in a dot product, and can use a wider format than the inputs. Tensor Cores accelerate supported matrix operations; TF32 is an arithmetic mode for FP32 inputs, not a separate tensor storage dtype. Scaling changes magnitudes to fit a chosen representation. A format decision must consider both the stored values and the arithmetic actually performed.
+## 9. Numerical precision and accelerated arithmetic
 
-**Objective** Relate dtype, shape, Tensor Core eligibility, throughput, memory, and numerical tolerance.
+**Objective**
 
-**Prerequisite bridge** Arithmetic pipelines consume values fetched through the memory system. Precision changes both the representation of those values and which library or Tensor Core instruction can implement an operation.
+Relate dtype, shape, Tensor Core eligibility, throughput, memory, and numerical tolerance.
 
-**Why it matters** Lower precision can reduce bytes and accelerate matrix operations, but a dtype annotation does not guarantee Tensor Core dispatch or acceptable training/inference behavior. Storage, input, multiply, accumulation, and output precision can differ.
+**How it works**
 
-**Mechanism** FP32 provides broad range and precision. TF32 is an NVIDIA Tensor Core compute mode for selected FP32 matrix operations, not a storage dtype. FP16 reduces range and often needs scaling; BF16 retains the FP32-sized exponent with fewer fraction bits. FP8 requires a scaling recipe and higher-precision accumulation or surrounding state. Matrix dimensions, alignment, library heuristics, framework policy, and operation type determine dispatch. Pointwise work may remain on ordinary CUDA cores even inside mixed precision.
+Floating-point formats represent numbers using a sign, an exponent and a fraction. The exponent controls range—how large or small a value can be—while the fraction controls precision, or the spacing between representable values. 32-bit floating point (FP32), 16-bit floating point (FP16) and 8-bit floating point (FP8) use 32, 16 and 8 bits; bfloat16 (BF16) means brain floating point 16 and distributes its bits differently from FP16. Rounding selects a representable approximation. Overflow exceeds the available range; underflow makes very small values lose precision or become zero.
 
-An encoding determines which numbers can be represented. FP formats allocate bits to sign, exponent and fraction; INT8/INT4 quantization instead represents values through integer codes and scale/zero-point conventions. Four-bit weights are not automatically FP4 training. Smaller formats trade range or spacing between values for fewer bytes. A scale maps values into the available range; large outliers can make small values hard to preserve. In integer quantization, a zero point is the integer code that represents real zero. Per-tensor scaling shares one scale across the whole tensor; per-channel scaling assigns scales along a selected feature dimension; block scaling assigns a scale to each bounded group of values. Sharing one scale is simple, while smaller groups can improve local fit at the cost of metadata and extra operations. Keep sensitive reductions and accumulations in suitable higher precision, and measure the complete conversion-plus-compute path.
-A matmul precision policy chooses which internal arithmetic a framework may use for FP32 matrix products. `torch.set_float32_matmul_precision("highest")` requests FP32 internal computation; `"high"` permits supported faster reduced-precision internal algorithms. It does not convert the stored tensors to BF16 or guarantee one kernel. Set the policy before the operation, hold shapes and inputs fixed, and inspect dispatch separately from measuring time. Explicit BF16 or FP16 inputs are different cases because their values have already been rounded to those storage formats.
+Accumulation is the running combination of partial arithmetic results, such as sums in a dot product, and can use a wider format than the inputs. Tensor Cores accelerate supported matrix operations; TensorFloat-32 (TF32) is an arithmetic mode for FP32 inputs, not a separate tensor storage dtype. Scaling changes magnitudes to fit a chosen representation. A format decision must consider both the stored values and the arithmetic actually performed.
 
-The L2 norm is the square root of the sum of squared elements. Relative L2 error divides the norm of candidate-minus-reference by the reference norm, measuring aggregate discrepancy rather than the worst element. Reference `[3,4]` and candidate `[3,4.1]` give `0.1/5 = 0.02`. Choose the reference and near-zero denominator rule before testing; Lab 02 uses a random reference expected to have a nonzero norm. A zero-reference extension needs a declared absolute-error or guarded-denominator policy, as explained in its guide. Compare each candidate with the appropriate reference, keep finite checks, and report both timing and error. An aggregate threshold does not establish task quality or bound every individual element.
+Arithmetic pipelines consume values fetched through the memory system. Precision changes both the representation of those values and which library or Tensor Core instruction can implement an operation.
 
-**Recall** Why can lower precision reduce both bytes moved and compute time?
+### Separate stored values from the arithmetic used on them
 
-**Mental model** H100 Tensor Cores accelerate supported matrix operations and dtypes, but dispatch depends on shapes, alignment, library selection, and framework policy. Accumulation precision and scaling still determine numerical behavior.
+A precision choice affects two stages. First, storing or converting an input rounds its values to a representation. Then the selected kernel performs arithmetic, possibly using a wider format for intermediate sums. The output may be rounded again when it is stored. Input, multiplication, accumulation and output precision therefore need not match.
+
+FP32 offers a broad range and relatively fine precision. FP16 uses fewer bytes but has a narrower range, so some computations need scaling to keep important values representable. BF16 keeps the FP32-sized exponent but fewer fraction bits: it preserves a similar range with coarser spacing. FP8 uses fewer bits again and needs a suitable scaling recipe and higher-precision accumulation or surrounding state.
+
+TF32 is different: it is a Tensor Core compute mode for selected operations on FP32 inputs, not a storage dtype. Matrix dimensions, alignment, operation type, framework policy and library selection determine the actual kernel. Pointwise operations may still run on ordinary CUDA cores inside a mixed-precision program.
+
+### Fit values into the chosen representation
+
+An encoding determines which numbers can be represented. FP formats allocate bits to sign, exponent and fraction; 8-bit integer (INT8)/INT4 quantization instead represents values through integer codes and scale/zero-point conventions. Four-bit weights are not automatically FP4 training. Smaller formats trade range or spacing between values for fewer bytes. A scale maps values into the available range; large outliers can make small values hard to preserve. In integer quantization, a zero point is the integer code that represents real zero. Per-tensor scaling shares one scale across the whole tensor; per-channel scaling assigns scales along a selected feature dimension; block scaling assigns a scale to each bounded group of values. Sharing one scale is simple, while smaller groups can improve local fit at the cost of metadata and extra operations. Keep sensitive reductions and accumulations in suitable higher precision, and measure the complete conversion-plus-compute path.
+
+### Follow the framework policy to the selected implementation
+
+A matmul precision policy chooses which internal arithmetic a framework may use for FP32 matrix products. `torch.set_float32_matmul_precision("highest")` requests FP32 internal computation; `"high"` permits supported faster reduced-precision internal algorithms. It does not convert the stored tensors to BF16 or guarantee one kernel. The policy affects eligible operations after it is set, but identifying the selected kernel requires separate dispatch evidence. Explicit BF16 or FP16 inputs are different cases because their values have already been rounded to those storage formats.
+
+### Understand what the error measure captures
+
+The Euclidean (L2) norm is the square root of the sum of squared elements. Relative L2 error divides the norm of candidate-minus-reference by the reference norm, measuring aggregate discrepancy rather than the worst element. Reference `[3,4]` and candidate `[3,4.1]` give `0.1/5 = 0.02`. Choose the reference and near-zero denominator rule before testing; Lab 02 uses a random reference expected to have a nonzero norm. A zero-reference extension needs a declared absolute-error or guarded-denominator policy, as explained in its guide. Compare each candidate with the appropriate reference, keep finite checks, and report both timing and error. An aggregate threshold does not establish task quality or bound every individual element.
+
+Lower precision can reduce bytes and accelerate matrix operations, but a dtype annotation does not guarantee Tensor Core dispatch or acceptable training/inference behavior. Storage, input, multiply, accumulation, and output precision can differ.
 
 **Practice labs**
 
 - [Lab 02: Compare matrix precision, error, and throughput](reference/labs/02_tensor_core_precision.md)
 
-## 10. Classify workloads with arithmetic intensity and roofline
+**Mental model**
 
-**What it is** The roofline model relates a workload's arithmetic rate to how much data it must move. A FLOP is one floating-point operation; FLOP/s measures operations completed per second. Bandwidth measures bytes transferred per second. Arithmetic intensity is operations per byte at a stated memory boundary, such as HBM. A roofline plot puts intensity on the horizontal axis and achieved arithmetic rate on the vertical axis. Its sloped bandwidth ceiling and horizontal compute ceiling meet at the ridge point.
+H100 Tensor Cores accelerate supported matrix operations and dtypes, but dispatch depends on shapes, alignment, library selection, and framework policy. Accumulation precision and scaling still determine numerical behavior.
+
+## 10. Arithmetic intensity and performance limits
+
+**Objective**
+
+Decide whether another byte or another operation is the more valuable optimization target.
+
+**How it works**
+
+The roofline model relates a workload's arithmetic rate to how much data it must move. A FLOP is one floating-point operation; FLOP/s measures operations completed per second. Bandwidth measures bytes transferred per second. Arithmetic intensity is operations per byte at a stated memory boundary, such as high-bandwidth memory (HBM). A roofline plot puts intensity on the horizontal axis and achieved arithmetic rate on the vertical axis. Its sloped bandwidth ceiling and horizontal compute ceiling meet at the ridge point.
 
 A low-intensity calculation may have to wait for bytes even when arithmetic units are available; a high-intensity one can reuse enough data to approach a compute limit. The ceilings describe upper bounds under declared assumptions, not expected measurements. The chosen precision, operation type and byte-count boundary must match the plotted workload before the model can explain a result.
 
-**Objective** Decide whether another byte or another operation is the more valuable optimization target.
+The previous lessons supplied a byte ledger and compute-path model. Roofline combines them into a bound that helps choose the next experiment without pretending to predict every kernel detail.
 
-**Prerequisite bridge** The previous lessons supplied a byte ledger and compute-path model. Roofline combines them into a bound that helps choose the next experiment without pretending to predict every kernel detail.
+Begin with a count of useful floating-point operations and the bytes needed to perform them. Choose one memory boundary, such as HBM, and include the reads, writes and intermediate traffic that cross it. Dividing operations by bytes gives arithmetic intensity: how much useful arithmetic is performed for each byte moved.
 
-**Why it matters** Optimizing arithmetic in a bandwidth-limited kernel or compressing bytes in a compute-limited kernel may not move elapsed time. A roofline position turns a vague utilization observation into a falsifiable resource hypothesis.
+The bandwidth ceiling follows directly. If the memory system supplies a given number of bytes per second, and each byte supports a given number of operations, multiplying those quantities gives the maximum arithmetic rate that data supply can sustain. As intensity increases, this ceiling rises: more reuse lets each transferred byte support more work.
 
-**Mechanism** Arithmetic intensity is useful operations divided by bytes crossing the chosen boundary. The sloped roof is attainable bandwidth multiplied by intensity; the flat roof is attainable compute rate. Their intersection is the ridge point. Count bytes at one declared boundary—often HBM—and include repeated reads, writes, and intermediates. Use measured sustainable roofs when possible, because marketing peaks are upper bounds. A point far below both roofs may indicate dependencies, launch gaps, imbalance, poor instruction mix, or insufficient parallelism rather than a pure bandwidth/compute limit.
+The arithmetic units impose a second ceiling, the attainable compute rate for the relevant operation and precision. Performance cannot exceed either ceiling, so the roofline uses the lower of the two. Their intersection is the ridge point. Below that intensity, the bandwidth bound is lower; above it, the compute bound is lower. Independently measured sustainable rates are usually more informative than marketing peaks, which remain upper bounds.
 
-**Recall** How is arithmetic intensity computed?
+A measured point far below both ceilings needs another explanation. Launch gaps, dependent instructions, uneven work, an unsuitable instruction path or too little parallelism can all prevent a kernel from approaching either bound. The model narrows the possibilities; it does not diagnose the bottleneck by itself.
 
-**Mental model** Arithmetic intensity is operations divided by bytes transferred. Roofline compares that intensity with attainable memory bandwidth and compute throughput to bound performance.
+Optimizing arithmetic in a bandwidth-limited kernel or compressing bytes in a compute-limited kernel may not move elapsed time. A roofline position turns a vague utilization observation into a falsifiable resource hypothesis.
+
+For example, suppose a kernel performs 2 billion floating-point operations and transfers 1 billion bytes at the memory boundary being modeled. Its arithmetic intensity is 2 operations per byte. With an assumed sustainable bandwidth of 1 trillion bytes per second, the bandwidth bound is 2 trillion operations per second. If the assumed compute ceiling is 10 trillion operations per second, the lower bound on elapsed time is the larger of 1 millisecond for traffic and 0.2 milliseconds for arithmetic: 1 millisecond. These illustrative assumptions describe a bound; dependencies, launches and inefficient access can make the measured time longer.
 
 **Practice labs**
 
 - [Lab 05: Contrast memory-oriented and compute-oriented work](reference/labs/05_roofline_microbench.md)
 
-## 11. Read sharing and health state without changing it
+**Mental model**
 
-**What it is** GPU sharing determines which applications can use physical resources at the same time. Multi-Instance GPU (MIG) partitions supported hardware into isolated GPU instances. Multi-Process Service (MPS) coordinates work from multiple CUDA processes so compatible work can share execution resources. Time-slicing alternates access over time. A CUDA context holds a process's device-execution state; it is not itself a hardware partition. These sharing modes differ from an application merely launching several streams.
+Arithmetic intensity is operations divided by bytes transferred. Roofline compares that intensity with attainable memory bandwidth and compute throughput to bound performance.
+
+## 11. GPU sharing and operational health
+
+**Objective**
+
+Distinguish full GPU, MIG, MPS, and time-slicing and collect non-intervening health evidence.
+
+**How it works**
+
+GPU sharing determines which applications can use physical resources at the same time. Multi-Instance GPU (MIG) partitions supported hardware into isolated GPU instances. Multi-Process Service (MPS) coordinates work from multiple CUDA processes so compatible work can share execution resources. Time-slicing alternates access over time. A CUDA context holds a process's device-execution state; it is not itself a hardware partition. These sharing modes differ from an application merely launching several streams.
 
 Health monitoring reports whether the device is operating normally. Error-correcting code (ECC) detects or corrects certain memory errors; Xid messages are driver-reported diagnostic events. Clock frequency is the rate at which hardware operates, and throttling reduces it in response to limits such as power or temperature. NVIDIA Data Center GPU Manager (DCGM) gathers operational metrics and health checks. A counter's scope identifies which device, instance or time interval it describes; an observation alone does not prove exclusive access.
 
-**Objective** Distinguish full GPU, MIG, MPS, and time-slicing and collect non-intervening health evidence.
+The single-GPU lessons explain useful work and timing, while the initial preflight checks the allocated device before every run. Now interpret sharing and operational signals in more depth, before adding two-node communication. These observations never authorize changing the cluster.
 
-**Prerequisite bridge** The single-GPU lessons explain useful work and timing, while the initial preflight checks the allocated device before every run. Now interpret sharing and operational signals in more depth, before adding two-node communication. These observations never authorize changing the cluster.
+First separate resource allocation from the way work is shared. A full-GPU allocation assigns a scheduler-visible device to a workload; that allocation alone does not prove that no other process can access it. MIG divides supported compute and memory resources into hardware-isolated instances. MPS instead coordinates concurrent work from CUDA processes. On H100 those clients retain separate CUDA contexts and GPU address spaces while sharing scheduling resources. Time-slicing gives workloads turns on shared resources without creating MIG-style hardware partitions.
 
-**Why it matters** Sharing or clock/thermal events can change variance and throughput enough to invalidate a benchmark. They are context, not automatic root causes, and observing them must not silently reconfigure the node.
+These arrangements affect how much work can run and which counters describe it. A reading for a physical GPU may cover a different scope from a reading for one instance. Before interpreting a change, identify the device or instance and the time interval represented by the observation.
 
-**Mechanism** Full-GPU allocation gives one workload the scheduler-visible device. MIG partitions supported compute and memory resources into isolated GPU instances. MPS allows work from multiple CUDA processes to execute concurrently. On H100, clients retain separate CUDA contexts and GPU address spaces while sharing GPU scheduling resources; this is not MIG-style hardware partitioning. Time-slicing gives workloads alternating access without MIG’s hardware partitioning. ECC counts, retired pages, Xid events, clocks, power, temperature, and link state form an operational timeline. Passive DCGM health watches interpret retained fields; active diagnostics are a different, potentially intervening workflow. ECC is error-correcting code: distinguish corrected errors from uncorrectable errors and record counter scope and changes, not just totals. Xid is an NVIDIA driver error classification, not a complete diagnosis. Retired-page or row-remapping state records memory-reliability handling; newer GPUs including H100 expose row-remapping information, so interpret only supported fields. Power, thermal limits, and clocks provide operating context, not automatic proof of the cause. These are read-only observations; escalate concerning changes to the administrator.
+Next distinguish the health signals. ECC counters describe corrected or uncorrectable memory errors; a change during a trial has a different meaning from a lifetime total. Xid events are driver error classifications that require further diagnosis. Retired-page and row-remapping information records memory-reliability handling; interpret only fields supported on the device, including H100's row-remapping information. Clocks, power, temperature and link state describe operating conditions. A nearby change can be relevant without proving what caused an application slowdown.
 
-Telemetry terms answer different questions. Sampled GPU activity reports whether GPU work was active during a sampling window; it is not a percentage of peak arithmetic achieved. Memory-controller activity concerns intervals serving memory traffic, not how much HBM is allocated. Allocated bytes describe occupied capacity, not transfer rate. A one-second sample can hide alternating short busy and idle bursts. Correlate timestamps and use a timeline for launch gaps; do not infer saturation or a bottleneck from one utilization number. DCGM profiling counters add more specific observations, but collection ownership and competing profiler access must be coordinated without changing monitoring configuration in these labs.
+Activity and capacity counters also answer different questions. Sampled GPU activity reports whether work was active during a sampling window, not the fraction of peak arithmetic achieved. Memory-controller activity concerns time serving traffic, while allocated bytes describe occupied high-bandwidth memory (HBM) capacity. Neither capacity nor an activity percentage is a transfer rate. A one-second sample can hide repeated short busy and idle bursts.
 
-**Recall** Which sharing mode partitions hardware resources into isolated GPU instances?
+A useful interpretation connects signals from the same interval to the application's execution timeline. Passive DCGM health watches interpret collected fields; active diagnostics can alter execution and belong to a separate workflow. More detailed profiling counters require coordination with other collectors. These labs keep observations read-only and escalate concerning changes to an administrator rather than changing sharing or monitoring configuration.
 
-**Mental model** MIG creates hardware-isolated instances, MPS coordinates CUDA processes, and scheduler time-slicing shares execution over time. ECC, Xid, retired-page, power, clock, thermal, and link signals provide system context but do not by themselves prove an application cause.
+Sharing or clock/thermal events can change variance and throughput enough to invalidate a benchmark. They are context, not automatic root causes, and observing them must not silently reconfigure the node.
 
 **Practice labs**
 
 - [Lab 12: Read GPU health and sharing signals safely](reference/labs/12_read_only_health.md)
 
-## 12. Understand GPU networking, topology, and collectives
+**Mental model**
 
-**What it is** A node is a machine in the cluster; a rank identifies one participating process; topology describes how machines, GPUs and network interfaces connect. A collective is a communication operation performed by a group of ranks. NVIDIA Collective Communications Library (NCCL) supplies GPU-oriented collectives: all-reduce combines values and returns the combined result to every rank, all-gather assembles each rank's piece, and broadcast sends one rank's values to the group. A shard is one piece of a larger tensor; the payload is the data being communicated.
+MIG creates hardware-isolated instances, MPS coordinates CUDA processes, and scheduler time-slicing shares execution over time. ECC, Xid, retired-page, power, clock, thermal, and link signals provide system context but do not by themselves prove an application cause.
 
-GPU networking lets separate devices exchange the values needed to cooperate on one problem. The names in this lesson describe different layers, not competing products that all do the same job. NVLink is a GPU interconnect; NVSwitch connects NVLink endpoints; InfiniBand and Ethernet are network fabrics; RoCE carries RDMA over Ethernet; GPUDirect RDMA makes supported GPU memory accessible to a network adapter; NCCL is communication software that uses available paths. A fabric is the connected collection of links and switches carrying traffic between endpoints.
+## 12. GPU communication and distributed execution
 
-**Objective** Explain the networking layers, trace GPU-to-GPU data movement, and select meaningful collective measurements for two one-GPU nodes.
+**Objective**
 
-**Prerequisite bridge** Single-GPU execution, timing, roofline and read-only health checks now provide a local baseline. Two-node work adds process placement and network collectives; verify both allocated devices before interpreting their shared critical path.
+Explain the networking layers, trace GPU-to-GPU data movement, and select meaningful collective measurements for two one-GPU nodes.
 
-**Why it matters** A fast local kernel cannot improve a step dominated by synchronization or network transfer. Two ranks can teach collective mechanics and placement, but they cannot establish dense-node or large-cluster scaling.
+**How it works**
 
-**Mechanism**
+A node is a machine in the cluster; a rank identifies one participating process; topology describes how machines, GPUs and network interfaces connect. A collective is a communication operation performed by a group of ranks. NVIDIA Collective Communications Library (NCCL) supplies GPU-oriented collectives: all-reduce combines values and returns the combined result to every rank, all-gather assembles each rank's piece, and broadcast sends one rank's values to the group. A shard is one piece of a larger tensor; the payload is the data being communicated.
+
+GPU networking lets separate devices exchange the values needed to cooperate on one problem. The names in this lesson describe different layers, not competing products that all do the same job. NVLink is a GPU interconnect; NVSwitch connects NVLink endpoints; InfiniBand and Ethernet are network fabrics; RDMA over Converged Ethernet (RoCE) carries remote direct memory access (RDMA) over Ethernet; GPUDirect RDMA makes supported GPU memory accessible to a network adapter; NCCL is communication software that uses available paths. A fabric is the connected collection of links and switches carrying traffic between endpoints.
+
+Single-GPU execution, timing, roofline and read-only health checks now provide a local baseline. Two-node work adds process placement and network collectives; verify both allocated devices before interpreting their shared critical path.
+
+Follow a value from one GPU to another. First identify the local device connections, then the network between machines, and finally the software operation that uses that path. Each layer adds a different part of the explanation.
 
 ### First locate the devices and their connections
 
-A network interface controller (NIC) connects a machine to a network. In InfiniBand documentation, an endpoint adapter is also called a host channel adapter (HCA); NVIDIA ConnectX adapters provide supported networking capabilities. PCI Express (PCIe) connects devices through switches and host root complexes. NUMA means that the access cost to host memory depends on the CPU/socket attached to that memory. A nearby GPU and NIC may have a different path from a pair whose traffic crosses CPU sockets. Placement therefore matters even when the endpoint GPUs have the same model name.
+A network interface controller (NIC) connects a machine to a network. In InfiniBand documentation, an endpoint adapter is also called a host channel adapter (HCA); NVIDIA ConnectX adapters provide supported networking capabilities. PCI Express (PCIe) connects devices through switches and host root complexes. Non-uniform memory access (NUMA) means that the access cost to host memory depends on the CPU/socket attached to that memory. A nearby GPU and NIC may have a different path from a pair whose traffic crosses CPU sockets. Placement therefore matters even when the endpoint GPUs have the same model name.
 
 NVLink carries communication between supported GPU endpoints at high bandwidth. NVSwitch is switching hardware for NVLink: it gives several GPUs paths to one another instead of requiring every pair to have a dedicated direct link. A supported multi-GPU DGX H100 system has this scale-up connectivity as well as network adapters for communication beyond the system. NVSwitch is not an InfiniBand switch, and NVLink is not a setting that creates a connection between arbitrary servers. Special NVLink Switch System deployments can extend supported NVLink domains; their dedicated hardware is not part of this course's two-node target.
 
@@ -332,7 +506,7 @@ Congestion is competition for a link or queue whose capacity is temporarily insu
 
 Remote direct memory access (RDMA) allows a network adapter to transfer data into or out of registered memory on a remote machine without the receiving CPU copying each payload through the ordinary socket path. Registration establishes which memory the adapter may access and how. A queue pair (QP) holds send and receive work queues; a completion reports that submitted work has reached its defined completion boundary. CPUs and drivers still create connections, register buffers and coordinate work. RDMA does not mean that the application has no CPU activity or synchronization requirements.
 
-RDMA can operate on host memory. GPUDirect RDMA adds a supported direct path between a network adapter and GPU memory, avoiding a host-memory staging copy for that transfer. Conceptually, the host-staged path is GPU memory → host buffer → NIC → network → NIC → host buffer → remote GPU memory. A qualified direct path is GPU memory → NIC → network → NIC → remote GPU memory. PCIe attachment and registration remain involved; the NIC is not magically connected to GPU HBM without an interconnect. GPUDirect peer-to-peer concerns local device access, while GPUDirect Storage concerns supported storage I/O. Those names do not prove that a particular network transfer is GPU-direct.
+RDMA can operate on host memory. GPUDirect RDMA adds a supported direct path between a network adapter and GPU memory, avoiding a host-memory staging copy for that transfer. Conceptually, the host-staged path is GPU memory → host buffer → NIC → network → NIC → host buffer → remote GPU memory. A qualified direct path is GPU memory → NIC → network → NIC → remote GPU memory. PCIe attachment and registration remain involved; the NIC is not magically connected to GPU high-bandwidth memory (HBM) without an interconnect. GPUDirect peer-to-peer concerns local device access, while GPUDirect Storage concerns supported storage I/O. Those names do not prove that a particular network transfer is GPU-direct.
 
 ### Finally place NCCL above those paths
 
@@ -341,15 +515,22 @@ NCCL supplies topology-aware communication operations; frameworks such as PyTorc
 All-reduce combines values and returns the result to every rank; reduce-scatter combines and shards; all-gather reconstructs shards; all-to-all exchanges distinct partitions. For example, rank 0 holds [1, 2] and rank 1 holds [3, 4]. Sum all-reduce gives both [4, 6]; it does not concatenate them into [1, 2, 3, 4]. Every participant must agree on the operation, datatype, count and collective ordering. A mismatch can hang or fail rather than produce a useful benchmark.
 
 Small messages emphasize fixed latency and launch/synchronization overhead, while large messages emphasize sustained transfer. Algorithmic bandwidth divides the logical payload by elapsed time. NCCL Tests' bus bandwidth applies a collective-specific normalization; it is not a direct measurement of physical NIC traffic. Strong scaling holds total work fixed as ranks increase; weak scaling grows total work with rank count. Both require the slowest-rank step time and identical correctness semantics.
-Slurm is the cluster workload manager: a job requests resources, and a job step starts processes inside that allocation. A launcher assigns each process a rank, a local device and the information needed to find its peers. PyTorch's `torchrun` supplies such process coordination; a process group is the set of ranks participating in its collectives. Use the supplied launcher to establish the group, run the known-value preflight, and release the group on exit. All ranks must call matching collectives in the same order. A barrier waits for the group to arrive, while an all-reduce combines payload values; they serve different purposes. Report the maximum elapsed rank time because the group result is not ready while one required rank is unfinished.
 
-Capability, transport selection and memory registration are distinct claims. An active RDMA port establishes capability; a runtime trace can identify the transport selected by NCCL. Direct GPU-memory registration is an additional requirement, provided only through a supported platform integration such as DMA-BUF or a peer-memory driver path. A selected RDMA transport alone does not prove that payloads avoided host staging.
+### Coordinate the participating processes
 
-**Recall** Which collective gives every rank the reduction result?
+Slurm is the cluster workload manager: a job requests resources, and a job step starts processes inside that allocation. A launcher assigns each process a rank, a local device and the information needed to find its peers. PyTorch's `torchrun` supplies such process coordination; a process group is the set of ranks participating in its collectives. All ranks must call matching collectives in the same order. A barrier waits for the group to arrive, while an all-reduce combines payload values; they serve different purposes. Report the maximum elapsed rank time because the group result is not ready while one required rank is unfinished.
 
-**Mental model** Collectives move and combine data across ranks. With one GPU per node, the relevant path includes GPU, host interconnect, network, and the remote node; it does not demonstrate intra-node NVLink or NVSwitch scaling. GPUDirect RDMA and GPUDirect Storage can remove selected CPU-staging paths only when the NIC, storage, driver, topology, and software stack support them.
+### Separate a possible path from the path actually used
+
+Capability, transport selection and memory registration are distinct claims. An active RDMA port establishes capability; a runtime trace can identify the transport selected by NCCL. Direct GPU-memory registration is an additional requirement, provided only through a supported platform integration such as DMA-BUF (Linux’s framework for sharing buffers between device drivers) or a peer-memory driver path. A selected RDMA transport alone does not prove that payloads avoided host staging.
+
+A fast local kernel cannot improve a step dominated by synchronization or network transfer. Two ranks can teach collective mechanics and placement, but they cannot establish dense-node or large-cluster scaling.
 
 **Practice labs**
 
 - [Lab 00: Verify the two-node H100 platform](reference/labs/00_cluster_preflight.md)
 - [Lab 06: Measure a two-node NCCL all-reduce](reference/labs/06_distributed_collectives.md)
+
+**Mental model**
+
+Collectives move and combine data across ranks. With one GPU per node, the relevant path includes GPU, host interconnect, network, and the remote node; it does not demonstrate intra-node NVLink or NVSwitch scaling. GPUDirect RDMA and GPUDirect Storage can remove selected CPU-staging paths only when the NIC, storage, driver, topology, and software stack support them.

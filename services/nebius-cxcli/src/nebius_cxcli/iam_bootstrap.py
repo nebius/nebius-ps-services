@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .app_mutation import assert_app_mutation_authority
 from .credential_compensation import (
     CredentialCompensationError,
     CredentialCompensationJournal,
@@ -17,6 +18,7 @@ from .credential_compensation import (
     CredentialDeliveryDisposition,
 )
 from .sdk_auth import init_nebius_sdk, suppress_deleted_key_refresh_logs
+from .soperator_install_progress import install_phase, install_progress_step
 
 
 class CredentialProviderError(RuntimeError):
@@ -33,6 +35,7 @@ def _credential_provider_result[Result](
 ) -> Result:
     """Run one secret-bearing provider call behind a sanitized error boundary."""
 
+    assert_app_mutation_authority()
     try:
         return invoke()
     except Exception:
@@ -157,6 +160,7 @@ def _account_ref(service_account_id: str):
     return Account(service_account=Account.ServiceAccount(id=service_account_id))
 
 
+@install_progress_step("service-account", "Checking the canonical Nebius service account")
 def _ensure_service_account(
     *,
     service_accounts,
@@ -201,12 +205,14 @@ def _ensure_service_account(
         )
 
     try:
-        operation = service_accounts.create(
-            CreateServiceAccountRequest(
-                metadata=ResourceMetadata(parent_id=project_id, name=service_account_name),
-                spec=ServiceAccountSpec(description=service_account_description),
-            )
-        ).wait()
+        with install_phase("create-service-account", "Creating the Nebius service account"):
+            assert_app_mutation_authority()
+            operation = service_accounts.create(
+                CreateServiceAccountRequest(
+                    metadata=ResourceMetadata(parent_id=project_id, name=service_account_name),
+                    spec=ServiceAccountSpec(description=service_account_description),
+                )
+            ).wait()
     except Exception as exc:
         if _is_already_exists_error(exc):
             existing = service_accounts.get_by_name(
@@ -251,6 +257,7 @@ def _ensure_service_account(
     )
 
 
+@install_progress_step("permissions", "Ensuring service account permissions")
 def _ensure_project_role_permits(
     *,
     access_permits,
@@ -260,6 +267,7 @@ def _ensure_project_role_permits(
     role_ids: list[str],
     reject_unexpected_role_ids: bool = False,
     create_missing: bool = True,
+    reconcile_managed_roles: bool = False,
 ) -> tuple[list[str], list[str]]:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import (
@@ -269,6 +277,7 @@ def _ensure_project_role_permits(
     )
 
     existing_roles: set[str] = set()
+    permit_ids_by_role: dict[str, list[str]] = {}
     unexpected_resource_permits: set[tuple[str, str]] = set()
     page_token: str | None = None
     seen_tokens: set[str] = set()
@@ -285,6 +294,10 @@ def _ensure_project_role_permits(
             if role:
                 if resource_id == project_id:
                     existing_roles.add(role)
+                    metadata = getattr(item, "metadata", None)
+                    permit_ids_by_role.setdefault(role, []).append(
+                        str(getattr(metadata, "id", "") or "").strip()
+                    )
                 else:
                     unexpected_resource_permits.add((resource_id, role))
         page_token = getattr(response, "next_page_token", "") or None
@@ -305,10 +318,20 @@ def _ensure_project_role_permits(
             f"the canonical project ({len(unexpected_resource_permits)} found)"
         )
     unexpected_roles = sorted(existing_roles - expected_roles)
-    if reject_unexpected_role_ids and unexpected_roles:
+    if reconcile_managed_roles and not (reject_unexpected_role_ids and create_missing):
+        raise ValueError("Managed role reconciliation requires strict identity mutation authority")
+    if reject_unexpected_role_ids and unexpected_roles and not reconcile_managed_roles:
         raise RuntimeError(
             f"{principal_label} has unexpected project role permits: " + ", ".join(unexpected_roles)
         )
+    obsolete_ids = [
+        permit_id for role in unexpected_roles for permit_id in permit_ids_by_role[role]
+    ]
+    if reconcile_managed_roles and (
+        any(not permit_id for permit_id in obsolete_ids)
+        or len(obsolete_ids) != len(set(obsolete_ids))
+    ):
+        raise RuntimeError("Managed role reconciliation requires exact unique access-permit IDs")
 
     missing_roles = sorted(expected_roles - existing_roles)
     if missing_roles and not create_missing:
@@ -327,6 +350,7 @@ def _ensure_project_role_permits(
             already_present.append(role_id)
             continue
         try:
+            assert_app_mutation_authority()
             access_permits.create(
                 CreateAccessPermitRequest(
                     metadata=ResourceMetadata(parent_id=permit_parent_id),
@@ -341,6 +365,15 @@ def _ensure_project_role_permits(
             raise RuntimeError(
                 f"Failed to grant role '{role_id}' to {principal_label}: {exc}"
             ) from exc
+
+    if reconcile_managed_roles:
+        from nebius.api.nebius.iam.v1 import DeleteAccessPermitRequest
+
+        # Establish desired authority before removing exact obsolete project grants.
+        # Foreign scopes and unexpected members were rejected before any mutation.
+        for permit_id in obsolete_ids:
+            assert_app_mutation_authority()
+            access_permits.delete(DeleteAccessPermitRequest(id=permit_id)).wait()
 
     return created, already_present
 
@@ -386,6 +419,7 @@ def _ensure_group(
         )
 
     try:
+        assert_app_mutation_authority()
         operation = groups.create(
             CreateGroupRequest(
                 metadata=ResourceMetadata(parent_id=project_id, name=group_name),
@@ -462,6 +496,7 @@ def _ensure_group_membership(
         return False
 
     try:
+        assert_app_mutation_authority()
         group_memberships.create(
             CreateGroupMembershipRequest(
                 metadata=ResourceMetadata(parent_id=group_id),
@@ -1297,10 +1332,14 @@ def ensure_ci_service_account_identity(
     allow_mutation: bool,
     allow_cli_token: bool = True,
     strict_managed_identity: bool = False,
+    reconcile_managed_roles: bool = False,
+    expected_service_account_id: str | None = None,
 ) -> CIIdentityEnsureResult:
     """Validate or ensure service-account identity and roles without creating keys."""
     if not role_ids:
         raise ValueError("role_ids must not be empty")
+    if reconcile_managed_roles and not (strict_managed_identity and allow_mutation):
+        raise ValueError("Managed role reconciliation requires strict identity mutation authority")
 
     sdk = _init_sdk(
         profile=profile,
@@ -1328,8 +1367,12 @@ def ensure_ci_service_account_identity(
             service_account_name=service_account_name,
             service_account_description=service_account_description,
             strict_description=strict_managed_identity,
-            create_missing=allow_mutation,
+            create_missing=allow_mutation and expected_service_account_id is None,
         )
+        if expected_service_account_id and service_account_id != expected_service_account_id:
+            raise RuntimeError(
+                "Canonical service-account identity does not match the cached credential"
+            )
 
         permit_group_name = _group_name_for_service_account(service_account_name)
         permit_group_id, _ = _ensure_group(
@@ -1353,12 +1396,6 @@ def ensure_ci_service_account_identity(
                 f"IAM group '{permit_group_name}' is missing the canonical service-account "
                 "member; read-only identity validation cannot add it."
             )
-        if allow_mutation:
-            _ensure_group_membership(
-                group_memberships=group_memberships,
-                group_id=permit_group_id,
-                member_id=service_account_id,
-            )
 
         roles_created, roles_already_present = _ensure_project_role_permits(
             access_permits=access_permits,
@@ -1368,7 +1405,15 @@ def ensure_ci_service_account_identity(
             role_ids=role_ids,
             reject_unexpected_role_ids=strict_managed_identity,
             create_missing=allow_mutation,
+            reconcile_managed_roles=reconcile_managed_roles,
         )
+
+        if allow_mutation:
+            _ensure_group_membership(
+                group_memberships=group_memberships,
+                group_id=permit_group_id,
+                member_id=service_account_id,
+            )
 
         return CIIdentityEnsureResult(
             project_id=project_id,

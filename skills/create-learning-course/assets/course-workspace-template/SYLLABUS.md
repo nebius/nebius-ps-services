@@ -18,3 +18,6 @@ tasks and feedback. Identify which earlier ideas each review revisits.}
 
 {An authentic changed scenario, required evidence, correctness/quality rubric
 and limitations. Learners must be prepared for each assessed competency.}
+
+Use the exact conceptual lesson titles from COURSE.md. Name the learning
+subject or relationship rather than enumerating tools or components.

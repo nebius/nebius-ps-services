@@ -23,6 +23,7 @@ from .soperator_release_source import (
     default_soperator_source_cache_root,
 )
 from .soperator_upgrade_progress import sanitized_bounded_command_output
+from .soperator_values import validate_frozen_backup_values
 
 _BUFFER_SIZE = 1024 * 1024
 _MAX_CHART_BYTES = 64 * 1024 * 1024
@@ -190,7 +191,12 @@ def _cache_chart_package(
         with tempfile.TemporaryDirectory(prefix=f".{chart}-", dir=cache_dir) as staging_value:
             staging = Path(staging_value)
             if repository.startswith("oci://"):
-                command = [helm, "pull", f"{repository.rstrip('/')}/{chart}", "--version", version]
+                reference = f"{repository.rstrip('/')}/{chart}"
+                command = (
+                    [helm, "pull", reference + "@" + expected_oci_digest]
+                    if expected_oci_digest
+                    else [helm, "pull", reference, "--version", version]
+                )
             else:
                 command = [helm, "pull", chart, "--repo", repository, "--version", version]
             command.extend(["--destination", str(staging)])
@@ -261,6 +267,102 @@ def _package_verified_source_chart(
     return packages[0]
 
 
+def render_soperator_consumers(
+    lock: SoperatorReleaseSnapshot,
+    source: SoperatorSourceReceipt,
+    values: Mapping[str, object],
+) -> tuple[dict, ...]:
+    """Render the frozen umbrella to resolve actual child values and namespaces."""
+    if source.release != lock.release or source.manifest_sha256 != lock.source_manifest_sha256:
+        raise ValueError("Soperator source receipt does not match the operation snapshot")
+    helm = shutil.which("helm")
+    if not helm:
+        raise RuntimeError("helm is required to validate Soperator configuration")
+    with tempfile.TemporaryDirectory(prefix="cxcli-soperator-consumers-") as directory:
+        path = Path(directory) / "values.yaml"
+        path.write_text(yaml.safe_dump(dict(values)))
+        path.chmod(0o600)
+        try:
+            result = _run(
+                [
+                    helm,
+                    "template",
+                    "soperator-fluxcd",
+                    str(Path(source.source_dir) / lock.umbrella.source_path),
+                    "--namespace",
+                    "flux-system",
+                    "--values",
+                    str(path),
+                ],
+                label="render Soperator consumers",
+            )
+        except RuntimeError:
+            raise ValueError("Frozen Soperator umbrella rejected the configuration") from None
+    return tuple(
+        doc
+        for doc in yaml.safe_load_all(result.stdout)
+        if isinstance(doc, dict) and doc.get("kind") == "HelmRelease"
+    )
+
+
+def soperator_consumer_namespaces(
+    lock: SoperatorReleaseSnapshot,
+    consumers: tuple[dict, ...],
+) -> dict[str, str]:
+    roles = {node.release_name: node.chart_key for node in lock.release_graph}
+    namespaces: dict[str, str] = {}
+    for doc in consumers:
+        role = roles.get(doc.get("metadata", {}).get("name"))
+        if role in {"backupConfig", "slurmCluster", "nodesets"}:
+            namespace = doc.get("spec", {}).get("targetNamespace")
+            if not isinstance(namespace, str) or not namespace:
+                raise ValueError(f"Soperator {role} consumer has no explicit target namespace")
+            namespaces[role] = namespace
+    return namespaces
+
+
+def _validate_child_renders(
+    lock: SoperatorReleaseSnapshot,
+    consumers: tuple[dict, ...],
+    packages: Mapping[str, Path],
+    *,
+    helm: str,
+    directory: Path,
+) -> None:
+    roles = {node.release_name: node.chart_key for node in lock.release_graph}
+    for doc in consumers:
+        role = roles.get(doc.get("metadata", {}).get("name"))
+        if role is None or role not in packages:
+            continue
+        spec = doc.get("spec", {})
+        values = spec.get("values") or {}
+        if not isinstance(values, Mapping):
+            raise ValueError(f"Soperator {role} consumer values must be a mapping")
+        if role == "backupConfig":
+            files = _chart_file_map(packages[role])
+            defaults = yaml.safe_load(files.get("values.yaml", b"{}"))
+            validate_frozen_backup_values(values, defaults)
+        path = directory / f"{role}-effective-values.yaml"
+        path.write_text(yaml.safe_dump(dict(values)))
+        path.chmod(0o600)
+        try:
+            _run(
+                [
+                    helm,
+                    "template",
+                    str(spec.get("releaseName") or "soperator"),
+                    str(packages[role]),
+                    "--namespace",
+                    str(spec.get("targetNamespace") or "flux-system"),
+                    "--values",
+                    str(path),
+                ],
+                label=f"validate frozen {role} configuration",
+            )
+        except RuntimeError:
+            raise ValueError(f"Frozen Soperator {role} chart rejected the configuration") from None
+
+
 def verify_soperator_release_artifacts(
     lock: SoperatorReleaseSnapshot,
     source: SoperatorSourceReceipt,
@@ -284,7 +386,8 @@ def verify_soperator_release_artifacts(
     with tempfile.TemporaryDirectory(prefix="nebius-cxcli-soperator-source-charts-") as temp_value:
         temp = Path(temp_value)
         dependency_packages: dict[str, Path] = {}
-        for third_party_chart in lock.third_party_charts.values():
+        consumer_packages: dict[str, Path] = {}
+        for key, third_party_chart in lock.third_party_charts.items():
             package = _cache_chart_package(
                 helm=helm,
                 chart=third_party_chart.chart,
@@ -295,6 +398,7 @@ def verify_soperator_release_artifacts(
                 cache_dir=chart_cache,
             )
             dependency_packages[third_party_chart.chart] = package
+            consumer_packages[key] = package
             package_digests.append(third_party_chart.package_sha256)
         for key, upstream_chart in lock.charts.items():
             official = _cache_chart_package(
@@ -325,6 +429,7 @@ def verify_soperator_release_artifacts(
                     f"official OCI chart {upstream_chart.name} differs from release source"
                 )
             package_digests.append(upstream_chart.package_sha256)
+            consumer_packages[key] = official
             if key == "umbrella":
                 umbrella_package = official
         if umbrella_package is None:
@@ -363,6 +468,12 @@ def verify_soperator_release_artifacts(
             raise ValueError("official OCI umbrella render differs from release source")
         if values is not None:
             _verify_rendered_release_graph(source_render, values)
+            consumers = tuple(
+                doc
+                for doc in yaml.safe_load_all(source_render)
+                if isinstance(doc, dict) and doc.get("kind") == "HelmRelease"
+            )
+            _validate_child_renders(lock, consumers, consumer_packages, helm=helm, directory=temp)
         render_digest = _sha256_bytes(source_render)
 
     return SoperatorArtifactReceipt(

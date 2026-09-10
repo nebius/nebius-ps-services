@@ -103,21 +103,34 @@ and supporting assets. Keep the preservation audit out of learner content.
 
 ### 3. Author The Complete Course
 
-Use the template inventory and field order from `course-format.md`. Open with
-what the subject is, why it exists and how its end-to-end workflow operates.
-Later primers must explain mechanism and distinctions, not just benefits.
-Continue into reasoning, assumptions, trade-offs, examples, practice and
-feedback; a glossary link never replaces the explanation.
+Use the template inventory and four-section order from `course-format.md` for
+**every lesson**: **Objective → How it works → Practice → Mental model**.
+Name lessons for the concept or relationship taught, not an inventory of tools
+or components. Keep titles specific enough to signal the learning scope.
+
+Put the observable Objective first. In How it works, define concepts, connect
+necessary prior knowledge, explain purpose and mechanism step by step, and
+work through concrete examples and limitations in coherent prose. Integrate
+former Start here, What it is, Prerequisite bridge, Recall, Why it matters and
+Mechanism content; do not recreate these as standalone lesson headings.
+Expand unfamiliar abbreviations at first meaningful use and explain what the
+term does; omit expansions only for vocabulary obvious to the stated audience.
+Verify wording in context, never by global replacement. A glossary or link
+cannot substitute for the teaching. Put practice, feedback and retrieval in the
+owning activity. End with a concise Mental model that synthesizes concepts
+already explained; it must not introduce prerequisites or new mechanisms.
 
 Use one exact lesson/lab identity across syllabus, TOC, guide, metadata and
 source. Lab numbering is identity, not a substitute for prerequisite order.
 Explain each lab's purpose immediately after its title, then use all seven
 guide sections. Distinguish supplied behavior from optional extensions.
 
-Place each original diagram next to the explanation it supports. Give it one
-primary inline home and link later references to it. Diagram semantics,
-captions and surrounding prose must agree. Never add decorative diagrams to
-satisfy an image quota.
+Include at least one original core-concept diagram **inside every How it
+works**, beside the prose it explains. Show the lesson's actual relationships,
+sequence or decisions, and explain the notation and conclusion in visible
+text. A link to another lesson's figure or a decorative image does not satisfy
+this requirement. Give each diagram one primary inline home; link secondary
+mentions. Diagram semantics, captions and prose must agree.
 
 ### 4. Build The Publication
 
@@ -137,7 +150,11 @@ or dependency matrix for a nontechnical course.
 Use the checklist in `publication-safety.md` and the course's own tests:
 
 - Review every lesson semantically and grammatically, not merely by headings
-  or length. Test whether the outcome can be learned from the supplied text.
+  or length: conceptual title, four-section order, definitions before use,
+  causal completeness, contextual abbreviations and a final summary that adds
+  no new teaching. Test whether the outcome can be learned from the text.
+- Check a meaningful core diagram inside each How it works; global figure
+  counts, headings, captions and word counts cannot prove teaching quality.
 - Verify prerequisites, topic ownership, numbering, TOC targets and practice
   alignment. Retain useful depth when removing genuine duplicates.
 - Check complete source/prose parity, rebuild, then run the read-only check.

@@ -50,9 +50,12 @@ SVG references. Keep manifests, source files and output inside the course;
 reject traversal and symlink paths. A builder must not run learner code,
 download packages or start services.
 
-Check less-obvious request paths too: hyperlink ping tracking, CSS image
-functions and escaped SVG presentation values. Validate each figure's local
-caption and separately referenced title/description, not only global counts.
+Check less-obvious request paths too: hyperlink `ping` tracking,
+[`attributionsrc` reporting](https://wicg.github.io/attribution-reporting-api/#attributionsrc),
+CSS image functions and escaped SVG presentation values. Reject attribution
+attributes even when empty or valueless; normal HTTPS navigation remains allowed.
+Validate each figure's local caption and separately referenced title/description,
+not only global counts.
 Bounded checks do not replace a manual review of unfamiliar HTML/CSS features.
 Exercise malformed as well as valid authoring input: missing attribute values
 must produce clear validation failures, not an unhandled parser exception.
@@ -91,7 +94,13 @@ install or contact a live target without authority for those effects.
 ## Final Review
 
 - Read all changed public prose and files, not only keyword scan matches.
+- Check conceptual titles, Objective first, connected How it works, owning
+  Practice and Mental model last; no removed standalone authoring labels.
 - Check definitions before use cases, supported assumptions and calculation units.
+- Verify unfamiliar abbreviations locally and contextually; preserve official
+  names and mathematical meanings instead of mechanically expanding tokens.
+- Confirm each How it works includes a meaningful inline core diagram and
+  explanatory prose; another lesson's figure or a caption alone cannot count.
 - Confirm every outcome has matching teaching, practice and feedback.
 - Verify real commands, exact flags and actual output destinations against code.
 - Confirm TOC titles/IDs, lab associations and prerequisite order agree.

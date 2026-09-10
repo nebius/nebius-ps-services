@@ -575,6 +575,219 @@ def test_complete_product_readiness_requires_exact_nested_graph(
     assert detail == "complete Soperator release graph and product are Ready"
 
 
+def _retained_check_history_responses():
+    responses = _responses()
+    release = responses["helmreleases.helm.toolkit.fluxcd.io"]["items"][0]
+    release["spec"].update(releaseName="native-checks", targetNamespace="soperator")
+
+    def owner(kind, name, uid, api="batch/v1"):
+        return [{"apiVersion": api, "kind": kind, "name": name, "uid": uid, "controller": True}]
+
+    labels = {"app.kubernetes.io/component": "soperatorchecks"}
+    responses["pods"]["items"].append(
+        {
+            "metadata": {
+                "name": "old-check-pod",
+                "namespace": "soperator",
+                "uid": "old-pod-uid",
+                "labels": labels.copy(),
+                "ownerReferences": owner("Job", "old-check", "old-job-uid"),
+            },
+            "status": {"phase": "Failed"},
+        }
+    )
+    responses["jobs.batch"] = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "old-check",
+                    "namespace": "soperator",
+                    "uid": "old-job-uid",
+                    "labels": labels.copy(),
+                    "ownerReferences": owner("CronJob", "native-check", "cron-uid"),
+                },
+                "status": {"failed": 1, "conditions": _condition("Failed")},
+            }
+        ]
+    }
+    responses["cronjobs.batch"] = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "native-check",
+                    "namespace": "soperator",
+                    "uid": "cron-uid",
+                    "labels": labels.copy(),
+                    "ownerReferences": owner(
+                        "SlurmCluster", "example", "cluster-uid", "slurm.nebius.ai/v1"
+                    ),
+                },
+            }
+        ]
+    }
+    responses["activechecks.slurm.nebius.ai"] = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "native-check",
+                    "namespace": "soperator",
+                    "uid": "check-uid",
+                    "labels": {"app.kubernetes.io/managed-by": "Helm"},
+                    "annotations": {
+                        "meta.helm.sh/release-name": "native-checks",
+                        "meta.helm.sh/release-namespace": "soperator",
+                    },
+                },
+                "spec": {
+                    "slurmClusterRefName": "example",
+                    "checkType": "slurmJob",
+                    "runAfterCreation": True,
+                },
+                "status": {"slurmJobsStatus": {"lastRunStatus": "Complete"}},
+            }
+        ]
+    }
+    return responses
+
+
+def test_retained_native_check_history_does_not_block_service_readiness(monkeypatch):
+    responses = _retained_check_history_responses()
+    _install_fake_kubectl_json(monkeypatch, responses)
+    contract = _contract()
+    contract["readiness"] = {"activeChecksRequired": True}
+    ready, detail = flux_ops._soperator_product_readiness(contract, env={})
+    assert ready is True, detail
+
+
+@pytest.mark.parametrize(
+    ("resource", "path", "value"),
+    [
+        ("pods", ("metadata", "ownerReferences", 0, "uid"), "foreign-job"),
+        ("pods", ("metadata", "ownerReferences", 0, "controller"), False),
+        ("pods", ("metadata", "ownerReferences", 0, "kind"), "StatefulSet"),
+        ("pods", ("metadata", "namespace"), "foreign"),
+        ("pods", ("metadata", "labels"), {}),
+        ("pods", ("status", "phase"), "Pending"),
+        ("jobs.batch", ("metadata", "ownerReferences", 0, "uid"), "foreign-cron"),
+        ("jobs.batch", ("metadata", "ownerReferences"), []),
+        ("jobs.batch", ("metadata", "deletionTimestamp"), "2026-01-01T00:00:00Z"),
+        ("jobs.batch", ("status", "conditions"), []),
+        ("jobs.batch", ("status", "active"), 1),
+        ("jobs.batch", ("status", "terminating"), 1),
+        ("cronjobs.batch", ("metadata", "ownerReferences", 0, "uid"), "foreign-cluster"),
+        ("cronjobs.batch", ("metadata", "ownerReferences", 0, "name"), "foreign"),
+        ("cronjobs.batch", ("metadata", "ownerReferences", 0, "apiVersion"), "foreign/v1"),
+        ("cronjobs.batch", ("metadata", "labels"), {}),
+        ("activechecks.slurm.nebius.ai", ("spec", "slurmClusterRefName"), "foreign"),
+        ("activechecks.slurm.nebius.ai", ("spec", "checkType"), "prolog"),
+        ("activechecks.slurm.nebius.ai", ("metadata", "annotations"), {}),
+        (
+            "activechecks.slurm.nebius.ai",
+            ("metadata", "annotations", "meta.helm.sh/release-name"),
+            "foreign",
+        ),
+        (
+            "activechecks.slurm.nebius.ai",
+            ("metadata", "annotations", "meta.helm.sh/release-namespace"),
+            "foreign",
+        ),
+    ],
+)
+def test_unproven_check_history_still_blocks_pod_readiness(monkeypatch, resource, path, value):
+    responses = _retained_check_history_responses()
+    item = responses[resource]["items"][-1]
+    for key in path[:-1]:
+        item = item[key]
+    item[path[-1]] = value
+    _install_fake_kubectl_json(monkeypatch, responses)
+    ready, _ = flux_ops._soperator_product_readiness(_contract(), env={})
+    assert ready is False
+
+
+@pytest.mark.parametrize(
+    "resource", ["jobs.batch", "cronjobs.batch", "activechecks.slurm.nebius.ai"]
+)
+def test_missing_check_history_inventory_cannot_hide_failed_pods(monkeypatch, resource):
+    responses = _retained_check_history_responses()
+    responses[resource] = {"items": []}
+    _install_fake_kubectl_json(monkeypatch, responses)
+    assert flux_ops._soperator_product_readiness(_contract(), env={})[0] is False
+
+
+def test_terminal_history_does_not_accept_a_failed_required_check(monkeypatch):
+    responses = _retained_check_history_responses()
+    responses["activechecks.slurm.nebius.ai"]["items"][0]["status"]["slurmJobsStatus"][
+        "lastRunStatus"
+    ] = "Error"
+    _install_fake_kubectl_json(monkeypatch, responses)
+    contract = _contract()
+    contract["readiness"] = {"activeChecksRequired": True}
+    ready, detail = flux_ops._soperator_product_readiness(contract, env={})
+    assert ready is False
+    assert detail == "required Soperator ActiveChecks are not Available"
+
+
+def test_terminal_check_history_does_not_hide_unready_service_pod(monkeypatch):
+    responses = _retained_check_history_responses()
+    responses["pods"]["items"][0]["status"]["conditions"] = []
+    _install_fake_kubectl_json(monkeypatch, responses)
+    ready, detail = flux_ops._soperator_product_readiness(_contract(), env={})
+    assert ready is False
+    assert "controller-0" in detail
+
+
+def test_nonblocking_check_history_does_not_become_a_required_gate(monkeypatch):
+    responses = _retained_check_history_responses()
+    check = responses["activechecks.slurm.nebius.ai"]["items"][0]
+    check["spec"]["runAfterCreation"] = False
+    check["status"]["slurmJobsStatus"]["lastRunStatus"] = "Error"
+    _install_fake_kubectl_json(monkeypatch, responses)
+    assert flux_ops._soperator_product_readiness(_contract(), env={})[0] is True
+
+
+@pytest.mark.parametrize(
+    "phase,foreign,expected",
+    [("Failed", False, True), ("Pending", False, False), ("Failed", True, False)],
+)
+def test_auxiliary_history_requires_terminal_job_and_exact_helm_owner(
+    monkeypatch, phase, foreign, expected
+):
+    responses = _retained_check_history_responses()
+    name = "run-extensive-check-on-reservations"
+    cron = responses["cronjobs.batch"]["items"][0]
+    cron["metadata"].update(
+        name=name,
+        ownerReferences=[],
+        annotations={
+            "meta.helm.sh/release-name": "foreign" if foreign else "native-checks",
+            "meta.helm.sh/release-namespace": "soperator",
+        },
+    )
+    cron["spec"] = {
+        "jobTemplate": {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": name,
+                                "env": [
+                                    {"name": "TARGET_ACTIVE_CHECK_NAME", "value": "extensive-check"}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    responses["jobs.batch"]["items"][0]["metadata"]["ownerReferences"][0]["name"] = name
+    responses["pods"]["items"][-1]["status"]["phase"] = phase
+    responses["activechecks.slurm.nebius.ai"]["items"][0]["metadata"]["name"] = "extensive-check"
+    _install_fake_kubectl_json(monkeypatch, responses)
+    assert flux_ops._soperator_product_readiness(_contract(), env={})[0] is expected
+
+
 def test_stale_child_generation_blocks_product_readiness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1132,6 +1345,48 @@ def test_native_upstream_observation_accepts_release_without_cxcli_labels(
     assert receipt.release == "4.1.7"
     assert receipt.cluster_uid == "cluster-uid"
     assert len(receipt.protected_storage) == 2
+
+
+@pytest.mark.parametrize("latest_status", ["Complete", "Error"])
+def test_native_observation_separates_terminal_check_history_from_results(
+    monkeypatch, latest_status
+):
+    payloads = _install_native_kubectl(monkeypatch)
+    history = _retained_check_history_responses()
+    check = history["activechecks.slurm.nebius.ai"]["items"][0]
+    check["spec"]["slurmClusterRefName"] = "soperator"
+    check["status"]["slurmJobsStatus"]["lastRunStatus"] = latest_status
+    history["cronjobs.batch"]["items"][0]["metadata"]["ownerReferences"][0]["name"] = "soperator"
+    payloads["pods"]["items"].append(history["pods"]["items"][-1])
+    payloads["activechecks"]["items"].append(check)
+    payloads["helm"]["items"].append(
+        {
+            "metadata": {
+                "name": "soperator-activechecks",
+                "namespace": "flux-system",
+                "uid": "checks-release-uid",
+                "generation": 1,
+            },
+            "spec": {"releaseName": "native-checks", "targetNamespace": "soperator"},
+            "status": {"observedGeneration": 1, "conditions": _condition()},
+        }
+    )
+    original = flux_ops._kubectl_json
+
+    def read(command, **kwargs):
+        for resource in ("jobs.batch", "cronjobs.batch"):
+            if resource in command:
+                return history[resource]
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(flux_ops, "_kubectl_json", read)
+    ready, detail, receipt = flux_ops._native_soperator_observation(
+        expected_release="4.1.7", env={}
+    )
+    assert ready is (latest_status == "Complete"), detail
+    assert (receipt is not None) is ready
+    if not ready:
+        assert detail == "native Soperator ActiveChecks are not Available"
 
 
 def test_native_observation_rejects_failed_required_active_check(

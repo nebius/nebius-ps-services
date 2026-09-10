@@ -1,0 +1,21 @@
+<svg viewBox="0 0 600 440" role="img" aria-labelledby="h100-whole-title h100-whole-desc">
+<title id="h100-whole-title">H100 SXM 80 GB: SMs, L2 cache and HBM</title>
+<desc id="h100-whole-desc">A simplified whole-device view shows representative SM boxes for 132 streaming multiprocessors, linked to the shared 50 MB L2 cache and then 80 GB HBM3. Lines mean data-access connections, not timing or a mandatory path for every access. The ellipsis omits repeated SMs. This is not a silicon floorplan.</desc>
+<rect x="12" y="12" width="576" height="416" rx="16" fill="#f7fafc" stroke="#245880" stroke-width="2"/>
+<g font-family="Arial, sans-serif" fill="#172d3b" text-anchor="middle" font-size="24">
+<text x="300" y="51" font-weight="700">H100 SXM 80 GB</text>
+<text x="300" y="89">132 SMs compute</text>
+<g fill="#eef8f2" stroke="#206757" stroke-width="2">
+<rect x="36" y="110" width="108" height="62" rx="8"/>
+<rect x="160" y="110" width="108" height="62" rx="8"/>
+<rect x="428" y="110" width="136" height="62" rx="8"/>
+</g>
+<text x="90" y="149">SM 0</text><text x="214" y="149">SM 1</text><text x="350" y="149">…</text><text x="496" y="149">SM 131</text>
+<path d="M90 172V196H496V172 M214 172V196 M300 196V223" fill="none" stroke="#245880" stroke-width="2"/>
+<rect x="36" y="223" width="528" height="64" rx="10" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+<text x="300" y="263">L2 cache · 50 MB</text>
+<path d="M300 287V326" fill="none" stroke="#245880" stroke-width="2"/>
+<rect x="36" y="326" width="528" height="64" rx="10" fill="#fff7e7" stroke="#86500e" stroke-width="2"/>
+<text x="300" y="366">HBM3 · 80 GB</text>
+</g>
+</svg>

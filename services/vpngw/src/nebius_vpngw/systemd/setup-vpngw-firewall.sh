@@ -80,6 +80,7 @@ logger -t vpngw-firewall "Tunnel interfaces are not filtered - BGP traffic allow
 
 # Explicitly allow all traffic on XFRM interfaces (xfrm-*)
 for xfrm_if in $(ip link show type xfrm 2>/dev/null | grep -oP '^[0-9]+: \K[^:]+'); do
+  xfrm_if="${xfrm_if%%@*}"
   ufw allow in on "$xfrm_if"
   ufw allow out on "$xfrm_if"
   logger -t vpngw-firewall "Allowed traffic on XFRM interface: $xfrm_if"

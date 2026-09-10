@@ -5166,3 +5166,37 @@ def test_default_service_runtime_consumes_validated_manual_failover_after_promot
     runtime.close(restore_guard=False)
 
     assert not failover_path.exists()
+
+
+def test_rule_only_table_220_cleanup_does_not_record_a_spurious_failure(monkeypatch):
+    import subprocess
+    import time
+
+    from nebius_vpngw.agent import local_commands, routing_guard
+
+    remaining_rule = [True]
+    commands = []
+
+    def execute(args, **kwargs):
+        commands.append(args)
+        if args == ["ip", "rule", "show"]:
+            output = "220: from all lookup 220\n" if remaining_rule[0] else ""
+            return subprocess.CompletedProcess(args, 0, output, "")
+        if args == ["ip", "-j", "-4", "route", "show", "table", "all"]:
+            return subprocess.CompletedProcess(args, 0, "[]", "")
+        if args == ["ip", "route", "flush", "table", "220"]:
+            return subprocess.CompletedProcess(args, 2, "", "FIB table does not exist")
+        assert args == ["ip", "rule", "del", "lookup", "220"]
+        remaining_rule[0] = False
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(local_commands, "_bounded_run", execute)
+    budget = local_commands.CommandBudget(time.monotonic() + 20)
+    token = local_commands.CURRENT.set(budget)
+    try:
+        assert routing_guard._remove_table_220()
+        budget.require_success()
+        assert ["ip", "route", "flush", "table", "220"] not in commands
+        assert not remaining_rule[0]
+    finally:
+        local_commands.CURRENT.reset(token)

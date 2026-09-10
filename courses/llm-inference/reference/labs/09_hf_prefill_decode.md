@@ -12,6 +12,8 @@ H100 Tensor Cores can efficiently process large prefill matrices; single-token d
 
 ## Concepts and code path
 
+The implementation supplies a `DynamicCache`, updates attention masks and cache positions, and verifies cache length against inputs actually forwarded.
+
 The script tokenizes the prompt, performs a prefill pass with cache creation, and selects the first token from its logits. Each later pass supplies the last selected token and advances mask/cache state. For N requested new tokens, the schedule uses one prefill and N−1 continuation passes. Checks enforce that schedule rather than merely accepting nonempty text.
 
 ## Practice

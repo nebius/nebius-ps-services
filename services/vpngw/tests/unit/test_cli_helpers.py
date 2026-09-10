@@ -7,6 +7,7 @@ import os
 import shlex
 import subprocess
 import typing as t
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -165,6 +166,25 @@ from nebius_vpngw.vm_ha_credentials import VMHACredentialIdentityError
 
 
 class _ContextManagedFake:
+    def inspect_ordinary_targets(self, names):
+        return {
+            name: ("compute-" + name, "203.0.113." + str(10 + int(name.rsplit("-", 1)[-1])))
+            for name in names
+        }
+
+    def wait_for_vm_network(self, *args, **kwargs):
+        return True
+
+    def check_vm_health(self, *args, **kwargs):
+        return {
+            "reachable": True,
+            "cloud_init_complete": True,
+            "esp4_ready": True,
+            "strongswan_installed": True,
+            "frr_installed": True,
+            "message": "ready",
+        }
+
     def __enter__(self):
         return self
 
@@ -289,7 +309,11 @@ def _isolate_vm_ha_apply_identity_preflight(monkeypatch: pytest.MonkeyPatch) -> 
             token_identity=SimpleNamespace(token="managed-token"),
         ),
     )
-    artifact = SimpleNamespace(sha256="f" * 64)
+    artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=())
+    monkeypatch.setattr("nebius_vpngw.cli._unchanged_vm_ha_apply", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._plan_vm_ha_package_dependencies", lambda artifact, **kwargs: artifact
+    )
     monkeypatch.setattr(
         "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
         lambda _ssh_policy: artifact,
@@ -733,6 +757,46 @@ def test_prep_network_help_and_interactive_flags() -> None:
     assert "cannot be used together" in conflict_output
 
 
+@pytest.fixture
+def ordinary_deployment_boundary(monkeypatch):
+    """Isolate deployment I/O in tests of trust, IAM, readiness and HA removal.
+
+    The real plan/approval/receipt path is exercised in test_ordinary_apply.py.
+    These tests retain their original host-push spies after successful readiness.
+    """
+    from nebius_vpngw import cli
+    from nebius_vpngw.deploy import ordinary_apply
+
+    monkeypatch.setattr(cli, "_prepare_ordinary_apply", lambda *args, **kwargs: ({}, {}, False))
+    monkeypatch.setattr(
+        ordinary_apply,
+        "inspect_plan",
+        lambda ssh, target, instance, local, **kwargs: SimpleNamespace(
+            target=target,
+            instance=instance,
+            target_identity=kwargs["target_identity"],
+            observation={"config_sha256": None},
+            noop=False,
+            close=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(
+        ordinary_apply,
+        "execute_plan",
+        lambda ssh, prepared, local, **kwargs: ssh.push_config_and_reload(
+            prepared.target, prepared.instance, local, fail_closed=True
+        ),
+    )
+
+
+@pytest.fixture
+def approved_disruption(monkeypatch):
+    """An operator explicitly accepts the new boundary in HA effect-owner tests."""
+    from nebius_vpngw import cli
+
+    monkeypatch.setattr(cli, "_approve_disruption", lambda *args, **kwargs: True)
+
+
 def _static_route_plan() -> ResolvedDeploymentPlan:
     return ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
@@ -1065,7 +1129,9 @@ def test_missing_standby_direct_apply_points_to_vm_ha_without_claiming_a_digest(
     )
 
 
-def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Path) -> None:
+def test_apply_prints_add_routes_hint_after_initial_static_creation(
+    ordinary_deployment_boundary, tmp_path: Path
+) -> None:
     config_path = tmp_path / "static.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
 
@@ -1110,7 +1176,7 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
             return changes
 
         def ensure_group(self, spec, recreate=False, local_prefixes=None) -> dict[str, str]:
-            return {}
+            return {item.hostname: item.external_ip for item in plan.iter_instance_configs()}
 
     class FakeSSHPush:
         def deactivate_vm_ha(self, target, cfg) -> bool:
@@ -1143,7 +1209,65 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
     ]
 
 
+def test_apply_missing_attached_disk_stops_before_deployment(
+    ordinary_deployment_boundary, tmp_path: Path
+) -> None:
+    from nebius_vpngw.deploy.vm_manager import VMManager
+
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    manager = VMManager(project_id="project-test", region="eu-west1")
+    service = Mock()
+    service.get.return_value.wait.side_effect = _gateway_discovery_error(StatusCode.NOT_FOUND)
+
+    class FakeVMManager(_ContextManagedFake):
+        def __init__(self, **_kwargs):
+            pass
+
+        def check_changes(self, spec):
+            return manager.check_changes(spec)
+
+        ensure_group = Mock()
+
+    vm = SimpleNamespace(
+        spec=SimpleNamespace(
+            boot_disk=SimpleNamespace(existing_disk=SimpleNamespace(id="disk-attached"))
+        )
+    )
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=_static_route_plan()),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch.object(manager, "_get_client", return_value=object()),
+        patch.object(manager, "_get_vm_by_name", return_value=vm),
+        patch("nebius.api.nebius.compute.v1.DiskServiceClient", return_value=service),
+        patch("nebius_vpngw.cli.SSHPush") as push,
+        patch("nebius_vpngw.cli.publish_vm_ha_ssh_trust") as publish,
+    ):
+        result = CliRunner().invoke(app, ["apply", "-c", str(config_path)])
+
+    assert result.exit_code != 0
+    assert "attached boot disk is unavailable" in str(result.exception)
+    assert "Apply completed successfully" not in result.stdout
+    assert "VM does not exist" not in result.stdout
+    FakeVMManager.ensure_group.assert_not_called()
+    push.assert_not_called()
+    publish.assert_not_called()
+    service.create.assert_not_called()
+    manager.close()
+
+
 def test_ordinary_apply_publishes_prepinned_trust_before_compute_mutation(
+    ordinary_deployment_boundary,
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
@@ -1195,7 +1319,7 @@ def test_ordinary_apply_publishes_prepinned_trust_before_compute_mutation(
         def ensure_group(self, spec, recreate=False, local_prefixes=None):
             assert self.policy is policy
             trace.append("ensure-group")
-            return {}
+            return {item.hostname: item.external_ip for item in plan.iter_instance_configs()}
 
     class FakeSSHPush:
         def deactivate_vm_ha(self, target, cfg) -> bool:
@@ -1226,7 +1350,9 @@ def test_ordinary_apply_publishes_prepinned_trust_before_compute_mutation(
     assert trace.index("construct-runtime") < trace.index("ensure-group")
 
 
-def test_ordinary_dry_run_runs_trust_preflight_without_effects(tmp_path: Path) -> None:
+def test_ordinary_dry_run_runs_trust_preflight_without_effects(
+    ordinary_deployment_boundary, tmp_path: Path
+) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
     local_cfg = {
@@ -1277,7 +1403,7 @@ def test_ordinary_dry_run_runs_trust_preflight_without_effects(tmp_path: Path) -
     assert trace == ["construct", "preflight", "check-changes"]
     assert "Dry-run complete" in result.stdout
     publish_trust.assert_not_called()
-    ssh_push.assert_not_called()
+    ssh_push.assert_called_once()  # constructed for read-only deployment inspection
 
 
 def test_ordinary_dry_run_reports_required_enrollment_without_learning(
@@ -1326,6 +1452,7 @@ def test_ordinary_dry_run_reports_required_enrollment_without_learning(
 
 
 def test_ordinary_apply_enrolls_then_repreflights_before_publication(
+    ordinary_deployment_boundary,
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
@@ -1368,7 +1495,7 @@ def test_ordinary_apply_enrolls_then_repreflights_before_publication(
         def ensure_group(self, *args, **kwargs):
             assert self.runtime
             trace.append("ensure-group")
-            return {}
+            return {item.hostname: item.external_ip for item in plan.iter_instance_configs()}
 
     class FakeSSHPush:
         def deactivate_vm_ha(self, *args, **kwargs) -> bool:
@@ -1405,6 +1532,7 @@ def test_ordinary_apply_enrolls_then_repreflights_before_publication(
 
 
 def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vpc_read(
+    ordinary_deployment_boundary,
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
@@ -1482,7 +1610,8 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
             ["apply", "--local-config-file", str(config_path), "--sa", "test-sa"],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 1
+    assert "incomplete gateway target set" in str(result.exception)
     check_changes.assert_called_once()
     operator_auth.assert_not_called()
     compute_read.assert_called_once()
@@ -1498,6 +1627,7 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
 
 @pytest.mark.parametrize("sa_name", [None, "test-sa"], ids=("operator", "service-account"))
 def test_unmarked_resources_do_not_trigger_implicit_ha_discovery_or_teardown(
+    ordinary_deployment_boundary,
     tmp_path: Path,
     sa_name: str | None,
 ) -> None:
@@ -1570,7 +1700,7 @@ def test_unmarked_resources_do_not_trigger_implicit_ha_discovery_or_teardown(
             return {"nebius-vpn-gw-0": former["nebius-vpn-gw-0"]}
 
         def wait_for_vm_network(self, *args, **kwargs) -> bool:
-            return False
+            return True
 
     class FakeSSHPush:
         def inspect_legacy_vm_ha_identity(self, target, name, cfg):
@@ -1632,6 +1762,7 @@ def test_unmarked_resources_do_not_trigger_implicit_ha_discovery_or_teardown(
     ids=("v4", "v3-successor", "v4-resume-after-writer-stop"),
 )
 def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure_group(
+    ordinary_deployment_boundary,
     tmp_path: Path,
     lifecycle_record_version: int,
     resume_after_writer_stop: bool,
@@ -1724,7 +1855,7 @@ def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure
             return {"nebius-vpn-gw-0": former["nebius-vpn-gw-0"]}
 
         def wait_for_vm_network(self, *args, **kwargs) -> bool:
-            return False
+            return True
 
     class FakeSSHPush:
         def inspect_legacy_vm_ha_identity(self, target, name, cfg):
@@ -1890,6 +2021,7 @@ def test_ha_to_non_ha_requested_sa_fails_closed_before_discovery(
 
 
 def test_removed_tombstone_makes_consecutive_ordinary_sa_apply_teardown_free(
+    ordinary_deployment_boundary,
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
@@ -1941,7 +2073,7 @@ def test_removed_tombstone_makes_consecutive_ordinary_sa_apply_teardown_free(
             return {"nebius-vpn-gw-0": "203.0.113.10"}
 
         def wait_for_vm_network(self, *args, **kwargs) -> bool:
-            return False
+            return True
 
     class FakeSSHPush:
         def inspect_legacy_vm_ha_identity(self, target, name, cfg):
@@ -2121,7 +2253,7 @@ def test_ha_to_non_ha_failure_blocks_all_ordinary_provisioning(
 
 @pytest.mark.parametrize("recreate_gw", [False, True])
 def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
-    tmp_path: Path, recreate_gw: bool
+    ordinary_deployment_boundary, tmp_path: Path, recreate_gw: bool
 ) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -2200,6 +2332,7 @@ def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
 
 @pytest.mark.parametrize("identity_failure", [False, True])
 def test_apply_waits_for_readiness_but_not_identity_failure(
+    ordinary_deployment_boundary,
     tmp_path: Path,
     identity_failure: bool,
 ) -> None:
@@ -3931,9 +4064,14 @@ def test_vm_ha_nebius_credential_failure_precedes_auth_manager_and_cloud(
 
 
 @pytest.mark.parametrize("with_removed_tombstone", [False, True])
-def test_vm_ha_migration_dry_run_previews_without_mutation(
+@pytest.mark.parametrize("execute", [False, True])
+@pytest.mark.parametrize("cloud_drift", [False, True])
+def test_vm_ha_migration_preserves_approval_through_durable_intent(
     tmp_path: Path,
     with_removed_tombstone: bool,
+    ordinary_handoff_preview,
+    execute: bool,
+    cloud_drift: bool,
 ) -> None:
     config_path = tmp_path / "vm-ha-migration.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -3990,6 +4128,11 @@ def test_vm_ha_migration_dry_run_previews_without_mutation(
     calls: list[str] = []
     manager_events: list[str] = []
     trust_policy = SimpleNamespace(managed_action="create")
+    reservation_entered = [False]
+
+    def reserve(*args, **kwargs):
+        reservation_entered[0] = True
+        return nullcontext(Mock())
 
     class FakeVMManager(_ContextManagedFake):
         def __init__(self, *args, **kwargs) -> None:
@@ -4013,6 +4156,23 @@ def test_vm_ha_migration_dry_run_previews_without_mutation(
             calls.append("check-changes")
             return []
 
+        def observe_vm_ha_migration_state(self, spec, local_prefixes):
+            return {
+                "members": [
+                    {
+                        "instance_name": "nebius-vpn-gw-0",
+                        "present": True,
+                        "compute_id": "compute-active",
+                        "compute_revision": "changed"
+                        if cloud_drift and reservation_entered[0]
+                        else "1",
+                    }
+                ],
+                "shared_allocation": {"present": False},
+                "route_targets": [],
+                "routes": [],
+            }
+
         def ensure_group(self, *args, **kwargs):
             raise AssertionError("dry-run must not provision")
 
@@ -4028,12 +4188,38 @@ def test_vm_ha_migration_dry_run_previews_without_mutation(
         patch("nebius_vpngw.cli.publish_vm_ha_ssh_trust") as publish_trust,
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
         patch("nebius_vpngw.cli.SSHPush") as ssh_push,
+        patch("nebius_vpngw.cli._approve_disruption", return_value=True)
+        if execute
+        else nullcontext(),
+        patch(
+            "nebius_vpngw.deploy.ordinary_handoff.reserve",
+            side_effect=reserve,
+        )
+        if execute
+        else nullcontext(),
+        patch.object(
+            VMHALifecycleState,
+            "start_provisioning",
+            side_effect=AssertionError("durable boundary reached"),
+        ) as durable_intent,
     ):
         result = CliRunner().invoke(
             app,
-            ["apply", "--local-config-file", str(config_path), "--dry-run"],
+            ["apply", "--local-config-file", str(config_path), *([] if execute else ["--dry-run"])],
+            input="y\n" if execute else None,
         )
 
+    if execute:
+        if cloud_drift:
+            durable_intent.assert_not_called()
+            assert "approval became stale before durable intent" in result.stdout
+            return
+        assert "approval became stale" not in result.stdout, result.stdout
+        assert durable_intent.call_count == 1, (result.stdout, result.exception)
+        assert isinstance(result.exception, AssertionError)
+        assert str(result.exception) == "durable boundary reached"
+        return
+    durable_intent.assert_not_called()
     assert result.exit_code == 0, result.stdout
     assert "Ordinary gateway to VM-HA migration plan" in result.stdout
     assert (
@@ -4052,7 +4238,8 @@ def test_vm_ha_migration_dry_run_previews_without_mutation(
     assert require_trust.call_args.kwargs["persist_default_host_keys"] is False
     assert "would create the per-deployment SSH trust store" in result.stdout
     publish_trust.assert_not_called()
-    ssh_push.assert_not_called()
+    ordinary_handoff_preview.assert_called_once()
+    assert ssh_push.return_value.method_calls == []
     observed = lifecycle_store.read(
         expected_project_id="project-test",
         expected_gateway_name="nebius-vpn-gw",
@@ -4218,6 +4405,7 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
     ],
 )
 def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activates_partial_stage(
+    approved_disruption,
     tmp_path: Path,
     failing_stage_role: str | None,
     final_transition_fault: str | None,
@@ -5460,6 +5648,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
     ],
 )
 def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
+    approved_disruption,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     configured_key: str | None,
@@ -13247,14 +13436,45 @@ def test_restart_tunnel_full_reset_also_bounces_matching_bgp_neighbor(tmp_path: 
 
     assert result.exit_code == 0
     assert recorded_cmds[0][-1] == "sudo /usr/bin/python3 - --restart-tunnel tunnel-1"
-    assert recorded_cmds[1][-1] == (
-        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
-        "-c 'neighbor 169.254.10.2 shutdown'"
+    assert len(recorded_cmds) == 2  # paired reset shares one guest admission
+    import ast
+
+    source = shlex.split(recorded_cmds[1][-1])[-1]
+    tree = ast.parse(source)
+    guarded = [node for node in tree.body if isinstance(node, ast.With)]
+    assert len(guarded) == 1
+    assert ast.unparse(guarded[0].items[0].context_expr) == "_ops.mutation_lock()"
+    commands = []
+    namespace = {
+        "_ops": SimpleNamespace(
+            bounded=lambda args, **kwargs: commands.append(args) or SimpleNamespace(returncode=0)
+        ),
+        "time": SimpleNamespace(sleep=lambda seconds: None),
+    }
+    exec(
+        compile(ast.Module(body=guarded[0].body, type_ignores=[]), "<guarded-reset>", "exec"),
+        namespace,
     )
-    assert recorded_cmds[2][-1] == (
-        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
-        "-c 'no neighbor 169.254.10.2 shutdown'"
-    )
+    assert commands == [
+        [
+            "vtysh",
+            "-c",
+            "configure terminal",
+            "-c",
+            "router bgp 65010",
+            "-c",
+            "neighbor 169.254.10.2 shutdown",
+        ],
+        [
+            "vtysh",
+            "-c",
+            "configure terminal",
+            "-c",
+            "router bgp 65010",
+            "-c",
+            "no neighbor 169.254.10.2 shutdown",
+        ],
+    ]
     assert "Resetting matching BGP neighbor(s)" in result.stdout
     assert "Successfully reset tunnel 'tunnel-1'" in result.stdout
 
@@ -13543,10 +13763,9 @@ def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0
-    assert recorded_cmds[0][-1] == (
-        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
-        "-c 'neighbor 169.254.10.2 shutdown'"
-    )
+    script = shlex.split(recorded_cmds[0][-1])[-1]
+    assert "with _ops.mutation_lock():" in script
+    assert "neighbor 169.254.10.2 shutdown" in script
     assert "Failover confirmed" in result.stdout
 
 
@@ -13660,10 +13879,9 @@ def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(
     assert "site-b-active" in result.stdout
     assert "site-b-passive" in result.stdout
     assert all("203.0.113.20" in cmd[-2] for cmd in recorded_cmds)
-    assert recorded_cmds[0][-1] == (
-        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
-        "-c 'neighbor 169.254.20.2 shutdown'"
-    )
+    script = shlex.split(recorded_cmds[0][-1])[-1]
+    assert "with _ops.mutation_lock():" in script
+    assert "neighbor 169.254.20.2 shutdown" in script
 
 
 def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
@@ -13740,10 +13958,9 @@ def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0
-    assert recorded_cmds[0][-1] == (
-        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
-        "-c 'no neighbor 169.254.10.2 shutdown'"
-    )
+    script = shlex.split(recorded_cmds[0][-1])[-1]
+    assert "with _ops.mutation_lock():" in script
+    assert "no neighbor 169.254.10.2 shutdown" in script
     assert "Failback confirmed" in result.stdout
 
 
@@ -13853,7 +14070,139 @@ def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_
     assert result.exit_code == 0
     assert "restore site-b-active" in result.stdout
     assert all("203.0.113.20" in cmd[-2] for cmd in recorded_cmds)
-    assert recorded_cmds[0][-1] == (
-        "sudo vtysh -c 'configure terminal' -c 'router bgp 65010' "
-        "-c 'no neighbor 169.254.20.2 shutdown'"
+    script = shlex.split(recorded_cmds[0][-1])[-1]
+    assert "with _ops.mutation_lock():" in script
+    assert "no neighbor 169.254.20.2 shutdown" in script
+
+
+@pytest.mark.parametrize("pending", [True, False])
+def test_pending_handoff_without_package_effects_repairs_before_credentials(
+    tmp_path, monkeypatch, approved_disruption, pending
+):
+    from contextlib import contextmanager
+
+    from nebius_vpngw import cli
+    from nebius_vpngw.deploy import ordinary_handoff
+
+    config_path = tmp_path / "migration.yaml"
+    config_path.write_text("version: 1\n")
+    generation = SimpleNamespace(
+        generation_id="a" * 64,
+        digests=SimpleNamespace(
+            configuration="a" * 64, static_routes="b" * 64, bgp_policy="c" * 64
+        ),
     )
+    members = tuple(
+        SimpleNamespace(
+            instance_index=i,
+            node_id=f"node-{i}",
+            role=SimpleNamespace(value="active" if i == 0 else "passive"),
+        )
+        for i in range(2)
+    )
+    instances = tuple(
+        SimpleNamespace(
+            instance_index=i,
+            hostname=f"nebius-vpn-gw-{i}",
+            external_ip=f"203.0.113.{10 + i}",
+            vm_ha_node=members[i],
+            vm_ha_generation=generation,
+            config_yaml="vm_ha:\n  cluster_id: cluster\n",
+        )
+        for i in range(2)
+    )
+    plan = SimpleNamespace(
+        vm_ha=SimpleNamespace(cluster_id="cluster", generation=generation, members=members),
+        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-west1"),
+        gateway={"local_prefixes": ["10.0.0.0/8"]},
+        validate=lambda: None,
+        iter_instance_configs=lambda: iter(instances),
+    )
+    plan.gateway_group.vm_ha = plan.vm_ha
+    events = []
+    monkeypatch.setattr(cli, "_vm_ha_migration_plan_digest", lambda *args, **kwargs: "c" * 64)
+
+    class Manager(_ContextManagedFake):
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def discover_vm_ha_members(self, spec):
+            return {i.hostname: i.external_ip for i in instances}
+
+        def verify_vm_ha_existing_identities(self, *args, **kwargs):
+            pass
+
+        def check_changes(self, spec):
+            return []
+
+    packages = tuple(
+        (
+            instance.hostname,
+            SimpleNamespace(effects=[], target_identity=f"compute-{i}", digest=str(i) * 64),
+        )
+        for i, instance in enumerate(instances)
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_local_config",
+        lambda *args: {"project_id": "project-test", "gateway_group": {"vm_spec": {}}},
+    )
+    monkeypatch.setattr(cli, "merge_with_peer_configs", lambda *args: plan)
+    monkeypatch.setattr(cli, "_ensure_authentication", lambda **kwargs: "test-token")
+    monkeypatch.setattr(cli, "_vm_ha_activation_blockers", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        cli,
+        "require_vm_ha_ssh_policy",
+        lambda *args, **kwargs: SimpleNamespace(managed_action=None),
+    )
+    monkeypatch.setattr(cli, "VMManager", Manager)
+    monkeypatch.setattr(cli, "SSHPush", Mock())
+    monkeypatch.setattr(
+        cli, "_vm_ha_ordinary_migration_ssh_import_hosts", lambda *args: {instances[0].hostname}
+    )
+    monkeypatch.setattr(
+        cli,
+        "_plan_vm_ha_package_dependencies",
+        lambda artifact, **kwargs: SimpleNamespace(
+            sha256=artifact.sha256, dependency_plans=packages
+        ),
+    )
+    monkeypatch.setattr(cli, "_confirm_vm_ha_apply_plan", lambda *args, **kwargs: True)
+    monkeypatch.setattr(typer, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        ordinary_handoff,
+        "inspect",
+        lambda *args: dict(
+            mode="ha", pending=pending, lock={"operation_id": "b" * 64} if pending else None
+        ),
+    )
+
+    def peer(*args, **kwargs):
+        events.append("peer")
+        return {"forwarding": False}
+
+    monkeypatch.setattr(ordinary_handoff, "inspect_repair", peer)
+
+    @contextmanager
+    def reserve(*args, **kwargs):
+        events.append("reserve")
+        yield SimpleNamespace(
+            prepare_package=lambda *args: events.append("prepare"),
+            finish_repair=lambda **kwargs: events.append("finish"),
+        )
+
+    monkeypatch.setattr(ordinary_handoff, "reserve", reserve)
+
+    def credentials(*args, **kwargs):
+        events.append("credentials")
+        raise RuntimeError("boundary reached")
+
+    monkeypatch.setattr(cli, "ensure_managed_vm_ha_credentials", credentials)
+    result = CliRunner().invoke(
+        app,
+        ["apply", "--local-config-file", str(config_path), "--recover-vm-ha-migration", "c" * 64],
+    )
+    assert events == (
+        ["peer", "reserve", "prepare", "finish", "credentials"] if pending else ["credentials"]
+    ), (result.stdout, result.exception)
+    assert "boundary reached" in result.stdout

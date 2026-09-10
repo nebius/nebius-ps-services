@@ -4,7 +4,7 @@ DistributedDataParallel lets each GPU process different data while keeping repli
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 4 and 11 for complete updates, local/global loss normalization, DDP replicas, process groups and gradient averaging. Use Lessons 6–7 for memory and autocast, and complete distributed preflight before comparing rank timings.
+**Theory preparation:** Read Lessons 4 and 11 for complete updates, loss normalization, DDP replicas and gradient averaging. Use Lessons 6–7 for memory and autocast, and complete distributed preflight.
 
 Pass Lab 00 and understand the one-GPU training loop. Both ranks need the same Training environment. The supplied fixed-shape batches do not exercise unequal valid-token counts across ranks.
 
@@ -12,7 +12,7 @@ Two one-H100 nodes validate API and state/collective mechanics over the measured
 
 ## Concepts and code path
 
-The launcher starts two workers; shared helpers initialize NCCL and bind devices. Each rank builds a full tiny model and optimizer, wraps the model in DDP, and runs local batches. Backward synchronizes parameter gradients through DDP. The program aggregates loss, maximum memory, and elapsed time for reporting; model parameters remain replicated rather than sharded.
+The launcher starts two workers; shared helpers initialize NCCL and bind each process to its GPU. Each rank builds its tiny model, wraps it in DDP, then constructs AdamW. Backward synchronizes gradients while parameters remain replicated. The program reports aggregated loss, maximum memory and elapsed time.
 
 ## Practice
 

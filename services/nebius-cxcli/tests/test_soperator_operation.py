@@ -108,6 +108,7 @@ def _paths(tmp_path: Path) -> ProjectPaths:
 
 def _spec(tmp_path: Path):
     return build_soperator_operation_spec(
+        checks_policy_sha256="sha256:" + "c" * 64,
         paths=_paths(tmp_path),
         target_ref="cluster-a",
         ownership="managed",
@@ -152,6 +153,7 @@ def test_operation_spec_binds_every_mutable_boundary(tmp_path: Path) -> None:
 def test_operation_spec_rejects_missing_infrastructure_identity(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="infrastructure plan SHA-256"):
         build_soperator_operation_spec(
+            checks_policy_sha256="sha256:" + "c" * 64,
             paths=_paths(tmp_path),
             target_ref="cluster-a",
             ownership="managed",

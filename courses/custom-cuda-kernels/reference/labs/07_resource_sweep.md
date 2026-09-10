@@ -12,7 +12,7 @@ Use SM90 limits and compiler output. Thread-block cluster kernels need cluster o
 
 ## Concepts and code path
 
-A fused multiply-add (FMA) computes `a*b + c` with one final rounding, rather than rounding the product separately before adding. Performance accounting conventionally counts its multiplication and addition as two floating-point operations.
+A fused multiply-add (FMA) computes `a*b + c` with one final rounding, rather than rounding the product separately before adding. Performance accounting conventionally counts its multiplication and addition as two floating-point operations. The device uses `fmaf`; the source checks the first and last outputs against a CPU `std::fma` reference, not every output element.
 
 A templated kernel maintains several per-thread values through repeated FMAs and writes their sum. For four state values, the host sweeps 64, 128, 256, and 512 threads; separate 256-thread cases use 16 and 64 values. CUDA function attributes report registers/local bytes, and the occupancy API estimates active blocks. Increasing state count changes useful arithmetic as well as resource pressure.
 

@@ -98,6 +98,9 @@ If a module is intended to act as the cluster source for `deploy`/Flux
 handoff, it must expose a stable cluster ID output so the CLI can obtain
 kubeconfig after Terraform apply.
 
+The MK8s module's `service_account_ids` output keeps configured node-group keys
+known during planning, allowing caller-owned IAM grants in the first apply.
+
 If a module is intended to participate in Nebius API status reporting during
 `deploy`/`terraform apply`, the source catalog entry should be able to point to
 stable component inputs for:

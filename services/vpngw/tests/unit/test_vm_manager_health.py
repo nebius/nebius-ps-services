@@ -98,6 +98,30 @@ def test_check_vm_health_fails_immediately_on_host_identity_rejection(
         )
 
 
+@pytest.mark.parametrize(
+    ("agent_state", "returncode", "running"),
+    [("active", 0, True), ("inactive", 3, False), ("failed", 3, False), ("active", 255, False)],
+)
+def test_bootstrap_agent_health_requires_exact_successful_active_state(
+    monkeypatch: pytest.MonkeyPatch, agent_state: str, returncode: int, running: bool
+) -> None:
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    delegate = _fake_ssh_run_for_esp4(_completed())
+
+    def run(command, *args, **kwargs):
+        if "dpkg -l strongswan frr" in command[-1]:
+            return _completed(f"ii strongswan 5.9\nii frr 10.5\n{agent_state}\n", returncode)
+        return delegate(command, *args, **kwargs)
+
+    monkeypatch.setattr("subprocess.run", run)
+    health = VMManager(project_id="project-test", region="eu-west1").check_vm_health(
+        "gateway-0", "203.0.113.10"
+    )
+    assert health["agent_installed"] is running
+    assert ("agent running" in health["message"]) is running
+    assert "VM ready" in health["message"]
+
+
 def test_existing_member_identity_probe_uses_logical_host_alias(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

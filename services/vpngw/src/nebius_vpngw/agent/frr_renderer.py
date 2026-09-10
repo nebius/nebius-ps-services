@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .local_commands import run
+
 BGPD_CONF = Path("/etc/frr/bgpd.conf")
 FRR_CONF = Path("/etc/frr/frr.conf")
 DAEMONS_FILE = Path("/etc/frr/daemons")
@@ -26,16 +28,20 @@ class FRRRenderer:
         except (KeyError, OSError) as error:
             raise RuntimeError("failed to establish VM-HA FRR configuration access") from error
 
-    def _ensure_bgpd_enabled(self, enable_bfd: bool = False) -> bool:
+    def _ensure_bgpd_enabled(
+        self, enable_bfd: bool = False, rendered_files: dict[Path, str | None] | None = None
+    ) -> bool:
         """Ensure bgpd daemon is enabled and listening on all interfaces."""
         if not DAEMONS_FILE.exists():
             print("[FRR] WARNING: /etc/frr/daemons not found; creating with bgpd=yes")
-            DAEMONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            if rendered_files is None:
+                DAEMONS_FILE.parent.mkdir(parents=True, exist_ok=True)
             bfdd_value = "yes" if enable_bfd else "no"
-            DAEMONS_FILE.write_text(
-                f'bgpd=yes\nbgpd_options="   -A 0.0.0.0"\nbfdd={bfdd_value}\n',
-                encoding="utf-8",
-            )
+            content = f'bgpd=yes\nbgpd_options="   -A 0.0.0.0"\nbfdd={bfdd_value}\n'
+            if rendered_files is not None:
+                rendered_files[DAEMONS_FILE] = content
+            else:
+                DAEMONS_FILE.write_text(content, encoding="utf-8")
             return True
 
         text = DAEMONS_FILE.read_text(encoding="utf-8").splitlines()
@@ -79,6 +85,9 @@ class FRRRenderer:
             new_lines.append(f"bfdd={bfdd_value}")
             changed = True
 
+        if rendered_files is not None:
+            rendered_files[DAEMONS_FILE] = "\n".join(new_lines) + "\n"
+            return changed
         if changed:
             DAEMONS_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
             print("[FRR] Configured bgpd to listen on all interfaces in /etc/frr/daemons")
@@ -118,6 +127,7 @@ class FRRRenderer:
         advertise_local_prefixes: bool = True,
         require_reload: bool = False,
         prepare_vm_ha_controller_access: bool = False,
+        rendered_files: dict[Path, str | None] | None = None,
     ) -> None:
         """Render FRR bgpd.conf for BGP tunnels and prefix advertisement.
 
@@ -133,8 +143,16 @@ class FRRRenderer:
         bfd_rx = int(bfd_cfg.get("receive_interval_ms", 300))
         bfd_multiplier = int(bfd_cfg.get("detect_multiplier", 3))
 
-        daemons_changed = self._ensure_bgpd_enabled(enable_bfd=bfd_enabled) if activate else False
-        BGPD_CONF.parent.mkdir(parents=True, exist_ok=True)
+        daemons_changed = (
+            self._ensure_bgpd_enabled(
+                enable_bfd=bfd_enabled,
+                **({"rendered_files": rendered_files} if rendered_files is not None else {}),
+            )
+            if activate
+            else False
+        )
+        if rendered_files is None:
+            BGPD_CONF.parent.mkdir(parents=True, exist_ok=True)
 
         gateway = cfg.get("gateway", {})
         local_asn = gateway.get("local_asn", 65010)
@@ -144,7 +162,12 @@ class FRRRenderer:
         gateway_local_prefixes: list[str] = gateway.get("local_prefixes", [])
 
         # Ensure kernel routes exist for local_prefixes so BGP can advertise them
-        if activate and advertise_local_prefixes and gateway_local_prefixes:
+        if (
+            activate
+            and rendered_files is None
+            and advertise_local_prefixes
+            and gateway_local_prefixes
+        ):
             self.ensure_local_prefix_routes(cfg)
 
         hold = d_bgp.get("hold_time_seconds", 60)
@@ -464,6 +487,9 @@ class FRRRenderer:
 
         rendered = "\n".join(lines) + "\n"
         # FRR 8+ uses integrated config in frr.conf
+        if rendered_files is not None:
+            rendered_files[FRR_CONF] = rendered
+            return
         FRR_CONF.write_text(rendered, encoding="utf-8")
         if prepare_vm_ha_controller_access:
             self._enable_vm_ha_controller_writes()
@@ -479,7 +505,7 @@ class FRRRenderer:
             action = "reload"
         cmd = ["systemctl", action, "frr"]
         try:
-            result = subprocess.run(
+            result = run(
                 cmd,
                 check=False,
                 stdout=subprocess.PIPE,

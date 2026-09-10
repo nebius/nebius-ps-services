@@ -179,13 +179,11 @@ def _grafana_settings() -> ObservabilityGrafanaSettings:
 
 
 def _grafana_app_id() -> str:
-    settings = _grafana_settings()
-    return settings.chart_component_id if settings.enabled_by_default else ""
+    return _grafana_settings().chart_component_id
 
 
 def _grafana_gateway_app_id() -> str:
-    settings = _grafana_settings()
-    return settings.gateway_chart_component_id if settings.enabled_by_default else ""
+    return _grafana_settings().gateway_chart_component_id
 
 
 def _grafana_cli_settings() -> GrafanaCliSettings:
@@ -348,9 +346,7 @@ def _normalize_target_scoped_observability_instance_id(
         row["instance_id"] = _observability_instance_id(app_id, target_ref=target_ref)
 
 
-def _required_observability_app_target_refs(
-    payload: dict[str, Any], app_id: str
-) -> tuple[str, ...]:
+def required_observability_app_target_refs(payload: dict[str, Any], app_id: str) -> tuple[str, ...]:
     collector_app_id = _collector_app_id()
     grafana_app_id = _grafana_app_id()
     grafana_gateway_app_id = _grafana_gateway_app_id()
@@ -829,6 +825,28 @@ def _root_observability_enabled(payload: dict[str, Any]) -> bool:
     return bool(enabled)
 
 
+def soperator_target_refs(payload_or_config: Any) -> set[str]:
+    """Return the exact cluster targets with an enabled Soperator app."""
+    payload = _as_payload(payload_or_config)
+    targets = enabled_cluster_target_refs(payload)
+    return {
+        target_ref
+        for row in _app_chart_rows_for_id(payload, "soperator")
+        if bool(row.get("enabled", False))
+        for target_ref in [app_chart_target_ref(row) or (targets[0] if len(targets) == 1 else "")]
+        if target_ref in targets
+    }
+
+
+def _selected_app_on_target(payload: dict[str, Any], app_id: str, target_ref: str) -> bool:
+    targets = enabled_cluster_target_refs(payload)
+    return any(
+        bool(row.get("enabled", False))
+        and (app_chart_target_ref(row) or (targets[0] if len(targets) == 1 else "")) == target_ref
+        for row in _app_chart_rows_for_id(payload, app_id)
+    )
+
+
 def _kubernetes_agent_required(
     payload: dict[str, Any],
     *,
@@ -841,7 +859,11 @@ def _kubernetes_agent_required(
             _kubernetes_agent_required(payload, target_ref=item)
             for item in enabled_cluster_target_refs(payload)
         )
-    if not _observability_enabled(payload, target_ref=normalized_target_ref):
+    if normalized_target_ref in soperator_target_refs(payload):
+        enabled = kubernetes_observability_agent_selected(payload, normalized_target_ref)
+    else:
+        enabled = _observability_enabled(payload, target_ref=normalized_target_ref)
+    if not enabled:
         return False
     if "mk8s" not in _enabled_component_ids(payload, scope="infra"):
         return False
@@ -852,6 +874,11 @@ def _kubernetes_agent_required(
     return effective.logs_enabled or effective.metrics_enabled or effective.traces_enabled
 
 
+def kubernetes_observability_agent_selected(payload: dict[str, Any], target_ref: str) -> bool:
+    """Resolve explicit collector intent on one target, independently of signal toggles."""
+    return _selected_app_on_target(payload, _collector_app_id(), target_ref)
+
+
 def _grafana_required(
     payload: dict[str, Any],
     *,
@@ -859,7 +886,17 @@ def _grafana_required(
 ) -> bool:
     if not _grafana_app_id():
         return False
-    return _kubernetes_agent_required(payload, target_ref=target_ref)
+    normalized_target_ref = normalize_component_token(target_ref)
+    if not normalized_target_ref:
+        return any(
+            _grafana_required(payload, target_ref=item)
+            for item in enabled_cluster_target_refs(payload)
+        )
+    if normalized_target_ref in soperator_target_refs(payload):
+        return _selected_app_on_target(payload, _grafana_app_id(), normalized_target_ref)
+    return _grafana_settings().enabled_by_default and _kubernetes_agent_required(
+        payload, target_ref=normalized_target_ref
+    )
 
 
 def _vm_monitoring_agent_enabled(payload: dict[str, Any]) -> bool:
@@ -1168,6 +1205,9 @@ def resolve_observability_app_selection(
     grafana_gateway_app_id = _grafana_gateway_app_id()
     kubernetes_settings = _effective_kubernetes_observability_config(payload)
     observability_enabled = _observability_enabled(payload)
+    single_soperator_target = len(enabled_cluster_target_refs(payload)) == 1 and bool(
+        soperator_target_refs(payload)
+    )
     kubernetes_agent_required = _kubernetes_agent_required(
         payload,
         kubernetes_settings=kubernetes_settings,
@@ -1183,6 +1223,17 @@ def resolve_observability_app_selection(
 
     issues: list[str] = []
     auto_enabled: list[str] = []
+
+    for target_ref in sorted(soperator_target_refs(payload)):
+        if _observability_enabled(payload, target_ref=target_ref) and not (
+            kubernetes_observability_agent_selected(payload, target_ref)
+        ):
+            issues.append(
+                f"deploy.targets[instance_id={target_ref}].observability.enabled=true "
+                "requires explicit additional telemetry selection on this Soperator target; "
+                f"use 'component add {collector_app_id}@{target_ref} --config CONFIG_YAML' "
+                "or disable the additional telemetry switch."
+            )
 
     if collector_app_id:
         collector_row = _app_chart_row(payload, collector_app_id)
@@ -1207,7 +1258,9 @@ def resolve_observability_app_selection(
                     if app_chart_target_ref(row)
                 ]
                 for row, row_target_ref in targeted_rows:
-                    if not _observability_enabled(
+                    if row_target_ref not in soperator_target_refs(
+                        payload
+                    ) and not _observability_enabled(
                         payload,
                         target_ref=row_target_ref,
                     ):
@@ -1219,12 +1272,12 @@ def resolve_observability_app_selection(
                             f"apps:{app_label} requires "
                             f"deploy.targets[instance_id={row_target_ref}].observability.enabled=true"
                         )
-                if not targeted_rows and not observability_enabled:
+                if not targeted_rows and not observability_enabled and not single_soperator_target:
                     issues.append(
                         f"apps:{collector_app_id} requires "
                         "deploy.targets[].observability.enabled=true for an MK8s target"
                     )
-            elif not observability_enabled:
+            elif not observability_enabled and not single_soperator_target:
                 issues.append(
                     f"apps:{collector_app_id} requires "
                     "deploy.targets[].observability.enabled=true for an MK8s target"
@@ -1262,7 +1315,9 @@ def resolve_observability_app_selection(
                     if app_chart_target_ref(row)
                 ]
                 for row, row_target_ref in targeted_rows:
-                    if not _observability_enabled(payload, target_ref=row_target_ref):
+                    if row_target_ref not in soperator_target_refs(
+                        payload
+                    ) and not _observability_enabled(payload, target_ref=row_target_ref):
                         app_label = component_instance_label(
                             grafana_app_id,
                             component_instance_id(row),
@@ -1271,12 +1326,12 @@ def resolve_observability_app_selection(
                             f"apps:{app_label} requires "
                             f"deploy.targets[instance_id={row_target_ref}].observability.enabled=true"
                         )
-                if not targeted_rows and not observability_enabled:
+                if not targeted_rows and not observability_enabled and not single_soperator_target:
                     issues.append(
                         f"apps:{grafana_app_id} requires "
                         "deploy.targets[].observability.enabled=true for an MK8s target"
                     )
-            elif not observability_enabled:
+            elif not observability_enabled and not single_soperator_target:
                 issues.append(
                     f"apps:{grafana_app_id} requires "
                     "deploy.targets[].observability.enabled=true for an MK8s target"
@@ -1396,7 +1451,7 @@ def ensure_observability_app_rows(
         if entry is None:
             continue
         if len(target_refs) > 1 and app_id in _observability_target_scoped_app_ids():
-            required_target_refs = _required_observability_app_target_refs(payload, app_id)
+            required_target_refs = required_observability_app_target_refs(payload, app_id)
             remaining_rows = _app_chart_rows_for_id(payload, app_id)
             rows_by_target = {
                 app_chart_target_ref(row): row
@@ -2078,7 +2133,10 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
     for chart_row in collector_rows:
         before = copy.deepcopy(chart_row)
         target_ref = app_chart_target_ref(chart_row)
-        if _kubernetes_agent_required(payload, target_ref=target_ref):
+        if _kubernetes_agent_required(payload, target_ref=target_ref) or (
+            target_ref in soperator_target_refs(payload)
+            and kubernetes_observability_agent_selected(payload, target_ref)
+        ):
             for target_path, target_value in _collector_managed_values(
                 payload,
                 target_ref=target_ref,
@@ -2205,14 +2263,11 @@ def observability_endpoint_summary(
     kubernetes_settings_by_target = tuple(
         _effective_kubernetes_observability_config(payload, target_ref=target_ref)
         for target_ref in enabled_cluster_target_refs(payload)
-        if _observability_enabled(payload, target_ref=target_ref)
+        if _kubernetes_agent_required(payload, target_ref=target_ref)
     )
-    if not kubernetes_settings_by_target and _observability_enabled(payload):
-        kubernetes_settings_by_target = (_effective_kubernetes_observability_config(payload),)
     vm_settings = _effective_vm_observability_config(payload)
-    observability_enabled = _observability_enabled(payload)
     enabled_infra = _enabled_component_ids(payload, scope="infra")
-    kubernetes_enabled = bool(observability_enabled and "mk8s" in enabled_infra)
+    kubernetes_enabled = bool(kubernetes_settings_by_target and "mk8s" in enabled_infra)
     kubernetes_logs_enabled = bool(
         kubernetes_enabled and any(item.logs_enabled for item in kubernetes_settings_by_target)
     )
@@ -2222,6 +2277,7 @@ def observability_endpoint_summary(
     kubernetes_traces_enabled = bool(
         kubernetes_enabled and any(item.traces_enabled for item in kubernetes_settings_by_target)
     )
+    upstream_telemetry = bool(soperator_target_refs(payload))
     vm_service_metrics_enabled = _vm_monitoring_agent_enabled(payload)
     vm_logs_enabled = _vm_journald_logs_enabled(payload, vm_settings=vm_settings)
     service_metric_buckets = _observability_service_buckets(payload, signal="metrics")
@@ -2229,12 +2285,19 @@ def observability_endpoint_summary(
     service_metrics_enabled = bool(service_metric_buckets)
     service_logs_enabled = bool(service_log_buckets)
     metrics_enabled = bool(
-        kubernetes_metrics_enabled or vm_service_metrics_enabled or service_metrics_enabled
+        upstream_telemetry
+        or kubernetes_metrics_enabled
+        or vm_service_metrics_enabled
+        or service_metrics_enabled
     )
     signals = {
-        "logs": bool(kubernetes_logs_enabled or vm_logs_enabled or service_logs_enabled),
+        "logs": bool(
+            upstream_telemetry or kubernetes_logs_enabled or vm_logs_enabled or service_logs_enabled
+        ),
         "metrics": metrics_enabled,
         "traces": kubernetes_traces_enabled,
+        "soperator_metrics": upstream_telemetry,
+        "soperator_logs": upstream_telemetry,
         "service_metrics": service_metrics_enabled,
         "service_logs": service_logs_enabled,
         "kubernetes_logs": kubernetes_logs_enabled,

@@ -4,7 +4,7 @@ Long inputs and long output sequences stress different parts of an inference wor
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 5 for matrix projection, tanh recurrence, batch-row concurrency and separate/joined timing boundaries. Fundamentals supplies matrix arithmetic and Optimizations supplies events and peak-memory accounting. Run the operator experiment in Lesson 5; Lesson 7 later contrasts its rates with service metrics.
+**Theory preparation:** Read Lesson 5 for ISL, OSL, recurrence and the difference between parallel input work and dependent updates. The operator fixture and its four timing boundaries are explained below; it does not generate tokens.
 
 Use one H100 in the mechanics environment. The four cases combine input lengths 128/2048 with 32/512 recurrent iterations. The `--concurrency` option controls simultaneous batch rows here, not concurrent HTTP requests.
 

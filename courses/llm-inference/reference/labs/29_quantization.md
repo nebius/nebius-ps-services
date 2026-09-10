@@ -4,7 +4,7 @@ Quantization can reduce stored payload size while adding scale metadata, convers
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 12 for per-tensor symmetric INT8 encoding, scale metadata, dequantization, nonzero-reference relative L2 and task-quality limits. Use Fundamentals Lesson 9’s format/error meanings and Optimizations timing before separating storage savings from conversion and compute cost.
+**Theory preparation:** Read Lesson 12 for scales, integer encoding and reconstruction. Fundamentals Lesson 9 introduces precision and relative L2. The nonzero-reference policy and separate weight/KV checks are defined below.
 
 Use one H100 in the mechanics environment. Read the scale and error walkthrough below before interpreting the numerical gates. Both BF16 and INT8 copies remain resident for the A/B checks, so the process is intentionally not memory-minimized.
 

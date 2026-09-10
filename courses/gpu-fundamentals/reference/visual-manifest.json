@@ -1,12 +1,21 @@
 {
   "diagrams": [
     {
+      "path": "reference/diagrams/h100-whole-gpu.svg",
+      "title": "H100 SXM 80 GB: SMs, L2 cache and HBM",
+      "lessons": [
+        1
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
       "path": "reference/diagrams/h100-beginner-overview.svg",
       "title": "H100 overview: physical resources and logical work",
       "lessons": [
         1
       ],
-      "after": "Start here",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -15,7 +24,7 @@
       "lessons": [
         3
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -25,7 +34,7 @@
         3,
         6
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -34,7 +43,7 @@
       "lessons": [
         3
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -44,7 +53,7 @@
         1,
         8
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -53,7 +62,7 @@
       "lessons": [
         10
       ],
-      "after": "Mental model",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -62,7 +71,7 @@
       "lessons": [
         6
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -71,7 +80,7 @@
       "lessons": [
         4
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -80,7 +89,7 @@
       "lessons": [
         7
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -89,7 +98,7 @@
       "lessons": [
         8
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -98,7 +107,7 @@
       "lessons": [
         9
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -107,7 +116,7 @@
       "lessons": [
         10
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -116,7 +125,7 @@
       "lessons": [
         12
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -125,7 +134,7 @@
       "lessons": [
         12
       ],
-      "after": "What it is",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -134,7 +143,7 @@
       "lessons": [
         12
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     },
     {
@@ -143,7 +152,7 @@
       "lessons": [
         12
       ],
-      "after": "Mechanism",
+      "after": "How it works",
       "home": "lesson"
     }
   ]

@@ -1549,7 +1549,7 @@ def prune_inactive_mk8s_gpu_app_rows(
         )
         required_by_target[context.instance_id] = set(
             _required_gpu_app_ids(
-                (context,),
+                target_contexts,
                 gpu_settings=settings,
                 health_checker_enabled=validation_overrides.health_checker_enabled,
             )
@@ -1594,6 +1594,9 @@ def prune_inactive_mk8s_gpu_app_rows(
         if target_ref:
             if app_id in required_by_target.get(target_ref, set()) or (
                 policy is not None
+                # Defaults-only rules tune an operator if selected; they do
+                # not require it on a profile-owned Soperator target.
+                and not (policy.role and target_ref in soperator_target_refs)
                 and _mk8s_gpu_app_policy_matches_contexts(
                     policy,
                     contexts_by_target.get(target_ref, ()),
@@ -2783,6 +2786,7 @@ def _gpu_nodes(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]:
         {
             "name": _as_text(node.get("name")),
             "node_group": _as_text(node.get("node_group")) or "<none>",
+            "node_group_id": _as_text(node.get("node_group_id")),
             "gpu_count": int(node.get("gpu_count", 0) or 0),
             "allocatable_resources": dict(node.get("allocatable_resources", {}))
             if isinstance(node.get("allocatable_resources"), Mapping)
@@ -2880,6 +2884,7 @@ def _node_inventory(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]
                     or _as_text(labels.get("nebius.com/node-group-id"))
                     or "<none>"
                 ),
+                "node_group_id": _as_text(labels.get("nebius.com/node-group-id")),
                 "instance_type": (
                     _as_text(labels.get("node.kubernetes.io/instance-type"))
                     or _as_text(labels.get("beta.kubernetes.io/instance-type"))
@@ -3832,14 +3837,32 @@ def _run_cuda_smoke_validation(
         if isinstance(raw_node_groups, list | tuple)
         else set()
     )
-    if selected_node_groups:
+    raw_node_group_ids = spec.get("node_group_ids")
+    selected_node_group_ids: set[str] = set()
+    if raw_node_group_ids is not None:
+        if (
+            not isinstance(raw_node_group_ids, list | tuple)
+            or not raw_node_group_ids
+            or any(not isinstance(value, str) or not value.strip() for value in raw_node_group_ids)
+        ):
+            raise ValueError("GPU validation requires non-empty provider node-group IDs")
+        selected_node_group_ids = {value.strip() for value in raw_node_group_ids}
+        # Campaign scope is an immutable provider identity. A logical label
+        # cannot substitute for a missing or different provider ID.
+        all_nodes = [
+            node
+            for node in all_nodes
+            if _as_text(node.get("node_group_id")) in selected_node_group_ids
+        ]
+    elif selected_node_groups:
         all_nodes = [
             node for node in all_nodes if _as_text(node.get("node_group")) in selected_node_groups
         ]
     if not all_nodes:
         scope = (
-            " in node group(s) " + ", ".join(sorted(selected_node_groups))
-            if selected_node_groups
+            " in node group(s) "
+            + ", ".join(sorted(selected_node_group_ids or selected_node_groups))
+            if selected_node_group_ids or selected_node_groups
             else ""
         )
         raise RuntimeError(
@@ -3869,6 +3892,7 @@ def _run_cuda_smoke_validation(
             "image": image,
             "max_nodes": max_nodes,
             "node_groups": sorted(selected_node_groups),
+            "node_group_ids": sorted(selected_node_group_ids),
             "selected_node_count": 0,
             "total_gpu_node_count": total_gpu_nodes,
             "skipped_node_count": total_gpu_nodes,
@@ -4075,6 +4099,7 @@ def _run_cuda_smoke_validation(
             "image": image,
             "max_nodes": max_nodes,
             "node_groups": sorted(selected_node_groups),
+            "node_group_ids": sorted(selected_node_group_ids),
             "selected_node_count": len(nodes),
             "total_gpu_node_count": total_gpu_nodes,
             "skipped_node_count": skipped_nodes,

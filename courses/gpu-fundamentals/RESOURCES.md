@@ -5,6 +5,7 @@
 - [Nsight Compute: SM subpartitions, schedulers and execution resources](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html)
 
 - [NVIDIA Hopper Tuning Guide](https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html)
+- [CUDA hardware multithreading: resident warps, registers and scheduling](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#hardware-multithreading)
 - [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/)
 - [CUDA Compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/index.html)
 - [CUDA Programming Guide](https://docs.nvidia.com/cuda/cuda-programming-guide/)
@@ -28,3 +29,6 @@
 - [NCCL network diagnostics and RoCE GID guidance](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html)
 - [NVIDIA Ethernet/RoCE packet format and transport guidance](https://docs.nvidia.com/networking/display/mlnxenv23102131201lts/ethernet-network.pdf)
 - [NVIDIA Quantum InfiniBand and Spectrum Ethernet platform roles](https://developer.nvidia.com/networking)
+
+- [CUDA compute-capability limits for blocks, threads and residency](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html)
+- [PTX: Parallel Thread Execution instruction set](https://docs.nvidia.com/cuda/parallel-thread-execution/)
