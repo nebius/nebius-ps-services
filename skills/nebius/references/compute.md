@@ -37,6 +37,34 @@ links and regional availability checks before provisioning.
    disruption, ephemeral storage loss, attachment retention and controller
    ownership. Do not automatically delete an errored VM as a diagnostic step.
 
+## Maintenance pauses across VM reboot
+
+When an authorized VM maintenance pause must survive reboot, check both the
+active and enabled states of each exact owned systemd timer and its triggered
+service. Stopping a timer leaves its enablement unchanged. An enabled calendar
+timer with `Persistent=true` can run missed work when activated again.
+
+Record the original states and existing enablement links, including custom
+links, before an authorized change. `disable` can remove links that `enable`
+will not recreate. Check the units'
+`[Install]` settings, including `Also=`, and user/global enablement so disabling
+one unit does not silently change another owner's units or leave another
+enablement path active. Disable and stop only units within the authorized pause
+scope; inspect whether their services are still running.
+Disabling a timer does not stop an already-running service or prevent every other
+activation path. Resolve those paths within the owning maintenance procedure.
+
+After an authorized reboot, inspect timer state, service execution timestamps and
+the current boot's journal before claiming the pause held. A service can finish
+or fail and be inactive after writing data or triggering an `OnFailure` service;
+inspect those effects without executing the scripts or sending a test alert.
+Restore the recorded original states and enablement links only when the
+maintenance owner authorizes resumption. Routine status requests do not authorize
+disabling healthy timers.
+
+See [systemctl enablement](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html)
+and [persistent timers](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html).
+
 ## VM plus disk example
 
 The following is an authorized-call example, not a script to run implicitly.
