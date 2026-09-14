@@ -278,6 +278,17 @@ def test_slurm_worker_readiness_rejects_configured_but_unregistered_nodes(
 
 
 def _upgrade_payload_with_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    values = copy.deepcopy(dict(values))
+    if "jailRootfs" in values:
+        store = values["jailRootfs"].setdefault("store", {})
+        store.setdefault("mountPath", "/mnt/jail-store")
+        rows = values.setdefault("jailPersistentMounts", [])
+        paths = {row["mountPath"] for row in rows}
+        rows.extend(
+            {"mountPath": path, "localPath": "/mnt/jail-store/shared" + path}
+            for path in ("/home", "/data", "/scripts", "/models", "/opt/soperator-home")
+            if path not in paths
+        )
     return {
         "apps": {
             "charts": [
@@ -332,6 +343,7 @@ def test_upgrade_wizard_freezes_defaults_and_preserves_existing_mount_backing(
         "/home",
         "/models",
         "/opt/customer-data",
+        "/opt/soperator-home",
         "/scripts",
     )
     values = payload["apps"]["charts"][0]["values"]
@@ -356,10 +368,24 @@ def test_upgrade_recovery_reuses_frozen_persistent_paths_without_prompt(
         target=cli._parse_soperator_upgrade_target("cluster-a"),
         ownership="onboarded",
         interactive=True,
-        frozen_paths=["/home", "/data", "/scripts", "/models", "/srv/customer"],
+        frozen_paths=[
+            "/home",
+            "/data",
+            "/scripts",
+            "/models",
+            "/opt/soperator-home",
+            "/srv/customer",
+        ],
     )
 
-    assert protected == ("/data", "/home", "/models", "/scripts", "/srv/customer")
+    assert protected == (
+        "/data",
+        "/home",
+        "/models",
+        "/opt/soperator-home",
+        "/scripts",
+        "/srv/customer",
+    )
     values = payload["apps"]["charts"][0]["values"]
     mounts = {item["mountPath"]: item["localPath"] for item in values["jailPersistentMounts"]}
     assert mounts["/srv/customer"] == "/mnt/jail/srv/customer"
@@ -412,7 +438,7 @@ def test_upgrade_materializes_default_slot_source_during_admission() -> None:
     )
 
     values = payload["apps"]["charts"][0]["values"]
-    assert protected == ("/data", "/home", "/models", "/scripts")
+    assert protected == ("/data", "/home", "/models", "/opt/soperator-home", "/scripts")
     assert values["jailRootfs"]["adoption"] == {
         "activeSource": "slot",
         "rollbackSource": "slot",
@@ -469,7 +495,7 @@ def test_upgrade_preserves_legacy_rollback_authority_after_slot_adoption() -> No
         target=cli._parse_soperator_upgrade_target("cluster-a"),
         ownership="onboarded",
         interactive=False,
-        frozen_paths=["/home", "/data", "/scripts", "/models"],
+        frozen_paths=["/home", "/data", "/scripts", "/models", "/opt/soperator-home"],
     )
     first_reconstruction = copy.deepcopy(payload)
     cli._configure_soperator_upgrade_persistent_paths(
@@ -477,7 +503,7 @@ def test_upgrade_preserves_legacy_rollback_authority_after_slot_adoption() -> No
         target=cli._parse_soperator_upgrade_target("cluster-a"),
         ownership="onboarded",
         interactive=False,
-        frozen_paths=["/home", "/data", "/scripts", "/models"],
+        frozen_paths=["/home", "/data", "/scripts", "/models", "/opt/soperator-home"],
     )
 
     assert payload == first_reconstruction
@@ -509,7 +535,7 @@ def test_upgrade_rejects_legacy_rollback_authority_without_pvc_identity() -> Non
             target=cli._parse_soperator_upgrade_target("cluster-a"),
             ownership="onboarded",
             interactive=False,
-            frozen_paths=["/home", "/data", "/scripts", "/models"],
+            frozen_paths=["/home", "/data", "/scripts", "/models", "/opt/soperator-home"],
         )
 
 
@@ -726,7 +752,7 @@ def _rootfs_admission(
         target_storage_class_name="slurm-local-pv",
         target_provisioner="kubernetes.io/no-provisioner",
         target_capacity="128Gi",
-        persistent_paths=("/scripts", "/home", "/models", "/data"),
+        persistent_paths=("/scripts", "/home", "/models", "/data", "/opt/soperator-home"),
         assert_authority=assert_authority,
     )
 
@@ -750,10 +776,16 @@ def test_rootfs_admission_is_content_free_and_requires_only_fencing_authority() 
 
     assert authority_checks == 1
     assert payload["mode"] == "target-wins"
-    assert payload["persistentPaths"] == ["/data", "/home", "/models", "/scripts"]
+    assert payload["persistentPaths"] == [
+        "/data",
+        "/home",
+        "/models",
+        "/opt/soperator-home",
+        "/scripts",
+    ]
     assert payload["decision"] == {
         "targetWinsOutsidePersistentPaths": True,
-        "protectedPathCount": 4,
+        "protectedPathCount": 5,
     }
     assert payload["binding"]["targetProvisioner"] == "kubernetes.io/no-provisioner"
     assert set(payload).isdisjoint({"classification", "manifests", "scratch", "jobs"})
@@ -794,7 +826,7 @@ def test_rootfs_admission_rejects_incomplete_or_mutable_authority(
         "target_storage_class_name": "slurm-local-pv",
         "target_provisioner": "kubernetes.io/no-provisioner",
         "target_capacity": "128Gi",
-        "persistent_paths": ("/data", "/home", "/models", "/scripts"),
+        "persistent_paths": ("/data", "/home", "/models", "/opt/soperator-home", "/scripts"),
         "assert_authority": None,
     }
     kwargs.update(overrides)

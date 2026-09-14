@@ -4,7 +4,7 @@ A reduction combines many inputs into a small output, so contention and aggregat
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 7 for atomics, shuffle participation, hierarchical reduction, shared partials, CUB workspace and destination reset. Lessons 3–4 supply finite reference checks and race/synchronization tools. State the sum and reset timing boundary before each variant.
+**Theory preparation:** Read Lesson 7 for atomics, shuffle participation, hierarchical reduction, shared partials, CUB workspace and destination reset. Lessons 3–4 supply finite reference checks and race/synchronization tools. State whether output initialization is included in the sum timing before each variant.
 
 Use the completed SM90 build with its CUDA/CUB headers on one H100. Inputs are ones and the reference sum is known. Arbitrary signed or ill-conditioned values are not covered by this fixture.
 

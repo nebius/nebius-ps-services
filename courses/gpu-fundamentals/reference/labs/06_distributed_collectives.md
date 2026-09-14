@@ -18,7 +18,7 @@ Each rank creates a tensor whose known values make the sum predictable. The prog
 
 ## Practice
 
-Given one rank completing compute in 12 milliseconds, the other in 18, and an all-reduce taking 6 after both arrive, the step is at least 24 milliseconds. Change only the fast rank’s kernel to 8 milliseconds. Expected observation: step time stays near 24 because the slowest-rank barrier is unchanged; the optimization is locally real but globally hidden.
+Given one rank completing compute in 12 milliseconds, the other in 18, and an all-reduce taking 6 after both arrive, the step is at least 24 milliseconds. Change only the fast rank’s kernel to 8 milliseconds. Expected observation: step time stays near 24 because the wait for the slower rank is unchanged; the optimization is locally real but globally hidden.
 
 First annotate Lesson 12’s networking diagrams without running commands: label the software operation, local attachment, inter-node fabric and memory path. Then use this lab as the collective-mechanics baseline through the two-node launcher and compare several message sizes. GPU Optimizations covers transport diagnostics, NVIDIA NCCL Tests and tuning; do not introduce network configuration changes here.
 
@@ -52,7 +52,7 @@ Avoid generalizing a two-rank result to dense multi-GPU nodes or production-scal
 
 ## Takeaways and next step
 
-Collective rates are meaningful only with topology, message size, and timing boundaries attached. Extend measurement to the slowest rank before using it as a global-step estimate; then study communication overlap in GPU Optimizations.
+Collective rates are meaningful only with topology, message size, and the timed operations specified. Extend measurement to the slowest rank before using it as a global-step estimate; then study communication overlap in GPU Optimizations.
 
 Treat the lab as a communication-mechanics baseline and preserve topology as part of benchmark identity.
 

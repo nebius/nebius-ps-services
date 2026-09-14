@@ -7,7 +7,7 @@ description: "Design non-SDLC features, architectures, ADRs, or proven contract-
 
 ## Help
 
-For `$design --help` or `$design -h`, return concise help and stop before
+For `$design --help` or `$design -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +18,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$design` in Codex, `/design` in Claude Code, or
+`/skills:design` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -42,7 +51,7 @@ codebase yet.
   causal mechanism when the remedy changes architecture topology, component or
   service responsibilities or boundaries, a public interface, data ownership
   or lifecycle, a migration, or a cross-component workflow.
-- Producing a final `/plan` handoff that another Codex run can execute.
+- Producing a final `/plan` handoff that another agent session can execute.
 - Updating or drafting a design document only when the user asks for a
   committed design artifact.
 
@@ -262,7 +271,8 @@ reversible choices when evidence is weak.
 
 ### Phase 7: Create Implementation Plan
 
-Use the Codex `/plan` command when available. The plan handoff must include:
+Use the host's planning mode or plan tool when available; otherwise return
+the same complete plan in the response. The plan handoff must include:
 
 - final design summary
 - selected option and rejected alternatives
@@ -350,7 +360,7 @@ short answer is explicitly requested:
 - Recommended design with components, technologies, boundaries, data/control
   flow, security, observability, validation, and rollout notes.
 - Alternative comparison and rationale.
-- `/plan` handoff or confirmation that the Codex plan was created.
+- `/plan` handoff or confirmation that the host plan was created.
 - Remaining questions, blockers, and confidence level.
 
 ## References

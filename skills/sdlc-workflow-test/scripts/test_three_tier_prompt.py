@@ -15,7 +15,7 @@ SKILLS_ROOT = Path(__file__).resolve().parents[2]
 PROMPT_WORKSPACE = SKILLS_ROOT / "sdlc-start" / "scripts" / "prompt_workspace.py"
 RENDERER = Path(__file__).with_name("render_three_tier_prompt.py")
 COMPUTER_USE_CONTRACT_FILES = (
-    SKILLS_ROOT / "sdlc-workflow-test" / "SKILL.md",
+    SKILLS_ROOT / "sdlc-workflow-test" / "references" / "three-tier-process.md",
     SKILLS_ROOT / "sdlc-workflow-test" / "references" / "three-tier-live.md",
     SKILLS_ROOT
     / "sdlc-workflow-test"
@@ -51,7 +51,7 @@ class ThreeTierPromptTests(unittest.TestCase):
                 str(PROMPT_WORKSPACE),
                 "init",
                 str(project),
-                "--codex-home",
+                "--agent-home",
                 str(codex_home),
                 "--no-open",
                 "--json",
@@ -87,7 +87,7 @@ class ThreeTierPromptTests(unittest.TestCase):
                 str(starter),
                 "--project-path",
                 str(project),
-                "--codex-home",
+                "--agent-home",
                 str(codex_home),
                 "--json",
             )
@@ -104,7 +104,7 @@ class ThreeTierPromptTests(unittest.TestCase):
                 str(PROMPT_WORKSPACE),
                 "init",
                 str(project),
-                "--codex-home",
+                "--agent-home",
                 str(codex_home),
                 "--no-open",
                 "--json",
@@ -136,6 +136,8 @@ class ThreeTierPromptTests(unittest.TestCase):
             self.assertIn("does not match", result.stderr)
 
     def test_computer_use_jit_readiness_contract_is_mirrored(self) -> None:
+        skill = (SKILLS_ROOT / "sdlc-workflow-test" / "SKILL.md").read_text()
+        self.assertIn("read and follow\n`references/three-tier-process.md` before any live operation", skill)
         for path in COMPUTER_USE_CONTRACT_FILES:
             with self.subTest(path=path):
                 text = " ".join(

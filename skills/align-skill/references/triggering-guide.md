@@ -1,7 +1,7 @@
 # Triggering Guide
 
-This guide explains how to trigger `align-skill` across Codex surfaces using
-only behavior confirmed by official OpenAI documentation.
+This guide explains how to trigger `align-skill` across supported agent surfaces. The Codex details below remain conditional
+on that host; see `agent-portability.md` for Claude Code and neutral rules.
 
 Docs reviewed:
 
@@ -136,3 +136,10 @@ Standardize this multi-skill folder and add missing references, assets, or scrip
 Review this skill's vendor-specific commands against official documentation.
 Align `skills/foo` and `skills/bar`, but do not run live tests unless the environment is confirmed as non-production.
 ```
+
+## Claude Code
+
+Use `/align-skill <target>` for a standalone skill, or
+`/skills:align-skill <target>` for the native skills plugin. Keep invocation
+policy in frontmatter and verify fresh-session loading independently.
+See [Claude skills documentation](https://code.claude.com/docs/en/skills).

@@ -1,6 +1,6 @@
 # Lab 13: Test whether communication can overlap independent compute
 
-Communication is not automatically hidden just because an API is asynchronous. This lab compares serialized compute-plus-all-reduce with a schedule that permits the two independent tasks to overlap across two H100 nodes. You will measure the joined completion boundary and use a timeline to determine whether any observed improvement really comes from concurrent execution.
+Communication is not automatically hidden just because an API is asynchronous. This lab compares serialized compute-plus-all-reduce with a schedule that permits the two independent tasks to overlap across two H100 nodes. You will measure elapsed time until both computation and the collective complete and use a timeline to determine whether any observed improvement really comes from concurrent execution.
 
 ## Before you start
 

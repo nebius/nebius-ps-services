@@ -10,15 +10,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from skill_frontmatter import FormatError, frontmatter, read_text, standard_name, validate_fields, yaml_mapping
+from skill_resources import referenced_paths
+
 
 KNOWN_OPTIONAL_DIRS = {"agents", "assets", "evals", "references", "scripts"}
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-LOCAL_REF_RE = re.compile(
-    r"(?P<path>"
-    r"(?:agents|assets|evals|references|scripts)/[A-Za-z0-9._/@%+=:,~/-]+"
-    r")"
-)
-MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)]+)\)")
 FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<marker>`{3,}|~{3,})(?P<rest>.*)$")
 HELP_HEADING = "## Help"
 HELP_REQUIRED_SNIPPETS = (
@@ -122,6 +119,9 @@ class SkillResult:
     path: Path
     failures: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    extensions: list[str] = field(default_factory=list)
+    standard_fields: str = "NOT_CHECKED"
+    strict_conformity: str = "NOT_CHECKED"
 
     @property
     def ok(self) -> bool:
@@ -132,7 +132,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Validate a single skill folder or a folder containing multiple "
-            "skills. Uses Python standard library only and performs no "
+            "skills. Requires scripts/requirements.txt and performs no "
             "network calls."
         ),
         epilog=(
@@ -150,13 +150,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         help="Skill folder or parent folder containing skill folders.",
     )
+    parser.add_argument("--agent", choices=("core", "codex", "claude"),
+                        default="core", help="Host checks; independent of the standards/repository policy.")
+    parser.add_argument("--policy", choices=("agentskills", "repository"),
+                        default="repository", help="Standard fields only, or add repository conventions (default).")
     parser.add_argument(
         "--profile",
         choices=("basic", "stateful-workflow"),
         default="basic",
         help=(
-            "Optional validation profile. The default basic profile checks "
-            "generic skill structure only. stateful-workflow additionally "
+            "Optional validation profile. basic uses the selected policy. "
+            "stateful-workflow additionally "
             "requires the standard state-machine skill sections."
         ),
     )
@@ -165,51 +169,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help=(
             "Require each selected skill to provide the canonical "
-            "evals/trigger-prompts.csv suite. Any canonical suite that exists "
-            "is validated even when this flag is omitted."
+            "evals/trigger-prompts.csv suite. Repository policy also validates "
+            "existing canonical suites when this flag is omitted."
         ),
     )
     return parser.parse_args(argv)
 
 
-def read_frontmatter(skill_md: Path, result: SkillResult) -> dict[str, str]:
+def read_frontmatter(skill_md: Path, result: SkillResult) -> dict:
     try:
-        text = skill_md.read_text(encoding="utf-8")
-    except OSError as exc:
-        result.failures.append(f"cannot read SKILL.md: {exc}")
+        return frontmatter(skill_md)
+    except FormatError as exc:
+        result.failures.append(f"SKILL.md: {exc}")
         return {}
-
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        result.failures.append("SKILL.md is missing YAML front matter")
-        return {}
-
-    end_index = None
-    for index, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            end_index = index
-            break
-
-    if end_index is None:
-        result.failures.append("SKILL.md front matter is not closed")
-        return {}
-
-    metadata: dict[str, str] = {}
-    current_key: str | None = None
-    for line in lines[1:end_index]:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if line.startswith((" ", "\t")) and current_key:
-            metadata[current_key] = f"{metadata[current_key]} {line.strip()}".strip()
-            continue
-        if ":" not in line:
-            result.warnings.append(f"front matter line is not parsed: {line!r}")
-            continue
-        key, value = line.split(":", 1)
-        current_key = key.strip()
-        metadata[current_key] = value.strip().strip("\"'")
-
-    return metadata
 
 
 def is_valid_name(name: str) -> bool:
@@ -220,43 +192,6 @@ def is_valid_name(name: str) -> bool:
         and not name.startswith("-")
         and not name.endswith("-")
     )
-
-
-def clean_reference(raw: str) -> str | None:
-    target = raw.strip().strip("`'\".,;:")
-    if (
-        not target
-        or target.startswith(("#", "http://", "https://", "mailto:"))
-        or "*" in target
-        or "<" in target
-        or ">" in target
-        or "$" in target
-    ):
-        return None
-    if "#" in target:
-        target = target.split("#", 1)[0]
-    if target.startswith(("agents/", "assets/", "evals/", "references/", "scripts/")):
-        name = target.rstrip("/").rsplit("/", 1)[-1]
-        if not target.endswith("/") and "." not in name:
-            return None
-    return target or None
-
-
-def referenced_paths(skill_md: Path) -> set[str]:
-    text = skill_md.read_text(encoding="utf-8")
-    refs: set[str] = set()
-
-    for match in MARKDOWN_LINK_RE.finditer(text):
-        target = clean_reference(match.group("target"))
-        if target and "/" in target:
-            refs.add(target)
-
-    for match in LOCAL_REF_RE.finditer(text):
-        target = clean_reference(match.group("path"))
-        if target:
-            refs.add(target)
-
-    return refs
 
 
 def extract_learning_loop_section(skill_text: str) -> str | None:
@@ -272,7 +207,7 @@ def extract_learning_loop_section(skill_text: str) -> str | None:
 
 
 def canonical_help_body(name: str) -> str:
-    return f"""For `${name} --help` or `${name} -h`, return concise help and stop before
+    return f"""For `${name} --help` or `${name} -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -484,14 +419,21 @@ def validate_openai_metadata_policy(
     description: str,
     skill_text: str,
     result: SkillResult,
+    required: bool = True,
+    repository: bool = True,
 ) -> None:
     metadata_path = skill_dir / OPENAI_METADATA_RELATIVE_PATH
+    if metadata_path.parent.is_symlink():
+        result.failures.append("agents/ metadata directory must not be a symlink")
+        return
     if not metadata_path.exists():
         if (skill_dir / WRONG_OPENAI_METADATA_FILENAME).exists():
             result.failures.append(
                 "found agents.openai.yaml; OpenAI metadata must live at "
                 f"{OPENAI_METADATA_RELATIVE_PATH}"
             )
+            return
+        if not required:
             return
         result.failures.append(
             f"missing {OPENAI_METADATA_RELATIVE_PATH} metadata with "
@@ -505,42 +447,42 @@ def validate_openai_metadata_policy(
         return
 
     try:
-        lines = metadata_path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        result.failures.append(f"cannot read {OPENAI_METADATA_RELATIVE_PATH}: {exc}")
+        metadata = yaml_mapping(read_text(metadata_path))
+    except FormatError as exc:
+        result.failures.append(f"{OPENAI_METADATA_RELATIVE_PATH}: {exc}")
         return
-
-    in_policy = False
-    value: str | None = None
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if not line.startswith((" ", "\t")):
-            in_policy = stripped.split(":", 1)[0] == "policy"
-            continue
-        if in_policy and stripped.startswith("allow_implicit_invocation:"):
-            value = stripped.split(":", 1)[1].strip().strip("\"'")
-
-    if value is None:
-        result.failures.append(
-            f"{OPENAI_METADATA_RELATIVE_PATH} is missing "
-            "policy.allow_implicit_invocation"
-        )
+    policy_data = metadata.get("policy", {})
+    if not isinstance(policy_data, dict):
+        result.failures.append("OpenAI policy must be a mapping")
         return
-    if value not in {"true", "false"}:
-        result.failures.append(
-            "policy.allow_implicit_invocation must be lowercase true or false"
-        )
+    value = policy_data.get("allow_implicit_invocation")
+    if "allow_implicit_invocation" not in policy_data:
+        if repository:
+            result.failures.append(f"{OPENAI_METADATA_RELATIVE_PATH} is missing policy.allow_implicit_invocation")
         return
+    if type(value) is not bool:
+        result.failures.append("policy.allow_implicit_invocation must be lowercase true or false (YAML boolean)")
+        return
+    if repository:
+        expected = expected_implicit_invocation(name, description, skill_text)
+        if value != (expected == "true"):
+            result.failures.append(f"policy.allow_implicit_invocation must be {expected} for {skill_dir.name} based on the skill name and explicit-only workflow contract")
 
-    expected = expected_implicit_invocation(name, description, skill_text)
-    if value != expected:
-        result.failures.append(
-            "policy.allow_implicit_invocation must be "
-            f"{expected} for {name} based on the skill name and explicit-only "
-            "workflow contract"
-        )
+
+def validate_claude_policy(metadata: dict, *, name: str,
+                           description: str, skill_text: str,
+                           result: SkillResult) -> None:
+    internal = name.startswith("sdlc-") and name not in {"sdlc-start", "sdlc-workflow-test"}
+    if internal:
+        if metadata.get("user-invocable") is not False:
+            result.failures.append("coordinator-only skills require user-invocable: false")
+        if metadata.get("disable-model-invocation") is True:
+            result.failures.append("coordinator-only skills must permit verified coordinator routing")
+        if "verified workflow context" not in skill_text.lower():
+            result.failures.append("coordinator-only skills require a verified workflow context guard")
+    elif expected_implicit_invocation(name, description, skill_text) == "false":
+        if metadata.get("disable-model-invocation") is not True:
+            result.failures.append("explicit-only skills require disable-model-invocation: true")
 
 
 def validate_trigger_evals(
@@ -678,6 +620,8 @@ def validate_skill(
     skill_dir: Path,
     *,
     profile: str = "basic",
+    agent: str = "core",
+    policy: str = "repository",
     require_evals: bool = False,
 ) -> SkillResult:
     result = SkillResult(path=skill_dir)
@@ -691,19 +635,29 @@ def validate_skill(
         return result
 
     metadata = read_frontmatter(skill_md, result)
+    field_failures, extension_failures, result.extensions = validate_fields(metadata)
+    result.failures.extend(field_failures)
+    result.standard_fields = "FAIL" if result.failures else "PASS"
+    result.failures.extend(extension_failures)
+    result.strict_conformity = "FAIL" if result.failures else ("EXTENSIONS" if result.extensions else "PASS")
+    if not metadata and result.failures:
+        return result
+    repository = policy == "repository"
     name = metadata.get("name", "")
     description = metadata.get("description", "")
+    if not isinstance(name, str) or not isinstance(description, str):
+        return result
 
     if not name:
         result.failures.append("front matter is missing name")
-    elif not is_valid_name(name):
+    elif not (is_valid_name(name) if repository else standard_name(name)):
         result.failures.append(
             "name must be lowercase alphanumeric with single hyphens, "
             "1-64 characters, and no leading or trailing hyphen"
         )
     elif name != skill_dir.name:
         result.failures.append(
-            f"name {name!r} does not match parent folder {skill_dir.name!r}"
+            "front matter name does not match the parent folder"
         )
 
     if not description:
@@ -711,7 +665,7 @@ def validate_skill(
     elif len(description) > 1024:
         result.failures.append("description exceeds 1024 characters")
     elif (
-        name.startswith("sdlc-")
+        repository and name.startswith("sdlc-")
         and name not in SDLC_PREFIX_EXTERNAL_SKILLS
         and not description.startswith(SDLC_ONLY_DESCRIPTION_PREFIX)
     ):
@@ -719,7 +673,7 @@ def validate_skill(
             "SDLC-only skills must start the description with: "
             f"{SDLC_ONLY_DESCRIPTION_PREFIX}"
         )
-    elif description.startswith(SDLC_ONLY_DESCRIPTION_PREFIX) and not name.startswith(
+    elif repository and description.startswith(SDLC_ONLY_DESCRIPTION_PREFIX) and not name.startswith(
         "sdlc-"
     ):
         result.failures.append(
@@ -727,9 +681,9 @@ def validate_skill(
         )
 
     try:
-        skill_text = skill_md.read_text(encoding="utf-8")
-    except OSError as exc:
-        result.failures.append(f"cannot read SKILL.md for learning loop: {exc}")
+        skill_text = read_text(skill_md)
+    except FormatError as exc:
+        result.failures.append(f"cannot read SKILL.md: {exc}")
         skill_text = ""
 
     line_count = len(skill_text.splitlines())
@@ -746,14 +700,19 @@ def validate_skill(
             description=description,
             skill_text=skill_text,
             result=result,
+            required=repository and agent == "codex",
+            repository=repository,
         )
-        if skill_text:
+        if repository and agent == "claude":
+            validate_claude_policy(metadata, name=name, description=description,
+                                   skill_text=skill_text, result=result)
+        if repository and skill_text:
             validate_help_contract(skill_text, name=name, result=result)
 
     learning_loop = extract_learning_loop_section(skill_text)
-    if skill_text and learning_loop is None:
+    if repository and skill_text and learning_loop is None:
         result.failures.append("SKILL.md is missing ## Learning Loop")
-    elif learning_loop is not None:
+    elif repository and learning_loop is not None:
         for snippet in LEARNING_LOOP_REQUIRED_SNIPPETS:
             if snippet not in learning_loop:
                 result.failures.append(
@@ -763,30 +722,42 @@ def validate_skill(
     if profile == "stateful-workflow" and skill_text:
         validate_stateful_workflow_profile(skill_text, result)
 
-    validate_trigger_evals(
-        skill_dir,
-        require_evals=require_evals,
-        result=result,
-    )
+    if repository or require_evals:
+        validate_trigger_evals(skill_dir, require_evals=require_evals, result=result)
 
     for child in sorted(skill_dir.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
             continue
-        if child.name not in KNOWN_OPTIONAL_DIRS:
+        if repository and child.name not in KNOWN_OPTIONAL_DIRS:
             result.warnings.append(
                 f"non-canonical folder reported for review: {child.name}/"
             )
 
     try:
         refs = referenced_paths(skill_md)
-    except OSError as exc:
+    except (OSError, FormatError) as exc:
         result.failures.append(f"cannot scan local references: {exc}")
         refs = set()
 
     for ref in sorted(refs):
-        if not (skill_dir / ref).exists():
-            result.failures.append(f"referenced local path does not exist: {ref}")
+        try:
+            if Path(ref).is_absolute() or any(ord(char) < 32 or ord(char) == 127 for char in ref):
+                raise ValueError("invalid path")
+            candidate = skill_dir
+            for part in Path(ref).parts:
+                candidate /= part
+                if candidate.is_symlink():
+                    raise ValueError("symlink component")
+            if not candidate.resolve().is_relative_to(skill_dir.resolve()):
+                raise ValueError("escaped reference")
+            if not candidate.exists():
+                result.failures.append(f"referenced local path does not exist: {ref}")
+        except (OSError, RuntimeError, ValueError):
+            result.failures.append("referenced local path must be valid and stay inside skill without symlinks")
 
+    if not standard_name(name) or name != skill_dir.name:
+        result.standard_fields = "FAIL"
+        result.strict_conformity = "FAIL"
     return result
 
 
@@ -820,6 +791,9 @@ def discover_skills(target: Path) -> tuple[list[Path], list[str]]:
 def print_result(result: SkillResult) -> None:
     status = "OK" if result.ok else "FAIL"
     print(f"{status} {result.path}")
+    print(f"  STANDARD_FIELDS: {result.standard_fields}; STRICT_FRONTMATTER: {result.strict_conformity}")
+    if result.extensions:
+        print("  HOST_EXTENSIONS: " + ", ".join(result.extensions) + "; strict standard-only consumers may reject this file; runtime behavior unverified")
     for warning in result.warnings:
         print(f"  WARN: {warning}")
     for failure in result.failures:
@@ -838,6 +812,8 @@ def main(argv: list[str]) -> int:
             validate_skill(
                 skill,
                 profile=args.profile,
+                agent=args.agent,
+                policy=args.policy,
                 require_evals=args.require_evals,
             )
             for skill in skills

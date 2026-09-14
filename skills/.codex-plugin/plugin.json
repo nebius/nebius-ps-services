@@ -1,0 +1,210 @@
+{
+  "name": "skills",
+  "version": "0.1.0",
+  "description": "Reusable engineering skills and workflow hooks for Codex and Claude Code.",
+  "skills": [
+    "./agent-nebius-auth-diagnose",
+    "./agent-nebius-auth-setup",
+    "./ai-agent-design",
+    "./ai-stack",
+    "./align",
+    "./align-skill",
+    "./app-stack",
+    "./apply-security",
+    "./attach-ubuntu",
+    "./brainstorm",
+    "./code-info",
+    "./code-review",
+    "./commit",
+    "./commit-push",
+    "./config-claude",
+    "./config-codex",
+    "./container",
+    "./create-learning-course",
+    "./create-pr",
+    "./design",
+    "./frontend-project",
+    "./github-workflows",
+    "./gitignore",
+    "./global-context-management",
+    "./helmchart",
+    "./install-grafana-mcp-for-nebius",
+    "./linter",
+    "./maintain-project-specs",
+    "./merge-pr",
+    "./nebius",
+    "./nebius-audit-log",
+    "./nebius-grafana-query",
+    "./nosleep4mac",
+    "./optimize-pytest",
+    "./project-agent-instructions",
+    "./prompt-session-intake",
+    "./publish-helm",
+    "./publish-image",
+    "./publish-release",
+    "./python-project",
+    "./research",
+    "./review-pr",
+    "./scaffold-project",
+    "./sdlc-align-specs",
+    "./sdlc-auto-steering",
+    "./sdlc-classify-failure",
+    "./sdlc-commit",
+    "./sdlc-create-design",
+    "./sdlc-create-plan",
+    "./sdlc-create-requirements",
+    "./sdlc-evaluate",
+    "./sdlc-gather-context",
+    "./sdlc-gui-test",
+    "./sdlc-implement-plan",
+    "./sdlc-merge-pr",
+    "./sdlc-prepare-execution",
+    "./sdlc-start",
+    "./sdlc-tdd",
+    "./sdlc-tui-test",
+    "./sdlc-uat-tests",
+    "./sdlc-unit-tests",
+    "./sdlc-update-documents",
+    "./sdlc-validate-codes",
+    "./sdlc-workflow-test",
+    "./shell-scripting",
+    "./system-design-rules",
+    "./task-implementer",
+    "./task-implementer-test",
+    "./terraform",
+    "./troubleshoot",
+    "./worktree"
+  ],
+  "hooks": {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "^Bash$",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook pre_tool_use_nebius_auth.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30,
+              "statusMessage": "Preparing Nebius auth"
+            }
+          ]
+        },
+        {
+          "matcher": "Bash|apply_patch|Edit|Write|mcp__.*|Skill",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook pre_tool_use_sdlc_policy.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30
+            }
+          ]
+        },
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook remediation_attempt_guard.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30,
+              "statusMessage": "Checking remediation budget"
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook commit_intent.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30,
+              "statusMessage": "Binding explicit commit intent",
+              "additionalContextLimit": 1200
+            }
+          ]
+        },
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook user_prompt_context.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 10
+            }
+          ]
+        },
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook project_specs_lifecycle.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30,
+              "statusMessage": "Binding project contracts",
+              "additionalContextLimit": 1600
+            }
+          ]
+        },
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook prompt_session_intake.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 10,
+              "statusMessage": "Staging bound-session prompt intent"
+            }
+          ]
+        },
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook remediation_attempt_guard.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30,
+              "statusMessage": "Authorizing troubleshoot budget",
+              "additionalContextLimit": 800
+            }
+          ]
+        }
+      ],
+      "SessionStart": [
+        {
+          "matcher": "startup|resume|clear|compact",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook session_start_context.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 10,
+              "statusMessage": "Loading global context policy"
+            }
+          ]
+        },
+        {
+          "matcher": "startup|resume|clear|compact",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook project_specs_lifecycle.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30,
+              "statusMessage": "Auditing project contracts",
+              "additionalContextLimit": 1600
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook stop_lifecycle_arbiter.py --plugin-root \"${PLUGIN_ROOT}\"",
+              "timeout": 30,
+              "statusMessage": "Arbitrating workflow completion"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "author": {
+    "name": "Nebius"
+  }
+}

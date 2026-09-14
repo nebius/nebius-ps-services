@@ -4,7 +4,7 @@ Two simple kernels can spend more time moving intermediate values than performin
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 5 for scale/bias/ReLU, fusion, intermediate traffic and FMA rounding, after Lessons 3–4 establish complete references and tool order. Explain the separate and fused byte ledgers before comparing the supplied paths.
+**Theory preparation:** Read Lesson 5 for scale/bias/ReLU, fusion, intermediate traffic and FMA rounding, after Lessons 3–4 establish complete references and tool order. Explain the read/write byte counts for the separate and fused implementations before comparing the supplied paths.
 
 Use the completed SM90 build on one H100. Understand vector indexing and FP32 reference checks. The experiment compares its supplied scalar-scale and bias-array expression, not every possible broadcast layout.
 
@@ -52,6 +52,6 @@ Avoid counting only input/output tensors and ignoring intermediate materializati
 
 Fusion is valuable when it removes material overhead without violating semantics or resource constraints. Extend the experiment by integrating the operation into an application, and include any changes in allocation or copy costs before claiming an end-to-end benefit.
 
-Build a byte ledger and validate the fused expression against the unfused reference.
+Count the bytes read and written and validate the fused expression against the unfused reference.
 
 State when excessive fusion can increase registers or reduce maintainability.

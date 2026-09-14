@@ -23,3 +23,5 @@
 - [CMake CUDA architecture initialization](https://cmake.org/cmake/help/latest/variable/CMAKE_CUDA_ARCHITECTURES.html)
 - [Slurm sbatch](https://slurm.schedmd.com/sbatch.html)
 - [PTX and target-specific code generation](https://docs.nvidia.com/cuda/parallel-thread-execution/)
+- [CUDA thread-block cluster co-scheduling and distributed shared memory](https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/programming-model.html#thread-block-clusters)
+- [CUDA warp shuffle participation masks](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html#warp-shuffle-functions)

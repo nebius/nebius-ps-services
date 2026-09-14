@@ -4,7 +4,7 @@ A training accelerator can wait because its next batch is not ready, even when t
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 9 for sample ownership, prefetch, pinning and batch readiness. Reuse Optimizations Lessons 2 and 6 for timing boundaries and transfer lifetimes.
+**Theory preparation:** Read Lesson 9 for sample ownership, prefetch, pinning and batch readiness. Reuse Optimizations Lessons 2 and 6 for timing with CPU timers and CUDA events, and transfer lifetimes.
 
 Use one H100 and enough allocated CPUs for worker processes. The dataset is synthetic and deterministic. This lab exposes worker, prefetch, batch-count, and producer-delay options; it does not benchmark real storage.
 
@@ -50,7 +50,7 @@ Increasing workers changes random data order because worker seeding is incomplet
 
 ## Takeaways and next step
 
-Input optimization must preserve data completeness and order semantics. Add a real dataset and an actual training consumer as a new experiment, retaining the identity checks and whole-loop timing boundary.
+Input optimization must preserve data completeness and order semantics. Add a real dataset and an actual training consumer as a new experiment, retaining the identity checks and measurement of the complete loop.
 
 Verify order and content first, then tune the slowest producer stage.
 

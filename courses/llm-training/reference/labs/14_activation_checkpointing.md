@@ -1,10 +1,10 @@
-# Lab 14: Compare no, selective, and full recomputation
+# Lab 14: Compare checkpointing on alternate blocks and all blocks
 
 Activation checkpointing saves memory by recomputing selected forward work during backward instead of retaining every intermediate. This lab compares three matched tiny-transformer paths and checks loss plus all trainable parameter gradients. You will connect checkpoint boundaries to the memory–compute trade-off rather than assuming that lower peak allocation always produces a better training configuration.
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 3–4 for parameter/activation gradients, Lesson 6 for incremental peak allocation and Lesson 8 for selective/full-block recomputation and non-reentrant checkpointing. Use Lesson 7’s matched-state numerical reasoning. This experiment stops after backward, without an optimizer.
+**Theory preparation:** Read Lessons 3–4 for parameter/activation gradients, Lesson 6 for incremental peak allocation and Lesson 8 for selected-module versus whole-block recomputation and non-reentrant checkpointing. Use Lesson 7’s matched-state numerical reasoning. This experiment stops after backward, without an optimizer.
 
 Use one H100 and understand the model's forward/backward flow. The inputs are integer token IDs, so an input-token gradient is not defined. Review the [autograd mechanism guide](../lab-mechanisms.md) for parameter and activation distinctions.
 
@@ -12,13 +12,13 @@ Extra H100 compute can make recomputation worthwhile when capacity enables a mor
 
 ## Concepts and code path
 
-The program prepares matched model state and batches for eager, selective, and full checkpointing. Selective means alternate whole transformer blocks, not operator-level selective recomputation. Full means every listed block. It verifies loss and gradients, then measures forward, loss, and backward time plus incremental peak allocation. The reported `step_time` excludes optimizer work and optimizer state: no optimizer is constructed or updated in this lab.
+The program prepares matched model state and batches for no checkpointing, alternate-block checkpointing and all-block checkpointing. The output key `selective` checkpoints complete transformer blocks at odd indices; `full` checkpoints every listed transformer block. These are this script's result labels. NVIDIA Megatron's selective activation recomputation instead targets selected modules within layers, which this lab does not implement. It verifies loss and gradients, then measures forward, loss, and backward time plus incremental peak allocation. The reported `step_time` excludes optimizer work and optimizer state: no optimizer is constructed or updated in this lab.
 
 ## Practice
 
 Given a block saving 6 GiB of activations and costing 12 milliseconds to recompute, full checkpointing enables microbatch two instead of one but adds 12 milliseconds. Change to checkpoint only a 5-GiB attention intermediate costing 4 milliseconds to replay. Expected observation: if microbatch two still fits, selective recomputation retains most capacity benefit with less step-time penalty at fixed global tokens.
 
-Run Labs 02 and 14 with matched work within each lab, not between their different models. Lab 02 compares an MLP/MSE effective batch against accumulated microbatches. Lab 14 compares eager, selective, and full recomputation of a tiny transformer's forward/loss/backward path. Lab 14 does not execute an optimizer update; complete-update equivalence is a separately implemented extension.
+Run Labs 02 and 14 with matched work within each lab, not between their different models. Lab 02 compares an MLP/MSE effective batch against accumulated microbatches. Lab 14 compares no checkpointing, alternate-block checkpointing and all-block checkpointing of a tiny transformer's forward/loss/backward path. Lab 14 does not execute an optimizer update; complete-update equivalence is a separately implemented extension.
 
 Run all three variants together with the smoke profile. Use the H100 profile only after equivalence passes; its larger model/context is a new memory-pressure experiment.
 
@@ -30,7 +30,7 @@ sbatch slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile h10
 
 ## Check your results
 
-Require separate loss and gradient agreement for selective and full paths at BF16 `rtol=0.01, atol=0.01`. Inspect checkpointed block indices, forward/backward-only `step_time`, and `median_incremental_peak_bytes`. Token and position embedding parameters are included in the gradient checks; optimizer-update equivalence is not tested here.
+Require separate loss and gradient agreement for the alternate-block and all-block paths at BF16 `rtol=0.01, atol=0.01`. Inspect checkpointed block indices, forward/backward-only `step_time`, and `median_incremental_peak_bytes`. Token and position embedding parameters are included in the gradient checks; optimizer-update equivalence is not tested here.
 
 For Lab 02 retain effective-batch size, its sampled-gradient check and peak memory. For Lab 14 retain fixed batch/sequence settings, loss and every parameter-gradient comparison, forward/loss/backward timing, peak memory, and recomputed regions. Do not relabel those timings as complete optimizer-step measurements.
 
@@ -50,7 +50,7 @@ Avoid changing microbatch count without holding effective batch or optimizer sch
 
 ## Takeaways and next step
 
-Recomputation is a selective resource trade, not free memory. A further exercise can implement operator-level policies, but it must preserve this lab's complete loss/gradient gates and explicitly identify the new checkpoint boundaries.
+Recomputation trades additional computation for lower activation memory use. A further exercise can implement operator-level policies, but it must preserve this lab's complete loss/gradient gates and explicitly identify the new checkpoint boundaries.
 
 Compare equivalent updates and choose the smallest recomputation set that meets capacity.
 

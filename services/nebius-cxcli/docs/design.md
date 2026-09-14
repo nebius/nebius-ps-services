@@ -1652,7 +1652,7 @@ may replace them. cxcli instead freezes the target digest, selected persistent
 paths, live active-slot identity, exact passive PVC identity, provisioner and
 capacity, and the target-wins decision. A selected path is a customer-data
 ownership boundary: its retained PVC intentionally shadows target-image content
-at that subtree, including the four mandatory paths. Outside selected paths,
+at that subtree, including the five mandatory paths. Outside selected paths,
 the official target image replaces the live rootfs in full. Content-free
 decision counts, protected-path compatibility, and the decision digest are
 sealed in the owner-only admission receipt. Recovery reconstructs and verifies
@@ -1693,8 +1693,8 @@ compare the running slot to the pristine image manifest. Data
 directories selected during first adoption are bound directly from their
 existing same-SFS locations into retained path-specific PVCs outside
 `rootfs/slot-a` and `rootfs/slot-b`; there is no content copy. `/home`, `/data`,
-`/scripts`, and `/models` are mandatory. The interactive wizard may add real
-data directories during first adoption and states that every unselected rootfs
+`/scripts`, `/models`, and `/opt/soperator-home` are mandatory. The interactive
+wizard may add real data directories during first adoption and states that every unselected rootfs
 change will be replaced by the official image. Once the rootfs is slot-backed,
 later upgrades may retain or remove only optional mounts that already have a
 durable outside-slot backing; introducing a new live path would require a data
@@ -3993,6 +3993,138 @@ No live infrastructure was changed; backup/restore and directory authentication
 remain separate operational validation.
 
 <!-- /FEATURE: FEAT-032 -->
+
+<!-- FEATURE: FEAT-033 reqs=REQ-023,REQ-030 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-033: Root SSH selection and canonical Soperator home retention
+
+#### Requirements Covered
+
+- REQ-023: Upgrade the jail and Soperator data plane in place.
+- REQ-030: Configure dedicated Soperator installation completely.
+
+#### Context Evidence
+
+Before this change, the dedicated wizard skipped the generic MK8s SSH picker
+and inherited a node-group key. The adapter already forwarded root keys
+correctly. Upstream 4.1.8 creates named users beneath `/opt/soperator-home`;
+that path was missing from mandatory retained mounts, and check workloads were
+bound only to the rootfs claim.
+
+#### Design Details
+
+Select root keys at the fresh-install input boundary, with explicit lists taking
+precedence over local discovery. Reuse public-key parsing and preferred-file
+ordering; persist inline values and atomic list ownership. Interactive replacement
+of existing keys is deliberate. Headless omission selects the preferred local
+key or fails. No local key lookup occurs during render, resume or upgrade.
+The final fresh-install validator requires explicit key ownership before saving
+configuration; leaving the wizard early cannot turn an unset choice into `[]`.
+
+Add `/opt/soperator-home` to the canonical shared-directory definitions, backed
+by `/mnt/jail-store/shared/opt/soperator-home` for new managed installations.
+Use the existing retained PV/PVC and mount mechanisms across login, workers,
+bootstrap/check jobs and applicable auxiliary consumers. Exclude retained mounts
+from image population and slot cleanup. Reject incomplete canonical layouts
+without migrating or silently redirecting data. Preserve upstream user homes;
+directory retention does not preserve account definitions in `/etc`.
+Rendered check mounts must use canonical absolute paths, and path containment
+checks reject aliases and parent/child overlaps with retained storage.
+
+#### Selected Option
+
+Extend the existing deterministic input and retained-directory contracts. Keep
+the upstream SSH adapter and user bootstrap behavior.
+
+#### Alternatives Considered
+
+MK8s key inheritance obscures root-login ownership. Moving named users into
+another user's home is incorrect. Migration, compatibility branches and a new
+account registry are outside the accepted greenfield contract.
+
+#### Implementation Boundaries
+
+Fresh project creation and wizard policy, public-key selection helpers, shared
+jail mount definitions, native check binding and actual-consumer verification.
+No new public flags, identity service, data migration or account database.
+
+#### Test-First Success Criteria
+
+- TDD-001: Explicit single/multiple/empty keys survive save and upstream render; absent keys use local discovery only during fresh install.
+- TDD-002: All fresh profiles and relevant consumers share the canonical retained home outside both disposable slots.
+- TDD-003: Slot transitions retain backing and files; population excludes retained storage and invalid layouts fail without repair.
+
+#### Validation Plan
+
+Run focused SSH/wizard, frozen-chart render, persistent-mount, checks-binding and
+consumer-verification tests, then scoped lint, architecture/type checks and align.
+
+#### Test Plan
+
+Cover missing keys, explicit empty lists, cancellation, headless creation,
+resume without discovery, conflicting/missing mounts and consecutive slot changes.
+
+#### Evaluation Plan
+
+Separate offline configuration/render proof from live provisioning, root SSH and
+native named-user bootstrap proof on a newly provisioned disposable cluster.
+
+#### Rollout And Rollback
+
+Ship one canonical greenfield configuration. Do not adapt earlier cxcli layouts
+or migrate data. No live operation is authorized by source validation.
+
+#### Done Definition
+
+Source, tests and documentation agree on root-key ownership and retained-directory
+semantics; report any unperformed live acceptance explicitly.
+
+#### Implementation Evidence
+
+`soperator_login_keys.py` owns fresh headless defaults and explicit-list prompt
+semantics. Project creation resolves inputs once, initializes the managed slot
+layout, and persists key ownership. The dedicated wizard reuses the public-key
+picker; the former MK8s-to-root inheritance helpers were removed.
+
+The shared retained-path definitions now include `/opt/soperator-home`.
+Adapter compilation and upgrade admission reject incomplete or conflicting
+saved layouts. ActiveChecks, bootstrap users and the auxiliary CronJob use the
+same retained claims as login and workers. Policy compilation validates actual
+rendered check storage after per-check overrides; scheduling and auxiliary
+recovery also verify retained bindings. Long mount-gate names receive a stable
+bounded hash suffix. README, changelog and storage diagram reflect the contract.
+
+#### Verification Evidence
+
+The final affected-surface selection passed 822 tests (319 unrelated tests
+deselected), including real fresh-install creation across CPU/GPU/mixed profiles,
+explicit and empty key choices, missing keys, consecutive slot switches,
+conflicting layouts, recovery, and architecture contracts. Unmodified upstream
+4.1.8 charts, verified against the source archive hash, prove exact root-key
+forwarding, named-user bootstrap mounts, and the actual auxiliary Kustomize
+postrenderer. Negative frozen-chart tests reject per-check mount bypasses.
+
+Scoped Ruff lint/format, Markdown, diff and CLI architecture checks pass.
+The configured mypy ratchet passes with 490 existing diagnostics against a
+493 maximum. Independent read-only review found no remaining serious issue.
+Evidence is source, in-checkout CLI and offline chart-consumer validation;
+no live provisioning, SSH login, home-file survival, or account-bootstrap trial
+was performed.
+
+An explicit subsequent alignment audit reproduced two contract violations:
+STORAGE-001 allowed mount-path aliases or `/` to evade overlap checks;
+SSH-001 allowed an interrupted wizard to save an unowned empty key list and
+reach planning. Ten frozen-chart bypass cases and the real-creation interruption
+case failed before repair. Canonical path validation and final explicit-key
+validation now close those paths, with all 27 targeted cases passing. Independent
+read-only reviewers confirmed both repairs. The final expanded selection passed
+1,160 tests, including the shared CLI creation and install-policy tests. Ruff
+lint/format passed for all 23 changed Python files; the mypy and CLI architecture
+ratchets passed. A wheel built from a temporary source copy passed the packaged
+CLI contract using its extracted package and existing runtime dependencies.
+This adds packaged CLI evidence, without claiming a fresh dependency installation
+or live cluster validation.
+
+<!-- /FEATURE: FEAT-033 -->
 
 <!-- maintain-project-specs:design:end -->
 

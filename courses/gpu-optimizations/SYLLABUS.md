@@ -4,9 +4,9 @@ Estimated guided time: **36 hours**.
 
 ## Learning progression
 
-Begin with the first lesson's **Start here** explanation and workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
+Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Each later lesson begins with **What it is** before objectives or applications. Read the definition and mechanism, open a **Practice labs** link, then follow the lab's **Theory preparation** in **Before you start**. Its named lessons explain the techniques before full execution; **Concepts and code path** connects them to the implementation. Before running, explain what each technique does, why it is used, how its inputs and dependencies work, and what timing and numerical checks establish. A preview is reading only; a later revisit adds a new interpretation without making an untaught technique a hidden prerequisite for the first run.
+Every lesson follows **Objective → How it works → Practice labs → Mental model**. Read the definitions, mechanisms and worked examples in **How it works**, then open a **Practice labs** link, then follow the lab's **Theory preparation** in **Before you start**. Its named lessons explain the techniques before full execution; **Concepts and code path** connects them to the implementation. Before running, explain what each technique does, why it is used, how its inputs and dependencies work, and what timing and numerical checks establish. A preview is reading only; a later revisit adds a new interpretation without making an untaught technique a hidden prerequisite for the first run.
 
 Establish a workload contract, correct timing and a profiler hypothesis before making changes. Progress through local launch, graph, input, memory and library optimizations; diagnose local imbalance before network qualification and tuning in Lesson 11, application scaling/overlap in Lesson 12, and the capstone in Lesson 13. Finish with an evidence-backed library-first decision.
 
@@ -43,8 +43,8 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 After Lesson 3, describe the bottleneck hypothesis and the evidence that could disprove it. After Lesson 10, explain whether idle time belongs to the local workload or scheduler. In Lesson 11, qualify topology and transport, then interpret the collective size curve before changing one setting. Only then compare one- and two-rank application execution in Lesson 12. Lesson 13 integrates the final decision. The final decision must preserve correctness and include independent repeated runs.
 
-Every lesson retains its definition, prerequisite bridge, mental model and
-mechanism, followed by **Practice labs** links. The linked guides integrate
+Every lesson starts with its **Objective**, teaches definitions and mechanisms
+in **How it works**, links its **Practice labs**, and ends with a **Mental model**. The linked guides integrate
 examples and commands in **Practice**, with H100 scope, trade-offs, evidence,
 failure analysis and review in their relevant sections. Before moving on,
 explain the new mechanism and its limitation in your own words; a completed

@@ -1,13 +1,13 @@
 ---
 name: global-context-management
-description: "Manage complex Codex planning, implementation, debugging, refactoring, migration, review, testing, CI, or multi-file work with concise parent context, durable task state, bounded read-only helpers, focused validation, and risk review."
+description: "Manage complex agent planning, implementation, debugging, refactoring, migration, review, testing, CI, or multi-file work with concise parent context, durable task state, bounded read-only helpers, focused validation, and risk review."
 ---
 
 # Global Context Management
 
 ## Help
 
-For `$global-context-management --help` or `$global-context-management -h`, return concise help and stop before
+For `$global-context-management --help` or `$global-context-management -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -19,9 +19,21 @@ inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
 
+## Agent Compatibility
+
+Before workflow reads, load `references/agent-hosts.md`
+for selected-home paths, native identity and required runtime setup.
+
+Use `$global-context-management` in Codex, `/global-context-management` in Claude Code, or
+`/skills:global-context-management` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
+
 ## Purpose
 
-Use this skill to keep long or complex Codex work focused and recoverable:
+Use this skill to keep long or complex agent work focused and recoverable:
 concise parent context, durable task-state notes, bounded read-only subagents
 when it is useful, focused validation, and final risk review.
 
@@ -55,7 +67,7 @@ when it is useful, focused validation, and final risk review.
 - Do not treat skill activation, generic hook context, a complex task, or
   configured `[agents.*]` roles alone as delegation authorization.
 - Do not claim runtime hook or skill activation is proven unless it was
-  observed in the current Codex surface.
+  observed in the current agent surface.
 
 ## Inputs
 
@@ -86,13 +98,13 @@ when it is useful, focused validation, and final risk review.
 ## Writes
 
 - May create or update only the advertised task-state file under
-  `$CODEX_HOME/task-state` when continuity is useful and writes are permitted.
+  `<agent-home>/task-state` when continuity is useful and writes are permitted.
 - May edit requested project files, skill source files, docs, tests, templates,
   or validators in the current task scope.
 - May update this skill's public-safe local source materials under the Learning
   Loop when the task contract allows source edits.
 - Must not write repo-local task-state files, SDLC run state, hook runtime
-  files, credentials, raw logs, or unrelated `$CODEX_HOME` files.
+  files, credentials, raw logs, or unrelated `<agent-home>` files.
 
 ## Runtime Boundaries
 
@@ -102,7 +114,7 @@ metadata, prior turns, or tool outputs already in the parent thread.
 
 Valid delegation authorization comes from either:
 
-- a current prompt that asks Codex to use or spawn subagents, delegation, or
+- a current prompt that asks the agent to use or spawn subagents, delegation, or
   parallel agents; or
 - a user-enabled local hook policy that injects a bounded read-only delegation
   request for the current prompt, when the runtime accepts that hook context.
@@ -140,12 +152,12 @@ an empty private scaffold with `0700` directories and a `0600` `current.md`.
 Hooks never copy prompt text into that scaffold. The parent owns all semantic
 content and rewrites the rolling summary when the task changes. If a local
 PreToolUse write guard is installed, it must allow writes under
-`$CODEX_HOME/task-state` while continuing to block unrelated `$CODEX_HOME`
+`<agent-home>/task-state` while continuing to block unrelated `<agent-home>`
 runtime edits such as hook rewrites.
 
 For complex prompts, `UserPromptSubmit` may list a small bounded set of
 same-workspace prior `current.md` candidate paths from the same
-`$CODEX_HOME/task-state/<workspace>-<hash>/` bucket. The hook must not inject
+`<agent-home>/task-state/<workspace>-<hash>/` bucket. The hook must not inject
 historical task-state contents. The parent may read a candidate only when it
 appears relevant, and must verify it as stale context. The current session's
 advertised `current.md` remains the only write target.
@@ -270,10 +282,14 @@ every spawned handle and report any handle that could not be closed.
 
 ## Local Setup
 
-For machine-level installation, use `config-codex` or read
+For Claude machine-level setup, use `config-claude`; its native roles are
+`repo-mapper`, `test-strategist` and `risk-reviewer`. Verify effective tools and
+project/CLI/managed overrides before using the hook-advertised candidates.
+
+For Codex machine-level installation, use `config-codex` or read
 `references/local-setup.md`. This skill owns the complex-task workflow; the
-setup skill owns rendering and patching a local Codex home. Keep local runtime
-files under `$CODEX_HOME`; keep this skill public, generic, and free of
+selected setup skill owns rendering and patching its native home. Keep local runtime
+files under `<agent-home>`; keep this skill public, generic, and free of
 personal paths or secrets. When script execution is permitted, use
 `scripts/validate-local-templates.py` for a local-only template smoke test when
 validating hook setup. For the human-facing design and architecture map, read

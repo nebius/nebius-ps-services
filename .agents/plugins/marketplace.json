@@ -1,0 +1,20 @@
+{
+  "name": "nebius-ps-services",
+  "interface": {
+    "displayName": "Nebius Platform Services Skills"
+  },
+  "plugins": [
+    {
+      "name": "skills",
+      "source": {
+        "source": "local",
+        "path": "./skills"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

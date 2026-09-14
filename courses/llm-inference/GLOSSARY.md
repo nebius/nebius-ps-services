@@ -9,9 +9,9 @@
 
 - **AIPerf:** NVIDIA's current client workflow for measuring generative-AI endpoint latency and throughput under a declared request distribution.
 - **Closed-loop load:** each client waits for completion before sending again, which can hide overload behind client pacing.
-- **Continuous batching:** admitting and retiring requests as sequences progress instead of waiting for a fixed batch to finish together.
-- **CUDA Graph:** a captured device-work graph replayed with lower CPU launch overhead when shapes, addresses, control flow, and operations satisfy capture constraints.
-- **Decode:** autoregressive generation after prefill, usually producing one new token position per sequence per iteration.
+- **Continuous batching:** admitting and retiring requests between model iterations instead of waiting for a fixed batch to finish together; TensorRT-LLM also calls this in-flight batching or iteration-level batching.
+- **CUDA Graph:** a graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
+- **Decode:** autoregressive processing after prefill, usually producing one new token per sequence per iteration; also called the generation phase in TensorRT-LLM.
 - **Disaggregated serving:** separate prefill and decode worker pools connected by request and KV-state handoff.
 - **DP:** Data parallel serving: independent model replicas process different requests; a request does not require gradient synchronization across replicas.
 - **E2E latency:** end-to-end latency from the declared request or workload start to completion at the declared observation boundary.
@@ -20,7 +20,8 @@
 - **GQA/MQA:** attention layouts with fewer KV heads than query heads.
 - **HBM:** high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
 - **ISL/OSL:** input and output sequence lengths used to describe request work.
-- **ITL:** inter-token latency; the distribution of time gaps between successive generated tokens at an explicitly defined observation boundary.
+- **ITL:** inter-token latency; AIPerf reports a per-request average, with the formula and timestamp convention explained in Lesson 7. Individual token gaps are a different distribution.
+- **ICL:** inter-chunk latency; gaps between streaming content chunks, which can contain multiple tokens.
 - **KV cache:** cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
 - **KV-aware routing:** worker selection that combines reusable-prefix state with projected active load.
 - **Length bucketing:** grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
@@ -29,8 +30,8 @@
 - **Open-loop load:** arrivals generated independently of response completion, exposing queue growth beyond service capacity.
 - **Paged KV cache:** managing KV storage in blocks/pages to reduce fragmentation and support dynamic request scheduling.
 - **PP:** pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
-- **Preemption:** removal or suspension of active request state under pressure, followed by rejection, swap, or recomputation according to engine policy.
-- **Prefill:** processing prompt tokens, usually as a parallel sequence computation, to initialize model state and KV cache.
+- **Preemption:** temporarily suspending a running request to free resources; resumption may require restoring or recomputing KV state. Rejecting a new request is a separate admission decision.
+- **Prefill:** processing prompt tokens to form KV state and the logits for the first output token; also called the context phase in TensorRT-LLM.
 - **Prefix caching:** reusing KV state for an exactly matching reusable prefix under the serving engine's cache rules.
 - **Remote model code:** Python supplied by a model repository and executed when an operator explicitly enables a trust option; it requires an exact-revision review and is disabled in these labs.
 - **SDPA:** scaled dot-product attention, the query/key/value attention operation. PyTorch's SDPA API selects among supported implementations for the actual inputs and configuration.
@@ -39,7 +40,7 @@
 - **Speculative decoding:** proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
 - **Throughput:** completed requests or tokens per second for a declared workload and boundary.
 - **TP (tensor parallelism):** splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
-- **TPOT:** time per output token; an aggregate decode measure, commonly decode duration divided by the number of output-token intervals, and not a substitute for the ITL distribution.
+- **TPOT:** time per output token; an average generation interval per subsequent token. Tool conventions vary, so compare its formula and endpoints with ITL rather than assuming the names imply different aggregations.
 - **TTFT:** time from the declared request boundary to the first observed output token. First-nonempty-content timing is a proxy unless its correspondence to token arrival is established. TTFT is distinct from steady-state inter-token latency and end-to-end latency.
 - **Temperature:** positive divisor applied to logits before softmax; lower values sharpen the distribution.
 - **Top-k:** sampling filter retaining the k highest-scoring candidates, followed by renormalization.

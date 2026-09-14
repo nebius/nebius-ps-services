@@ -1,5 +1,8 @@
 # Implement Plan
 
+Execution supports Codex and Claude through the selected native host context.
+See `SKILL.md` for invocation, required setup and evidence boundaries.
+
 `sdlc-implement-plan` is an Agentic SDLC skill. It is authored in this repository and is
 installed into a Codex runtime only when `install-skills.sh` is run.
 

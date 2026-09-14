@@ -50,7 +50,7 @@ Increasing block size does not repair a skewed work distribution.
 
 ## Takeaways and next step
 
-Regrouping is useful only when its complete cost is justified. A follow-on experiment can amortize packing over repeated reuse, with the same logical outputs and an explicitly expanded timing boundary.
+Regrouping is useful only when its complete cost is justified. A follow-on experiment can amortize packing over repeated reuse, with the same logical outputs and timing that includes packing and all repeated uses.
 
 Separate lane masks, block duration, and grid coverage before tuning.
 

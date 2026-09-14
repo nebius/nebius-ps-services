@@ -180,3 +180,141 @@ def test_nested_backup_typo_is_rejected_against_frozen_contract(frozen_charts):
         {"backup": {"failedJobsHistoryLimit": 5}, "prune": {"retention": {"keepWeekly": 3}}},
         defaults,
     )
+
+
+def _render_values(chart, values):
+    return _render_child(
+        {"spec": {"releaseName": "fixture", "targetNamespace": "soperator", "values": values}},
+        chart,
+    )
+
+
+@pytest.mark.parametrize("keys", [[], ["ssh-ed25519 first", "ssh-rsa second"]])
+def test_root_keys_reach_upstream_cluster_unchanged(frozen_charts, keys):
+    snapshot, _, source = frozen_charts
+    values = _values()
+    values["slurmNodes"].setdefault("login", {})["sshRootPublicKeys"] = keys
+    compiled, _ = compile_upstream_soperator_values(values, release=snapshot)
+    rendered = _render_values(
+        source / "helm/slurm-cluster", compiled["slurmCluster"]["overrideValues"]
+    )
+    cluster = next(row for row in rendered if row["kind"] == "SlurmCluster")
+    assert cluster["spec"]["slurmNodes"]["login"]["sshRootPublicKeys"] == keys
+
+
+def test_retained_homes_reach_frozen_bootstrap_checks_and_auxiliary_job(frozen_charts, tmp_path):
+    from nebius_cxcli.soperator_checks_binding import (
+        auxiliary_post_renderers,
+        retained_check_mounts,
+    )
+    from nebius_cxcli.soperator_checks_policy import compile_checks_policy
+    from nebius_cxcli.soperator_checks_scheduling import auxiliary_storage_matches
+
+    if not shutil.which("kubectl"):
+        pytest.skip("kubectl kustomize is required for native postrenderer validation")
+    snapshot, _, source = frozen_charts
+    compiled, _ = compile_upstream_soperator_values(_values(), release=snapshot)
+    policy = compile_checks_policy(source, compiled)
+    bindings = retained_check_mounts(compiled)
+    expected = {"/mnt/jail" + row["mount_path"]: row["name"] for row in bindings}
+    assert "/mnt/jail/opt/soperator-home" in expected
+    assert {"create-user-nebius", "create-user-soperatorchecks"} <= policy.execution_specs.keys()
+    for spec in policy.execution_specs.values():
+        job = spec[spec["checkType"] + "Spec"]
+        actual = {row["mountPath"]: row["name"] for row in job["jobContainer"]["volumeMounts"]}
+        assert actual.items() >= expected.items()
+    rendered = _render_values(
+        source / "helm/soperator-activechecks", compiled["soperatorActiveChecks"]["overrideValues"]
+    )
+    native = next(row for row in rendered if row["kind"] == "CronJob")
+    directory = tmp_path / "auxiliary"
+    directory.mkdir()
+    (directory / "cron.yaml").write_text(yaml.safe_dump(native))
+    (directory / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "resources": ["cron.yaml"],
+                "patches": auxiliary_post_renderers(compiled)[0]["kustomize"]["patches"],
+            }
+        )
+    )
+    result = subprocess.run(
+        ["kubectl", "kustomize", str(directory)], capture_output=True, text=True, check=True
+    )
+    bound = yaml.safe_load(result.stdout)
+    assert auxiliary_storage_matches(bound["spec"], policy.auxiliary_spec)
+    pod = bound["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    pod["containers"][0]["volumeMounts"].pop()
+    assert not auxiliary_storage_matches(bound["spec"], policy.auxiliary_spec)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {
+            "create-user-nebius": {
+                "k8sJobSpec": {
+                    "jobContainer": {
+                        "volumeMounts": [
+                            {"name": "jail", "mountPath": "/mnt/jail"},
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "gpu-fryer": {
+                "slurmJobSpec": {
+                    "jobContainer": {
+                        "extraVolumeMounts": [
+                            {
+                                "name": "jail",
+                                "mountPath": "/mnt/jail/opt/soperator-home",
+                                "readOnly": True,
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    ],
+)
+def test_check_specific_overrides_cannot_bypass_retained_storage(frozen_charts, override):
+    from nebius_cxcli.soperator_checks_policy import compile_checks_policy
+
+    snapshot, _, source = frozen_charts
+    values = _values()
+    values["soperator-activechecks"] = {"checks": override}
+    compiled, _ = compile_upstream_soperator_values(values, release=snapshot)
+    with pytest.raises(ValueError, match="retained|writable jail mount"):
+        compile_checks_policy(source, compiled)
+
+
+@pytest.mark.parametrize(
+    "check,kind", [("create-user-nebius", "k8sJobSpec"), ("gpu-fryer", "slurmJobSpec")]
+)
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/mnt/jail/opt//soperator-home",
+        "/mnt/jail/opt/./soperator-home",
+        "/unrelated/../mnt/jail/opt/soperator-home",
+        "//mnt/jail/opt/soperator-home",
+        "/mnt/jail/opt/soperator-home/",
+        "/",
+    ],
+)
+def test_check_mount_aliases_cannot_shadow_retained_home(frozen_charts, check, kind, path):
+    from nebius_cxcli.soperator_checks_policy import compile_checks_policy
+
+    snapshot, _, source = frozen_charts
+    values = _values()
+    container = {"extraVolumeMounts": [{"name": "shadow", "mountPath": path}]}
+    job = {"jobContainer": container}
+    (job if kind == "k8sJobSpec" else container)["extraVolumes"] = [
+        {"name": "shadow", "emptyDir": {}}
+    ]
+    values["soperator-activechecks"] = {"checks": {check: {kind: job}}}
+    compiled, _ = compile_upstream_soperator_values(values, release=snapshot)
+    with pytest.raises(ValueError, match="canonical|retained"):
+        compile_checks_policy(source, compiled)

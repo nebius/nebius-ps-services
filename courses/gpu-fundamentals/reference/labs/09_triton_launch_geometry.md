@@ -10,7 +10,7 @@ Use one H100 with the course-qualified Triton package. This is Python learner co
 
 Exact enabled GPC, SM, and memory-controller counts vary by H100 product and configuration. Course diagrams show containment and data paths, not an exact die floorplan. Measure the actual device rather than hard-coding one SKU count.
 
-Use the SM90 occupancy APIs and actual compiler resource report rather than a generic calculator with another architecture’s limits. Cluster kernels have an additional cluster-occupancy calculation.
+Use the CUDA occupancy APIs with the H100 kernel and device limits and actual compiler resource report rather than a generic calculator with another architecture’s limits. Cluster kernels have an additional cluster-occupancy calculation.
 
 ## Concepts and code path
 

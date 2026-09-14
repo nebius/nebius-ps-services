@@ -3,9 +3,11 @@ name: Skills project specs CI
 on:
   pull_request:
     paths:
+      - "skills/**" # Include resource-only changes in installed payload checks.
       - ".github/workflows/skills-project-specs-ci.yml"
       - "skills/maintain-project-specs/**"
       - "skills/task-implementer/**"
+      - "skills/worktree/**"
       - "skills/sdlc-create-requirements/**"
       - "skills/sdlc-create-design/**"
       - "skills/sdlc-align-specs/**"
@@ -13,8 +15,20 @@ on:
       - "skills/sdlc-prepare-execution/**"
       - "skills/sdlc-implement-plan/**"
       - "skills/project-agent-instructions/**"
-      - "skills/align-skill/scripts/validate-skill-structure.py"
-      - "skills/agent-nebius-auth-setup/scripts/test_install_hook_registration.py"
+      - "skills/align-skill/**"
+      - "skills/global-context-management/**"
+      - "skills/config-codex/**"
+      - "skills/config-claude/**"
+      - "skills/commit/**"
+      - "skills/prompt-session-intake/**"
+      - "skills/troubleshoot/**"
+      - "skills/.codex-plugin/**"
+      - "skills/.claude-plugin/**"
+      - ".agents/plugins/marketplace.json"
+      - ".claude-plugin/marketplace.json"
+      - "skills/agent-nebius-auth-setup/**"
+      - "skills/**/SKILL.md"
+      - "skills/**/agents/openai.yaml"
       - "skills/install-skills.sh"
       - "skills/docs/requirements.md"
       - "skills/docs/design.md"
@@ -23,9 +37,11 @@ on:
   push:
     branches: [main]
     paths:
+      - "skills/**" # Include resource-only changes in installed payload checks.
       - ".github/workflows/skills-project-specs-ci.yml"
       - "skills/maintain-project-specs/**"
       - "skills/task-implementer/**"
+      - "skills/worktree/**"
       - "skills/sdlc-create-requirements/**"
       - "skills/sdlc-create-design/**"
       - "skills/sdlc-align-specs/**"
@@ -33,8 +49,20 @@ on:
       - "skills/sdlc-prepare-execution/**"
       - "skills/sdlc-implement-plan/**"
       - "skills/project-agent-instructions/**"
-      - "skills/align-skill/scripts/validate-skill-structure.py"
-      - "skills/agent-nebius-auth-setup/scripts/test_install_hook_registration.py"
+      - "skills/align-skill/**"
+      - "skills/global-context-management/**"
+      - "skills/config-codex/**"
+      - "skills/config-claude/**"
+      - "skills/commit/**"
+      - "skills/prompt-session-intake/**"
+      - "skills/troubleshoot/**"
+      - "skills/.codex-plugin/**"
+      - "skills/.claude-plugin/**"
+      - ".agents/plugins/marketplace.json"
+      - ".claude-plugin/marketplace.json"
+      - "skills/agent-nebius-auth-setup/**"
+      - "skills/**/SKILL.md"
+      - "skills/**/agents/openai.yaml"
       - "skills/install-skills.sh"
       - "skills/docs/requirements.md"
       - "skills/docs/design.md"
@@ -50,6 +78,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runtime-security:
+    name: Skills runtime security (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: skills
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify trusted loading, source audit and payload parity
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python -B global-context-management/scripts/test-trusted-runtime.py
+          python -B config-codex/scripts/test-check-local-idempotency.py CheckLocalIdempotencyTest.test_modified_installed_audit_code_never_executes
+          python -B sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py VerifierContractTests.test_payload_parity_requires_two_successful_regular_file_digests
+
   verify:
     name: Skills project specs
     runs-on: ubuntu-latest
@@ -66,10 +122,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install lint dependency
+      - name: Install validation dependencies
         run: |
           set -euo pipefail
-          python -m pip install ruff==0.14.11
+          python -m pip install ruff==0.14.11 -r align-skill/scripts/requirements.txt
 
       - name: Validate source contracts
         run: |
@@ -99,10 +155,39 @@ jobs:
             task-implementer/scripts/prompt_workspace_execution.py \
             task-implementer/scripts/prompt_workspace_waves.py \
             task-implementer/scripts/prompt_workspace_resume.py \
+            task-implementer/scripts/prompt_workspace.py \
+            task-implementer/scripts/test-task-resume.py \
             sdlc-start/scripts/prompt_workspace.py \
             sdlc-prepare-execution/scripts/sdlc_evidence_security.py \
             sdlc-prepare-execution/scripts/sdlc_execution_core.py \
             sdlc-implement-plan/scripts/worker_dispatch.py
+
+      - name: Validate cross-agent distribution and evaluation adapters
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python -B global-context-management/scripts/check-plugin-manifests.py --catalogs
+          python -B global-context-management/scripts/test-agent-installation.py
+          python -B config-codex/scripts/test-check-local-idempotency.py
+          python -B config-claude/scripts/test-check-local-idempotency.py
+          python -B global-context-management/scripts/test-claude-roles.py
+          python -B worktree/scripts/test-worktree-manager.py WorktreeManagerTest.test_worktree_and_commit_share_selected_agent_lock
+          python -B align-skill/scripts/test-validate-skill-structure.py
+          python -B align-skill/scripts/test-skill-frontmatter.py
+          python -B align-skill/scripts/test-npx-compatibility.py
+          python -B align-skill/scripts/test-skill-evals.py
+          python -B align-skill/scripts/validate-skill-structure.py --policy repository --agent codex --require-evals .
+          python -B align-skill/scripts/validate-skill-structure.py --policy repository --agent claude --require-evals .
+          ruff check --no-cache global-context-management/scripts/agent_runtime.py \
+            global-context-management/scripts/trusted_runtime.py \
+            global-context-management/scripts/task_state_permissions.py \
+            global-context-management/scripts/test-trusted-runtime.py \
+            global-context-management/scripts/hook_runtime.py \
+            global-context-management/scripts/check-plugin-manifests.py \
+            global-context-management/scripts/test-agent-installation.py \
+            global-context-management/scripts/test-claude-roles.py config-claude/scripts \
+            align-skill/scripts
 
       - name: Run canonical owner and hook tests
         run: |
@@ -130,3 +215,40 @@ jobs:
           python -B project-agent-instructions/scripts/test_project_agent_instructions.py
           python -B project-agent-instructions/scripts/test_project_specs_retention.py
           python -B agent-nebius-auth-setup/scripts/test_install_hook_registration.py
+
+      - name: Run native workflow harness regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python -B task-implementer-test/scripts/test_task_implementer_lifecycle.py
+          python -B task-implementer-test/scripts/test_verify_task_implementer.py
+          python -B sdlc-workflow-test/scripts/test_three_tier_lifecycle.py
+          python -B sdlc-workflow-test/scripts/test_three_tier_prompt.py
+          python -B sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py
+
+  npx-installation:
+    name: Skills CLI discovery and copied installation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: skills
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Set up Node for pinned skills CLI
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install declared validator dependency
+        run: python -m pip install -r align-skill/scripts/requirements.txt
+      - name: Verify single-skill discovery and installation
+        run: python -B align-skill/scripts/check-npx-compatibility.py align-skill
+      - name: Verify full catalog discovery and installation
+        run: python -B align-skill/scripts/check-npx-compatibility.py .

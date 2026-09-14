@@ -1,147 +1,100 @@
 # Audit Log Querying
 
-This reference keeps the current Nebius Audit Logs query contract in one place
-so `SKILL.md` can stay concise.
+## Authoritative contracts
 
-## Official Sources Checked
+Reviewed against current official documentation and public API schemas on
+2026-09-11; no live tenant query or local CLI authentication was performed.
 
-- Audit Logs overview: <https://docs.nebius.com/audit-logs>
-- Viewing events: <https://docs.nebius.com/audit-logs/events/view>
-- Filtering events: <https://docs.nebius.com/audit-logs/events/filter>
-- Event structure and fields:
-  <https://docs.nebius.com/audit-logs/events/reference>
-- CLI list command:
-  <https://docs.nebius.com/cli/reference/audit/v2/audit-event/list>
-- IAM whoami: <https://docs.nebius.com/cli/reference/iam/whoami>
-- CLI config get: <https://docs.nebius.com/cli/reference/config/get>
-- Project get: <https://docs.nebius.com/cli/reference/iam/v2/project/get>
-- Regions: <https://docs.nebius.com/overview/regions>
+- [Viewing events and tenant roles](https://docs.nebius.com/audit-logs/events/view)
+- [Supported services](https://docs.nebius.com/audit-logs/services)
+- [Filtering events](https://docs.nebius.com/audit-logs/events/filter)
+- [Event fields and operation status](https://docs.nebius.com/audit-logs/events/reference)
+- [Audit list CLI](https://docs.nebius.com/cli/reference/audit/v2/audit-event/list)
+- [Selected CLI profile](https://docs.nebius.com/cli/reference/profile/current)
+- [Whoami](https://docs.nebius.com/cli/reference/iam/whoami)
+- [CLI exit codes](https://docs.nebius.com/cli/exit-codes)
+- [Profile response schema](https://github.com/nebius/api/blob/main/nebius/iam/v1/profile_service.proto)
+- [Project schema](https://github.com/nebius/api/blob/main/nebius/iam/v2/project.proto)
+- [Audit list schema and page limit](https://github.com/nebius/api/blob/main/nebius/audit/v2/audit_event_service.proto)
 
-The local CLI was checked at version `0.12.239`, and
-`nebius audit v2 audit-event list --help` includes `--region`.
+## Identity is separate from authorization
 
-## Command Contract
+`profile current` resolves the profile selected by CLI configuration,
+`NEBIUS_PROFILE` or an explicit `--profile`. Keep that selected profile and the
+inherited environment consistent for all calls. The CLI owns authentication,
+including renewable credentials; the helper must not read keys or fetch tokens.
 
-Use the read-only list command:
+Whoami returns one documented variant. For `user_profile`, select exactly one
+`tenants` entry whose `tenant_id` equals the query tenant, then use its
+`tenant_user_account_id`. For `service_account_profile`, use
+`info.metadata.id`. Anonymous, absent, invalid or ambiguous identities stop.
+Do not recursively search unrelated fields for an ID with a matching prefix.
 
-```bash
-nebius audit v2 audit-event list \
-  --parent-id <tenant_id> \
-  --start <start_iso_8601_utc> \
-  --end <end_iso_8601_utc> \
-  --event-type control_plane \
-  --region <region> \
-  --filter "<filter>" \
-  --page-size <n> \
-  --format json
-```
+The first valid bounded audit-list response proves effective read access for
+that request and becomes page one. Every subsequent page remains subject to
+server authorization. Tenant `auditlogs.audit-event-viewer` is sufficient;
+`admin` also works. Do not enumerate roles or require broad IAM-read access as a
+precondition. A failed identity lookup is not an audit-permission verdict.
 
-Required command inputs:
+## Scope and region
 
-- `--parent-id`: tenant ID.
-- `--start`: ISO 8601 timestamp.
-- `--end`: ISO 8601 timestamp.
+The audit list parent is always a tenant ID. The helper requires a resource,
+subject, current-subject or tenant-wide selector. Additional filters narrow
+that explicit scope; there is no hidden actor selection. A tenant-wide query
+still covers only the chosen region and window.
 
-Useful query controls:
+Use explicit region whenever known. Otherwise verify the explicit/configured
+project's metadata ID and tenant parent, then read `spec.region`. Failed or
+missing discovery stops. The API documents that after 2026-08-13 events are
+stored only in their origin region; an arbitrary `eu-north1` fallback can miss
+an event. Project lookup is not needed when region is supplied explicitly.
 
-- `--event-type`: `control_plane` or `data_plane`; this skill uses
-  `control_plane` only in v1.
-- `--filter`: Nebius Audit Logs filter expression.
-- `--page-size`: bounded result size.
-- `--page-token`: page continuation token.
-- `--all`: list every page; use only when explicitly requested.
-- `--region`: region to retrieve logs from. The Nebius CLI documents
-  `eu-north1` as the command default and notes a transition period until
-  `13-08-2026` where events are written both to `eu-north1` and their origin
-  region. After that date, events are stored only in their origin region and
-  the region field becomes required.
+## Query and response contract
 
-## Default Resolution
+Use `nebius audit v2 audit-event list` with tenant parent, absolute start/end,
+region, `control_plane`, optional filter, bounded page size and JSON output.
+Maximum page size is 500. The helper owns pagination instead of CLI `--all`.
 
-Tenant:
+The canonical envelope uses `items` and `next_page_token`. Protobuf default
+omission permits `{}` or a token-only page; these differ from empty stdout,
+invalid JSON, wrong types, duplicate keys or an alias-only envelope. Validate
+all events in a page before committing it to the result. Do not translate a
+provider/parser failure into an empty event collection.
 
-1. Use explicit `--tenant-id`.
-2. Else run `nebius config get tenant-id`.
-3. Else stop and ask for a tenant ID or configured CLI profile.
+`DONE`, `STARTED` and `ERROR` describe the operation, and event authorization
+describes the historical actor. Neither proves current reader access. In MK8s
+investigations, inspect `service.name='MK8S'` and `action='DELETE'` together
+with resource ID, time and status. Preserve service-account attribution without
+inventing the initiating human; resolving that may require separately scoped
+CI or automation evidence.
 
-Region:
+## Filter and privacy boundary
 
-1. Use explicit `--region`.
-2. Else use the current/default project region when it can be discovered from
-   an explicit `--project-id` or `nebius config get parent-id`.
-3. Else try CLI config region keys if the local CLI exposes them.
-4. Else use `eu-north1`.
+The helper accepts only documented noncredential fields and AND-connected
+comparisons or regex predicates. Quoted literals are parsed as strings, so the
+word OR inside a quoted pattern is not an OR operator. Unsupported syntax and
+credential fields fail before CLI access. Structured selectors cannot be
+replaced or broadened by an extra expression.
 
-Time range:
+All reports use an allowlist: safe scope, IDs, service/action/status/time,
+source method, request ID, response code and optional names. Never serialize
+whole identity resources or audit payloads for convenience. Sensitive filter
+literals and provider stderr are excluded even in previews/errors. Raw payload
+passthrough is not supported.
 
-1. Use explicit `--start` and `--end` when supplied.
-2. If only `--end` is supplied, use `--hours` before that end.
-3. If only `--start` is supplied, end at current UTC time.
-4. If neither is supplied, use the last 24 hours in UTC.
+## Failure and evidence rules
 
-## Filter Contract
+CLI code 7 is authentication failure; 15/55 are permission denial; 12/52 are
+deadlines; 20/60 are unavailable service; 4 is configuration failure. Preserve
+the failing stage and classify other exit codes without guessing from text.
+Do not fix credentials or grant permissions to make the query succeed.
 
-Nebius Audit Logs support `=`, `!=`, `:`, and `regex`, and combine filters with
-`AND`. This skill composes only equality filters unless the user provides
-`--raw-filter`.
+Deadlines, output limits, page limits and later errors yield partial evidence
+with earlier validated pages retained. A returned token can resume only the
+same query with the original absolute window. Cycles have no safe continuation.
+No events in a failed or partial report is never evidence of absence.
 
-Core filter fields used by this skill:
-
-- `resource.metadata.id`
-- `resource.metadata.type`
-- `authentication.subject.tenant_user_id`
-- `authentication.subject.service_account_id`
-- `action`
-- `service.name`
-- `status`
-
-Resource query:
-
-```text
-resource.metadata.id='<resource_id>'
-```
-
-Missing-resource fallback for the current logged-in principal:
-
-```text
-authentication.subject.tenant_user_id='<tenant_user_id>'
-```
-
-or:
-
-```text
-authentication.subject.service_account_id='<service_account_id>'
-```
-
-Optional filters are appended with `AND`, for example:
-
-```text
-resource.metadata.id='computeinstance-abc' AND action='DELETE' AND service.name='COMPUTE'
-```
-
-## Sanitization
-
-Default output must avoid:
-
-- tokens and token-derived fields
-- credentials and static-key material
-- raw request parameters and response payloads
-- full raw event JSON
-- subject names, user-controlled resource names, or email-like PII
-
-The helper therefore parses JSON output and returns a reduced event summary.
-Use `--raw` only when the user explicitly needs raw Nebius CLI output and
-accepts the security risk. Use `--include-pii` only when subject names or other
-PII-bearing summary fields are explicitly required.
-
-## Live Validation
-
-Prefer these validation levels:
-
-1. Unit tests with the fake `nebius` executable.
-2. `--dry-run` against the target profile, tenant, and region.
-3. A live query only after the user opts in, with explicit tenant/profile and a
-   low `--page-size`.
-
-Do not run exports, updates, credential creation, IAM mutation, or CLI update
-commands from this skill.
+`--dry-run` makes zero CLI calls and never establishes authentication or access.
+Offline fake-CLI tests, source-copy portability, installed runtime loading and
+live tenant access are distinct validation levels. Only an explicitly scoped
+live request can supply the last one.

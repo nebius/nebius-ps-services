@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Script helper to install Codex skills into ~/.agents/skills.
+# Install skills and hooks for Codex (default) or Claude via --agent.
 #
 # Usage: ./install-skills.sh [source] [destination_dir]
 #        ./install-skills.sh --remove-skill <skill_name> [destination_dir]
@@ -17,7 +17,7 @@ set -euo pipefail
 #
 # Requirements: bash, rsync, and git (GitHub sources only). Hook installation
 # also uses install, find, cmp, chmod, awk, cut, sort, date, mktemp, and
-# shasum or sha256sum. Hook registration also uses python3.
+# shasum or sha256sum. Combined/hook installation requires Python 3.11+.
 # How behavior is enforced:
 #   - Skill detection: only directories containing SKILL.md are treated as skills.
 #   - Idempotency: rsync keeps destination in sync (--delete, --omit-dir-times) and
@@ -31,7 +31,8 @@ set -euo pipefail
 #     they are still marked as owned by the same source.
 #   - Hook drift visibility: hook installation copies missing hook files,
 #     records provenance hashes, and refreshes differing existing hook files
-#     from the selected source after backing up the previous target. It lists
+#     from the selected source after backing up the previous target. Existing
+#     global_context_policy.json is operator-owned and preserved. It lists
 #     extra installed hook files and hooks.json registrations that are not
 #     present in the selected source manifests, but it never deletes them
 #     automatically unless --replace-hooks-json is explicitly set for
@@ -39,6 +40,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
+export SKILLS_INSTALL_PROJECTOR="${SCRIPT_DIR}/global-context-management/scripts"
 
 # Color/style output (auto-disabled for non-interactive terminals or NO_COLOR).
 S_RESET=""
@@ -93,8 +95,17 @@ require_command() {
 }
 
 show_usage() {
+  printf '%s\n' 'Default: install skills, all selected-source hooks, and register hooks for Codex.'
+  printf '%s\n' 'Combined installation refreshes exact managed registrations automatically; unchanged reruns add no backups.'
+  printf '%s\n' '  --agent codex|claude  Select the agent (default: codex).'
+  # shellcheck disable=SC2016
+  printf '%s\n' 'Claude uses ${CLAUDE_CONFIG_DIR:-~/.claude}/skills, hooks/, and settings.json.'
+  printf '%s\n' 'Example: ./install-skills.sh --agent claude'
+  printf '%s\n' 'Requires Python 3.11+. Paths below show Codex defaults; --agent applies to every mode.'
+  printf '%s\n' 'Claude registration merges settings.json and preserves non-hook settings.'
+
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[source] [destination_dir]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[--agent codex|claude] [source] [destination_dir]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--remove-skill <skill_name> [destination_dir]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir> [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]${S_RESET}"
@@ -102,8 +113,8 @@ show_usage() {
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Defaults:${S_RESET}"
-  printf '%b\n' "  - ${S_CYAN}./install-skills.sh${S_RESET} installs from this script's directory into ${S_CYAN}~/.agents/skills${S_RESET}."
-  printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} without ${S_CYAN}[destination_dir]${S_RESET} removes from ${S_CYAN}~/.agents/skills${S_RESET}."
+  printf '%b\n' "  - ${S_CYAN}./install-skills.sh${S_RESET} installs from this script's directory into the selected agent skill directory, with hooks registered."
+  printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} without ${S_CYAN}[destination_dir]${S_RESET} removes from the selected agent skill directory."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Source:${S_RESET}"
@@ -119,7 +130,7 @@ show_usage() {
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}              Show this help."
-  printf '%b\n' "  ${S_YELLOW}--remove-skill <name>${S_RESET}   Remove one skill by visible Codex skill name or folder name."
+  printf '%b\n' "  ${S_YELLOW}--remove-skill <name>${S_RESET}   Remove one skill by visible skill name or folder name."
   printf '%b\n' "  ${S_YELLOW}--install-hooks <dir>${S_RESET}   Sync hook payload files from one source hook directory into"
   printf '%b\n' "                           ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks${S_RESET}."
   printf '%b\n' "                           Installed names strip a trailing ${S_CYAN}.template${S_RESET} suffix."
@@ -131,7 +142,7 @@ show_usage() {
   printf '%b\n' "                           into ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks.json${S_RESET}."
   printf '%b\n' "  ${S_YELLOW}--refresh-hook-registrations${S_RESET}"
   printf '%b\n' "                           With ${S_CYAN}--register-hooks${S_RESET}, replace only differing registrations"
-  printf '%b\n' "                           for the same event/script and handlers; only statusMessage may differ."
+  printf '%b\n' "                           for the same event/script and handlers; only statusMessage or an exact managed host command may differ."
   printf '%b\n' "  ${S_YELLOW}--replace-hooks-json${S_RESET}    With ${S_CYAN}--register-hooks${S_RESET}, replace hooks.json with a clean"
   printf '%b\n' "                           file built only from selected source manifest(s)."
   printf '\n'
@@ -168,26 +179,27 @@ show_usage() {
   printf '%b\n' "  - Other extra destination skills are listed at the end with a"
   printf '%b\n' "    ${S_CYAN}--remove-skill${S_RESET} hint."
   printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} accepts the exact skill name from ${S_CYAN}SKILL.md${S_RESET}"
-  printf '%b\n' "    ${S_DIM}(the name Codex shows in VS Code)${S_RESET} or the installed folder name."
+  printf '%b\n' "    ${S_DIM}(the name in SKILL.md)${S_RESET} or the installed folder name."
   printf '%b\n' "  - ${S_CYAN}--remove-skill${S_RESET} removes the skill folder and local manifest entries"
   printf '%b\n' "    from the selected destination."
   printf '%b\n' "  - Reinstalling from a source that still contains the skill will add it back."
-  printf '%b\n' "  - ${S_CYAN}--install-hooks${S_RESET} is opt-in because hooks are runtime guardrails, not skills."
+  printf '%b\n' "  - ${S_CYAN}--install-hooks${S_RESET} selects hook-only installation; combined default installation includes hooks."
   printf '%b\n' "  - ${S_CYAN}--install-all-hooks${S_RESET} discovers only hook-only ${S_CYAN}*/assets/hooks${S_RESET}"
   printf '%b\n' "    directories under this source."
   printf '%b\n' "  - Hook file provenance hashes are recorded for drift visibility."
   printf '%b\n' "  - Differing existing hook files are backed up, then refreshed from the"
   printf '%b\n' "    selected source."
+  printf '%b\n' "  - Existing ${S_CYAN}global_context_policy.json${S_RESET} is operator-owned and preserved."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} preflights ${S_CYAN}hooks.json${S_RESET}, preserves existing entries,"
   printf '%b\n' "    and appends missing source entries."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} refuses duplicate Python hook files within the same hook event."
   printf '%b\n' "  - ${S_CYAN}--refresh-hook-registrations${S_RESET} explicitly replaces only a differing registration"
-  printf '%b\n' "    with the same event/script and handlers when only statusMessage differs, preserving unrelated entries."
+  printf '%b\n' "    with the same event/script and handlers when only status metadata or managed host binding differs; unrelated entries stay."
   printf '%b\n' "  - ${S_CYAN}--replace-hooks-json${S_RESET} explicitly backs up and replaces ${S_CYAN}hooks.json${S_RESET} with"
   printf '%b\n' "    selected source entries."
   printf '%b\n' "  - Hook installation reports extra installed hook files and ${S_CYAN}hooks.json${S_RESET}"
   printf '%b\n' "    entries not present in the selected source."
-  printf '%b\n' "  - After installing new or changed hooks, restart Codex and review/trust"
+  printf '%b\n' "  - After installing new or changed hooks, restart the selected agent; in Codex review/trust"
   printf '%b\n' "    the hook entries in ${S_CYAN}/hooks${S_RESET}."
   printf '%b\n' "  - If newly installed skills are not visible, restart the VS Code extension"
   printf '%b\n' "    host ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
@@ -745,6 +757,12 @@ sync_hook_files() {
     dest="${hook_dest}/${dest_rel}"
     source_sha="$(hash_file "${src}")"
     HOOK_SYNC_TOTAL=$((HOOK_SYNC_TOTAL + 1))
+    # This is operator policy, not an executable payload. Preserve a reviewed
+    # opt-in/opt-out across reinstallations instead of restoring the example.
+    if [[ "${dest_rel}" == "global_context_policy.json" && -f "${dest}" ]]; then
+      HOOK_SYNC_UNCHANGED=$((HOOK_SYNC_UNCHANGED + 1))
+      continue
+    fi
     if [[ -f "${dest}" ]] && cmp -s "${src}" "${dest}"; then
       chmod 0644 "${dest}"
       target_sha="$(hash_file "${dest}")"
@@ -793,6 +811,9 @@ write_source_hook_files_manifest() {
       printf '%s\n' "${dest_rel}" >> "${output_file}"
     done < <(find "${hook_src}" -type f -print0)
   done
+  if [[ -n "${HOOK_SUPPORT_ROOT:-}" ]]; then
+    printf '%s\n' agent_runtime.py hook_runtime.py >> "${output_file}"
+  fi
   sort -u "${output_file}" -o "${output_file}"
 }
 
@@ -835,7 +856,7 @@ print_extra_destination_hook_files() {
 
 print_extra_hook_registrations() {
   local codex_home="$1"
-  local hooks_json="${codex_home}/hooks.json"
+  local hooks_json="${codex_home}/${HOOK_SETTINGS_FILE}"
   local manifest_paths=()
   local hook_src=""
   local manifest_src=""
@@ -854,7 +875,111 @@ print_extra_hook_registrations() {
 
   extra_output="$(
     python3 - "${codex_home}" "${hooks_json}" "${manifest_paths[@]}" <<'PY'
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -892,6 +1017,12 @@ def load_manifest(path: Path, codex_home: Path) -> dict[str, list[dict[str, Any]
     for event_name, entries in hooks.items():
         if isinstance(event_name, str) and isinstance(entries, list):
             result[event_name] = [entry for entry in entries if isinstance(entry, dict)]
+    support = os.environ.get("SKILLS_INSTALL_SUPPORT")
+    if support:
+        project_hook_entries = _load_skill_support("projector",
+            str(Path(os.environ["SKILLS_INSTALL_PROJECTOR"]) / "hook_runtime.py"),
+            "global-context-management/scripts/hook_runtime.py", source_only=True)["hook_runtime"].project_hook_entries
+        result = project_hook_entries(result, codex_home, os.environ.get("SKILLS_INSTALL_AGENT", "codex"))
     return result
 
 
@@ -1020,6 +1151,109 @@ register_hooks_manifests() {
   done
 
   python3 - "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${status_file}" "${preflight}" "${manifest_args[@]}" <<'PY'
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+
 import json
 import os
 import re
@@ -1069,6 +1303,15 @@ def load_manifest(path: Path, codex_home: Path) -> dict[str, list[dict[str, obje
                 fail(f"{path} hooks.{event_name} entries must contain a hooks array")
             event_entries.append(entry)
         hooks[event_name] = event_entries
+    support = os.environ.get("SKILLS_INSTALL_SUPPORT")
+    if support:
+        project_hook_entries = _load_skill_support("projector",
+            str(Path(os.environ["SKILLS_INSTALL_PROJECTOR"]) / "hook_runtime.py"),
+            "global-context-management/scripts/hook_runtime.py", source_only=True)["hook_runtime"].project_hook_entries
+        try:
+            hooks = project_hook_entries(hooks, codex_home, os.environ.get("SKILLS_INSTALL_AGENT", "codex"))
+        except ValueError as error:
+            fail(str(error))
     return hooks
 
 
@@ -1090,7 +1333,7 @@ def command_python_script_names(command: str) -> list[str]:
     names: list[str] = []
     for token in tokens:
         candidate = token.rstrip(";),")
-        if candidate.endswith(".py"):
+        if candidate.endswith(".py") and Path(candidate).name != "hook_runtime.py":
             names.append(Path(candidate).name)
 
     if names:
@@ -1174,7 +1417,8 @@ source_manifests = [
     (manifest_args[index], Path(manifest_args[index + 1]).expanduser())
     for index in range(0, len(manifest_args), 2)
 ]
-hooks_json = codex_home / "hooks.json"
+agent = os.environ.get("SKILLS_INSTALL_AGENT", "codex")
+hooks_json = codex_home / ("settings.json" if agent == "claude" else "hooks.json")
 if not source_manifests:
     fail("--register-hooks requires at least one source manifest")
 
@@ -1193,12 +1437,26 @@ def handler_lists_refresh_compatible(
     source_handlers = source_entry.get("hooks")
     if not isinstance(existing_handlers, list) or not isinstance(source_handlers, list):
         return False
+    # Matchers are source-owned; other entry options may carry user policy.
+    if ({key: value for key, value in existing_entry.items() if key not in {"hooks", "matcher"}}
+            != {key: value for key, value in source_entry.items() if key not in {"hooks", "matcher"}}):
+        return False
 
     def without_status_message(handler: object) -> object:
         if not isinstance(handler, dict):
             return handler
         normalized = dict(handler)
         normalized.pop("statusMessage", None)
+        # Explicit refresh may bind an exact reviewed direct hook command to
+        # the host adapter. It must not replace custom arguments or handlers.
+        support = os.environ.get("SKILLS_INSTALL_SUPPORT")
+        if support and normalized.get("type") == "command":
+            project_hook_entries = _load_skill_support("projector",
+                str(Path(os.environ["SKILLS_INSTALL_PROJECTOR"]) / "hook_runtime.py"),
+                "global-context-management/scripts/hook_runtime.py", source_only=True)["hook_runtime"].project_hook_entries
+            normalized = project_hook_entries(
+                {"event": [{"hooks": [normalized]}]}, codex_home, agent
+            )["event"][0]["hooks"][0]
         return normalized
 
     return [without_status_message(handler) for handler in existing_handlers] == [
@@ -1242,8 +1500,10 @@ if had_existing:
     if existing_valid:
         existing_count = count_entries(existing_target)
 
+if agent == "claude" and had_existing and not existing_valid:
+    fail(f"{hooks_json} is not valid JSON; repair it before installing hooks")
 if replace_hooks_json:
-    target = new_target
+    target = {**(existing_target or {}), **new_target} if agent == "claude" else new_target
 else:
     if had_existing:
         if not existing_valid:
@@ -1423,7 +1683,7 @@ else:
                         fail(
                             "Targeted hook registration refresh matched an entry "
                             "with a differing or mixed handler list beyond "
-                            "statusMessage metadata; refusing to replace "
+                            "statusMessage metadata or the exact managed host command, or differing entry options; refusing to replace "
                             "unrelated handlers"
                         )
                     target_entries[target_entries.index(existing_entry)] = entry
@@ -1807,6 +2067,7 @@ install_hooks() {
     preflight_register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}"
   fi
 
+  sync_hook_support "${codex_home}"
   file_status_file="$(mktemp)"
   registration_status_file="$(mktemp)"
   HOOK_FILE_STATUS_FILE="${file_status_file}"
@@ -1821,7 +2082,7 @@ install_hooks() {
   fi
   print_combined_hook_status "${codex_home}" "${file_status_file}" "${registration_status_file}" "${register_hooks}"
   if [[ "${HOOK_STATUS_REVIEW_NEEDED}" -eq 1 ]]; then
-    log_action_required "Action required: hook files or registrations changed. Restart Codex and review/trust entries in /hooks."
+    log_action_required "Action required: hook files or registrations changed. Restart ${AGENT} and review/trust entries in /hooks."
   fi
   rm -f "${file_status_file}" "${registration_status_file}"
   if [[ "${report_extras}" -eq 1 ]]; then
@@ -1948,6 +2209,7 @@ install_all_hooks() {
     preflight_register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${hook_dirs[@]}"
   fi
 
+  sync_hook_support "${codex_home}"
   file_status_file="$(mktemp)"
   registration_status_file="$(mktemp)"
   HOOK_FILE_STATUS_FILE="${file_status_file}"
@@ -1965,15 +2227,135 @@ install_all_hooks() {
   fi
   print_combined_hook_status "${codex_home}" "${file_status_file}" "${registration_status_file}" "${register_hooks}"
   if [[ "${HOOK_STATUS_REVIEW_NEEDED}" -eq 1 ]]; then
-    log_action_required "Action required: hook files or registrations changed. Restart Codex and review/trust entries in /hooks."
+    log_action_required "Action required: hook files or registrations changed. Restart ${AGENT} and review/trust entries in /hooks."
   fi
   rm -f "${file_status_file}" "${registration_status_file}"
 
   print_extra_destination_hooks "${codex_home}" "${hook_dirs[@]}"
 }
 
+
+preflight_agent_install() {
+  python3 - "${AGENT_HOME_DIR}" "${AGENT}" "${HOOK_SETTINGS_FILE}" "${1:-}" "${REPLACE_HOOKS_JSON}" <<'PY_CHECK'
+import json
+import os
+from pathlib import Path
+import sys
+home, agent, filename, destination, replace = sys.argv[1:]
+if sys.version_info < (3, 11):
+    raise SystemExit("ERROR: Python 3.11 or newer is required for cross-agent hook installation")
+for raw in (home, destination, str(Path(home) / "hooks"), str(Path(home) / filename),
+            str(Path(home) / ".install-hooks-state")):
+    if not raw:
+        continue
+    path = Path(raw).expanduser().absolute()
+    if any(part.is_symlink() and not (str(part) in {"/var", "/tmp", "/etc"}
+                                      and part.lstat().st_uid == 0)
+           for part in (path, *path.parents)):
+        raise SystemExit("ERROR: installation paths must not contain symlinks")
+for directory in (Path(home) / "hooks", Path(home) / ".install-hooks-state"):
+    if directory.is_dir() and any(path.is_symlink() for path in directory.rglob("*")):
+        raise SystemExit("ERROR: hook destinations must not contain symlinks")
+for path in (Path(home), Path(home) / "hooks"):
+    if path.exists() and (not path.is_dir() or path.stat().st_uid != os.getuid()
+                          or path.stat().st_mode & 0o022):
+        raise SystemExit("ERROR: agent home and hooks must be owned directories without group/world write access")
+for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+    path = Path(home) / "hooks" / name
+    if path.exists() and (not path.is_file() or path.stat().st_uid != os.getuid()
+                          or path.stat().st_mode & 0o022):
+        raise SystemExit("ERROR: shared runtime files must be owned regular files without group/world write access")
+settings = Path(home) / filename
+if settings.exists():
+    if not settings.is_file():
+        raise SystemExit("ERROR: hook settings must be a regular file")
+    try:
+        value = json.loads(settings.read_text())
+        if not isinstance(value, dict) or not isinstance(value.get("hooks", {}), dict):
+            raise ValueError()
+    except (ValueError, OSError):
+        if agent != "codex" or replace != "1":
+            raise SystemExit("ERROR: invalid hook settings; repair before installation")
+# Do not alter an independently installed native plugin.
+if agent == "codex" and (Path(home) / "config.toml").is_file():
+    try:
+        import tomllib
+        config_text = (Path(home) / "config.toml").read_text()
+        if "agent-nebius-auth managed block begin" in config_text or "pre_tool_use_nebius_auth.py" in config_text:
+            print("Remove the inline agent-nebius-auth hook entry before registering the canonical hooks.json entry.")
+            raise SystemExit("ERROR: agent-nebius-auth inline config.toml hook entry detected; remove it before installing hooks")
+        config = tomllib.loads(config_text)
+        declared = config.get("plugins", {}).get("skills@nebius-ps-services", {})
+        if isinstance(declared, dict) and declared.get("enabled") is True:
+            raise SystemExit("ERROR: native skills plugin is enabled; remove it through Codex before using the local installer")
+    except (ValueError, OSError):
+        raise SystemExit("ERROR: cannot verify existing Codex plugin configuration")
+registry = Path(home) / "plugins/installed_plugins.json"
+if registry.is_file():
+    try:
+        plugins = json.loads(registry.read_text()).get("plugins", {})
+    except (ValueError, OSError, AttributeError):
+        raise SystemExit("ERROR: cannot verify existing native plugin installation")
+    if "skills@nebius-ps-services" in plugins:
+        raise SystemExit("ERROR: native skills plugin is installed; remove it through the agent before using the local installer")
+PY_CHECK
+}
+
+
+configure_hook_support() {
+  local source="$1" required="${2:-0}" candidate=""
+  HOOK_SUPPORT_ROOT=""
+  export SKILLS_INSTALL_SUPPORT=""
+  for candidate in "${source}" "${source}/.." "${source}/../../.."; do
+    if [[ -f "${candidate}/global-context-management/scripts/agent_runtime.py" && -f "${candidate}/global-context-management/scripts/hook_runtime.py" && -f "${candidate}/global-context-management/scripts/trusted_runtime.py" && -f "${candidate}/global-context-management/scripts/task_state_permissions.py" ]]; then
+      HOOK_SUPPORT_ROOT="$(cd "${candidate}/global-context-management/scripts" && pwd -P)"
+      export SKILLS_INSTALL_SUPPORT="${HOOK_SUPPORT_ROOT}"
+      return 0
+    fi
+  done
+  if python3 - "${source}" <<'PY_DEPENDENCIES'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+required = any((b"from agent_runtime import" in path.read_bytes() or b"_load_skill_support(" in path.read_bytes())
+               for path in root.rglob("*")
+               if path.is_file() and path.name.endswith((".py", ".py.template")))
+raise SystemExit(0 if required else 1)
+PY_DEPENDENCIES
+  then
+    required=1
+  fi
+  if [[ "${required}" -eq 1 ]]; then
+    log_error "Selected source is missing global-context-management runtime dependencies. Install from the full repository."
+    return 1
+  fi
+}
+
+sync_hook_support() {
+  local agent_home="$1"
+  local support_root="${HOOK_SUPPORT_ROOT:-}"
+  [[ -n "${support_root}" ]] || return 0
+  local name="" src="" dest="" digest=""
+  for name in agent_runtime.py hook_runtime.py trusted_runtime.py task_state_permissions.py; do
+    src="${support_root}/${name}"
+    [[ -f "${src}" ]] || { log_error "Missing shared hook dependency: ${name}"; return 1; }
+    dest="${agent_home}/hooks/${name}"
+    mkdir -p "${agent_home}/hooks"
+    if [[ -f "${dest}" ]] && ! cmp -s "${src}" "${dest}"; then
+      backup_hook_file_for_overwrite "${agent_home}" "${name}" "${dest}"
+    fi
+    if [[ ! -f "${dest}" ]] || ! cmp -s "${src}" "${dest}"; then
+      install -m 0644 "${src}" "${dest}"
+    fi
+    digest="$(hash_file "${src}")"
+    write_hook_file_provenance "${agent_home}" "${name}" "$(hook_source_id "${support_root}")" "${name}" "${digest}" "${digest}"
+  done
+}
+
 init_output_style
 
+AGENT="codex"
+AGENT_SET=0
 REMOVE_SKILL=""
 HOOK_INSTALL_SOURCE=""
 INSTALL_ALL_HOOKS=0
@@ -1986,6 +2368,15 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       show_usage
       exit 0
+      ;;
+    --agent)
+      if [[ $# -lt 2 || ( "$2" != "codex" && "$2" != "claude" ) || "${AGENT_SET}" -eq 1 ]]; then
+        log_error "--agent requires codex or claude and may be specified once."
+        exit 1
+      fi
+      AGENT="$2"
+      AGENT_SET=1
+      shift 2
       ;;
     --remove-skill)
       if [[ $# -lt 2 ]]; then
@@ -2071,6 +2462,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+export SKILLS_INSTALL_AGENT="${AGENT}"
+if [[ "${AGENT}" == "claude" ]]; then
+  AGENT_HOME_DIR="$(expand_home_path "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}")"
+  DEFAULT_SKILLS_DIR="${AGENT_HOME_DIR}/skills"
+  HOOK_SETTINGS_FILE="settings.json"
+else
+  AGENT_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
+  DEFAULT_SKILLS_DIR="${HOME}/.agents/skills"
+  HOOK_SETTINGS_FILE="hooks.json"
+fi
+
 if [[ -n "${HOOK_INSTALL_SOURCE}" && "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
   log_error "--install-hooks cannot be combined with --install-all-hooks."
   show_usage >&2
@@ -2111,11 +2513,13 @@ if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
   if [[ "${#POSITIONAL[@]}" -gt 0 ]]; then
     log_error "--install-all-hooks does not accept positional arguments."
     log_note "It installs from hook-only */assets/hooks directories under this script's source folder."
-    log_note "Set CODEX_HOME to choose a non-default Codex home."
+    log_note "Set CODEX_HOME or CLAUDE_CONFIG_DIR for the selected agent home."
     show_usage >&2
     exit 1
   fi
-  CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
+  preflight_agent_install
+  configure_hook_support "${DEFAULT_SRC_DIR}" 1
+  CODEX_HOME_DIR="${AGENT_HOME_DIR}"
   install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" "${REPLACE_HOOKS_JSON}" "${REFRESH_HOOK_REGISTRATIONS}"
   exit 0
 fi
@@ -2123,11 +2527,13 @@ fi
 if [[ -n "${HOOK_INSTALL_SOURCE}" ]]; then
   if [[ "${#POSITIONAL[@]}" -gt 0 ]]; then
     log_error "--install-hooks does not accept positional arguments."
-    log_note "Set CODEX_HOME to choose a non-default Codex home."
+    log_note "Set CODEX_HOME or CLAUDE_CONFIG_DIR for the selected agent home."
     show_usage >&2
     exit 1
   fi
-  CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
+  preflight_agent_install
+  configure_hook_support "${HOOK_INSTALL_SOURCE}" "$([[ "${AGENT}" == "claude" ]] && echo 1 || echo 0)"
+  CODEX_HOME_DIR="${AGENT_HOME_DIR}"
   install_hooks "${HOOK_INSTALL_SOURCE}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" 1 "${REPLACE_HOOKS_JSON}" "${REFRESH_HOOK_REGISTRATIONS}"
   exit 0
 fi
@@ -2147,7 +2553,7 @@ else
 fi
 
 if [[ -n "${REMOVE_SKILL}" ]]; then
-  DEST_DIR="${POSITIONAL[0]:-${HOME}/.agents/skills}"
+  DEST_DIR="${POSITIONAL[0]:-${DEFAULT_SKILLS_DIR}}"
   DEST_DIR="$(expand_home_path "${DEST_DIR}")"
   if [[ -d "${DEST_DIR}" ]]; then
     DEST_DIR="$(cd "${DEST_DIR}" && pwd -P)"
@@ -2157,7 +2563,7 @@ if [[ -n "${REMOVE_SKILL}" ]]; then
 fi
 
 SOURCE_SPEC="${POSITIONAL[0]:-${DEFAULT_SRC_DIR}}"
-DEST_DIR="${POSITIONAL[1]:-${HOME}/.agents/skills}"
+DEST_DIR="${POSITIONAL[1]:-${DEFAULT_SKILLS_DIR}}"
 SOURCE_SPEC="$(expand_home_path "${SOURCE_SPEC}")"
 DEST_DIR="$(expand_home_path "${DEST_DIR}")"
 
@@ -2235,6 +2641,19 @@ else
 
   SRC_DIR="$(cd "${SOURCE_SPEC}" && pwd -P)"
   SOURCE_ID="local:${SRC_DIR}"
+fi
+
+require_command "python3" "for installation preflight"
+preflight_agent_install "${DEST_DIR}"
+combined_hook_dirs=()
+while IFS= read -r hook_src; do
+  [[ -n "${hook_src}" ]] && combined_hook_dirs+=("${hook_src}")
+done < <(discover_hook_source_dirs "${SRC_DIR}" | sort)
+configure_hook_support "${SRC_DIR}" "$([[ "${AGENT}" == "claude" && "${#combined_hook_dirs[@]}" -gt 0 ]] && echo 1 || echo 0)"
+if [[ "${#combined_hook_dirs[@]}" -gt 0 ]]; then
+  validate_hook_dest_collisions "${combined_hook_dirs[@]}"
+  reject_inline_agent_nebius_auth_config_hook "${AGENT_HOME_DIR}" "${combined_hook_dirs[@]}"
+  preflight_register_hooks_manifests "${AGENT_HOME_DIR}" 0 1 "${combined_hook_dirs[@]}"
 fi
 
 mkdir -p "${DEST_DIR}"
@@ -2384,3 +2803,10 @@ else
 fi
 
 print_extra_destination_skills "${DEST_DIR}" "${TMP_SOURCE_SKILLS}"
+
+if [[ "${#combined_hook_dirs[@]}" -gt 0 ]]; then
+  install_all_hooks "${SRC_DIR}" "${AGENT_HOME_DIR}" 1 0 1
+else
+  sync_hook_support "${AGENT_HOME_DIR}"
+  log_note "No reviewed hook bundles in the selected source."
+fi

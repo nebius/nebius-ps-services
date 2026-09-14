@@ -1,5 +1,9 @@
 # Local Setup
 
+This reference owns the Codex setup variant. For Claude, use
+`../../config-claude/SKILL.md`; shared runtime paths are defined in
+`agent-hosts.md`. Do not apply Codex configuration to a Claude home.
+
 This reference explains the local-only setup for `global-context-management`.
 Do not copy machine-specific paths, secrets, or task-state contents into a
 public repository.
@@ -330,3 +334,24 @@ Even when the probe succeeds, context can still grow quickly if broad command
 output, long logs, large file dumps, or repeated exploration are returned in
 the parent thread. The skill reduces future noise; it cannot remove context
 that already entered the conversation.
+
+## Shared Host Runtime Dependency
+
+Copy `agent_runtime.py` and `hook_runtime.py` from the installed or source
+`global-context-management/scripts/` directory beside the hook payloads.
+The local installer performs this automatically from the selected source.
+Standalone script skills also receive this support. Their import bootstrap
+prefers package-local files, then validates the selected home's `hooks/`
+dependency; it never falls through to current-directory module discovery.
+Use the shared runtime when configuring hooks; do not invent independent
+Claude and Codex home resolvers. Source templates remain Codex configuration
+assets; the installer and native manifests bind the selected runtime host.
+Existing Codex configuration reconciliation continues to preserve user settings.
+
+## Claude Setup Owner
+
+Use `config-claude` for native CLAUDE_CONFIG_DIR configuration, managed
+CLAUDE.md instructions, settings reconciliation and restricted Markdown roles.
+This reference retains its Codex setup contract. Shared hooks advertise
+validated Claude role candidates subject to effective runtime override checks;
+they do not make a permissionMode label an enforcement boundary.

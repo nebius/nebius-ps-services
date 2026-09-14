@@ -8190,7 +8190,14 @@ def test_soperator_install_real_creation_preserves_fields_and_frozen_release(
     network: bool,
     interactive: bool,
     notifier: bool = False,
+    root_keys_selected: bool = True,
 ) -> None:
+    from test_ssh_public_keys import _VALID_ED25519_PUBLIC_KEY
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519.pub").write_text(_VALID_ED25519_PUBLIC_KEY)
     monkeypatch.setattr(cli_module, "_preflight_soperator_install_checks", lambda *_args: None)
     snapshot = sample_snapshot()
     frozen = SimpleNamespace(snapshot=snapshot)
@@ -8278,7 +8285,11 @@ def test_soperator_install_real_creation_preserves_fields_and_frozen_release(
                     "mysterybox": {"secretId": "mbsec-example", "property": "url"},
                 },
             )
-        return yaml.safe_dump(payload), True
+        if root_keys_selected:
+            from nebius_cxcli.soperator_values import seed_soperator_values
+
+            seed_soperator_values(payload, {"slurmNodes": {"login": {"sshRootPublicKeys": []}}})
+        return yaml.safe_dump(payload), root_keys_selected
 
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", wizard)
     scaffold = cli_module._scaffold_instance
@@ -8338,6 +8349,12 @@ def test_soperator_install_real_creation_preserves_fields_and_frozen_release(
     if not interactive:
         args.append("--no-interactive")
     result = runner.invoke(app, args)
+    if interactive and not root_keys_selected:
+        assert result.exit_code != 0, "Interrupted root-key selection must not proceed to planning"
+        assert "root SSH key selection" in result.output
+        assert not captured
+        assert not config_path.exists()
+        return
     assert result.exit_code == 0, result.output
     assert len(captured) == 1
     payload = yaml.safe_load(config_path.read_text())
@@ -8352,8 +8369,20 @@ def test_soperator_install_real_creation_preserves_fields_and_frozen_release(
     assert "cert-manager" not in charts
     assert ("nvidia-gpu-operator" in charts) == (profile != "cpu")
     assert ("nvidia-network-operator" in charts) == network
+    mounts = {
+        row["mountPath"]: row["localPath"]
+        for row in charts["soperator"]["values"]["jailPersistentMounts"]
+    }
+    assert mounts["/opt/soperator-home"] == "/mnt/jail-store/shared/opt/soperator-home"
+    if not interactive:
+        assert charts["soperator"]["values"]["slurmNodes"]["login"]["sshRootPublicKeys"] == [
+            _VALID_ED25519_PUBLIC_KEY
+        ]
+        assert "/slurmNodes/login/sshRootPublicKeys" in charts["soperator"]["values-explicit-paths"]
     assert len(wizard_calls) == int(interactive)
     if interactive:
+        assert charts["soperator"]["values"]["slurmNodes"]["login"]["sshRootPublicKeys"] == []
+        assert "/slurmNodes/login/sshRootPublicKeys" in charts["soperator"]["values-explicit-paths"]
         assert charts["soperator"]["values"]["slurmConfig"]["clusterName"] == "configured-slurm"
     assert "Continue with optional wizard phases" not in result.output
     assert "Selected infra components" not in result.output
@@ -8361,6 +8390,12 @@ def test_soperator_install_real_creation_preserves_fields_and_frozen_release(
     assert "Soperator install plan:" in result.output
     dependency_issues = cli_module._component_dependency_issues_from_payload(payload)
     assert not [issue for issue in dependency_issues if "release.install_after" in issue]
+
+
+def test_install_does_not_write_or_plan_after_skipping_root_key_selection(monkeypatch, tmp_path):
+    test_soperator_install_real_creation_preserves_fields_and_frozen_release(
+        monkeypatch, tmp_path, "cpu", False, True, root_keys_selected=False
+    )
 
 
 def test_install_preserves_required_eso_from_upstream_notifier_configuration(monkeypatch, tmp_path):
@@ -8392,6 +8427,9 @@ def test_install_full_app_wizard_preserves_frozen_version_and_upstream_fields(mo
 
     def prompt(path_label, current, **_kwargs):
         prompted.append(path_label)
+        if path_label.endswith(".values.slurmNodes.login.sshRootPublicKeys"):
+            assert current is None
+            return [], False
         return current, False
 
     monkeypatch.setattr(cli_module, "_prompt_scalar_override", prompt)
@@ -8414,6 +8452,8 @@ def test_install_full_app_wizard_preserves_frozen_version_and_upstream_fields(mo
     assert "frozen release 4.1.7" in output
     updated = yaml.safe_load(updated_yaml)
     result = next(row for row in updated["apps"]["charts"] if row["id"] == "soperator")
+    assert result["values"]["slurmNodes"]["login"]["sshRootPublicKeys"] == []
+    assert "/slurmNodes/login/sshRootPublicKeys" in result["values-explicit-paths"]
     assert result["version"] == release.release
     assert not any(re.fullmatch(r"apps\.charts\[\d+\]\.version", path) for path in prompted)
     assert result["values"]["soperator-checks"]["enabled"] is True

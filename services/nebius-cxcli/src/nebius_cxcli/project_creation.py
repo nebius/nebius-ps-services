@@ -14,6 +14,7 @@ import yaml
 from rich.console import Console
 
 from .components import ComponentEntry, ComponentScope, soperator_install_entry
+from .deploy_targets import app_chart_target_ref
 from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     materialize_mk8s_gpu_app_values,
@@ -85,7 +86,7 @@ class ProjectCreationServices:
     expand_soperator_app_selection: Callable[..., set[str]]
     expand_soperator_component_selection: Callable[..., set[str]]
     identity_values_from_payload: Callable[..., tuple[str, str, str, str, str | None]]
-    materialize_create_soperator_component_defaults: Callable[..., bool]
+    materialize_soperator_component_defaults: Callable[..., bool]
     materialize_mk8s_image_defaults: Callable[..., None]
     materialize_planned_vpc_binding_tokens: Callable[..., None]
     materialize_singleton_provider_defaults: Callable[..., None]
@@ -168,6 +169,7 @@ class ProjectCreationWorkflow:
     ) -> Path | None:
         """Create one project from typed inputs; command adapters own token parsing."""
         services = self._services()
+        from .soperator_login_keys import select_headless_root_keys
         from .soperator_release_resolver import current_frozen_soperator_release
         from .soperator_values import (
             apply_frozen_feature_defaults,
@@ -589,7 +591,19 @@ class ProjectCreationWorkflow:
             apply_frozen_feature_defaults(final_payload, frozen)
         if soperator_values is not None:
             seed_soperator_values(final_payload, soperator_values)
-        services.materialize_create_soperator_component_defaults(final_payload)
+        if soperator_release is not None and not interactive_mode:
+            select_headless_root_keys(final_payload)
+        services.materialize_soperator_component_defaults(final_payload)
+        if soperator_release is not None:
+            from .soperator_jail_mounts import apply_jail_persistent_mount_values
+
+            for row in soperator_rows(final_payload):
+                row["values"] = apply_jail_persistent_mount_values(
+                    row["values"],
+                    target_ref=app_chart_target_ref(row),
+                    layout="managed",
+                    legacy_active_source=False,
+                )
         selected_apps, mysterybox_eso_app_labels = (
             services.ensure_mysterybox_eso_app_dependency_selection(
                 final_payload,
@@ -633,7 +647,7 @@ class ProjectCreationWorkflow:
                 entries=app_entries,
             )
 
-        services.materialize_create_soperator_component_defaults(final_payload)
+        services.materialize_soperator_component_defaults(final_payload)
         selected_apps, mysterybox_eso_app_labels = (
             services.materialize_soperator_child_chart_secret_dependencies(
                 final_payload,
@@ -760,7 +774,7 @@ class ProjectCreationWorkflow:
                 + " because the selected observability configuration requires them."
             )
         services.align_new_infra_instance_ids_with_resource_names(final_payload)
-        services.materialize_create_soperator_component_defaults(final_payload)
+        services.materialize_soperator_component_defaults(final_payload)
         services.materialize_compute_boot_disk_defaults(
             final_payload,
             provider_lookup=provider_lookup,

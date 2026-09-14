@@ -44,8 +44,8 @@ this reference:
   and may then omit skills. Keep descriptions concise and front-load the main
   job, trigger words, accepted inputs, and boundaries.
 - Add, preserve, or repair `agents/openai.yaml` when the target repository
-  convention expects OpenAI metadata. In this repository, every source-owned
-  skill must keep it. Use the nested path `agents/openai.yaml`, not a top-level
+  convention expects OpenAI metadata. In this repository, existing Codex metadata is preserved;
+  core and Claude validation do not require it. Use the nested path `agents/openai.yaml`, not a top-level
   `agents.openai.yaml` file.
 - Keep the interface metadata useful: `display_name`, `short_description`, and
   `default_prompt` should be concise and aligned with the current `SKILL.md`.
@@ -209,13 +209,14 @@ For these skills:
 
 - Validate the narrow target first, then broaden only when shared rules,
   templates, or validators changed.
-- When reviewing external skills, separate OpenAI portable minimum failures
+- When reviewing external skills, separate Agent Skills portable minimum failures
   from this repository's stricter source-owned standards. Missing
   `agents/openai.yaml`, `evals/`, or the repo learning-loop section may be a
-  repo-standard gap rather than an upstream OpenAI portability failure.
-- When reviewing repo-owned skills in this tree, treat missing
-  `agents/openai.yaml` as a validation failure and restore it with interface
-  metadata plus `policy.allow_implicit_invocation`.
+  repo-standard gap rather than an portable-format failure.
+- Select `--agent core` for portable checks, `--agent codex` for Codex
+  metadata policy, or `--agent claude` for Claude invocation policy. The
+  `--profile stateful-workflow` dimension remains independent. Restore missing
+  OpenAI metadata only for targets that require Codex support.
 - For this repository, run:
 
   ```bash
@@ -242,4 +243,13 @@ For these skills:
   target skill scope. Record fixed, deferred, skipped, incomplete, or blocking
   findings.
 - Report runtime trigger readiness from metadata inspection only unless you
-  actually observe the target Codex surface loading the skill.
+  actually observe the selected agent surface loading the skill.
+
+## Portable Authoring Without Functional Loss
+
+Apply [agent portability](agent-portability.md) to every aligned target. Keep
+standard YAML fields, native host controls and repository conventions distinct.
+Use the declared PyYAML dependency and both policy/host checks; do not flatten
+metadata or remove controls to make a validator pass. Capture the current
+working version and map edits to existing behavior. Test actual npx discovery
+and resource parity in disposable locations and disclose sibling/runtime setup.

@@ -1,13 +1,13 @@
 ---
 name: align-skill
-description: "Align and harden existing/scaffolded Codex or Agent Skill folders: triggers, concise instructions, metadata, safety, resources, and evals. Accept local or report-only GitHub sources; use skill-creator for new scaffolds and align for projects."
+description: "Align existing/scaffolded skills for Agent Skills, Codex, Claude Code, and npx skills installation while preserving functionality, native controls, resources, and evals. Accept local or report-only GitHub sources; use skill-creator for new scaffolds and align for projects."
 ---
 
 # Align Skill
 
 ## Help
 
-For `$align-skill --help` or `$align-skill -h`, return concise help and stop before
+For `$align-skill --help` or `$align-skill -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -21,9 +21,8 @@ authorization.
 
 ## Purpose
 
-Inspect, align, harden, validate, and improve one or more existing Codex or
-Agent Skill folders. Make the target easier to trigger correctly, cheaper to
-load, safer to execute, and independently evaluable. For every authorized
+Inspect, align, harden, validate, and improve one or more existing Agent Skill folders. Make the target easier to trigger correctly, cheaper to
+load, safer to execute, and independently evaluable without losing supported behavior. For every authorized
 writable target that completes alignment, create or update its canonical
 trigger evals and report static, runtime, and output-quality evidence
 separately.
@@ -80,14 +79,14 @@ alignment.
 
 ## Triggering This Skill
 
-Codex uses progressive disclosure: it sees skill metadata first, then loads
+Agent Skills use progressive disclosure: the host sees metadata first, then loads
 the full `SKILL.md` only when the skill is selected. Front-load target type,
 authoring intent, and boundaries in the front matter `description`.
 
-For deterministic activation, mention `align-skill` plus the target path,
-skill name, folder, GitHub repository URL, or GitHub tree URL. In ChatGPT, type
-`@` to select a skill. In Codex CLI or the IDE extension, use `/skills` or type
-`$` to mention a skill.
+For deterministic activation, use the host's explicit skill invocation and
+name the target path, skill, folder, or GitHub URL. Codex uses `$align-skill`;
+Claude Code uses `/align-skill`, or `/skills:align-skill` for the native plugin.
+Read `references/agent-portability.md` before changing host-specific behavior.
 
 Read `references/triggering-guide.md` when reviewing trigger behavior, surface
 support, or prompt examples.
@@ -96,7 +95,7 @@ support, or prompt examples.
 
 - Evidence-based changes only: use repo evidence, official vendor
   documentation, or explicit user requirements.
-- Distinguish the OpenAI portable baseline from repository-specific policy.
+- Distinguish the Agent Skills portable baseline from repository-specific policy.
   The upstream baseline is a skill folder with `SKILL.md` containing `name` and
   `description`; `agents/openai.yaml`, `assets/`, `evals/`, `references/`, and
   `scripts/` are optional unless local repository policy requires them.
@@ -158,16 +157,16 @@ newly scaffolded skill folder:
 4. Keep the skill focused on one repeatable job and front-load the `description`
    with user intent, accepted inputs, and boundaries from adjacent skills.
 5. Apply the correct structure profile:
-   - OpenAI portable minimum: `SKILL.md` with front matter `name` and
+   - Agent Skills portable minimum: `SKILL.md` with front matter `name` and
      `description`.
    - OpenAI optional metadata: `agents/openai.yaml` for UI metadata, invocation
      policy, and tool dependencies.
-   - This repository's source-owned standard: keep `agents/openai.yaml` on
-     every skill, keep the standard `## Help` and `## Learning Loop` sections,
+   - This repository's source-owned standard: preserve existing Codex metadata,
+     keep the standard `## Help` and `## Learning Loop` sections,
      require canonical trigger evals after writable alignment, and add other
      resource folders only when useful.
 6. Inventory the target's documented public actions, positional arguments, and
-   flags. Add or repair the standard `## Help` contract so every public item
+   flags. For repository-policy targets, add or repair the standard `## Help` contract so every public item
    has exact usage plus a concise description. Include `-h, --help`; when the
    skill has no other public flags, require the help response to say so. Never
    infer public options from private helper scripts or workflow transitions.
@@ -208,7 +207,7 @@ no standalone public workflow action.
 
 ## Learning Loop Enforcement
 
-When aligning target skills, inspect each target `SKILL.md` for a
+When repository policy applies, inspect each target `SKILL.md` for a
 `## Learning Loop` section. Add the standard section when it is missing,
 keep existing wording only when it contains the validator-required public-safe
 snippets, and repair stale or unsafe variants that allow raw logs, secrets,
@@ -277,14 +276,32 @@ Read `references/canonical-skill-structure.md` when checking structure,
 metadata, naming, section placement, optional resources, or stateful-workflow
 profile requirements. Keep the core distinction loaded here:
 
-- OpenAI portable minimum: a skill folder with `SKILL.md` containing front
+- Agent Skills portable minimum: a skill folder with `SKILL.md` containing front
   matter `name` and `description`.
-- OpenAI optional resources: `agents/openai.yaml`, `references/`, `scripts/`,
+- Host-specific optional metadata and resources: `agents/openai.yaml`, `references/`, `scripts/`,
   and `assets/` when they serve the skill.
-- This repository's source-owned standard: every repo-owned skill keeps
-  `agents/openai.yaml`; every authorized writable target that completes
+- This repository's source-owned standard: retain existing host metadata;
+  require it in this repository's Codex profile. Every writable target that completes
   alignment keeps canonical trigger evals; `assets/`, `references/`, and
   `scripts/` are added only when useful.
+
+## Functionality Preservation
+
+Before editing every target, capture its current working bytes and inventory its
+purpose, public actions, outputs, dependencies, native metadata, invocation
+restrictions, hooks, authorization, state, idempotency, and recovery. Map each
+compatibility edit to this inventory and compare affected behavior with the
+baseline using proportionate tests. Preserve intentional product targets:
+`config-codex` configures Codex and `config-claude` configures Claude regardless
+of the executing host. Preserve Task Implementer and Agentic SDLC worker/commit
+ownership, native identity, continuation and recovery.
+
+Do not remove native controls, hide required resources, or substitute weaker
+behavior to obtain a compatibility pass. Unsupported host capabilities remain
+explicit limitations. A necessary feature removal or behavioral redesign needs
+a concrete conflict report and explicit user direction. Read
+`references/agent-portability.md` for the behavior inventory and installation
+checks; apply them to every target, including simple instruction-only skills.
 
 ## Invocation Policy Selection
 
@@ -312,8 +329,10 @@ contract:
   run only after an explicit request, encode that requirement in
   `agents/openai.yaml` instead of relying on prose alone.
 
-Use `assets/openai-agent-metadata.yaml.template` as the starting point when a
-target skill is missing `agents/openai.yaml`.
+For a Codex target, use `assets/openai-agent-metadata.yaml.template` when
+OpenAI metadata is required. Do not add it solely to make a portable or Claude
+target pass. Follow `references/agent-portability.md` for Claude policy;
+coordinator-only routing is distinct from public explicit-only invocation.
 
 For stateful workflow skills, use the template in
 `assets/stateful-workflow-skill-template.md`. This profile is opt-in and should
@@ -326,12 +345,14 @@ not be forced onto simple instruction-only skills.
 2. Classify each target as authorized writable or report-only. Never mutate a
    remote, restricted, or report-only target or describe it as fully aligned.
 3. Inspect nearby repository conventions and each target's `SKILL.md` and
-   supporting folders. Before editing a dirty writable target, capture its
-   current working bytes in a task-owned temporary baseline rather than using
-   `HEAD` implicitly.
-4. Inventory each target's public actions, positional arguments, and flags.
-   Add or repair the standard `## Help` section so its report-only response
-   concisely describes every public interface item, and add or repair the
+   supporting folders. Before editing any writable target, capture its current
+   working bytes in a task-owned temporary baseline. Inventory the behavior
+   contract above; do not substitute `HEAD` for accepted working changes.
+4. Select `--policy repository` for this catalog and `--policy agentskills`
+   for external targets unless their repository requires stronger conventions.
+   Inventory each target's public actions, positional arguments, and flags.
+   Where repository policy applies, add or repair the standard `## Help` section
+   so its report-only response describes every public interface item, and repair the
    standard `## Learning Loop` section when missing or unsafe.
 5. Identify products, CLIs, APIs, clouds, frameworks, package managers, and
    external services the skill references.
@@ -361,9 +382,11 @@ not be forced onto simple instruction-only skills.
    for detailed guidance, `assets/` for reusable templates, `scripts/` for
    deterministic checks, and README or changelog entries for human-facing or
    release-note updates.
-12. Re-run strict static validation for every writable aligned target, then
-    report what changed, what passed, and every skipped or unavailable evidence
-    lane.
+12. Check standard fields, Codex and Claude host policies, and npx installation
+    for every target using `references/agent-portability.md`. Compare affected
+    behavior against the captured baseline. Report strict-format extensions,
+    required runtime/hook setup, and every unavailable evidence lane separately.
+    An executed regression blocks acceptance of the affected change.
 
 ## Live Validation Workflow
 
@@ -376,20 +399,18 @@ Use the safe validation hierarchy:
 5. Disposable or sandbox integration tests.
 6. Live external tests only after test-environment confirmation.
 
-Use `python3 scripts/validate-skill-structure.py --require-evals <target>` for
-authorized writable targets that complete alignment. Add
-`--profile stateful-workflow` independently when the optional state-machine
-contract applies. Use basic validation without `--require-evals` for legacy
-catalog checks; it permits missing evals but still rejects a malformed canonical
-CSV that exists. The validator rejects symlinked CSV paths before reading and
-reports duplicate rows without echoing raw IDs or prompt content. If script
-execution is not permitted, mirror the static checks manually and report that
-the validator was skipped.
+Install the declared `scripts/requirements.txt` in an appropriate Python
+environment before validation; never install dependencies silently. Static
+checks stay offline. Follow `references/agent-portability.md` for the exact
+policy/host matrix and disposable npx test. Keep `--require-evals` for writable
+aligned targets and add `--profile stateful-workflow` only when applicable.
+Repository validation checks existing canonical CSVs even without that flag;
+standard-only validation checks them only when explicitly requested.
 
-When changing the validator itself, also run
-`python3 scripts/test-validate-skill-structure.py`; it uses temporary local
-fixtures plus a read-only pass over the real source catalog and performs no
-network or installed-runtime changes.
+When changing validators, run `scripts/test-validate-skill-structure.py`,
+`scripts/test-skill-frontmatter.py` and `scripts/test-npx-compatibility.py`.
+These offline tests are distinct from the actual network-dependent installer
+check. If execution is unavailable, report the missing evidence without a pass.
 
 Report evidence with only these states:
 
@@ -411,6 +432,8 @@ Return:
 - Scope inspected.
 - Changes made.
 - Evidence used and vendor docs checked.
+- Standard fields, strict frontmatter conformity, host policy and npx installation results.
+- Behavior inventory, captured baseline, regression coverage and required setup.
 - Validation run.
 - Eval files, case counts, baseline, and static/runtime/quality evidence states.
 - For an over-budget or overloaded target, block dispositions, preservation
@@ -462,5 +485,5 @@ and remaining blocker instead.
 ## Remaining Uncertainty
 
 Runtime skill triggering can be surface- and installation-dependent. If you did
-not observe Codex loading the skill in the target surface, report trigger
+not observe the selected host loading the skill in the target surface, report trigger
 readiness from metadata inspection only, not as proven runtime activation.

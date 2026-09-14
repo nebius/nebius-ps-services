@@ -1,13 +1,14 @@
 ---
 name: commit-push
 description: "Use only when explicitly asked to commit all repo changes and push an unmanaged non-default branch with repo-root staging and validation. Reject managed worktrees; do not open a PR."
+disable-model-invocation: true
 ---
 
 # Commit Push
 
 ## Help
 
-For `$commit-push --help` or `$commit-push -h`, return concise help and stop before
+For `$commit-push --help` or `$commit-push -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$commit-push` in Codex, `/commit-push` in Claude Code, or
+`/skills:commit-push` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 

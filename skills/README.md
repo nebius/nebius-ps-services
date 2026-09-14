@@ -1,13 +1,13 @@
 # Skills
 
-This folder contains public, reusable Codex skills for common engineering
+This folder contains public, reusable Agent Skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
 
 This root README is the concise catalog and install guide. Most skill folders
 also have a local `README.md` that explains architecture, core concepts,
 workflow, and important files. `SKILL.md` remains the concise runtime
-instruction file Codex loads when the skill is used; longer command cookbooks,
+instruction file the agent loads when the skill is used; longer command cookbooks,
 rubrics, standards, and templates live under `references/` or `assets/` and
 are loaded on demand.
 
@@ -25,8 +25,8 @@ canonical CSV and passes strict catalog validation. Ordinary validation keeps
 legacy-input compatibility for external or not-yet-migrated targets.
 
 Front matter descriptions stay compact and front-load each skill's job and
-nearest routing boundary because Codex initially budgets only the skill name,
-description, and path. The full `SKILL.md` still loads after selection, so
+nearest routing boundary because hosts initially discover skill metadata.
+The full `SKILL.md` loads after selection, so
 workflow detail belongs in the body and focused supporting files rather than
 the always-visible description.
 
@@ -35,15 +35,33 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 ## Table of Contents
 
 - [Skill Catalog](#skill-catalog)
-- [Using Skills in Codex Chat](#using-skills-in-codex-chat)
+- [Using Skills in Codex and Claude](#using-skills-in-codex-and-claude)
 - [Skill Details](#skill-details)
 - [Source Hook Catalog](#source-hook-catalog)
+- [Native Plugins and npx](#native-plugins-and-npx)
 - [Skills Installer](#skills-installer)
 
 ## Skill Catalog
 
-The catalog below mirrors the live skill folders in this source tree. The
-`Invocation` column reflects `agents/openai.yaml`:
+The catalog contains 71 flat skill folders with shared execution instructions,
+native invocation controls, and separate standard, host and distribution checks.
+Stateful workflows use the selected host's private home, identity and hook
+adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
+before stateful operations. Required tools and permissions remain prerequisites;
+a missing capability is reported explicitly.
+`config-codex` configures Codex; `config-claude` configures Claude using its
+native instructions, settings and roles. Installing either skill does not apply
+personal configuration.
+
+The [catalog alignment report](docs/agent-portability-alignment.md) records each
+skill's preservation inventory and static, installation and runtime evidence.
+Skills-only copying does not register hooks or prove model activation.
+
+The `Invocation` column reflects Codex `agents/openai.yaml`. Claude uses shared
+frontmatter: explicit public skills disable model invocation; internal SDLC
+skills are hidden from the user menu and require verified coordinator context.
+Plugin invocation uses `/skills:skill-name`; local Claude skills use
+`/skill-name`. Codex examples below use `$skill-name`:
 
 - `Implicit allowed`: Codex may select the skill when the prompt matches.
 - `Explicit only`: invoke the skill directly with `$skill-name`.
@@ -57,7 +75,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, bounded research for unresolved source conflicts, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Neutral findings-first review of local code; direct `$code-review` runs fix safe scoped findings and validate them with focused repository-native proof, while implicit and nested runs remain report-only. |
 | `create-learning-course` | Explicit only | Create complete, public-safe HTML textbooks with definition-first lessons, a light side-TOC layout, contextual diagrams and practical guides. |
-| `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
+| `global-context-management` | Implicit allowed | Keep complex agent tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
 | `research` | Implicit allowed | Senior-engineer due diligence on one focal subject or disputed claim, with relevant internal context first, vendor verification, alternatives, and bounded findings for an owning decision. |
 
 ### Local Setup and Information
@@ -69,6 +87,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
+| `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations and recovery. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
 | `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, rotating token state, and enforced read-only tools. |
 | `nosleep4mac` | Explicit only | Converge one per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power, including while its screen is locked. |
@@ -104,7 +123,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `maintain-project-specs` | Implicit allowed | Classify every direct root prompt, reconcile durable intent and delivery evidence through one canonical requirements/design pair, and migrate or validate specs without gating tools, Stop, or workflow completion. |
 | `nebius` | Implicit allowed | Build and inspect Nebius compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
-| `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
+| `nebius-audit-log` | Explicit only | Verify caller and tenant audit access, then query explicit resource, actor or tenant scope with bounded, sanitized results. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
 | `project-agent-instructions` | Explicit only | Conditionally render and terminally seal concise selected-project rules from shared-owner specs, including explicit existing-user compatibility intent, with nearest-marker discovery, registry-backed managed-tail ownership, guarded retirement, and fail-closed recovery. |
@@ -155,7 +174,7 @@ support for ambiguous failure diagnosis.
 | `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature and planned slice. |
 | `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation for the current feature, then use `code-review` as a review-only quality gate. |
 
-## Using Skills in Codex Chat
+## Using Skills in Codex and Claude
 
 For deterministic explicit invocation, use the exact skill name with a leading
 `$` in the Codex chat box, then add the task you want. For example, use
@@ -163,6 +182,11 @@ For deterministic explicit invocation, use the exact skill name with a leading
 `$terraform` to scaffold or review Terraform code. Official Codex docs also
 describe explicit invocation as including the skill directly in the prompt;
 using `$skill-name` remains the clearest repo convention.
+
+In Claude Code, use `/skill-name` for local skills or `/skills:skill-name`
+when installed through this repository's native plugin. Dollar-prefixed examples
+refer to the same named workflow on either host. Public explicit-only skills
+disable model invocation; internal phases remain coordinator-only.
 
 Append `--help` or `-h` to any repo-owned skill for concise, report-only help:
 
@@ -175,7 +199,7 @@ every public action, and describes every public action, positional argument,
 and flag in one concise line. It includes `-h, --help`, says when no additional
 public flags exist, never exposes private helper actions or flags, and
 identifies internal or coordinator-only skills as having no standalone public
-workflow action. It stops after Codex loads the selected `SKILL.md`, before
+workflow action. It stops after the host loads the selected `SKILL.md`, before
 project inspection, additional tools, workflow execution, or mutation. A help
 request is not authorization to run the skill's workflow.
 
@@ -430,7 +454,7 @@ undecided agent-subsystem choices through `ai-agent-design` and its scoped
 `ai-stack` handoff, design the solution, apply
 `system-design-rules` to non-trivial solution decisions,
 evaluate alternatives, define vertical end-to-end slices for serial multi-layer
-applications, and create a Codex `/plan` handoff. Use it for new features,
+applications, and create a handoff for the host’s native planning mode. Use it for new features,
 major changes, APIs, data flows, integrations, and new applications when the
 user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
@@ -632,10 +656,10 @@ needs, and open questions instead of treating principles as universal laws.
 
 `task-implementer` coordinates complex brownfield requests through deterministic dependency waves.
 It keeps durable prompts and orchestration evidence under
-`${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/`, outside Git, with one
+`<agent-home>/task-implementer/projects/`, outside Git, with one
 editable Markdown file per independent ask. A generated VS Code workspace puts
 `CODE — MANAGED PERSISTENT LANE` first and `PROMPTS` second so source and
-historical asks are visible together without making Codex depend on multi-root
+historical asks are visible together without making the agent depend on multi-root
 behavior or presenting the primary checkout as another editable folder.
 
 `workspace init [project-folder]` defaults to the exact current directory. It
@@ -685,7 +709,7 @@ matching observations are required, with one retry before `WORKSPACE_BUSY`.
 Legacy-only progress remains unavailable rather than reconstructed, and
 `lane-report` stays internal without adding a sixth action.
 
-An explicit init or run binds the current Codex session. In that bound session,
+An explicit init or run binds the selected agent's native session. In that bound session,
 every direct prompt still runs normally in the current agent. The separate
 `prompt-session-intake` hook may also stage safe input as a non-blocking
 sidecar; the agent refines material intent losslessly and the Task Implementer
@@ -726,7 +750,8 @@ workflow; existing effective instructions are still read normally.
 Parallel-capable tasks receive unique branches and full-repository linked
 worktrees under the private task-implementer root. For monorepo scopes, workers
 operate from the scope path inside those full checkouts. Native workers dispatch
-up to capacity; fresh sequential `codex exec` workers provide the same isolation
+up to capacity; fresh sequential native workers (`codex exec` or Claude print
+mode) provide the same isolation
 when native subagents are unavailable. Each worker implements one locked task,
 validates, runs `code-review`, and creates exactly one direct-child `$commit`.
 Worker-assignment v7 also carries immutable default guardrails plus exact
@@ -856,7 +881,7 @@ and continuation, plus one explicit evidence row for each of the 20 Agentic
 SDLC skills. Live PASS requires a real selected-scope commit, lane-specific
 private evidence, the exact complete skill matrix, and clean in-scope paths
 across every commit in the supplied history. It writes under
-`~/.codex/sdlc-verification/` and must not change real projects, installed
+`<agent-home>/sdlc-verification/` and must not change real projects, installed
 skills, hooks, hook trust, or agent configuration.
 
 The rename is an intentional ownership hard cut. Destroy retained live
@@ -1040,7 +1065,7 @@ receipt prerequisite, reload stop, or terminal seal. The
 canonical v2 pair is still required before spec-dependent planning or worker
 dispatch.
 Private run state, plans, evidence, screenshots, transcripts, and steering live
-under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
+under `<agent-home>/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
 Each active feature also has schema-v7 execution state and private worktrees
 there. After plan lock, `sdlc-prepare-execution` creates a persistent
 integration branch/worktree and enforces the initialized monorepo folder as the
@@ -1049,7 +1074,7 @@ separate peer workflows: both use Worktree infrastructure, but Agentic SDLC
 rejects an active Task Implementer persistent lane rather than nesting or
 sharing execution state. `sdlc-implement-plan` runs safe tasks in enforced
 capacity batches inside dependency waves, using one fresh native agent or
-sequential ephemeral `codex exec` fallback per task and immutable direct-
+sequential native fallback (`codex exec` or Claude print mode) per task and immutable direct-
 predecessor handoffs. It arms only available slots, requires direct bounded
 worker heartbeats, watches liveness every 30 seconds, and gives scope violations
 precedence over allowed in-claim prestart mutation. Its sequential fallback
@@ -1068,7 +1093,7 @@ later return the recorded primary path plus the exact `$worktree integrate`
 handoff, then stop for a fresh explicit user invocation from that primary
 checkout without child publication.
 Project-level managed prompts and immutable run revisions also remain under
-`~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
+`<agent-home>/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
 steering ledger for accepted prompt revisions, while
 `steering/auto-steering.json` stores machine-readable
 dispositions and compact reminders. Requirements, design, or generated
@@ -1097,9 +1122,9 @@ inspection.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
-bundles deliberately with `./install-skills.sh --install-all-hooks
+bundles deliberately with `./install-skills.sh --agent <codex|claude> --install-all-hooks
 --register-hooks --refresh-hook-registrations`; installed copies under
-`$CODEX_HOME/hooks` are runtime artifacts. The refresh option replaces only a
+`<agent-home>/hooks` are runtime artifacts. The refresh option replaces only a
 differing same-event, same-script registration with the same handlers,
 allowing only `statusMessage` metadata to differ, and preserves unrelated
 entries.
@@ -1281,9 +1306,9 @@ creates `project-skills-<6-hex>` on `feature/skills-<6-hex>` and returns the
 child's `skills/` directory. Explicit task descriptions continue to produce
 their own public-safe slugs.
 
-After creation or exact reuse, Codex verifies the child from that returned
+After creation or exact reuse, the agent verifies the child from that returned
 directory and adopts it for subsequent development commands. This does not
-change a parent shell, the Codex workspace, or an editor window; editor
+change a parent shell, the agent workspace, or an editor window; editor
 retargeting remains explicit, and lifecycle actions still run from the primary
 checkout.
 
@@ -1328,6 +1353,16 @@ GitHub repositories, it reads a temporary archive using `GH_TOKEN`,
 manifests, package managers, builds, tests, or generators and does not change
 project files.
 
+### `config-claude`
+
+`config-claude` provides Claude-native personal setup and reconciliation from
+either invoking agent. It patches existing `CLAUDE.md` and `settings.json`,
+creates missing settings exclusively, and adds three restricted native roles.
+Shared hooks retain their existing installer/plugin owner. Trusted-local full
+access, delegation policy, Task Implementer storage and MCP integrations remain
+explicit options. See [Config Claude](config-claude/README.md) for native scope,
+recovery, checker options and evidence boundaries.
+
 ### `config-codex`
 
 `config-codex` bootstraps, recovers, or aligns a user's local Codex runtime
@@ -1368,7 +1403,7 @@ monorepo-friendly workflow structure.
 
 ### `global-context-management`
 
-`global-context-management` keeps complex Codex sessions focused and
+`global-context-management` keeps complex agent sessions focused and
 recoverable by using durable task-state files, limiting noisy parent-thread
 exploration, delegating bounded read-only investigation when the current prompt
 or a user-enabled local hook policy request authorizes delegation and the
@@ -1379,7 +1414,7 @@ finalizing when close controls are available, reporting any unavailable or
 failed cleanup,
 and reviewing risk before final answers. Its public skill files stay generic;
 local hooks, custom agent config, and task-state files belong under
-`$CODEX_HOME`. Normal startup advertises session-scoped task-state paths
+`<agent-home>`. See the selected-host installation paths below. Normal startup advertises session-scoped task-state paths
 without creating missing state files; compaction and the first complex prompt
 create only an empty private scaffold. Prompt hooks may suggest bounded same-workspace
 prior task-state candidate paths for complex prompts without injecting their
@@ -1442,9 +1477,13 @@ and integration guidance. See [the skill guide](nebius/README.md).
 ### `nebius-audit-log`
 
 `nebius-audit-log` is an explicit-only read-only workflow for Nebius Control
-Plane Audit Logs queries. It resolves tenant, region, time window, resource or
-current subject filters, keeps page size bounded by default, and sanitizes
-output unless raw output is explicitly requested.
+Plane Audit Logs investigations. It verifies the configured CLI caller and
+effective tenant audit-read access, requires explicit resource/subject/current-
+subject/tenant-wide selection, and resolves the origin region without guessing.
+Offline previews make no CLI calls. Queries have time, output and page bounds;
+sanitized summary/JSON reports distinguish complete, empty, denied and partial
+results. See the [skill guide](nebius-audit-log/README.md) for changed flags and
+continuation rules.
 
 ### `nebius-grafana-query`
 
@@ -1719,216 +1758,226 @@ single-Stop arbiter entry. This is a current-tree inventory, not a fixed allowli
 | `PreToolUse` matching `*` | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Validates the parent-authored remediation marker and its authorization handshake. A normally missing or resolved marker passes. Pending, invalid, exhausted, or terminally locked state blocks tool use except for one exact `apply_patch` targeting the advertised `current.md`: update when it exists or add only when absent. Delete, delete/add replacement, shell rewrites, and other tools remain denied. Ordinary report-quality and sensitive-detection dispositions never deny later tools; incompatible report state remains a trusted-state boundary requiring a fresh session. |
 | `Stop` for all stops | shared [`stop_lifecycle_arbiter.py`](maintain-project-specs/assets/hooks/stop_lifecycle_arbiter.py), carried byte-identically by `maintain-project-specs`, `prompt-session-intake`, `sdlc-start`, and `troubleshoot` | Runs troubleshooting, SDLC, and prompt-session Stop evaluators sequentially within one bounded budget. Project lifecycle has no Stop delegate and cannot request continuation or terminate a session. Independent workflow-owned terminal decisions retain precedence, and prompt-session cleanup remains best effort. |
 
-Matching registrations are independent. Codex starts matching command hooks for
-the same event concurrently, so they must not depend on ordering or
-short-circuiting. In this catalog, up to five `UserPromptSubmit` handlers,
-three Bash `PreToolUse` handlers, and two `apply_patch` `PreToolUse` handlers
-can match one event. `Edit` and `Write` are matcher aliases for
-canonical `apply_patch`, not additional entrypoints. Stop policy is different:
-one registered arbiter calls its available delegates in deterministic order.
-For `Stop`,
-`decision: "block"` requests another assistant turn, while `continue: false`
-terminates and takes precedence over peer continuation decisions. See the
-[official Codex Hooks documentation](https://learn.chatgpt.com/docs/hooks).
+Matching event handlers must not rely on ordering. Both hosts can execute
+matching registrations concurrently. One Stop arbiter runs its delegates in
+order; `continue: false` takes precedence over a continuation request. Claude
+continuation is capped at eight attempts per native prompt and leaves unfinished
+workflow state resumable.
 
-The manifests live in each owner skill's `assets/hooks.json.template`; the
-global-context manifest and payloads are mirrored under
-`config-codex/assets/hooks/` for installation. Helper modules, policy JSON,
-tests, and [`install-skills.sh`](install-skills.sh) are supporting payloads or
-installation machinery, not additional event handlers. Source validation does
-not prove installed or in-memory activation: hook installation and registration
-are explicit, changed hooks require a Codex restart, and non-managed hooks must
-be reviewed and trusted in `/hooks`.
+Owner manifests remain in `assets/hooks.json.template`. The shared host adapter
+binds commands, private homes, native prompt/session IDs, and Claude Bash worker
+identities. The authentication adapter owns Claude command rewrites so auth and
+worker bindings cannot overwrite each other. `Edit` and `Write` receive the same
+SDLC write checks as patches. Troubleshooting permits only one exact state edit
+(or initial write) at its advertised safe path. Install all hooks when using
+Task Implementer or Agentic SDLC on Claude; isolated hook bundles do not provide
+the complete workflow runtime.
+
+Global context policy can be overridden in the selected home's
+`hooks/global_context_policy.json`; reinstalls preserve this operator-owned
+policy, including an explicit opt-out. Native plugins otherwise read their bundled
+policy. Claude offers validated native user-role candidates when recursive
+definitions have no duplicate names or discoverable project shadows, alongside
+the available built-in Explore helper. Effective CLI and managed overrides
+still need inspection. Codex retains its configured read-only roles. Hooks do
+not create cloud credentials, configure
+models, or perform `config-codex` reconciliation. Restart the selected agent
+after changing installed hooks.
+
+## Native Plugins and npx
+
+Codex and Claude compatibility means independent installation and use. Each
+agent retains its own state, locks and workflow ownership. Concurrent
+cross-agent execution and workflow handoff are outside this contract.
+
+Choose one active installation route per agent: native plugin, local script,
+or npx skills plus the script's explicit hook-only installation. Do not combine
+a native plugin with locally registered copies of these hooks. The installer
+and plugin runtime reject detected competing registrations instead of silently
+running duplicates. Review/remove an older installation through its owning
+route before switching; private workflow state is retained. Moving an active
+workflow between hosts is unsupported.
+
+The Git root holds `.agents/plugins/marketplace.json` for Codex and
+`.claude-plugin/marketplace.json` for Claude. Both point to `./skills`; native
+manifests live in `skills/.codex-plugin/plugin.json` and
+`skills/.claude-plugin/plugin.json`. No skill folders move. Native plugins carry
+all skills and reviewed hooks. Hook payloads render into digest-addressed native
+plugin data directories; the installed plugin cache stays unchanged.
+
+Once these source changes are published, install from GitHub:
+
+```bash
+codex plugin marketplace add https://github.com/nebius/nebius-ps-services
+codex plugin add skills@nebius-ps-services
+
+claude plugin marketplace add https://github.com/nebius/nebius-ps-services
+claude plugin install skills@nebius-ps-services
+```
+
+For a local checkout, replace the marketplace URL with the absolute Git-root
+path (the parent of `skills/`). The current interactive managers are `/plugins`
+in Codex and `/plugin` in Claude. These commands follow the
+[Codex plugin documentation](https://developers.openai.com/plugins/build/plugins)
+and [Claude marketplace documentation](https://code.claude.com/docs/en/plugin-marketplaces).
+
+The [skills CLI](https://github.com/vercel-labs/skills) installs skill files;
+it does not register this catalog's hooks:
+
+```bash
+npx skills add nebius/nebius-ps-services --skill '*' -a codex -a claude-code --copy
+# Or select one skill:
+npx skills add nebius/nebius-ps-services --skill align-skill -a codex -a claude-code --copy
+
+# From a complete checkout's skills directory, add hooks if required:
+./install-skills.sh --install-all-hooks --register-hooks
+./install-skills.sh --agent claude --install-all-hooks --register-hooks
+```
+
+Install the full catalog for workflows that call sibling skills/helpers. A
+single copied `align-skill` supports structural checks after installing its
+declared `align-skill/scripts/requirements.txt` dependency; its complete review
+workflow also uses the sibling review/security/authoring skills it names.
+Single copied skills that use the shared runtime need the hook-only setup above
+before their scripts run. Missing runtime support produces an installation
+diagnostic; it is never imported from the current directory.
 
 ## Skills Installer
 
-`install-skills.sh` installs or updates skills into `~/.agents/skills` by
-default. It accepts a local source directory or a supported GitHub URL, treats
-only folders containing `SKILL.md` as installable skills, keeps reruns
-idempotent with `rsync`, skips unmanaged or other-source-owned destinations,
-removes stale same-source skills when they disappear from the selected source,
-and can remove one installed skill by visible Codex skill name or folder name.
-After each install it also lists destination skills that are not present in the
-selected source, so renamed or intentionally removed skills are visible and can
-be removed with `--remove-skill` when they are not same-source managed.
+With no arguments, `./install-skills.sh` installs all sibling skills, copies all
+seven reviewed hook bundles and their shared runtime, and merges their hook
+registrations for Codex. `--agent claude` performs the same operation for Claude.
+Existing explicit hook-only and skill-removal modes remain available.
+
+Combined installation automatically refreshes exact managed registrations,
+including direct commands replaced by the shared runtime and updated matchers.
+It preserves unrelated hooks and settings, backs up changed registration files,
+and rejects custom or ambiguous conflicts before installing anything. Once the
+installation matches source, another run changes no file content and creates no
+additional backups. No refresh flag is needed for this default operation.
+
+| Selection | Default skill directory | Hook payloads and registration |
+| --- | --- | --- |
+| Codex (default or `--agent codex`) | `~/.agents/skills` | `${CODEX_HOME:-~/.codex}/hooks/` and `hooks.json` |
+| `--agent claude` | `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` | `${CLAUDE_CONFIG_DIR:-~/.claude}/hooks/` and `settings.json` |
+
+A positional destination changes the skill directory only. All selected-host
+private state remains under its configuration home. Shared schemas and existing
+project-owned `.codex/project-specs.json` policy filenames stay stable; they do
+not make Claude read Codex's user home.
 
 ### Requirements
 
-- `bash`
-- `rsync`
-- `git` for GitHub sources
-- standard POSIX-style utilities for hook installation: `install`, `find`,
-  `cmp`, `chmod`, `awk`, `cut`, `sort`, `date`, `mktemp`, and `shasum` or
-  `sha256sum`
-- `python3` when using hook registration
+Use Bash, rsync, Python 3.11 or newer, standard POSIX utilities, and shasum or
+sha256sum. Git is required for GitHub sources. Native plugin hooks also require
+Python 3.11 or newer. Claude must supply native `prompt_id` (2.1.196 or newer);
+missing identity cannot authorize a workflow action. Installation was checked
+with Codex 0.154.0 and Claude Code 2.1.236; model behavior requires separate evals.
 
 ### Usage
 
 ```bash
-./install-skills.sh [source] [destination_dir]
-./install-skills.sh --remove-skill <skill_name> [destination_dir]
-./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
-./install-skills.sh --install-all-hooks [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
+./install-skills.sh [--agent codex|claude] [source] [destination_dir]
+./install-skills.sh [--agent codex|claude] --remove-skill <skill_name> [destination_dir]
+./install-skills.sh [--agent codex|claude] --install-hooks <source_hook_dir> [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
+./install-skills.sh [--agent codex|claude] --install-all-hooks [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
 ./install-skills.sh --help
 ```
 
-With no arguments, `./install-skills.sh` uses the directory containing the
-script as the source and installs every sibling skill folder that contains
-`SKILL.md` into the default Codex target, `~/.agents/skills`.
-The `--install-hooks` option is deliberately separate from normal skill
-installation. It copies hook files from an explicit source hook directory into
-`${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
-installed files. It copies missing hook files, leaves matching files unchanged,
-records local provenance hashes, and backs up differing existing hook files under
-`${CODEX_HOME:-$HOME/.codex}/.install-hooks-state/backups/`, then refreshes
-them from the selected source. Add `--register-hooks` to merge that bundle's
-`hooks.json` or `hooks.json.template` registration manifest into
-`${CODEX_HOME:-$HOME/.codex}/hooks.json`.
-The `--install-all-hooks` option is also explicit, but discovers every direct
-child skill-owned `*/assets/hooks` directory under this source skills folder
-and syncs those payload files in one pass. It does not scan mixed `assets/`
-directories.
-With `--register-hooks`, it also merges each discovered bundle's registration
-manifest while preserving existing hook entries. Add
-`--refresh-hook-registrations` to replace only differing registrations with the
-same event/script and handlers, allowing only `statusMessage` metadata to
-differ. Add `--replace-hooks-json` only when you intentionally want to back up
-and replace `hooks.json` with a clean file built from the selected source
-manifests. Hook install modes are
-idempotent: unchanged files are not recopied, hook file provenance is recorded,
-differing existing hook files are backed up before being refreshed,
-registration appends only missing source entries by default, refuses duplicate
-Python hook files within the same hook event, and any extra installed hook
-files or hook registrations are reported for review instead of removed
-automatically.
-
-### Supported Sources
-
-- Local directory path. The default source is the script directory, and a local
-  source can be either a multi-skill folder or a single skill folder containing
-  `SKILL.md`.
-- GitHub repository URL:
-  `https://github.com/<owner>/<repo>`
-- GitHub tree URL:
-  `https://github.com/<owner>/<repo>/tree/<ref>/<subpath>`
+Sources can be a local multi-skill directory, one local skill containing
+`SKILL.md`, a GitHub repository URL, or a GitHub tree URL with ref/subpath.
+Combined installation discovers hooks only under the selected source; sources
+without hook bundles also receive available shared runtime support when installed
+from this repository. This supports standalone script helpers such as Worktree;
+workflows that depend on other skills still need the full catalog. External
+instruction-only skills need no runtime bundle. A source missing a required
+runtime dependency fails before installation. The selected home, hooks directory
+and installed shared runtime files must be owned by the current user without
+group/world write access. Hook-only modes copy payloads but
+register only when `--register-hooks` is supplied. Shared dependencies must be
+present alongside the selected source; they are never borrowed from an
+unrelated installed version. Downloaded payloads are copied, not executed by
+installer preflight.
 
 ### Examples
 
 ```bash
-# Install all skills from this folder into the default destination
+# Complete local installation
 ./install-skills.sh
+./install-skills.sh --agent claude
 
-# Install from an explicit local source directory
-./install-skills.sh ~/test
+# Custom skill destination; hooks still use the selected configuration home
+./install-skills.sh --agent claude ./ ~/custom-skills
 
-# Install from a GitHub repository root
-./install-skills.sh "https://github.com/openai/skills"
+# Install from this repository's nested skills folder
+./install-skills.sh https://github.com/nebius/nebius-ps-services/tree/main/skills
 
-# Install from a nested GitHub skills folder
-./install-skills.sh "https://github.com/openai/skills/tree/main/skills"
-
-# Install one specific skill from a nested GitHub path
-./install-skills.sh \
-  "https://github.com/openai/skills/tree/main/skills/.curated/openai-docs"
-
-# Install to a custom destination
-./install-skills.sh \
-  "https://github.com/openai/skills/tree/main/skills" \
-  "~/custom-skills"
-
-# Remove an installed skill by its visible Codex skill name
-./install-skills.sh --remove-skill nebius
-
-# Remove an installed skill by its folder name
-./install-skills.sh --remove-skill vendor-nebius
-
-# Remove from a custom destination
-./install-skills.sh --remove-skill vendor-nebius "~/custom-skills"
-
-# Copy and refresh optional Agentic SDLC hooks in the default local Codex home
-./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks --refresh-hook-registrations
-
-# Copy and register global context-management hooks
-./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
-
-# Copy and register the remediation-budget guard hooks
-./install-skills.sh --install-hooks troubleshoot/assets/hooks --register-hooks
-
-# Copy and refresh every discovered hook-only bundle
+# Explicit hook-only refresh (combined installation already does this)
 ./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
 
-# Copy all discovered hook bundles and replace hooks.json with only those entries
-./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json
+# Explicit hook-only installation
+./install-skills.sh --agent claude --install-hooks commit/assets/hooks --register-hooks
 
-# Copy hooks into a non-default Codex home
-CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hooks
+# Explicitly replace only the selected host's hooks map after making a backup
+./install-skills.sh --agent claude --install-all-hooks --register-hooks --replace-hooks-json
+
+# Remove a skill by its frontmatter name or installed folder name
+./install-skills.sh --agent claude --remove-skill align-skill
 ```
 
-### Notes
+### Ownership, Backups, and Reinstallation
 
-- If newly installed skills are not visible, run `Developer: Restart Extension
-  Host` in VS Code.
-- A valid skill folder must contain `SKILL.md`.
-- Existing unmanaged folders in the destination are never overwritten.
-- If an install prints `Skip (existing unmanaged directory): <skill_name>`,
-  remove the destination copy and reinstall it from the current source:
+Reruns converge with rsync. Unmanaged or other-source-owned skill folders are
+skipped; obsolete same-source skills are removed. Other extra skills and hook
+files/registrations are reported for review, not automatically removed.
+`--remove-skill` removes the selected skill and its installer manifest entries;
+it does not uninstall hooks. Reinstalling a source that still contains that
+skill adds it back. Unmanaged copies require deliberate removal through their
+owning route before changing installation ownership.
 
-  ```bash
-  ./install-skills.sh --remove-skill <skill_name>
-  ./install-skills.sh
-  ```
+Differing hook payloads are backed up under the selected home's
+`.install-hooks-state/backups/` before refresh. Registration preflight rejects
+malformed settings and conflicting handlers before installing skills or hooks.
+Ordinary merges preserve unrelated registrations and Claude settings keys.
+`--refresh-hook-registrations` permits only the same event/script with unchanged
+handlers apart from status metadata and an exact managed command's host binding.
+It does not replace custom commands, mixed handler lists, or differing custom
+entry options.
 
-- If a skill exists but belongs to another source, it is skipped.
-- Skills previously installed from the same source are removed when they no
-  longer exist in that source, so source-owned renames converge on reinstall.
-- Other destination skills that are not present in the selected source are
-  listed at the end with a `--remove-skill` hint.
-- `--remove-skill` accepts either the exact `name:` from `SKILL.md` or the
-  installed folder name.
-- `--remove-skill <skill_name>` without an explicit destination removes from
-  the default Codex skills target, `~/.agents/skills`.
-- If you installed into a custom destination, pass that destination to
-  `--remove-skill`.
-- `--remove-skill` removes the destination skill folder and its local manifest
-  entries.
-- Reinstalling from a source that still contains a removed skill will add it
-  back.
-- Stale skill cleanup only applies to skills previously installed from the same
-  source.
-- `--install-hooks <source_hook_dir>` is opt-in because hooks are local runtime
-  guardrails, not skills. Use a hook-only source directory such as
-  `sdlc-start/assets/hooks`, `config-codex/assets/hooks`, or
-  `troubleshoot/assets/hooks`. Without
-  `--register-hooks`, this only syncs files under
-  `${CODEX_HOME:-$HOME/.codex}/hooks`. It records hook file provenance hashes
-  and backs up differing existing hook files before refreshing them from source.
-- `--install-all-hooks` discovers only skill-owned hook-only directories named
-  `*/assets/hooks` under this source folder, checks for conflicting installed
-  file names, and syncs all discovered hook bundles into
-  `${CODEX_HOME:-$HOME/.codex}/hooks` with the same provenance, backup, and
-  refresh behavior.
-- `--register-hooks` can be combined with either hook-install mode. It looks
-  for `hooks.json` or `hooks.json.template` in the hook directory or its parent,
-  validates the source and destination JSON before syncing hook payload files,
-  backs up an existing `${CODEX_HOME:-$HOME/.codex}/hooks.json` before changing
-  it, preserves existing entries, and appends only missing source entries. It
-  refuses to create or preserve multiple registrations for the same hook event
-  and Python hook filename, such as two `Stop` entries pointing at
-  `stop_sdlc_continue.py`.
-- `agent-nebius-auth-setup` keeps hook installation canonical: setup never
-  writes a global project selector, while the root installer syncs hook files
-  and `hooks.json` only. It does not migrate inline `config.toml` hook entries;
-  it rejects stale legacy agent-nebius-auth entries before copying hooks or
-  writing `hooks.json`.
-- `--replace-hooks-json` can be combined with `--register-hooks` to replace
-  `${CODEX_HOME:-$HOME/.codex}/hooks.json` with a clean file built from the
-  selected source manifest or manifests. This removes hand-written and stale
-  registrations that are not in the selected source. Use
-  `--install-all-hooks --register-hooks --replace-hooks-json` for a clean file
-  containing every discovered hook bundle under this source folder.
-- Hook install modes report extra files under
-  `${CODEX_HOME:-$HOME/.codex}/hooks` and extra `hooks.json` registrations that
-  are not present in the selected source manifests. These reports are advisory:
-  review the entries and remove obsolete files or JSON entries manually.
-- Hook registration does not trust hooks. Restart Codex and review/trust new or
-  changed hook entries in `/hooks`.
+`--replace-hooks-json` requires an explicit hook-only mode plus
+`--register-hooks`, backs up the selected settings file, and replaces its hooks
+map with the selected source manifests. Claude's permissions and other settings
+keys are preserved; malformed Claude JSON always requires repair first. Codex's
+standalone `hooks.json` can be explicitly replaced even when malformed. Keep the
+backup until the restarted agent has loaded the intended hooks.
+
+### Validation and Evidence
+
+The skills CI workflow also runs the Task Implementer and SDLC harness
+regression suites, including Claude home selection, cross-host resume rejection,
+native verification fixtures and the required live-procedure reference. These
+tests use disposable fixtures and mocked Docker/browser operations; they do
+not establish live workflow execution.
+
+`align-skill` now assesses the Agent Skills format, both native hosts and npx
+installation for every target, with a before/after behavior inventory. Native
+controls, product-specific capabilities, workflow ownership and recovery stay
+intact. Strict standard-only frontmatter exceptions are reported explicitly.
+Install the validator dependency in your selected Python environment first:
+`python3 -m pip install -r align-skill/scripts/requirements.txt`.
+
+```bash
+python3 global-context-management/scripts/check-plugin-manifests.py --catalogs
+python3 global-context-management/scripts/test-agent-installation.py
+python3 align-skill/scripts/test-skill-frontmatter.py
+python3 align-skill/scripts/test-npx-compatibility.py
+python3 align-skill/scripts/check-npx-compatibility.py .
+python3 align-skill/scripts/validate-skill-structure.py --policy repository --agent codex --require-evals .
+python3 align-skill/scripts/validate-skill-structure.py --policy repository --agent claude --require-evals .
+```
+
+Static validation, isolated installed-hook tests, native CLI installation,
+fresh-model trigger runs, and baseline quality comparisons are distinct checks.
+The [align-skill evaluation guide](align-skill/references/evaluation-guide.md)
+documents the native runner and reports unavailable credentials or traces as
+`UNAVAILABLE`, never a runtime pass.

@@ -24,6 +24,16 @@ state, then repeats the same checks under the lifecycle lock. The sibling
 worktree parent and `.worktree-skill` directory must be canonical directories,
 never symlinks.
 
+Commit preparation and Worktree ownership transitions share the selected
+agent's repository lock under its private configuration home. Claude uses
+`CLAUDE_CONFIG_DIR` (default `~/.claude`); Codex uses `CODEX_HOME` (default
+`~/.codex`). Standalone script installation includes the shared runtime;
+install the full catalog for workflows that call sibling skills.
+
+Codex and Claude are used independently. This lock coordinates callers within
+one selected installation; it does not provide cross-agent synchronization or
+workflow handoff.
+
 `--project` selects the returned starting directory; it is not a sparse
 checkout, branch argument, staging boundary, or changed-path restriction.
 

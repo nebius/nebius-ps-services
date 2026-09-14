@@ -4,7 +4,7 @@ Driver, CUDA runtime, compiler toolkit, and PyTorch versions answer different qu
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 1 for the host/device boundary. This guide defines the software layers needed for the first check; Lesson 2 explains compilation and compatibility in depth.
+**Theory preparation:** Read Lesson 1 for host submission and GPU execution. This guide defines the software layers needed for the first check; Lesson 2 explains compilation and compatibility in depth.
 
 Use the approved Fundamentals environment on one H100. The NVIDIA management utility and CUDA compiler may have different availability. A missing compiler is relevant to building custom code but does not automatically prevent an installed PyTorch wheel from running.
 
@@ -56,6 +56,6 @@ Installing a toolkit to solve a binary-wheel driver problem changes the wrong la
 
 Compatibility is a relationship among layers, not one version label. Use this report when comparing future runs, then perform a separate compile-and-launch preflight in Custom CUDA Kernels when compilation enters the workflow.
 
-Diagnose from the failing boundary: packaging/import, runtime/driver loading, architecture code generation, or kernel execution.
+Identify the failing operation: packaging/import, runtime/driver loading, architecture code generation, or kernel execution.
 
 Explain why a driver version and `torch.version.cuda` can legitimately differ.

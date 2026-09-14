@@ -35,3 +35,5 @@
 - [CUDA asynchronous execution](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html)
 - [CUDA pinned memory and overlapping transfers](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html)
 - [PyTorch pinned and nonblocking transfer safety](https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html)
+- [CUDA timing with CPU timers and CUDA events](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/#timing)
+- [PyTorch compiler graph breaks](https://docs.pytorch.org/docs/stable/compile/programming_model.graph_breaks_index.html)

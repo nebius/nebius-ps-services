@@ -1,13 +1,14 @@
 ---
 name: project-agent-instructions
 description: "Use only for an explicit project-instruction mutation request or a maintain-project-specs route with a current spec receipt; render, create, refresh, adopt, or retire selected-project AGENTS.md rules with deterministic ownership and recovery."
+disable-model-invocation: true
 ---
 
 # Project Agent Instructions
 
 ## Help
 
-For `$project-agent-instructions --help` or `$project-agent-instructions -h`,
+For `$project-agent-instructions --help` or `$project-agent-instructions -h` (including native Claude forms),
 return concise help and stop before any workflow step. State the purpose and
 invocation policy. Show exact usage for every public action. Describe each
 public action, positional argument, and flag in one concise line, including
@@ -18,6 +19,20 @@ After the selected `SKILL.md` is loaded, help is report-only: do not call any
 additional tools, inspect project state, or modify files, private state, Git,
 or external systems. Never expose private helper actions or flags or treat
 help as workflow authorization.
+
+## Agent Compatibility
+
+Read `references/claude-discovery.md` before Claude discovery or any Claude
+inspection, application or replay. Keep the canonical `AGENTS.md` target;
+Claude requires an existing tracked `CLAUDE.md` import. Codex retains native
+profile and instruction precedence. Both hosts bind `--agent` and `--agent-home`.
+
+Use `$project-agent-instructions` in Codex, `/project-agent-instructions` in Claude Code, or
+`/skills:project-agent-instructions` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -47,7 +62,7 @@ a standalone public workflow command.
   an explicit project-instruction decision here.
 - The user explicitly asks to create, refresh, adopt, or retire project
   instructions and the canonical spec receipt is available.
-- Specs, selected-project identity, relevant evidence, effective Codex config,
+- Specs, selected-project identity, relevant evidence, effective native instruction/configuration context,
   ancestor instructions, renderer, target, or prior decision changed.
 
 ## When Not To Use
@@ -65,10 +80,10 @@ a standalone public workflow command.
 - Current `docs/requirements.md` and `docs/design.md`.
 - Owner-issued mode-`0600` spec-validation receipt in a caller-owned private
   mode-`0700` directory outside Git.
-- Active Codex profile and discovery-relevant CLI overrides, encoded in the
+- On Codex: active profile and discovery-relevant CLI overrides, encoded in the
   required `<lifecycle-session>/runtime-config.json` declaration. Use explicit
   `null` and `{}` values when neither applies.
-- Explicit active Codex home passed to `inspect`; lifecycle routing never
+- Explicit selected native home and agent passed to `inspect`; lifecycle routing never
   relies on the helper's environment fallback.
 - Applicable global, ancestor, and selected-project instruction files.
 - Only the tracked project evidence needed to support candidate rules.
@@ -102,13 +117,14 @@ state must never be committed.
    selected project, Git root, scope, owner, validator, and traceability result.
    `inspect` reruns that owner's fixed validator and requires exact receipt
    equality.
-2. Always declare the active profile and discovery-sensitive runtime overrides;
+2. On Codex, declare the active profile and discovery-sensitive runtime overrides;
    use `null` and `{}` for the base case. Resolve the current
    `$CODEX_HOME/PROFILE.config.toml` profile format before trusted project
-   config and runtime overrides. Treat the resulting selected project, layered
+   config and runtime overrides. On Claude, follow `references/claude-discovery.md`
+   for native source declarations and imports. Treat the resulting selected project, layered
    config, instruction chain, target classification, and recovery check as
    authoritative. Run lifecycle-owned inspection as one uncomposed command
-   with explicit `--codex-home` and absolute current-session receipt, runtime,
+   with explicit `--agent <codex|claude> --agent-home` and absolute current-session receipt, runtime,
    private-root, and output paths.
 3. Keep a rule only when it is durable, project-specific, actionable,
    public-safe, and supported by a tracked evidence record with an exact
@@ -192,7 +208,7 @@ state must never be committed.
 - Rules use only the six renderer-owned sections and stay within 8 preferred,
   12 hard; each rule is at most 256 UTF-8 bytes.
 - Prefer at most 2 KiB of generated body. A larger body requires a compact
-  justification and may never exceed 4 KiB or effective Codex capacity.
+  justification and may never exceed 4 KiB; Codex additionally respects its effective capacity.
 - Verify commands from current scripts, config, task runners, or CI.
 - An unmarked file is human-owned. When rules are needed, attach one managed
   tail region while preserving every existing byte as its human prefix.

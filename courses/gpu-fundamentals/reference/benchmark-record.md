@@ -25,7 +25,7 @@ aggregates following [evidence-security.md](evidence-security.md).
 | H100 SKU, node/rank count, MIG state, topology class (no asset IDs) | To record | To record |
 | Approved environment lock or immutable image; driver/CUDA/framework/NCCL/Slurm versions | To record | To record |
 | Input shapes, layouts, dtype, seeds, batch/workload semantics | To record | To record |
-| Primary metric, completion boundary, correctness/quality tolerances | To record | To record |
+| Primary metric, timer, included operations, completion condition, correctness/quality tolerances | To record | To record |
 | Warm-up, measured iterations, three independent trial IDs and order | To record | To record |
 | Correctness result and maximum error; missing/non-finite data | To record | To record |
 | Raw timing distribution, minimum, median, p90/p95 and dispersion | To record | To record |
@@ -33,10 +33,10 @@ aggregates following [evidence-security.md](evidence-security.md).
 | Sanitized profiler observation, selected range/kernel, tool version | To record | To record |
 | Supporting observation and disconfirming control | To record | To record |
 | Decision: keep, reject, or investigate; limitation and next experiment | To record | To record |
-| CPU/resident-GPU/transfer-inclusive timing boundaries | To record | To record |
+| CPU execution, CUDA-event interval with resident inputs, end-to-end time with transfers | To record | To record |
 | Useful byte/FLOP accounting, roofline assumptions, view/repack break-even | To record | To record |
 | Collective message size, algorithm/bus bandwidth, slowest-rank time | To record | To record |
 
 A faster result is accepted only when its declared correctness, workload,
-measurement boundary, and environment constraints all hold. Record rejected
+timed operations, and environment constraints all hold. Record rejected
 hypotheses and slower candidates; they are useful evidence for the next choice.

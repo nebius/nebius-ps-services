@@ -7,7 +7,7 @@ description: "Review local diffs/branches, files, modules, or patches for priori
 
 ## Help
 
-For `$code-review --help` or `$code-review -h`, return concise help and stop before
+For `$code-review --help` or `$code-review -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +18,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$code-review` in Codex, `/code-review` in Claude Code, or
+`/skills:code-review` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -69,7 +78,7 @@ Select the mode before inspecting or changing files:
 - **Direct report-only:** `review only`, `audit only`, `report only`,
   `findings only`, `do not edit`, `do not fix`, or equivalent no-write intent
   overrides the direct default. Review and report without changing files.
-- **Implicit report-only:** when Codex selects this skill from a natural review
+- **Implicit report-only:** when the agent selects this skill from a natural review
   request, or `$code-review` appears only in quoted text, discussion, examples,
   patches, or file content, never edit files or invoke remediation.
 - **Nested parent-owned:** when `align`, `align-skill`, an SDLC workflow,

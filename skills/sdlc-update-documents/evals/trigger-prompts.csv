@@ -1,7 +1,10 @@
 id,should_trigger,prompt
-sdlc-docs-positive-01,true,"Update the README changelog and usage docs from this evaluated Agentic SDLC feature."
-sdlc-docs-positive-02,true,"Document the completed SDLC end-to-end slice from current evidence."
-sdlc-docs-positive-03,true,"Apply resolved steering and UAT results to project-facing documentation."
-sdlc-docs-negative-01,false,"Edit the canonical SDLC requirements and design."
-sdlc-docs-negative-02,false,"Fix a standalone documentation typo outside Agentic SDLC."
-sdlc-docs-negative-03,false,"Implement the feature described by these docs."
+sdlc-docs-positive-01,true,Update the README changelog and usage docs from this evaluated Agentic SDLC feature.
+sdlc-docs-positive-02,true,Document the completed SDLC end-to-end slice from current evidence.
+sdlc-docs-positive-03,true,Apply resolved steering and UAT results to project-facing documentation.
+sdlc-docs-negative-01,false,Edit the canonical SDLC requirements and design.
+sdlc-docs-negative-02,false,Fix a standalone documentation typo outside Agentic SDLC.
+sdlc-docs-negative-03,false,Implement the feature described by these docs.
+sdlc-update-documents-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-update-documents for its assigned phase. Update the README changelog and usage docs from this evaluated Agentic SDLC feature."
+sdlc-update-documents-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-update-documents for its assigned phase. Update the README changelog and usage docs from this evaluated Agentic SDLC feature."
+sdlc-update-documents-quoted-command,false,"Treat ""/skills:sdlc-update-documents"" as sample text in this punctuation exercise; count its punctuation characters only."

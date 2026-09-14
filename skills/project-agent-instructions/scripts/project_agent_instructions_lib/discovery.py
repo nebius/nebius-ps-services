@@ -415,7 +415,7 @@ def _trusted(user_config: dict[str, object], git_root: Path) -> bool:
 
 
 def _codex_settings(
-    codex_home: Path,
+    agent_home: Path,
     git_root: Path,
     project_root: Path,
     runtime_path: Path,
@@ -427,7 +427,7 @@ def _codex_settings(
     }
     sources: list[dict[str, str]] = []
     user_config: dict[str, object] = {}
-    user_path = codex_home / "config.toml"
+    user_path = agent_home / "config.toml"
     if _lstat_optional(user_path) is not None:
         user_config, raw = _load_toml(user_path, "Codex user config")
         _apply_settings(settings, user_config)
@@ -439,7 +439,7 @@ def _codex_settings(
             raise ProjectInstructionsError(
                 "DISCOVERY_CONTEXT_UNVERIFIED", "active Codex profile name is invalid"
             )
-        profile_path = codex_home / f"{profile}.config.toml"
+        profile_path = agent_home / f"{profile}.config.toml"
         if _lstat_optional(profile_path) is None:
             raise ProjectInstructionsError(
                 "DISCOVERY_CONTEXT_UNVERIFIED", "active Codex profile is missing"
@@ -641,14 +641,14 @@ def _target_record(
 def _instruction_chain(
     project_root: Path,
     discovery_root: Path,
-    codex_home: Path,
+    agent_home: Path,
     fallbacks: list[str],
 ) -> tuple[
     list[dict[str, object]], list[dict[str, object]], Optional[dict[str, object]]
 ]:
     global_entries: list[dict[str, object]] = []
     global_entry = _first_nonempty_instruction(
-        codex_home,
+        agent_home,
         [("AGENTS.override.md", "global-override"), ("AGENTS.md", "global")],
         scope="global",
         project_root=project_root,
@@ -719,10 +719,11 @@ def _manifest(
     owner: str,
     requirements_value: str,
     design_value: str,
-    codex_home_value: Optional[Path],
+    agent_home_value: Optional[Path],
     spec_receipt_path: Path,
     runtime_config_path: Path,
     permitted_backup_sha256: Optional[str] = None,
+    *, agent: str = "codex",
 ) -> dict[str, object]:
     project_root, git_root, project_scope = _project_identity(project_root_value)
     target_path = project_root / "AGENTS.md"
@@ -745,19 +746,26 @@ def _manifest(
         requirements_path,
         design_path,
     )
-    codex_home = (
-        codex_home_value.expanduser().resolve()
-        if codex_home_value is not None
+    agent_home = (
+        agent_home_value.expanduser().resolve()
+        if agent_home_value is not None
         else Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve()
     )
-    config = _codex_settings(codex_home, git_root, project_root, runtime_config_path)
-    fallbacks = list(config["fallback_filenames"])
-    discovery_root = _instruction_discovery_root(
-        project_root, git_root, list(config["project_root_markers"])
-    )
-    global_entries, ancestors, active = _instruction_chain(
-        project_root, discovery_root, codex_home, fallbacks
-    )
+    if agent == "codex":
+        config = _codex_settings(agent_home, git_root, project_root, runtime_config_path)
+        discovery_root = _instruction_discovery_root(
+            project_root, git_root, list(config["project_root_markers"])
+        )
+        global_entries, ancestors, active = _instruction_chain(
+            project_root, discovery_root, agent_home, list(config["fallback_filenames"])
+        )
+    elif agent == "claude":
+        from .claude_discovery import discover
+        config, global_entries, ancestors, active = discover(
+            agent_home, git_root, project_root, runtime_config_path
+        )
+    else:
+        raise ProjectInstructionsError("DISCOVERY_CONTEXT_UNVERIFIED", "unsupported agent")
     target = _target_record(project_root, active)
     tracked_entries = list(ancestors)
     if active is not None and (
@@ -784,9 +792,9 @@ def _manifest(
             "sha256": _sha256_bytes(_read_regular(design_path, "design")),
         },
         "spec_receipt": {"path": str(receipt_path), "sha256": receipt_digest},
-        "codex_home": str(codex_home),
+        "codex_home": str(agent_home),
         "config_context": config,
-        "generated_body_max_bytes": _generated_body_capacity(
+        "generated_body_max_bytes": MAX_BODY_BYTES if agent == "claude" else _generated_body_capacity(
             int(config["project_doc_max_bytes"]), ancestors, target
         ),
         "global_instructions": global_entries,

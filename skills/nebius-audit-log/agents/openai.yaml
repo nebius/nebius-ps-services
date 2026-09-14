@@ -1,6 +1,6 @@
 interface:
   display_name: "Nebius Audit Log"
   short_description: "Query Nebius Audit Logs safely"
-  default_prompt: "Use $nebius-audit-log to query Nebius Control Plane Audit Logs for a resource or current subject over the last 24 hours."
+  default_prompt: "Use $nebius-audit-log to verify caller and tenant audit access, then investigate an explicitly selected resource, subject or tenant scope with bounded, sanitized results."
 policy:
   allow_implicit_invocation: false

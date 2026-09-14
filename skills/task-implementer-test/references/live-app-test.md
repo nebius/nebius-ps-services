@@ -4,7 +4,7 @@
 
 Use the lifecycle helper for every mutation. Keep its generation ID immutable
 for the invocation. The helper owns the canonical private root, seeded project,
-isolated Codex home, Compose snapshot, report archive, and cleanup state.
+isolated agent home, Compose snapshot, report archive, and cleanup state.
 
 The generated Compose model must use the helper-provided unique project name
 and label every service, network, volume, and locally built image with:

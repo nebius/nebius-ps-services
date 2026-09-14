@@ -27,7 +27,7 @@ Use this checklist as the durable test plan for `sdlc-workflow-test`.
 
 ## Report Sections
 
-The report at `~/.codex/sdlc-verification/report.md` must include:
+The report at `<agent-home>/sdlc-verification/report.md` must include:
 
 - Summary
 - Environment checked
@@ -76,7 +76,7 @@ Verify `docs/agentic-sdlc-design.md` includes:
   monitored sequential `codex exec` fallback, and `worktree-interop-v2`
   coordinator state over v4 Worktree leases
 - `allow_implicit_invocation: false`
-- `~/.codex/sdlc-verification/report.md`
+- `<agent-home>/sdlc-verification/report.md`
 - `sdlc-auto-steering`
 - `sdlc-update-documents`
 - `steering/auto-steering.json`
@@ -133,7 +133,7 @@ Verify read-only:
 - Codex-managed `[hooks.state]` TOML metadata is not treated as an inline hook
   event.
 - When configured, PreToolUse and Stop hook entries point to the expected SDLC
-  payloads under the canonical `$CODEX_HOME/hooks` install location. A basename
+  payloads under the canonical `<agent-home>/hooks` install location. A basename
   match at another path is FAIL. Compare only validated canonical entrypoints
   plus their shared runtime libraries against the source hook bundle; hook test
   fixtures are not installed-runtime payloads.
@@ -337,7 +337,7 @@ GUI evaluation and UAT must use `harness: computer-use` against only the fresh
 verifier-owned Chrome instance. Immediately before the first navigation in
 evaluation and again before UAT, require a fresh browser `get_app_state` whose
 accessibility state contains the exact verification marker while
-the console is unlocked unless the current Codex surface explicitly confirms
+the console is unlocked unless the current agent surface explicitly confirms
 locked Computer Use is enabled for this session. A normal target window must
 be visible, unminimized, foreground, and on the current macOS Space. Refresh
 accessibility state after every successful action. Test blank input, create,
@@ -389,7 +389,7 @@ publication reservation.
 ## Private Live Evidence
 
 The optional manifest defaults to
-`~/.codex/sdlc-verification/live-results.json` and uses
+`<agent-home>/sdlc-verification/live-results.json` and uses
 `agentic-sdlc/verification-live-results-v3` from
 `assets/live-results.schema.json`. It binds:
 

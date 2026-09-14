@@ -32,3 +32,6 @@
 
 - [CUDA compute-capability limits for blocks, threads and residency](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html)
 - [PTX: Parallel Thread Execution instruction set](https://docs.nvidia.com/cuda/parallel-thread-execution/)
+- [CUDA asynchronous execution: streams, event timestamps and waits](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html)
+- [CUDA memory spaces, visibility and physical storage](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-cuda-kernels.html)
+- [PyTorch tensor views and contiguous storage](https://docs.pytorch.org/docs/stable/tensor_view.html)

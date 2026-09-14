@@ -4,7 +4,7 @@ GPU utilization can be limited by preparing and delivering the next batch rather
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 6 for producer-consumer readiness, pinning and input starvation. Use Lesson 2's timing boundaries to separate preparation, transfer and device work. The DataLoader settings are explained below.
+**Theory preparation:** Read Lesson 6 for producer-consumer readiness, pinning and input starvation. Use Lesson 2's CPU timers and CUDA events to separate preparation, transfer and device work. The DataLoader settings are explained below.
 
 Use one H100 and a compute-node environment that supports DataLoader worker processes and pinned memory. The launcher must have enough CPU resources. Pinning is enabled in both variants; positive-worker prefetch is fixed at two.
 

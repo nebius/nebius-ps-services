@@ -10,7 +10,7 @@
 
 - **Activation checkpointing:** discarding selected forward activations and recomputing them during backward to trade compute for memory.
 - **Context parallelism:** sharding long sequence context or attention work across ranks to reduce activation pressure, with communication of key/value or partial-attention state.
-- **CUDA Graph:** a captured device-work graph replayed with lower CPU launch overhead when shapes, addresses, control flow, and operations satisfy capture constraints.
+- **CUDA Graph:** a graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
 - **DDP:** DistributedDataParallel; one model replica per rank with gradient synchronization, commonly by all-reduce.
 - **DP:** Data parallelism: replicas process different examples while synchronizing gradients to preserve the same global optimizer update.
 - **Effective batch:** all examples or tokens contributing to one optimizer update.

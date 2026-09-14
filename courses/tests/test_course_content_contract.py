@@ -167,7 +167,10 @@ def test_representative_mechanisms_and_tooling_are_published() -> None:
             "sampler epoch and data cursor",
             "partial-accumulation",
         ),
-        "llm-inference/COURSE.md": ("trust_remote_code", "GPU materialization"),
+        "llm-inference/COURSE.md": (
+            "trust_remote_code",
+            "loading places the weights in device memory",
+        ),
         "custom-cuda-kernels/COURSE.md": (
             "indexing, masking, synchronization",
             "maintenance",

@@ -23,7 +23,7 @@ def test_jail_binding_preserves_extra_volumes_and_input():
         "checks": {"custom": {"enabled": False}},
     }
     old = copy.deepcopy(values)
-    result = bind_checks_jail(values, "jail-rootfs-slot-b-pvc")
+    result = bind_checks_jail(values, "jail-rootfs-slot-b-pvc", [])
     assert values == old
     assert (
         result["jobContainer"]["volumes"][0]["persistentVolumeClaim"]["claimName"]
@@ -44,12 +44,12 @@ def test_jail_binding_preserves_extra_volumes_and_input():
 )
 def test_jail_binding_rejects_non_authoritative_volumes(volumes):
     with pytest.raises(ValueError):
-        bind_checks_jail({"jobContainer": {"volumes": volumes}}, "active-jail")
+        bind_checks_jail({"jobContainer": {"volumes": volumes}}, "active-jail", [])
 
 
 def test_auxiliary_patch_tests_upstream_claim_and_defers_only_in_operation():
-    steady = checks_post_renderers("active-jail")
-    quiet = checks_post_renderers("active-jail", suspended=True)
+    steady = checks_post_renderers("active-jail", [])
+    quiet = checks_post_renderers("active-jail", [], suspended=True)
 
     def patches(render):
         return yaml.safe_load(render[0]["kustomize"]["patches"][0]["patch"])
@@ -64,7 +64,7 @@ def test_auxiliary_cluster_binding_is_canonical_and_preserves_frozen_values():
         "slurmCluster": {"overrideValues": {"clusterName": "lab"}},
         "soperatorActiveChecks": {
             "enabled": True,
-            "overrideValues": bind_checks_jail({}, "active-jail"),
+            "overrideValues": bind_checks_jail({}, "active-jail", []),
         },
     }
     before = copy.deepcopy(values)
@@ -81,7 +81,7 @@ def test_auxiliary_cluster_binding_is_canonical_and_preserves_frozen_values():
                                         {
                                             "op": "add",
                                             "path": "/spec/postRenderers",
-                                            "value": checks_post_renderers("active-jail"),
+                                            "value": checks_post_renderers("active-jail", []),
                                         }
                                     ]
                                 ),

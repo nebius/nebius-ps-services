@@ -1,6 +1,6 @@
 # Lab 33: Tune real DDP buckets and communication hooks
 
-Gradient readiness only creates an opportunity for overlap; DDP must group gradients into buckets and communicate them in a valid order. This lab exposes that behavior and compares full-precision reduction with FP16, BF16 and PowerSGD communication hooks. You will observe actual bucket sizes, measure complete optimizer steps, and examine numerical drift against an independently evolving full-batch FP32 reference rather than assuming fewer bytes guarantee a better training run.
+Gradient readiness only creates an opportunity for overlap; DDP must group gradients into buckets and communicate them in a valid order. This lab exposes that behavior and compares FP32 reduction with FP16, BF16 and PowerSGD communication hooks. You will observe actual bucket sizes, measure complete optimizer steps, and examine numerical drift against an independently evolving full-batch FP32 reference rather than assuming fewer bytes guarantee a better training run.
 
 ## Before you start
 
@@ -18,7 +18,7 @@ Reference checks follow timing. Both candidate and reference updates are checked
 
 ## Practice
 
-Consider 64 MiB of FP32 gradients and an illustrative effective link rate of 8 GiB/s: payload/rate alone is 7.8125 ms, before collective topology, startup and contention. Casting the payload to FP16 halves its nominal bytes, but conversion and reduction still cost time. If communication already fits beneath independent backward work, reducing its duration may not reduce the joined step. A trace that shows less collective time but unchanged or worse step time is a valid reason to reject compression.
+Consider 64 MiB of FP32 gradients and an illustrative effective link rate of 8 GiB/s: payload/rate alone is 7.8125 ms, before collective topology, startup and contention. Casting the payload to FP16 halves its nominal bytes, but conversion and reduction still cost time. If communication already fits beneath independent backward work, reducing its duration may not reduce step time including communication completion. A trace that shows less collective time but unchanged or worse step time is a valid reason to reject compression.
 
 After Lab 28's synthetic readiness schedule, run Lab 33: Tune real DDP buckets and communication hooks. Compare two bucket caps with the allreduce hook first, using fresh jobs. Hold the selected cap fixed while comparing FP16, BF16 and PowerSGD separately. Do not interpret a cap sweep as transport qualification; reuse Optimizations' NCCL workshop before making topology claims.
 
@@ -62,4 +62,4 @@ Missing or non-finite gradients, or an optimizer step that changes no parameters
 
 ## Takeaways and next step
 
-Use both timeline dependencies and joined-step evidence to explain a bucket choice. Then define an application-specific validation metric, allowable degradation, training horizon and independent seeds before adopting compression in a real model. Compare convergence and full-job cost as well as local step latency; this short synthetic experiment cannot establish either production outcome.
+Use both timeline dependencies and step time including completion of the required communication to explain a bucket choice. Then define an application-specific validation metric, allowable degradation, training horizon and independent seeds before adopting compression in a real model. Compare convergence and full-job cost as well as local step latency; this short synthetic experiment cannot establish either production outcome.

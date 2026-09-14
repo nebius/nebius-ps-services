@@ -1,6 +1,6 @@
 # Lab 03: Measure pageable and pinned host transfers
 
-Pinned memory can help the GPU transfer data directly, but allocating pinned buffers and requesting a nonblocking copy do not automatically overlap transfers with computation. This lab measures four host-to-device copy combinations with an explicit completion boundary. You will learn what these timings establish and what still requires a timeline experiment.
+Pinned memory can help the GPU transfer data directly, but allocating pinned buffers and requesting a nonblocking copy do not automatically overlap transfers with computation. This lab measures four host-to-device copy combinations using a CPU timer that includes waiting for each copy to finish. You will learn what these timings establish and what still requires a timeline experiment.
 
 ## Before you start
 
@@ -38,7 +38,7 @@ Overlap is proven when the timeline and end-to-end time show concurrent useful w
 
 Which costs are excluded by reusing the buffers? Why can `non_blocking=True` have little effect when the host immediately waits? Compare the size trend before assuming a hardware link has reached its practical limit.
 
-Pinned memory speeds asynchronous transfers but consumes a scarce OS resource and can hurt system behavior if overused. More streams increase possible overlap while making lifetime, ordering, and debugging more complex.
+Pinned memory enables asynchronous host/device transfers and can improve bandwidth, but consumes a scarce OS resource and can hurt system behavior if overused. More streams increase possible overlap while making lifetime, ordering, and debugging more complex.
 
 ## If something goes wrong
 

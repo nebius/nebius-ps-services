@@ -1,13 +1,14 @@
 ---
 name: task-implementer-test
 description: "Use only when the user explicitly asks to verify Task Implementer: run the no-flag contract/fixture suite, or use --create/--keep/--destroy for one replaceable verifier-owned local frontend/API/PostgreSQL stack."
+disable-model-invocation: true
 ---
 
 # Task Implementer Test
 
 ## Help
 
-For `$task-implementer-test --help` or `$task-implementer-test -h`, return concise help and stop before
+For `$task-implementer-test --help` or `$task-implementer-test -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,20 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before stateful verification, read `../global-context-management/references/agent-hosts.md`.
+The lifecycle binds the selected agent through its isolated native home (`codex-home/` or `claude-home/`);
+set that host's native home variable for the public workflow. Resume and cleanup
+require the recorded host. Never transfer a trial or infer live proof from fixtures.
+
+Use `$task-implementer-test` in Codex, `/task-implementer-test` in Claude Code, or
+`/skills:task-implementer-test` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -55,7 +70,7 @@ $task-implementer-test --destroy
 
 Reject `--keep` alone, mixed create/destroy, repeated flags, positional
 arguments, and unknown flags before mutation. The single canonical private
-root is `${CODEX_HOME:-$HOME/.codex}/task-implementer-test/`; do not expose a
+root is `<agent-home>/task-implementer-test/`; do not expose a
 public alternate-root flag that would permit multiple instances.
 
 ## Required Reads
@@ -77,23 +92,23 @@ The no-flag verifier may write only its private sanitized report and temporary
 test fixtures. Create modes may additionally write one owned lifecycle under:
 
 ```text
-${CODEX_HOME:-$HOME/.codex}/task-implementer-test/
+<agent-home>/task-implementer-test/
 ├── owner.json
 ├── active.json
 ├── report.md
 ├── archive/<generation>/
 └── runs/<generation>/
     ├── project/
-    ├── codex-home/
+    ├── <agent>-home/
     ├── lifecycle.json
     ├── compose.snapshot.json
     └── evidence/
 ```
 
-The isolated run `codex-home/` owns Task Implementer prompts, run state, and
+The isolated run `<agent>-home/` owns Task Implementer prompts, run state, and
 worktrees for the disposable fixture. Never reuse or delete the user's normal
-`${CODEX_HOME}/task-implementer/` state. Reports and archived lifecycle
-summaries survive destroy; the active project, isolated Codex home, raw
+`<agent-home>/task-implementer/` state. Reports and archived lifecycle
+summaries survive destroy; the active project, isolated agent home, raw
 evidence, and exact owned runtime resources do not.
 
 ## Process
@@ -139,7 +154,7 @@ evidence, and exact owned runtime resources do not.
    $task-implementer integrate <project-folder>
    ```
 
-   Run it with the lifecycle's isolated Codex home. Do not bypass the public
+   Run it with the lifecycle's isolated agent home. Do not bypass the public
    contract with private `wave-*`, `task-*`, or orchestration commands.
 8. Require the first dependency wave to contain disjoint frontend, API, and
    database work; require a later integration/runtime task. The frontend

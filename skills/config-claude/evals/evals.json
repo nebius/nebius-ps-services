@@ -1,0 +1,53 @@
+{
+  "skill_name": "config-claude",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use $config-claude --help. Explain its public invocation interface only.",
+      "expected_output": "Concise skill help without target inspection, script execution or state changes.",
+      "files": [],
+      "assertions": [
+        "The result describes the Codex, direct Claude and namespaced Claude plugin invocation forms and help flags.",
+        "After loading the skill, no target configuration is inspected or modified and no helper is run.",
+        "Helper script flags are not advertised as public skill flags."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use $config-claude to inspect the supplied existing-settings.json fixture and describe the narrow reconciliation needed for native roles and instructions. This is inspection only. Keep my model, sandbox and permissions. The skills plugin is already enabled. Do not read or modify any real home.",
+      "expected_output": "A read-only, native plan that preserves personal values and plugin-owned hooks and explains separate static/runtime validation.",
+      "files": ["evals/fixtures/existing-settings.json"],
+      "assertions": [
+        "The result preserves the existing model, sandbox, deny rule and custom preference.",
+        "The result uses native CLAUDE.md/settings.json and three Markdown role templates with Read/Grep/Glob tools.",
+        "The result does not install duplicate local hooks while the plugin owns them.",
+        "The result does not claim runtime loading or comparative quality from fixture inspection.",
+        "No real home, repository fixture or source file is modified."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use $config-claude to explain missing-settings recovery without applying it. Assume the target settings.json is missing at inspection, but another process creates it before publication. I have not selected trusted-local permissions, MCP integrations, or delegation. Explain the result and the next safe step. Do not inspect real configuration.",
+      "expected_output": "Exclusive minimal recovery stops at EXISTS without replacing the concurrent file; optional integrations remain unselected.",
+      "files": [],
+      "assertions": [
+        "The minimal recovery baseline is an empty JSON object and does not enable full access or MCP servers.",
+        "A concurrent creator is preserved and recovery switches to inspection and patch-only handling.",
+        "A post-publication durability warning calls for inspection rather than blind creation retry.",
+        "Existing Claude application/auth state is not reconstructed from Codex or a public template."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use $config-claude to explain full setup from a standalone copy of this skill. The full hook-owner catalog is missing, and a project defines repo-mapper with Bash access. This is report-only: identify blockers before any changes and explain what evidence would prove the read-only role is effective.",
+      "expected_output": "Dependency preflight and effective-role checks prevent a partial setup or an unsupported read-only claim.",
+      "files": [],
+      "assertions": [
+        "Missing complete hook/runtime dependencies are reported before full-setup mutations.",
+        "The result does not fabricate a new hook bundle or automatically download dependencies.",
+        "The project role override is not classified as read-only solely from its name or permissionMode.",
+        "The result distinguishes restricted agent tools from permitted private inherited-hook effects."
+      ]
+    }
+  ]
+}

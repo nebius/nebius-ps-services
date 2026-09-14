@@ -38,7 +38,7 @@ sbatch slurm/single_gpu.sbatch labs/02_tensor_core_precision.py --profile smoke 
 
 Inspect each mode's error report, timing distribution, and `achieved_tflops`. The supplied gate is finite output with relative L2 error below 0.1, a deliberately broad teaching check. It is not the course's stricter elementwise tolerance and does not establish training-quality equivalence.
 
-Record dispatch/profiler evidence, dtype ledger, shapes, time, memory, and maximum/relative error.
+Record dispatch/profiler evidence, input, accumulation and output dtypes, shapes, time, memory, and maximum/relative error.
 
 A dtype is accepted only when the real operation uses the intended path and meets its quality tolerance.
 

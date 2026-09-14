@@ -156,7 +156,7 @@ def test_common_document_transform_cannot_restore_early(source, values):
     )
 
     values["slurmCluster"]["overrideValues"]["clusterName"] = "example"
-    values["soperatorActiveChecks"]["overrideValues"] = bind_checks_jail({}, "active-jail")
+    values["soperatorActiveChecks"]["overrideValues"] = bind_checks_jail({}, "active-jail", [])
     policy = compile_checks_policy(source, values)
     documents = [
         {
@@ -181,7 +181,7 @@ def test_common_document_transform_cannot_restore_early(source, values):
                                             {
                                                 "op": "add",
                                                 "path": "/spec/postRenderers",
-                                                "value": checks_post_renderers("active-jail"),
+                                                "value": checks_post_renderers("active-jail", []),
                                             }
                                         ]
                                     ),
@@ -424,6 +424,26 @@ def test_auxiliary_schedule_is_derived_from_the_frozen_render_without_new_identi
         "volumes": [{"name": "jail", "persistentVolumeClaim": {"claimName": "jail-active"}}]
     }
     expected = {"schedule": "*/5 * * * *", "timeZone": "Etc/UTC", "suspend": False}
+    values["slurmCluster"]["overrideValues"]["clusterName"] = "cluster"
+    expected["jobTemplate"] = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "check",
+                            "volumeMounts": [{"name": "jail", "mountPath": "/mnt/jail"}],
+                        }
+                    ],
+                    "volumes": [
+                        {"name": "jail", "persistentVolumeClaim": {"claimName": "jail-pvc"}},
+                        {"name": "slurm-configs", "configMap": {"name": "soperator-slurm-configs"}},
+                        {"name": "munge-key", "secret": {"secretName": "soperator-munge"}},
+                    ],
+                }
+            }
+        }
+    }
     monkeypatch.setattr(
         module,
         "_cached_execution_specs",
@@ -436,7 +456,11 @@ def test_auxiliary_schedule_is_derived_from_the_frozen_render_without_new_identi
         ),
     )
     policy = compile_checks_policy(source, values)
-    assert policy.auxiliary_spec == expected
+    from nebius_cxcli.soperator_checks_binding import bind_auxiliary_spec
+
+    assert policy.auxiliary_spec == bind_auxiliary_spec(
+        expected, "jail-active", [], cluster="cluster"
+    )
     assert policy.auxiliary_pvc == "jail-active"
     assert replace(policy, auxiliary_spec={}).sha256 == policy.sha256
 

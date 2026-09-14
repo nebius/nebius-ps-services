@@ -1,0 +1,40 @@
+{
+  "skill_name": "nebius-audit-log",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Investigate Audit Logs for who deleted cluster <cluster_id> in tenant <tenant_id>, region <origin_region>, during the supplied UTC window. The events include one failed user deletion and one completed service-account deletion.",
+      "expected_output": "Report the completed deletion with its acting service-account ID, time and safe correlation, distinguish the failed attempt, and state the human initiator is not established.",
+      "files": [],
+      "assertions": [
+        "Caller identity and effective audit read are verified before conclusions.",
+        "Use explicit resource scope without a current-caller event filter.",
+        "Distinguish DONE from ERROR and STARTED.",
+        "Do not infer a human from a service-account actor or expose raw payloads."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Build an offline audit preview for the configured identity with current-subject scope, plus a name predicate containing private@example.invalid. Then explain how an audit-denied result differs from a successful empty query.",
+      "expected_output": "Preview leaves configured identity and scope unresolved without CLI calls, omits the predicate value, and distinguishes unverified, denied and authorized-empty outcomes.",
+      "files": [],
+      "assertions": [
+        "No CLI or cloud request is performed for the preview.",
+        "Predicate metadata omits the literal even when explaining the preview.",
+        "A dry run and whoami alone never establish audit permission.",
+        "Describe tenant audit viewer access without granting IAM rights."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "A bounded audit query returned one page and a continuation token, then the next request failed. Summarize the investigation and how to continue.",
+      "expected_output": "Preserve prior events as partial evidence, report the failure, and resume only with the same scope, filters and original absolute window.",
+      "files": [],
+      "assertions": [
+        "Do not claim complete coverage or event absence.",
+        "Retain validated events and the safe pending token.",
+        "Do not broaden region, actor or time window silently."
+      ]
+    }
+  ]
+}

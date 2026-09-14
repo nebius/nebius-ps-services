@@ -241,7 +241,7 @@ Tasks become done only after verified fast-forward promotion.
 - Active wave:
 - Dispatch batch:
 - Retained inventory: none
-- Worker mechanism: native subagents | fresh sequential codex exec
+- Worker mechanism: native subagents | fresh sequential Codex exec | fresh sequential Claude print
 
 ## Final Alignment
 

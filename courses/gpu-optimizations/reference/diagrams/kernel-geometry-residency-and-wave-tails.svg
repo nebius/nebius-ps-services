@@ -1,6 +1,6 @@
 <svg viewBox="0 0 1200 620" role="img" aria-labelledby="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-title detail-kernel-geometry-residency-and-wave-tails-kernel-balance-desc">
 <title id="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-title">Kernel geometry, residency, and wave tails</title>
-<desc id="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-desc">A grid of blocks is scheduled in waves across four example SMs. Register, shared-memory, thread, and block limits determine resident blocks, while a partial final wave leaves some SMs idle.</desc>
+<desc id="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-desc">This simplified wave model groups blocks by concurrent resident capacity across four example SMs. Actual blocks can start as resources become available. Register, shared-memory, thread, and block limits determine resident blocks, while a partial final wave leaves some SMs idle.</desc>
 <defs>
 <marker id="detail-kernel-geometry-residency-and-wave-tails-kernel-balance-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" markerUnits="userSpaceOnUse" orient="auto">
 <path d="M0,0 L0,8 L8,4 z" fill="#245880"/>
@@ -72,5 +72,5 @@
 <text x="820" y="525" class="diagram-label">threads · registers · shared memory</text>
 <text x="820" y="548" class="diagram-label">block limit · architectural limit</text>
 </g>
-<text x="600" y="605" text-anchor="middle" fill="#52626b">The best launch balances useful work, residency, latency hiding, and tail waste.</text>
+<text x="600" y="605" text-anchor="middle" fill="#52626b">Waves model capacity; actual blocks can start as resources become available.</text>
 </svg>

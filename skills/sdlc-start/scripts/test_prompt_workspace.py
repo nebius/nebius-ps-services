@@ -1012,7 +1012,7 @@ Independent verification predates schema v2 evidence tracking.
                 str(prompt),
                 "--project-path",
                 str(self.project),
-                "--codex-home",
+                "--agent-home",
                 str(self.codex_home),
                 "--json",
             ],

@@ -7,7 +7,7 @@ description: "{Front-load the workflow trigger, accepted inputs, state boundary,
 
 ## Help
 
-For `${skill-name} --help` or `${skill-name} -h`, return concise help and stop
+For `${skill-name} --help` or `${skill-name} -h` (including native Claude forms), return concise help and stop
 before any workflow step. State the purpose and invocation policy. Show exact
 usage for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No

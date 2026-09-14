@@ -7,7 +7,7 @@ description: "Align a project after changes across code, wiring, tests, CI, CLI/
 
 ## Help
 
-For `$align --help` or `$align -h`, return concise help and stop before
+For `$align --help` or `$align -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +18,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$align` in Codex, `/align` in Claude Code, or
+`/skills:align` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -151,7 +160,7 @@ skill-list budget, installation, or discovery limits, resolve and read its
 1. Use the current session's skill path when available.
 2. Otherwise try the sibling path next to this skill, such as
    `../apply-security/SKILL.md`.
-3. If the sibling path is unavailable, search readable standard Codex skill
+3. If the sibling path is unavailable, search readable selected-host skill
    locations, including repo-local skill roots and
    `$HOME/.agents/skills/apply-security`.
 

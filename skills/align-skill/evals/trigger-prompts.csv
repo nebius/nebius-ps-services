@@ -1,9 +1,17 @@
 id,should_trigger,prompt
-align-skill-positive-01,true,"Use align-skill to review and harden the existing skill under skills/release-notes."
+align-skill-positive-01,true,Use align-skill to review and harden the existing skill under skills/release-notes.
 align-skill-positive-02,true,"Please improve this scaffolded Codex skill so its SKILL.md is lean, its trigger boundaries are precise, and it has its own evals."
 align-skill-positive-03,true,"Audit every skill in this local skills folder against our skill structure, safety, evaluation, and progressive-disclosure standards."
-align-skill-positive-04,true,"Review this GitHub skill repository in report-only mode and identify alignment gaps without changing it."
-align-skill-negative-01,false,"Create a brand-new skill named release-notes from scratch and choose its initial folder structure."
+align-skill-positive-04,true,Review this GitHub skill repository in report-only mode and identify alignment gaps without changing it.
+align-skill-negative-01,false,Create a brand-new skill named release-notes from scratch and choose its initial folder structure.
 align-skill-negative-02,false,"Align this entire application repository across code, tests, CI, configuration, and documentation."
-align-skill-negative-03,false,"Implement the retry bug in src/client.py and update its unit tests."
-align-skill-negative-04,false,"Review this pull request for correctness and merge readiness."
+align-skill-negative-03,false,Implement the retry bug in src/client.py and update its unit tests.
+align-skill-negative-04,false,Review this pull request for correctness and merge readiness.
+align-skill-positive-05,true,"Make this existing skill portable across Codex and Claude with minimal edits, preserving its metadata, hooks and workflow safety."
+align-skill-negative-05,false,Install the skills plugin from a marketplace and configure my Claude model preferences.
+align-skill-positive-06,true,Align this existing skill against agentskills.io and npx skills discovery while preserving each function and native invocation restriction.
+align-skill-positive-07,true,"Check whether converting this workflow skill to Codex and Claude loses hooks, resources, recovery, or worker ownership."
+align-skill-negative-06,false,Show me how to list installed packages with npm; do not review or change any skills.
+align-skill-codex-portability,true,$align-skill Use align-skill to review and harden the existing skill under skills/release-notes.
+align-skill-claude-portability,true,/align-skill Use align-skill to review and harden the existing skill under skills/release-notes.
+align-skill-quoted-command,false,"Treat ""/skills:align-skill"" as sample text in this punctuation exercise; count its punctuation characters only."

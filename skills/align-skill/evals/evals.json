@@ -46,6 +46,49 @@
         "The result rejects a generic statement that the skill is complex as sufficient exception evidence.",
         "Static, runtime, and quality evidence remain separate, and any unavailable clean-run evidence is not represented as a pass."
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use align-skill to align the supplied portability-contract fixture in report-only mode for core, Codex and Claude. Preserve all intentionally product-specific configuration and workflow safety behavior. Recommend the smallest changes and evidence needed.",
+      "expected_output": "A minimal host-aware conversion that preserves intentional Codex configuration, distinguishes worker commit ownership, retains both metadata policies and does not claim runtime proof.",
+      "files": [
+        "evals/fixtures/portability-contract.md"
+      ],
+      "assertions": [
+        "A minimal portable skill passes agentskills policy without repository Help, Learning Loop or OpenAI metadata; repository Codex checks retain the metadata policy, and malformed present metadata is never ignored.",
+        "config-codex remains a Codex configuration skill when invoked from Claude; config-claude remains a separate Claude configuration skill.",
+        "Task Implementer workers retain their own commits while Agentic SDLC commits remain coordinator-owned; native identity, receipts, checkpoints, Stop arbitration and recovery are preserved.",
+        "Public explicit skills use disable-model-invocation on Claude; internal SDLC stages stay coordinator-available with user-invocable false and verified active workflow context.",
+        "The result distinguishes static checks, installed artifacts, native CLI installation, fresh model triggers and baseline quality evidence, marking missing proof UNAVAILABLE."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Align the distribution-preservation fixture in report-only mode for Agent Skills, Codex, Claude Code and npx skills. Keep every existing function and identify the required installation and regression evidence.",
+      "expected_output": "A behavior-preserving compatibility assessment that retains explicit-only controls, identifies required metadata.json loss and runtime dependencies, and reports separate evidence without modifying the fixture.",
+      "files": [
+        "evals/fixtures/distribution-preservation.md"
+      ],
+      "assertions": [
+        "The result inventories current actions, outputs, native invocation restrictions, resources, hooks, state and recovery and uses current working bytes as the baseline rather than HEAD.",
+        "The result retains native Claude restrictions and useful OpenAI metadata, reports strict standard-only exceptions and does not coerce away a functional host extension.",
+        "The required metadata.json resource excluded by skills CLI copy is a compatibility failure; a rename requires tracing and preserving every reader, never ignoring or deleting the resource.",
+        "npx discovery and copying are tested separately for codex and claude-code in disposable locations; file installation does not register hooks or prove runtime behavior.",
+        "The result preserves config product targets, Task Implementer worker commits, SDLC coordinator commits, native identity, checkpoints and recovery.",
+        "Absent host capabilities remain explicit limitations; feature removal or weaker behavior requires a concrete conflict and explicit user decision.",
+        "The result remains report-only and does not claim executed native, quality or installation evidence."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Review a minimal external reporting skill containing only valid name/description YAML and Markdown. It has no Help section, Learning Loop, OpenAI metadata, hooks or evals. Determine Agent Skills and npx readiness in report-only mode without imposing this repository's conventions.",
+      "expected_output": "A policy-separated assessment that accepts the minimal standard structure, preserves its reporting purpose, and leaves installation/runtime evidence unavailable until tested.",
+      "files": [],
+      "assertions": [
+        "The result selects agentskills policy and does not call missing repository-specific sections or OpenAI metadata standard-format failures.",
+        "The result distinguishes valid format from actual npx installation and native trigger evidence.",
+        "The result does not add hooks, permissions, fake license metadata or new features to a simple reporting skill."
+      ]
     }
   ]
 }

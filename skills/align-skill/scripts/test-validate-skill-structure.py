@@ -27,7 +27,7 @@ URLs, customer data, raw logs, or one-off local state.
 def help_contract(name: str) -> str:
     return f"""## Help
 
-For `${name} --help` or `${name} -h`, return concise help and stop before any
+For `${name} --help` or `${name} -h` (including native Claude forms), return concise help and stop before any
 workflow step. State the purpose and invocation policy. Show exact usage for
 every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -125,10 +125,11 @@ def run_validator(
     target: Path,
     *,
     profile: str | None = None,
+    agent: str = "codex",
     require_evals: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     validator = Path(__file__).with_name("validate-skill-structure.py")
-    command = [sys.executable, "-B", str(validator)]
+    command = [sys.executable, "-B", str(validator), "--agent", agent]
     if profile:
         command.extend(["--profile", profile])
     if require_evals:
@@ -712,6 +713,30 @@ def test_sdlc_workflow_test_external_verifier_exception() -> None:
         assert_contains(output, "Validated 1 skill(s): 0 failure(s), 0 warning(s)")
 
 
+def test_agent_profiles() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        skill = root / "portable-example"
+        write_skill(skill, "portable-example", allow_implicit_invocation=None)
+        for agent in ("core", "claude"):
+            result = run_validator(skill, agent=agent)
+            if result.returncode:
+                raise AssertionError(result.stdout + result.stderr)
+        if run_validator(skill, agent="codex").returncode == 0:
+            raise AssertionError("Codex policy unexpectedly optional")
+        write_skill(skill, "portable-example", allow_implicit_invocation="invalid")
+        if run_validator(skill, agent="core").returncode == 0:
+            raise AssertionError("malformed optional metadata accepted")
+        explicit = root / "commit"
+        write_skill(explicit, "commit", allow_implicit_invocation="false")
+        if run_validator(explicit, agent="claude").returncode == 0:
+            raise AssertionError("Claude explicit-only policy was not enforced")
+        path = explicit / "SKILL.md"
+        path.write_text(path.read_text().replace("---\n", "---\ndisable-model-invocation: true\n", 1))
+        if run_validator(explicit, agent="claude").returncode:
+            raise AssertionError("valid Claude explicit-only policy rejected")
+
+
 def test_missing_openai_metadata_policy_fails() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1050,6 +1075,7 @@ def main() -> int:
         test_sdlc_only_name_and_description_contract,
         test_real_source_catalog_passes,
         test_sdlc_workflow_test_external_verifier_exception,
+        test_agent_profiles,
         test_missing_openai_metadata_policy_fails,
         test_wrong_openai_metadata_path_fails,
         test_invocation_policy_contract_fails_for_wrong_value,

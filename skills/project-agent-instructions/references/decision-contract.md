@@ -1,5 +1,9 @@
 # Project Agent Instructions Decision Contract
 
+The layered TOML/profile algorithm below is the Codex variant. On Claude, read
+[Claude discovery](claude-discovery.md) and use its native declaration/import
+contract with the same canonical target, rules, ownership and transactions.
+
 ## Contents
 
 - [Prerequisite receipts](#prerequisite-receipts)
@@ -315,7 +319,7 @@ python3 INSTALLED_SKILLS_ROOT/project-agent-instructions/scripts/project_agent_i
   --design docs/design.md \
   --spec-receipt LIFECYCLE_SESSION/spec-receipt.json \
   --runtime-config LIFECYCLE_SESSION/runtime-config.json \
-  --codex-home CODEX_HOME \
+  --agent codex --agent-home CODEX_HOME \
   --private-root PRIVATE_PROJECT_AGENT_DIR \
   --output PRIVATE_PROJECT_AGENT_DIR/manifest.json
 
@@ -340,7 +344,7 @@ python3 INSTALLED_SKILLS_ROOT/project-agent-instructions/scripts/project_agent_i
 
 <!-- markdownlint-enable MD013 -->
 
-The lifecycle hook requires this exact inspect shape: explicit `--codex-home`,
+The lifecycle hook requires this exact inspect shape: explicit `--agent` and `--agent-home`,
 the current session's canonical private members, and no shell composition.
 Relative private paths and environment fallback are not canonical coordinator
 inputs and fail at the CLI or lifecycle-hook boundary. The helper may populate

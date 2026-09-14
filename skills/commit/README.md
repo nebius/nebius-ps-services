@@ -52,7 +52,7 @@ Current branch and fast safety checks
 Temporary-index candidate and complete diff inspection
   |
   v
-Common-repository lock and drift revalidation
+Selected-installation repository lock and drift revalidation
   |
   v
 Exact full-repository staging, validation, and local commit
@@ -92,7 +92,8 @@ Final status report
   and tree have been reviewed. Failed hooks that create no commit become stale
   for a fresh explicit retry. Recovery never resets, amends, or unstages user
   work.
-- Worktree ownership and direct commits share one common-repository lock. A
+- Worktree ownership and direct commits share one common-repository lock within
+  the selected agent installation. A
   direct claim refuses an active Worktree preparation or reservation for the
   same source ref, and malformed ownership or coordination records fail closed
   before staging. Active Agentic SDLC runs continue to own commits through

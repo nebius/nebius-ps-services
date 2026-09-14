@@ -1,13 +1,14 @@
 ---
 name: scaffold-project
 description: "Use only when the user explicitly asks to plan, create, merge, or standardize a complete repo scaffold after architecture/stack approval using path ownership and an approved plan. Not for stack selection, feature work, SDLC, or destructive rewrites."
+disable-model-invocation: true
 ---
 
 # Scaffold Project
 
 ## Help
 
-For `$scaffold-project --help` or `$scaffold-project -h`, return concise help and stop before
+For `$scaffold-project --help` or `$scaffold-project -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$scaffold-project` in Codex, `/scaffold-project` in Claude Code, or
+`/skills:scaffold-project` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 

@@ -15,7 +15,10 @@ Source basis:
 
 | Area | Check |
 | --- | --- |
-| Structure profile | Review distinguishes OpenAI portable minimum requirements from local repo-specific standards. |
+| Cross-host functionality | Every target has a current working baseline and behavior inventory; compatibility changes retain actions, outputs, hooks, authority, state and recovery. |
+| Distribution evidence | Actual npx discovery and copied payload parity for both hosts are separate from model behavior and explicit hook/runtime setup. |
+| Native extensions | Retain native controls and disclose standard-only conformity exceptions; unsupported capability is not repaired by deleting behavior. |
+| Structure profile | Review distinguishes Agent Skills portable minimum requirements from local repo-specific standards. |
 | Name and folder consistency | `name` is lowercase hyphenated, valid, and matches the parent folder. |
 | SDLC-only naming | Skills used only inside the Agentic SDLC state machine use `sdlc-*` names and start descriptions with `Use only as part of the Agentic SDLC workflow;`. |
 | Description specificity | Description concisely communicates the job and outcome, triggering intent, routing-relevant inputs or mode, and adjacent negative boundaries without formulaic keyword stuffing. |

@@ -1,5 +1,10 @@
 # Project Agent Instructions
 
+Execution supports Codex and Claude through the selected native host context.
+See `SKILL.md` for invocation, required setup and evidence boundaries.
+Claude discovery uses an existing `CLAUDE.md` import of canonical `AGENTS.md`;
+see [native discovery](references/claude-discovery.md).
+
 `project-agent-instructions` is an explicit-only mutation skill that may be
 routed by `maintain-project-specs`. After the shared owner validates
 the current requirements and design, the skill decides whether the exact
@@ -54,7 +59,7 @@ commands and flags are not a user-facing interface. Use
 inspection, mutation, or private-state write.
 
 When repository instruction bytes are created, attached, refreshed, or
-retired, this workflow recommends a fresh Codex session before relying on the
+retired, this workflow recommends a fresh native agent session before relying on the
 new rules. That recommendation never halts Task Implementer or Agentic SDLC.
 
 ## Decision And Ownership Model
@@ -113,7 +118,7 @@ automation ownership. Recovery artifacts block every transition until
 resolved instead of being removed or bypassed automatically.
 
 Lifecycle-owned inspection is one uncomposed canonical command. It declares
-the active Codex home explicitly and uses absolute receipt, runtime,
+the selected agent and native home explicitly and uses absolute receipt, runtime,
 private-root, and manifest-output paths from the exact current-session bundle;
 environment fallback or relative output is not valid lifecycle evidence.
 Inspection reports `ownership_continuity` as `current`, `carried-forward`,

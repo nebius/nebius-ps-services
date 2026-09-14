@@ -1,5 +1,8 @@
 # Task Implementer Test
 
+Execution supports Codex and Claude through the selected native host context.
+See `SKILL.md` for invocation, required setup and evidence boundaries.
+
 `task-implementer-test` is an explicit verifier for `task-implementer`.
 
 ```text

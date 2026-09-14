@@ -6,7 +6,7 @@ scope. It is not repository content and does not grant lifecycle authority.
 ## Layout
 
 ```text
-${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/<project>/<scope>/
+<agent-home>/task-implementer/projects/<project>/<scope>/
 ├── workspace.json
 ├── activity.json
 ├── prompt-queue.json
@@ -55,7 +55,9 @@ omission never deletes previously accepted product truth.
 already-bound prompt. It excludes workflow instructions, commands, delivery
 requests, agent-control text, status chatter, and sensitive material. Capture
 never invokes Task Implementer, advances workflow state, or blocks the direct
-request on failure.
+request on failure. The delivered request proceeds normally in the current agent.
+Capture does not route execution. It records a metadata-only event-v2;
+workflow operations stay outside the project-intent projection.
 
 ## Workspace Identity
 

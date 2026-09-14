@@ -1,13 +1,14 @@
 ---
 name: task-implementer
 description: "Requires explicit invocation for durable brownfield work in persistent project worktree lanes: initialize or reopen a workspace, run dependency waves, integrate completed generations, or remove an idle lane. Not for one-shot work, Agentic SDLC, standalone Git, or generic parallel agents."
+disable-model-invocation: true
 ---
 
 # Task Implementer
 
 ## Help
 
-For `$task-implementer --help` or `$task-implementer -h`, return concise help
+For `$task-implementer --help` or `$task-implementer -h` (including native Claude forms), return concise help
 and stop before any workflow step. State the purpose and invocation policy.
 Show exact usage for every public action. Describe each public action,
 positional argument, and flag in one concise line, including `-h, --help`; say
@@ -18,6 +19,18 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external
 systems. Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for selected-home paths, native identity and required runtime setup.
+
+Use `$task-implementer` in Codex, `/task-implementer` in Claude Code, or
+`/skills:task-implementer` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -33,6 +46,8 @@ Public entry requires explicit invocation. Keep
 `prompt-session-intake` may capture a safe project-intent projection for an
 already-bound session, but it never selects or invokes Task Implementer.
 That durable project-intent projection excludes shell/tool control text.
+Capture and execution are separate operations; capture never authorizes
+starting or resuming the workflow.
 
 ## Public Interface
 
@@ -221,7 +236,11 @@ For each wave:
    assignment binds absolute scope cwd, base commit, helper digest, task
    digest, root-intent digest, canonical project-spec receipt, claims, domains,
    validation, criteria, guardrails, and predecessor evidence.
-4. Dispatch one fresh worker per assignment. A worker may mutate only its own
+4. Dispatch one fresh worker per assignment. Prefer native subagents; the
+   sequential fallback uses ephemeral Codex exec or Claude print mode with the
+   selected private home and a fresh identity. Preserve native permissions and
+   hooks; unavailable capabilities never authorize bypassing them.
+   A worker may mutate only its own
    registered worktree and claims, validates its task, performs `code-review`,
    invokes `$commit` exactly once, and publishes immutable result evidence.
    Its result always contains `spec_gaps`; a non-empty list requires

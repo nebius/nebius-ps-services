@@ -1,7 +1,10 @@
 id,should_trigger,prompt
-sdlc-failure-positive-01,true,"The active SDLC evaluation failed and needs an evidence-bound owner and retry route."
-sdlc-failure-positive-02,true,"Classify this failed SDLC phase before any remediation loop retries."
-sdlc-failure-positive-03,true,"Record the diagnosis repair budget invalidated gates and earliest responsible SDLC phase."
-sdlc-failure-negative-01,false,"Diagnose an unknown production failure outside Agentic SDLC."
-sdlc-failure-negative-02,false,"Fix this ordinary failing unit test directly."
-sdlc-failure-negative-03,false,"Continue the SDLC run after all gates passed."
+sdlc-failure-positive-01,true,The active SDLC evaluation failed and needs an evidence-bound owner and retry route.
+sdlc-failure-positive-02,true,Classify this failed SDLC phase before any remediation loop retries.
+sdlc-failure-positive-03,true,Record the diagnosis repair budget invalidated gates and earliest responsible SDLC phase.
+sdlc-failure-negative-01,false,Diagnose an unknown production failure outside Agentic SDLC.
+sdlc-failure-negative-02,false,Fix this ordinary failing unit test directly.
+sdlc-failure-negative-03,false,Continue the SDLC run after all gates passed.
+sdlc-classify-failure-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-classify-failure for its assigned phase. The active SDLC evaluation failed and needs an evidence-bound owner and retry route."
+sdlc-classify-failure-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-classify-failure for its assigned phase. The active SDLC evaluation failed and needs an evidence-bound owner and retry route."
+sdlc-classify-failure-quoted-command,false,"Treat ""/skills:sdlc-classify-failure"" as sample text in this punctuation exercise; count its punctuation characters only."

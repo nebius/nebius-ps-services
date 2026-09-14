@@ -7,7 +7,7 @@ description: "Diagnose and repair difficult, persistent, intermittent, or cross-
 
 ## Help
 
-For `$troubleshoot --help` or `$troubleshoot -h`, return concise help and stop before
+For `$troubleshoot --help` or `$troubleshoot -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +18,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$troubleshoot` in Codex, `/troubleshoot` in Claude Code, or
+`/skills:troubleshoot` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 

@@ -1,13 +1,14 @@
 ---
 name: prompt-session-intake
 description: "Internal coordinator only for safe direct-prompt metadata bound to Task Implementer or Agentic SDLC. Extract durable intent, record merge/noop/sensitive, merge once, and consume the sidecar; never invoke standalone."
+disable-model-invocation: true
 ---
 
 # Prompt Session Intake
 
 ## Help
 
-For `$prompt-session-intake --help` or `$prompt-session-intake -h`, return
+For `$prompt-session-intake --help` or `$prompt-session-intake -h` (including native Claude forms), return
 concise help and stop before any workflow step. State the purpose and invocation
 policy. Show exact usage for every public action. Describe each public action,
 positional argument, and flag in one concise line, including `-h, --help`; say
@@ -18,6 +19,18 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for selected-home paths, native identity and required runtime setup.
+
+Use `$prompt-session-intake` in Codex, `/prompt-session-intake` in Claude Code, or
+`/skills:prompt-session-intake` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -39,7 +52,7 @@ consume, replay, or recovery command.
 - Use only for the exact current root-agent turn when this skill's capture hook
   supplies its private event path and acceptance token.
 - Require an exact Task Implementer or Agentic SDLC init/run invocation in the
-  same Codex session before any later direct turn can stage capture. An active
+  same agent session before any later direct turn can stage capture. An active
   objective registry entry never establishes a session binding.
 
 ## When Not To Use
@@ -62,7 +75,7 @@ Read `references/state-contract.md` before any transition.
 - Metadata-only private event-v2 state, an accepted mode-0600
   `project-intent.md` projection when eligible, binding, current-event receipt,
   one-shot Stop continuation marker, and project objective registry under the
-  Codex home. Never write the submitted prompt body or a raw prompt journal.
+  selected agent home. Never write the submitted prompt body or a raw prompt journal.
 - Canonical workflow prompts only through the owning Task Implementer or SDLC
   compare-and-set adapter; this skill never writes committed project files.
 
@@ -174,7 +187,7 @@ passes; it never requests continuation for capture recovery.
   digests that are not part of the bounded public result.
 - Do not let the hook process refine text, edit canonical prompts, select work,
   or execute either workflow.
-- Do not install/register hooks, change trust, restart Codex, or claim runtime
+- Do not install/register hooks, change trust, restart the agent, or claim runtime
   activation unless those separate actions are explicitly authorized.
 
 ## Completion Criteria

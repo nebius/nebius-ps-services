@@ -1,7 +1,10 @@
 id,should_trigger,prompt
-sdlc-align-positive-01,true,"Within the active Agentic SDLC run verify that requirements design plans tests code and docs agree."
-sdlc-align-positive-02,true,"Use sdlc-align-specs to report advisory consistency for this feature's evidence chain."
-sdlc-align-positive-03,true,"Check the locked end-to-end slice against every SDLC artifact and implementation result."
-sdlc-align-negative-01,false,"Align the whole project after these ordinary code changes."
-sdlc-align-negative-02,false,"Create the canonical requirements for a new SDLC prompt."
-sdlc-align-negative-03,false,"Review this one design document for architecture quality."
+sdlc-align-positive-01,true,Within the active Agentic SDLC run verify that requirements design plans tests code and docs agree.
+sdlc-align-positive-02,true,Use sdlc-align-specs to report advisory consistency for this feature's evidence chain.
+sdlc-align-positive-03,true,Check the locked end-to-end slice against every SDLC artifact and implementation result.
+sdlc-align-negative-01,false,Align the whole project after these ordinary code changes.
+sdlc-align-negative-02,false,Create the canonical requirements for a new SDLC prompt.
+sdlc-align-negative-03,false,Review this one design document for architecture quality.
+sdlc-align-specs-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-align-specs for its assigned phase. Within the active Agentic SDLC run verify that requirements design plans tests code and docs agree."
+sdlc-align-specs-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-align-specs for its assigned phase. Within the active Agentic SDLC run verify that requirements design plans tests code and docs agree."
+sdlc-align-specs-quoted-command,false,"Treat ""/skills:sdlc-align-specs"" as sample text in this punctuation exercise; count its punctuation characters only."

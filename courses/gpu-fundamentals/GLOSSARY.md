@@ -6,13 +6,15 @@
 - **L1 / L2 cache:** hardware-managed storage that can serve repeated accesses with less traffic to lower memory levels; L1 is local to an SM and L2 is shared across SMs.
 - **Shared memory:** explicitly managed, block-scoped on-chip storage; on H100 its capacity shares a physical resource with L1, so it is not an extra serial cache level.
 - **Tensor:** an array of numbers with a shape, data type and device placement.
+- **GPU-resident tensor:** a tensor whose data is stored in GPU memory, independently of whether a kernel is currently using it.
+- **CPU timer:** a host-side clock used to measure elapsed time; GPU completion must be established before stopping it when timing a complete GPU request.
 
-- **Arithmetic intensity:** useful arithmetic operations divided by estimated bytes moved for a declared operation boundary.
+- **Arithmetic intensity:** floating-point operations divided by bytes transferred at a specified memory level. State whether bytes are estimated from the algorithm or measured by a profiler.
 - **Block:** a group of CUDA threads scheduled together on one streaming multiprocessor; a block does not split across SMs.
-- **Compute capability 9.0:** the baseline H100 CUDA architecture contract used by these courses.
+- **Compute capability 9.0:** the H100 hardware feature level and resource limits used by these courses; distinct from the CUDA Toolkit version.
 - **CTA:** cooperative thread array, CUDA's architectural term for a thread block.
 - **CUDA Core:** a general arithmetic execution resource used by CUDA workloads; it is not a synonym for a thread.
-- **CUDA event:** a device-timeline marker used to order work or measure elapsed device time.
+- **CUDA event:** a marker recorded in a CUDA stream to track completion or establish dependencies; timing-enabled events also record timestamps for elapsed-time measurement.
 - **Divergence:** a warp executing different control-flow paths for different active lanes, usually serializing the paths.
 - **Eligible warp:** a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
 - **GPC:** graphics processing cluster, a replicated top-level on-chip processing group that contains TPCs; the enabled count varies by H100 product.
@@ -24,7 +26,7 @@
 - **Local memory:** thread-private CUDA address space normally backed by device memory; register spills can create local-memory traffic.
 - **MIG:** hardware partitioning that exposes isolated GPU instances.
 - **MPS:** NVIDIA service that coordinates work from multiple CUDA processes.
-- **Occupancy:** resident warps relative to the hardware limit; a resource constraint indicator, not a performance score.
+- **Occupancy:** active (resident) warps per SM relative to its maximum supported active warps. Theoretical occupancy is a resource limit; achieved occupancy is measured during execution.
 - **Pinned memory:** page-locked host memory that enables efficient DMA and is required for truly asynchronous host-to-device copies in common CUDA paths.
 - **PTX:** virtual NVIDIA GPU instruction representation that a compatible driver can translate.
 - **Roofline model:** a model that relates attainable work rate to arithmetic intensity, a bandwidth ceiling, and a compute ceiling.
@@ -35,8 +37,8 @@
 - **Tail wave:** a final partially filled scheduling wave that leaves resources idle.
 - **Tensor Core:** specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
 - **TF32:** a Tensor Core compute mode for selected FP32 matrix operations, not a tensor storage dtype.
-- **Thread-block cluster:** a Hopper scheduling hierarchy that co-schedules a bounded group of thread blocks so they can synchronize and use distributed shared memory.
-- **TPC:** texture/processing cluster; in Hopper, a TPC contains two SMs within a GPC.
+- **Thread-block cluster:** a group of thread blocks guaranteed to be co-scheduled on one GPC, supporting cluster synchronization and distributed shared memory on Hopper.
+- **TPC:** texture processing cluster; in Hopper, a TPC contains two SMs within a GPC.
 - **Triton program:** one instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.
 - **Warp:** 32 CUDA threads scheduled as an execution group on current NVIDIA GPUs covered by this course.
 - **DMA:** direct memory access; transfer hardware moves data without CPU instructions copying each byte.

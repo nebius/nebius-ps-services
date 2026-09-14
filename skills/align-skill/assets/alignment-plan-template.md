@@ -17,6 +17,20 @@
 - Optional folders present:
 - Repository conventions:
 
+## Compatibility And Behavior Preservation
+
+- Selected standard/repository policy:
+- Standard-field result and strict frontmatter conformity/extensions:
+- Codex and Claude host checks and unsupported capabilities:
+- npx discovery, copied resources/executable modes and repeat-install evidence:
+- Per-target working-byte baseline and cleanup plan/result:
+- Purpose, actions, outputs and invocation restrictions preserved:
+- Dependencies, hooks, authorization, state, idempotency and recovery preserved:
+- Product targets and worker/coordinator ownership preserved:
+- Edit-to-behavior mapping and regression evidence:
+- Required sibling skills, runtime and explicit setup steps:
+- Unavoidable behavioral conflicts needing a user decision:
+
 ## Required Contract Coverage
 
 - Skills missing `## Help`:

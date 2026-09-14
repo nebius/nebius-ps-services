@@ -38,9 +38,9 @@ A request will become token IDs, model computations and generated tokens. Before
 
 Loading a model turns an artifact bundle into an executable computation. The configuration describes the architecture; the weight shards and index supply its tensors; the tokenizer and chat template determine the input IDs. Generation settings, adapters and quantization metadata can change how the same visible request is processed. Immutable revisions and checksums identify which bundle is being used, while expected tensor shapes, dtypes and special-token IDs check that its parts agree.
 
-The loading path has several stages. Metadata is resolved first, files are downloaded or staged on the CPU if needed, GPU materialization places the weights in device memory, and libraries or kernels perform first-use setup. Readiness follows only after the intended request path can run. Mixing those stages into a steady-state benchmark makes loading and warm-up look like ordinary inference cost.
+The loading path has several stages. Metadata is resolved first, files are downloaded or staged on the CPU if needed, loading places the weights in device memory, and libraries or kernels perform first-use setup. Readiness follows only after the intended request path can run. Mixing those stages into a steady-state benchmark makes loading and warm-up look like ordinary inference cost.
 
-Custom model code adds an execution boundary: `trust_remote_code` permits repository code to run. It is not merely permission to read weight data. License metadata also needs review rather than automatic acceptance. The artifact record distinguishes local, fetched, transformed and compiled components while keeping credentials and private paths out of shared evidence.
+Enabling `trust_remote_code=True` permits Python code supplied by the model repository to execute. It is not merely permission to read weight data. License metadata also needs review rather than automatic acceptance. The artifact record distinguishes local, fetched, transformed and compiled components while keeping credentials and private paths out of shared evidence.
 
 During inference, an embedding table maps each input ID to a vector, and model operations read the loaded parameters. `model.eval()` selects evaluation behavior for modules such as dropout; it does not disable autograd. `torch.inference_mode()` avoids autograd recording for forward-only work. Neither mode makes parameters immutable. Keeping weights fixed is part of the inference workflow: no optimizer update is performed for the request.
 
@@ -67,9 +67,9 @@ Trace one request from text to tokens, prompt processing, iterative decode, deto
 
 **How it works**
 
-Tokenization converts text into token IDs using a vocabulary and its rules. Prefill processes the known prompt and produces attention state plus logits, the scores used to choose the first output token. Decode then processes newly selected tokens one step at a time using the saved state. Detokenization turns output IDs back into text, and stopping decides when generation ends. The first output does not require a separate decode pass after prefill.
+Tokenization converts text into token IDs using a vocabulary and its rules. Prefill processes the known prompt and produces attention state plus logits, the scores used to choose the first output token. Decode then processes newly selected tokens one step at a time using the saved state. Detokenization turns output IDs back into text, and stopping decides when generation ends. The first output does not require a separate decode pass after prefill. TensorRT-LLM also calls prefill the context phase and decode the generation phase.
 
-Inside attention, a learned projection transforms token vectors into queries (Q), keys (K) and values (V). A query describes what a position seeks, keys provide matching information, and values carry the information mixed into the result. The key/value (KV) cache stores prior keys and values. In shape notation, B is batch size, S is sequence length and H is hidden-vector width. These components explain the request workflow before its tensor shapes and timing boundaries are examined.
+Inside attention, a learned projection transforms token vectors into queries (Q), keys (K) and values (V). A query describes what a position seeks, keys provide matching information, and values carry the information mixed into the result. The key/value (KV) cache stores prior keys and values. In shape notation, B is batch size, S is sequence length and H is hidden-vector width. These components explain the request workflow before its tensor shapes and timed operations are examined.
 
 The audit fixes the tokenizer and model. This lesson follows one request through those artifacts so later metrics can be attached to exact phases rather than to a single opaque “inference time.”
 
@@ -144,7 +144,7 @@ Derive KV bytes per token and predict concurrency limits.
 
 The key-value (KV) cache stores attention information from tokens the model has already processed, avoiding repeated key/value computation during generation. Attention heads are parallel components that form queries, keys and values; head dimension is the width of each head's vectors. Multi-head attention (MHA) uses separate key/value heads for its query heads. Grouped-query attention (GQA) shares each key/value head among a group of query heads. Multi-query attention (MQA) shares one key/value head across all query heads.
 
-These are model-architecture choices, not interchangeable cache switches for arbitrary weights. Cache dtype is the numerical representation used to store its values. Resident state is memory currently occupied on the device, and headroom is capacity left for growth or other allocations. KV size therefore depends on the model's actual layers, key/value heads, head dimension, stored-token count and representation—not simply its parameter count.
+These are model-architecture choices, not interchangeable cache switches for arbitrary weights. Cache dtype is the numerical representation used to store its values. Device-resident state is data currently stored in GPU memory, and headroom is capacity left for growth or other allocations. KV size therefore depends on the model's actual layers, key/value heads, head dimension, stored-token count and representation—not simply its parameter count.
 
 Generation and sampling now define what output is requested and when it stops. Cached key/value tensors retain attention state from processed tokens, so their size connects that fixed token contract to the maximum resident workload.
 
@@ -252,7 +252,7 @@ Use user-facing latency and server-capacity metrics with explicit boundaries.
 
 **How it works**
 
-Latency measures how long a request or stage takes. Time to first token (TTFT) measures from a declared request boundary to the first generated token. Inter-token latency (ITL) measures the gaps between successive output tokens; time per output token (TPOT) summarizes the post-first-token generation interval per subsequent token under the declared convention. Throughput measures completed work per unit time, while goodput counts only work meeting the specified service and validity criteria.
+Latency measures how long a request or stage takes. Time to first token (TTFT) measures from a declared request boundary to the first generated token. Inter-token latency (ITL) and time per output token (TPOT) describe generation latency using tool-specific timing and averaging conventions. Distinguish individual token-arrival gaps from an average over one request. Throughput measures completed work per unit time, while goodput counts only work meeting the specified service and validity criteria.
 
 A percentile describes a position in the observed latency distribution: p95 is a boundary at or below which 95 percent of observations lie. Open-loop load schedules arrivals independently of response completion; closed-loop load allows completions to determine when more work is sent. AIPerf is a client-side tool for generating controlled inference requests and reporting service measurements. Network chunks may contain zero, one or several tokens, so chunk timing and true token timing are not automatically the same metric.
 
@@ -262,11 +262,15 @@ The workload matrix defines requests and the engine lifecycle provides a control
 
 TTFT starts at the declared request-submission boundary and ends when the first output token is observed there. It can include queueing, preprocessing, prefill, first-token selection/postprocessing and transport. Prefill already supplies the first-token logits; a separate mandatory decode pass is not part of that sequence.
 
-After the first token, ITL measures each gap between successive token arrivals. For N > 1 output tokens, mean TPOT is `(last_token_time - first_token_time)/(N-1)`: N tokens contain N−1 post-first-token gaps. A single-token output has no such interval. Last-token latency ends at the final content token, while response-completion latency can extend to later protocol or finish metadata. Substituting completion time into TPOT includes that extra overhead unless the timestamps coincide.
+After the first token, individual token-arrival gaps show how evenly output arrives. For N > 1 output tokens, mean TPOT is `(last_token_time - first_token_time)/(N-1)`: N tokens contain N−1 post-first-token gaps. A single-token output has no such interval. Last-token latency ends at the final content token, while response-completion latency can extend to later protocol or finish metadata. Substituting completion time into TPOT includes that extra overhead unless the timestamps coincide.
 
 ### Distinguish tokens from transport events
 
 Server-Sent Events (SSE) carries successive events on a Hypertext Transfer Protocol (HTTP) response. An event can contain metadata, several tokens or no content token, and transport chunks need not match event or token boundaries. First-content timestamps and inter-chunk gaps are therefore proxies unless the client has appropriate per-token accounting. Bundled tokens do not provide enough information to invent individual arrival times.
+
+### Read AIPerf metric names precisely
+
+AIPerf reports `inter_token_latency` as one average per request. Its documented default calculation is `(request_latency - time_to_first_token)/(output_sequence_length - 1)`, requiring at least two output tokens. Check the metric definition for the installed version and configuration, and use its timestamp endpoints rather than silently substituting the last-token timestamp in the conceptual TPOT calculation above. A percentile of these ITL values describes request averages, not every individual token gap. AIPerf's inter-chunk latency (ICL) instead records gaps between content-bearing response chunks. Token counts normalize ITL; they do not reconstruct arrival times for tokens delivered together.
 
 ### Count completed work under a defined load
 
@@ -284,7 +288,7 @@ Tools disagree about ITL/TPOT boundaries, empty chunks, warm-up, and throughput 
 
 **Mental model**
 
-TTFT spans request arrival to first token; inter-token latency measures output gaps; time per output token may use a different aggregation; throughput counts completed requests or tokens; goodput counts work meeting service objectives.
+TTFT measures the wait for first output. Specify whether later latency values are individual gaps or request averages: AIPerf calls its request average ITL and its chunk-gap metric ICL. Throughput counts completed work; goodput counts work meeting service objectives.
 
 ## 8. Attention-cache allocation and reclamation
 
@@ -330,21 +334,21 @@ Compare scheduling policies under mixed prompt and decode work.
 
 **How it works**
 
-Continuous batching updates the group of active requests between model iterations: completed requests leave and new requests can enter instead of waiting for an entire fixed batch to finish. Chunked prefill divides a long prompt into smaller pieces of prompt-processing work that can be scheduled between other work. The two ideas address different scheduling choices and can be combined. Neither means that one autoregressive request generates all of its dependent output tokens at once.
+Continuous batching, called in-flight batching or iteration-level batching in TensorRT-LLM, updates the group of active requests between model iterations: completed requests leave and new requests can enter instead of waiting for an entire fixed batch to finish. Chunked prefill divides a long prompt into smaller pieces of prompt-processing work that can be scheduled between other work. The two ideas address different scheduling choices and can be combined. Neither means that one autoregressive request generates all of its dependent output tokens at once.
 
 A token budget limits the token work admitted to a scheduling step. Admission decides which waiting work can start; backpressure slows or rejects new work when capacity is exhausted; fairness describes how capacity and waiting time are shared. A long prefill may delay other requests even if it is individually efficient. The lesson examines that trade-off while preserving total token work and separating an abstract scheduler model from a real engine.
 
-Paged key/value (KV) makes dynamic admission possible. The scheduler decides which prefill chunks and decode tokens share each model iteration under a token and capacity budget.
+Paged key/value (KV) storage helps allocate and reclaim cache capacity as requests enter and leave. The scheduler decides which prefill chunks and decode tokens share each model iteration under a token and capacity budget.
 
 At the end of a model iteration, the scheduler removes completed requests and decides which waiting requests can join the next active batch. It has a token-work budget and a finite amount of KV space. Continuous batching changes membership between iterations so a short request can leave without forcing every request in a fixed batch to finish first.
 
-Prompt processing and decode compete within that budget. One long prefill can occupy the device while existing requests wait for their next token. Chunked prefill divides the prompt into smaller segments, allowing decode work to be scheduled between them. Smaller chunks can reduce waiting but add scheduling, launch and repeated-boundary costs. They do not remove the prompt tokens or let one request generate dependent output tokens simultaneously.
+Prompt processing and decode compete within that budget. One long prefill can occupy the device while existing requests wait for their next token. Chunked prefill divides the prompt into smaller segments, allowing decode work to be scheduled between them. Smaller chunks can reduce waiting but add scheduling and kernel-launch overhead. They do not remove the prompt tokens or let one request generate dependent output tokens simultaneously.
 
 Admission also needs an overload policy. A bounded queue, rejection or backpressure limits what happens when arrivals exceed capacity. Queue arrival, admission, phase-specific scheduled tokens, active requests, free blocks, preemptions and completion connect that policy to observed waiting.
 
 A scheduling comparison must preserve outputs as well as token counts. A deterministic policy-equivalence check can compare matching greedy responses or their exact text digests, hashes of the returned text bytes. A matching digest is a bounded equality check, not proof of stochastic-distribution or task-quality equivalence. Fresh server restarts and counterbalanced A/B order prevent cache, graph or allocator warmth from consistently favoring one configuration. The campaign guides apply those controls to real serving; a scheduler model alone does not establish engine performance.
 
-Prefill-first scheduling can block decode behind one long prompt; decode-first scheduling can starve new requests. Chunking changes head-of-line delay but adds scheduler, launch, and repeated-boundary cost.
+Prefill-first scheduling can block decode behind one long prompt; decode-first scheduling can starve new requests. Chunking changes head-of-line delay but adds scheduling and kernel-launch overhead.
 
 An overlap scheduler prepares upcoming work on the CPU while already-submitted GPU work runs. Piecewise compilation or graph capture divides model execution into eligible compiled or captured regions and other regions. This partitions the execution graph; chunked prefill partitions prompt-token work. The serving engine must qualify its CUDA Graph capture sizes and its compiled shape ranges or fallback paths separately.
 
@@ -466,7 +470,7 @@ A complete recipe fixes calibration data, excluded layers, metadata, engine supp
 
 Smaller tensors do not guarantee faster requests. Dequantization, calibration, fallback kernels, irregular shapes, or memory-bound phase changes can erase gains; additional capacity may be the primary benefit even when single-request latency is unchanged.
 
-NVIDIA Model Optimizer can produce engine artifacts for supported 8-bit floating-point (FP8), activation-aware weight quantization (AWQ), and GPTQ recipes, but format names alone do not prove H100 kernel dispatch or quality.
+NVIDIA Model Optimizer quantizes models and exports supported representations for deployment frameworks such as TensorRT-LLM. Quantization, export and engine execution are distinct stages. FP8 is a numerical format; activation-aware weight quantization (AWQ) and GPTQ are quantization methods. Supported combinations depend on the selected workflow, and a quantized artifact alone does not prove H100 kernel dispatch or quality.
 
 **Practice labs**
 

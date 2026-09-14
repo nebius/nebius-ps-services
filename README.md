@@ -3,7 +3,7 @@
 Nebius Platform Services: reusable AI/ML deployment building blocks for Nebius AI Cloud.
 
 This repository contains Terraform modules, Helm charts, CLI services, examples,
-GPU engineering courses, and reusable Codex skills. Root-level files should
+GPU engineering courses, and reusable Agent Skills. Root-level files should
 stay focused on repository orientation and cross-project policy.
 Project-specific behavior, release notes,
 and operating instructions belong in the owning project folder.
@@ -17,8 +17,11 @@ and operating instructions belong in the owning project folder.
 | `courses/` | Five practical GPU performance engineering courses. | [course catalog](https://nebius.github.io/nebius-ps-services/courses/), [authoring and validation](courses/README.md) |
 | `platform-infra/` | Reusable Terraform modules and examples for Nebius infrastructure. | [README](platform-infra/README.md), [changelog](platform-infra/CHANGELOG.md) |
 | `helm-charts/` | Reusable Helm charts. | chart-local `README.md` / `CHANGELOG.md` files |
-| `skills/` | Public reusable Codex skills and the local skills installer. | [README](skills/README.md), [changelog](skills/CHANGELOG.md) |
+| `skills/` | Public reusable Agent Skills and the local skills installer. | [README](skills/README.md), [changelog](skills/CHANGELOG.md) |
 | `examples/` | Example deployments and reference configurations. | example-local docs where present |
+
+Codex and Claude marketplace catalogs live at the Git root and point to the
+unchanged `skills/` catalog. See the [installation guide](skills/README.md#native-plugins-and-npx).
 
 ## Common Use Cases
 
@@ -29,7 +32,7 @@ and operating instructions belong in the owning project folder.
 - Generate and deploy customer-facing Nebius configuration with service-local
   tooling.
 - Build and publish reusable service, chart, and image release workflows.
-- Use reusable Codex skills for project alignment, PR workflows, shell/Python
+- Use reusable Agent Skills for project alignment, PR workflows, shell/Python
   quality, Helm, Terraform, Nebius automation, and release helper authoring.
 
 ## Repository Website

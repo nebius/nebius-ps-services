@@ -146,6 +146,65 @@ def markdown_section(value: str, heading: str) -> str:
 
 
 class CheckLocalIdempotencyTest(unittest.TestCase):
+    def test_modified_installed_audit_code_never_executes(self) -> None:
+        marker = Path(self.tmp.name) / "unexpected-execution"
+        state_file = self.codex_home / "task-state/workspace/session/current.md"
+        state_file.parent.mkdir(parents=True)
+        state_file.write_text("preserve existing state\n")
+        state_file.chmod(0o644)
+        for name in ("global_context_state.py", "agent_runtime.py", "task_state_permissions.py"):
+            with self.subTest(name=name):
+                path = self.codex_home / "hooks" / name
+                previous = path.read_bytes()
+                path.write_text(f"open({str(marker)!r}, 'w').close()\n")
+                before = {str(p.relative_to(self.codex_home)): (p.read_bytes(), p.stat().st_mode)
+                          for p in self.codex_home.rglob('*') if p.is_file()}
+                result = self.run_check()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("nested task-state permissions or types are unsafe", result.stdout)
+                self.assertFalse(marker.exists())
+                after = {str(p.relative_to(self.codex_home)): (p.read_bytes(), p.stat().st_mode)
+                         for p in self.codex_home.rglob('*') if p.is_file()}
+                self.assertEqual(before, after)
+                path.write_bytes(previous)
+
+    def test_hook_registration_comparison_uses_canonical_projection(self) -> None:
+        spec = importlib.util.spec_from_file_location("config_codex_check", SCRIPT)
+        assert spec and spec.loader
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        project_hook_entries = checker._load_skill_support(
+            "projector", str(SCRIPT), "config-codex/scripts/check-local-idempotency.py",
+            source_only=True,
+        )["hook_runtime"].project_hook_entries
+        original = json.loads((ASSETS / "hooks.json.template").read_text())
+        projected = project_hook_entries(original["hooks"], self.codex_home, "codex")
+        cases = [("direct", original["hooks"], True), ("projected", projected, True)]
+        extras = json.loads(json.dumps(projected))
+        extras["SessionStart"].extend([{}, {"hooks": [{"type": "command", "command": "true"}]}])
+        cases.append(("unrelated extras", extras, True))
+        for mutation in ("command", "path", "matcher", "missing"):
+            changed = json.loads(json.dumps(projected))
+            entry = changed["SessionStart"][0]
+            if mutation == "command":
+                entry["hooks"][0]["command"] += " --unexpected"
+            elif mutation == "path":
+                entry["hooks"][0]["command"] = entry["hooks"][0]["command"].replace(
+                    str(self.codex_home), "/unrelated-home"
+                )
+            elif mutation == "matcher":
+                entry["matcher"] = "unrelated"
+            else:
+                changed["SessionStart"] = []
+            cases.append((mutation, changed, False))
+        for label, hooks, valid in cases:
+            with self.subTest(label=label):
+                (self.codex_home / "hooks.json").write_text(json.dumps({"hooks": hooks}))
+                failures: list[str] = []
+                with mock.patch("builtins.print"):
+                    checker.check_hooks_json(self.codex_home, failures)
+                self.assertEqual(bool(failures), not valid, failures)
+
     def test_custom_agent_templates_have_aligned_required_metadata(self) -> None:
         for name, description in EXPECTED_AGENT_DESCRIPTIONS.items():
             with self.subTest(name=name):
@@ -453,6 +512,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         for source in (ASSETS / "hooks").glob("*.template"):
             target = self.codex_home / "hooks" / source.name.removesuffix(".template")
             copy_template(source, target)
+        for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+            copy_template(SKILL_ROOT.parent / "global-context-management/scripts" / name,
+                          self.codex_home / "hooks" / name)
         for source in (ASSETS / "agents").glob("*.template"):
             target = self.codex_home / "agents" / source.name.removesuffix(".template")
             copy_template(source, target)

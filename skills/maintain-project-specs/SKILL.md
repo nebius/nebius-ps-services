@@ -7,7 +7,7 @@ description: "Maintain canonical requirements and design when direct root-user i
 
 ## Help
 
-For `$maintain-project-specs --help` or `$maintain-project-specs -h`, return
+For `$maintain-project-specs --help` or `$maintain-project-specs -h` (including native Claude forms), return
 concise help and stop before any workflow step. State the purpose and
 invocation policy. Show exact usage for every public action. Describe each
 public action, positional argument, and flag in one concise line, including
@@ -18,6 +18,18 @@ After the selected `SKILL.md` is loaded, help is report-only: do not call any
 additional tools, inspect project state, or modify files, private state, Git,
 or external systems. Never expose private helper actions or flags or treat
 help as workflow authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for selected-home paths, native identity and required runtime setup.
+
+Use `$maintain-project-specs` in Codex, `/maintain-project-specs` in Claude Code, or
+`/skills:maintain-project-specs` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -209,7 +221,7 @@ recover  --project-root <path>
   neutral/advisory behavior; they never fail closed on project lifecycle
   grounds.
 - Hook source changes do not prove activation. Verify source, installed parity
-  in a disposable Codex home, fresh-process loading, and neutral hook behavior
+  in disposable native homes for both hosts, fresh-process loading, and neutral hook behavior
   separately.
 
 ## Private Retention

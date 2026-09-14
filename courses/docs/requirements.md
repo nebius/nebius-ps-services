@@ -72,6 +72,9 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 - AC-007: Keep only a short estimated-guided-hours label in the banner and
   concise course metadata. Do not expose time formulas, minute allocations,
   duration-calculation tables, or a guided-learning-plan section.
+- AC-013: Catalog and course README sections or instructions intended for
+  course maintainers carry a concise audience label. Keep learner setup,
+  lab execution and shared guidance distinct from maintainer-only work.
 
 #### Negative Criteria
 
@@ -572,6 +575,121 @@ Exercise stale and missing catalog output, metadata changes, all navigation edge
 Navigate from the repository welcome page through the catalog and between all five courses using pointer and keyboard. Assess small-screen layout and readable attribution independently of static checks.
 
 <!-- /REQUIREMENT: REQ-013 -->
+
+<!-- REQUIREMENT: REQ-014 status=active priority=P0 type=quality -->
+### REQ-014: Authoritative technical terminology throughout the catalog
+
+#### User Story
+
+Learners need terminology that transfers directly from every lesson and lab to
+NVIDIA documentation and the official documentation of the frameworks they use.
+
+#### Acceptance Criteria
+
+- AC-001: Review all lessons and all lab guides in the five courses against the
+  relevant current NVIDIA references. Correct invented, ambiguous or inaccurate
+  technical wording in context, including connected diagrams, glossaries and
+  lab descriptions.
+- AC-002: Use NVIDIA names and meanings for CUDA execution, memory, timing,
+  architecture, profiling, communication and NVIDIA libraries. Preserve exact
+  framework/API names and use their owning official documentation where NVIDIA
+  does not define the concept.
+- AC-003: Define technical terms before relying on them. Clearly identify
+  descriptive measurement labels, analogies and synthetic models as such;
+  ordinary explanatory prose must not imply an undocumented GPU mechanism.
+- AC-004: Explain CPU timers, CUDA events and synchronization explicitly when
+  describing measured operations. Distinguish host submission, device execution,
+  data transfer and result completion, and distinguish memory residency from
+  thread-block residency.
+- AC-005: Preserve learning depth, existing lesson/lab identities, executable
+  behavior and evidence limits. Rebuild all HTML from canonical sources and
+  verify complete narrative/source parity and terminology consistency.
+
+#### Negative Criteria
+
+- NC-001: Do not perform blind global substitutions, copy vendor prose, invent
+  acronym expansions, rename API/result identifiers merely to edit prose, or
+  imply NVIDIA ownership of framework-specific terminology.
+- NC-002: This review does not authorize package upgrades, live GPU jobs,
+  infrastructure changes or external publication, and does not establish runtime
+  performance or independent expert approval.
+
+#### Validation Method
+
+Read every lesson and guide semantically, compare technical definitions with
+specific official sources, and inspect changed prose and diagram labels together.
+
+#### Test Method
+
+Run catalog and standalone validators, generated-source parity, existing
+editorial/source checks and permitted visual inspection of changed artifacts.
+
+#### Evaluation Method
+
+A learner can identify the documented concept and explain the actual operations
+performed and measured without learning an invented technical vocabulary.
+
+<!-- /REQUIREMENT: REQ-014 -->
+
+<!-- REQUIREMENT: REQ-015 status=satisfied priority=P1 type=feature -->
+### REQ-015: Incremental local course sync to a Slurm login node
+
+#### User Story
+
+Learners with a local Git clone need one command to copy and refresh all course
+labs and their supporting files in an easily navigable remote home directory.
+
+#### Acceptance Criteria
+
+- AC-001: Run `sync-labs.sh` locally with a DNS hostname, IPv4/IPv6 address or
+  SSH alias. Bare targets select `root`; an explicit `user@target` selects that
+  user. The selected account takes precedence over SSH configuration `User`.
+  SSH owns name resolution and authentication; port and identity overrides are
+  available. Preflight and transfer use the same selected account.
+- AC-002: Discover course directories by their metadata and labs directory;
+  preserve their source folder names and full supporting source packages plus
+  the catalog under remote `~/courses/`. A destination option selects another
+  safe direct child of remote home. Invocation works from any working directory.
+- AC-003: Transfer current tracked and non-ignored untracked working files,
+  including uncommitted edits. Exclude generated environments and outputs using
+  Git ignore rules. Size/time checks skip unchanged contents in one rsync
+  transfer across all courses; do not hash every file by default.
+- AC-004: Local source wins for matching files. Preserve remote-only files,
+  including results and locally deleted source counterparts. Dry-run does not
+  modify the remote destination, including on first use.
+- AC-005: Preserve runtime relative paths, executable permissions and timestamps.
+  Validate inputs and dependencies, report failures nonzero, clean temporary
+  state and print clear summaries and course-root navigation examples.
+- AC-006: Repeating a completed sync with unchanged local and remote state
+  transfers no file contents and preserves destination bytes, permissions and
+  modification times. After a partial transfer, rerunning converges to the
+  selected local sources while retaining remote-only files.
+
+#### Negative Criteria
+
+- NC-001: Do not delete destination-only files, weaken SSH host verification,
+  copy Git internals, install dependencies, provision infrastructure or submit
+  Slurm jobs. Do not introduce a sync database or compatibility shims.
+- NC-002: Local transfer tests do not establish live cluster or GPU readiness.
+
+#### Validation Method
+
+Check Bash syntax, ShellCheck, command help, source/package selection, paired
+spec validity and README examples.
+
+#### Test Method
+
+Use disposable Git repositories, real rsync and a controlled SSH transport for
+initial, unchanged, changed, excluded and interrupted transfers; compare settled
+destination snapshots across repeats and verify metadata-only convergence, target
+forms, quoting, source discovery, destination guards and dry-run preservation.
+
+#### Evaluation Method
+
+A learner runs one local command and navigates to the corresponding remote
+course root with every helper needed by the existing lab and Slurm commands.
+
+<!-- /REQUIREMENT: REQ-015 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

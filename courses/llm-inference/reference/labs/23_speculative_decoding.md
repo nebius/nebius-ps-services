@@ -4,7 +4,7 @@ Speculative decoding proposes several tokens with a cheaper draft and asks the t
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 13 for proposals, greedy verification, rejection recovery and bonus tokens. The synthetic first-order target and complete timing boundary are explained below.
+**Theory preparation:** Read Lesson 13 for proposals, greedy verification, rejection recovery and bonus tokens. The synthetic first-order target and operations included in the complete timing are explained below.
 
 Use one H100 in the mechanics environment. No external target/draft model is required. The example is a first-order synthetic greedy process, not a transformer engine or proof of stochastic speculative-distribution equivalence.
 

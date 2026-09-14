@@ -1,13 +1,14 @@
 ---
 name: sdlc-align-specs
 description: "Use only as part of the Agentic SDLC workflow; when explicitly requested, produce an advisory spec-consistency report that never gates phases, commit, or completion. Use align for required changed-surface alignment."
+user-invocable: false
 ---
 
 # Align Specs
 
 ## Help
 
-For `$sdlc-align-specs --help` or `$sdlc-align-specs -h`, return concise help and stop before
+For `$sdlc-align-specs --help` or `$sdlc-align-specs -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,27 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for the selected agent home, native identity and required runtime setup.
+
+Use `$sdlc-align-specs` in Codex, `/sdlc-align-specs` in Claude Code, or
+`/skills:sdlc-align-specs` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
+
+## Coordinator Invocation Boundary
+
+This skill requires verified workflow context from the active Agentic SDLC
+coordinator. Before acting, verify the selected project, active run, phase and
+coordinator ownership through the workflow's existing state helpers. Without
+that evidence, return without mutation; a skill mention or automatic selection
+is not workflow authorization. In Claude Code this skill is hidden from the
+public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
@@ -130,7 +152,7 @@ implementation, documentation, tests, and evidence tell one consistent story.
   migration, and validation owner for both canonical specs. Agentic SDLC
   requirement and design skills are phase adapters over that contract. Explicit
   project-instruction mutation stays outside the automatic SDLC workflow.
-- Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
+- Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
 - Work on one feature at a time unless the user explicitly asks for a different SDLC shape.

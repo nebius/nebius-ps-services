@@ -1,10 +1,100 @@
 # Changelog
 
-All notable changes to the reusable Codex skills are tracked here.
+All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
 ### Fixed
+
+- Replaced shared-runtime ancestor searches with declared, verified support
+  bundles across scripts and hooks. Validate the loader and transitive source
+  before execution, reject unsafe paths and conflicting module caches, and
+  distribute the complete support set through local and native installations.
+- Made Codex permission preflight inspect target state through reviewed source
+  without executing installed helpers. Preserved audit results and explicit
+  permission repair. Required successful regular-file digests for SDLC payload
+  parity so matching read failures cannot pass.
+- Clarified independent Codex and Claude installation/use. Existing per-agent
+  locks, private state and within-agent workflow coordination remain intact;
+  cross-agent execution and handoff are outside the supported contract.
+
+- Corrected SDLC hook payload parity checks to use each file's authoritative
+  source root, including shared runtime files and the lifecycle arbiter.
+  Added both-host regression coverage with a changed-payload negative control.
+- Made the Codex configuration checker compare hook registrations through the
+  canonical source projection, accepting direct template commands and installed
+  runtime wrappers while retaining complete-entry matching and extra hooks.
+- Made malformed independent quality-grade assertion collections report
+  `UNAVAILABLE` instead of aborting skill evaluation; well-formed incomplete
+  grades still report `FAIL`.
+
+- Corrected Task Implementer’s sequential and recovery worker fallback to use
+  the executing agent, its private home and a fresh session identity. Claude
+  uses native print mode without a permission override; existing exact-start,
+  immutable-result and recovery guards remain enforced. Private launch flags
+  now use host-neutral names without aliases.
+
+- Added the native Task Implementer and SDLC harness regression suites to
+  skills CI, covering host selection, cross-host resume rejection, verifier
+  fixtures and live-procedure routing. Corrected remaining shared-workflow
+  README paths and session wording to use the selected agent.
+
+- Aligned all 71 source skills for Codex and Claude execution, including native
+  Help forms, invocation boundaries, shared private-state guidance, and 213 new
+  host-routing eval cases. Preserved existing metadata, public workflows,
+  resources and product-specific configuration behavior. Moved the detailed
+  SDLC live-test procedure into an explicitly required conditional reference.
+- Added Claude-native SDLC worker dispatch, verification fixtures and isolated
+  workflow test homes. Preserved existing Codex state formats; cross-host trial
+  reuse is rejected. Private helper interfaces now use `--agent-home` and
+  `--agent-binary` without old flag aliases.
+- Added session-bound Claude instruction discovery for the existing project
+  `AGENTS.md` transaction, with native imports, source-digest checks, private
+  local instruction context and unchanged approval/recovery ownership.
+- Rejected writable hook runtime ancestry, linked or writable cached payloads,
+  and writable continuation counters. Added negative tests for both agents and
+  repaired stale SDLC verifier ownership assertions.
+
+- Made align-skill distinguish Agent Skills fields from repository and native
+  host rules using safe typed YAML. Preserve each skill's working behavior and
+  native controls, disclose strict-format exceptions, and verify actual pinned
+  npx discovery, resource/executable parity and repeat installation for both
+  hosts in disposable locations. Added offline regressions and a separate CI
+  installation check; PyYAML is now an explicit validator dependency. Resource
+  validation handles Markdown titles, URLs, extensionless files and malformed
+  paths without aborting the catalog. Native evals resolve task-owned temporary
+  root aliases before containment checks. YAML validation preserves merge
+  overrides and sequence precedence while rejecting duplicate explicit keys;
+  the SDLC catalog-test fixture includes the validator's shared dependencies
+  and detects setup errors instead of treating them as expected rejections.
+
+- Fixed false `STATIC_PASS` results in `config-claude` for regular files used as
+  private storage roots and malformed role frontmatter delimiters. Added
+  regressions for both invalid states and preserved read-only inspection.
+
+- Preserved existing operator delegation policy during hook reinstalls for both
+  agents, so an explicit opt-out is not replaced by the bundled example.
+
+- Fixed the default combined install rejecting existing managed hook
+  registrations during upgrades to the shared host runtime. Both preflight and
+  installation now reconcile those entries automatically; unchanged reruns
+  create no additional backups. Custom handler and entry options remain
+  protected, with both-agent upgrade and idempotency regression coverage.
+
+- Aligned cross-agent installation and execution: standalone helpers resolve
+  trusted installed runtime support, Worktree shares Commit's selected-agent
+  lock, and initial SDLC project coordinators can invoke internal phase skills.
+  Added regression checks for both hosts, unsafe runtime imports, and missing
+  dependencies. Skill evals reject symlinked/special payloads and require actual
+  skill content in Codex read output before confirming activation.
+
+- Improved `nebius-audit-log` with mandatory tenant-aware caller verification,
+  first-page audit access proof, explicit investigation selectors, verified
+  region discovery, offline previews, typed safe errors and bounded execution.
+  Added partial/resumable reporting, status/correlation evidence and privacy
+  regression tests. Removed implicit actor/region fallbacks, unbounded `--all`,
+  raw payload passthrough and raw-only formats; updated docs and evaluations.
+  Reject abbreviated flags so removed options cannot resolve to other flags.
 
 - Closed a tracking gap in the `create-learning-course` HTML checker:
   `attributionsrc` is rejected alongside hyperlink `ping`, including empty and
@@ -401,6 +491,19 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added `config-claude` for native personal setup, patch-only reconciliation,
+  private missing-settings recovery, restricted roles and selected MCP
+  integrations. Reused shared hook ownership and added both-host metadata,
+  deterministic tests and evaluation cases.
+- Added recursive, override-aware Claude user-role candidates to shared
+  context hooks, preserving Codex behavior and separating tool restrictions
+  from inherited hook effects.
+
+- Added Codex and Claude native plugin manifests with Git-root marketplaces,
+  retaining the flat 70-skill catalog; documented native CLI and npx routes.
+- Added shared host runtime, isolated cross-agent installation tests, and a
+  native Codex/Claude trigger and baseline-quality evaluation runner.
+
 - Added the implicitly invokable `ai-agent-design` skill for provider-neutral
   production agent-subsystem design. It classifies deterministic code, direct
   calls, deterministic AI workflows, and agents; applies bounded single- and
@@ -727,6 +830,16 @@ All notable changes to the reusable Codex skills are tracked here.
   byte-for-byte and PID-stable.
 
 ### Changed
+
+- Default local installation now installs skills, all reviewed hooks and
+  registrations. `--agent claude` selects Claude homes/settings; Codex remains
+  the default. Preserved ownership, backups, removal and explicit hook-only
+  modes, with strict dependency/configuration preflight and Python 3.11 minimum.
+- Converted `align-skill` to a portable core with Codex/Claude validation
+  profiles. Retained OpenAI metadata, intentional `config-codex` behavior and
+  Task Implementer/SDLC authorization, commit, state and recovery contracts.
+- Added Claude invocation metadata and native hook/worker identity adapters;
+  retained one bounded Stop arbiter and preserved unrelated Claude settings.
 
 - Made `python-project` uv-first for new scaffolds while preserving existing
   package managers unless migration is requested. The skill now treats

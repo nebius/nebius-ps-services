@@ -7,7 +7,46 @@ from nebius_cxcli.soperator_jail_mounts import (
     jail_persistent_mounts_from_paths,
     jail_rootfs_active_source,
     normalize_jail_persistent_mounts,
+    validate_retained_home_layout,
 )
+
+
+def test_retained_home_backing_is_unchanged_across_consecutive_slot_switches():
+    from nebius_cxcli.soperator_populate_jail import switch_active_passive_jail_rootfs_values
+
+    values = apply_jail_persistent_mount_values({}, target_ref="cluster", layout="managed")
+    mounts = values["jailPersistentMounts"]
+    for _ in range(2):
+        values = switch_active_passive_jail_rootfs_values(values)
+        validate_retained_home_layout(values)
+        assert values["jailPersistentMounts"] == mounts
+    assert values["jailRootfs"]["activeSlot"] == "slot-a"
+
+
+@pytest.mark.parametrize("change", ["missing", "wrong-backing", "overlap", "duplicate"])
+def test_saved_retained_home_layout_fails_without_repair(change):
+    import copy
+
+    values = apply_jail_persistent_mount_values({}, target_ref="cluster", layout="managed")
+    mounts = values["jailPersistentMounts"]
+    home = next(row for row in mounts if row["mountPath"] == "/opt/soperator-home")
+    if change == "missing":
+        mounts.remove(home)
+    elif change == "wrong-backing":
+        home["localPath"] = "/mnt/jail-store/opt/soperator-home"
+    elif change == "overlap":
+        mounts.append(
+            {
+                "mountPath": "/opt/soperator-home/nested",
+                "localPath": "/mnt/jail-store/shared/nested",
+            }
+        )
+    else:
+        mounts.append(copy.deepcopy(home))
+    before = copy.deepcopy(values)
+    with pytest.raises(ValueError):
+        validate_retained_home_layout(values)
+    assert values == before
 
 
 def test_apply_external_persistent_mount_values_adopts_legacy_paths_in_place() -> None:
@@ -25,6 +64,7 @@ def test_apply_external_persistent_mount_values_adopts_legacy_paths_in_place() -
         {"mountPath": "/data", "localPath": "/mnt/jail/data"},
         {"mountPath": "/scripts", "localPath": "/mnt/jail/scripts"},
         {"mountPath": "/models", "localPath": "/mnt/jail/models"},
+        {"mountPath": "/opt/soperator-home", "localPath": "/mnt/jail/opt/soperator-home"},
     ]
     volume_sources = {item["name"]: item for item in values["volumeSources"]}
     assert set(volume_sources) == {
@@ -155,6 +195,10 @@ def test_apply_managed_persistent_mount_values_uses_same_store_home() -> None:
         {"mountPath": "/data", "localPath": "/mnt/jail-store/shared/data"},
         {"mountPath": "/scripts", "localPath": "/mnt/jail-store/shared/scripts"},
         {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
+        {
+            "mountPath": "/opt/soperator-home",
+            "localPath": "/mnt/jail-store/shared/opt/soperator-home",
+        },
     ]
     assert values["volume"]["jail"]["localPath"] == "/mnt/jail-store"
 
@@ -270,6 +314,7 @@ def test_apply_managed_first_adoption_submounts_legacy_customer_paths_without_co
         {"mountPath": "/data", "localPath": "/mnt/jail-store/data"},
         {"mountPath": "/scripts", "localPath": "/mnt/jail-store/scripts"},
         {"mountPath": "/models", "localPath": "/mnt/jail-store/models"},
+        {"mountPath": "/opt/soperator-home", "localPath": "/mnt/jail-store/opt/soperator-home"},
     ]
     assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
     assert values["jailRootfs"]["adoption"]["rollbackSource"] == "legacy-rootfs"
@@ -293,6 +338,7 @@ def test_existing_external_home_submount_prevents_duplicate_default_home() -> No
         {"mountPath": "/data", "localPath": "/mnt/jail/data"},
         {"mountPath": "/scripts", "localPath": "/mnt/jail/scripts"},
         {"mountPath": "/models", "localPath": "/mnt/jail/models"},
+        {"mountPath": "/opt/soperator-home", "localPath": "/mnt/jail/opt/soperator-home"},
     ]
 
 
@@ -324,6 +370,10 @@ def test_persistent_mount_validation_rejects_bad_paths() -> None:
             [
                 {"mountPath": "/data", "localPath": "/mnt/jail/data"},
                 {"mountPath": "/models", "localPath": "/mnt/jail/data/models"},
+                {
+                    "mountPath": "/opt/soperator-home",
+                    "localPath": "/mnt/jail/data/opt/soperator-home",
+                },
             ],
             include_home=False,
         )

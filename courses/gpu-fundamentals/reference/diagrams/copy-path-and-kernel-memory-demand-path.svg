@@ -48,7 +48,7 @@
 <line x1="830" y1="352" x2="875" y2="352"/>
 </g>
 <rect x="175" y="475" width="850" height="80" rx="12" fill="#fff" stroke="#dbe5e1"/>
-<text x="600" y="507" text-anchor="middle" font-weight="700">Reuse changes traffic at a named boundary</text>
+<text x="600" y="507" text-anchor="middle" font-weight="700">Reuse changes traffic at each memory level</text>
 <text x="600" y="535" text-anchor="middle" class="diagram-label">an L2 hit avoids HBM · a shared tile avoids repeated L2/HBM demand · a register value avoids repeated loads</text>
 <text x="600" y="605" text-anchor="middle" fill="#52626b">Local memory from register spills is an address space backed by device memory, not on-chip “local storage.”</text>
 </svg>

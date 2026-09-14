@@ -10,7 +10,115 @@ import re
 import stat
 import sys
 
-from global_context_state import (
+
+
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+_load_skill_support('global-context', __file__, ('global-context-management/assets/user_prompt_context.py.template', 'config-codex/assets/hooks/user_prompt_context.py.template'))
+
+from agent_runtime import agent_name, claude_read_only_roles  # noqa: E402 — verified bootstrap precedes runtime imports
+
+from global_context_state import (  # noqa: E402 — verified bootstrap precedes runtime imports
     TaskStateError,
     codex_home,
     prepare_state_file,
@@ -291,7 +399,8 @@ def truthy(value: object, default: bool = False) -> bool:
 
 
 def delegation_policy(home: Path) -> dict:
-    return read_json_file(home / "hooks" / "global_context_policy.json")
+    override = home / "hooks" / "global_context_policy.json"
+    return read_json_file(override if override.exists() else Path(__file__).with_name("global_context_policy.json"))
 
 
 def auto_subagents_enabled(policy: dict) -> bool:
@@ -335,7 +444,12 @@ def agent_config_path(home: Path, name: str, spec: dict) -> Path:
     return home / "agents" / f"{name}.toml"
 
 
-def configured_read_only_agents(home: Path) -> list[dict[str, str]]:
+def configured_read_only_agents(home: Path, cwd: Path | None = None) -> list[dict[str, str]]:
+    if agent_name() == "claude":
+        agents = claude_read_only_roles(home, cwd)
+        if not any(truthy(os.environ.get(key)) for key in ("CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS", "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS")):
+            agents.append({"name": "Explore", "description": "Native exploration candidate; verify effective tools and overrides"})
+        return agents
     config = read_toml_file(home / "config.toml")
     agents_table = config.get("agents", {})
     if not isinstance(agents_table, dict):
@@ -399,12 +513,12 @@ def format_agent_names(names: list[str]) -> str:
     return ", ".join(f"`{name}`" for name in names)
 
 
-def subagent_context(home: Path) -> str:
+def subagent_context(home: Path, cwd: Path | None = None) -> str:
     policy = delegation_policy(home)
     if not auto_subagents_enabled(policy):
         return ""
 
-    agents = configured_read_only_agents(home)
+    agents = configured_read_only_agents(home, cwd)
     if not agents:
         return ""
 
@@ -414,11 +528,11 @@ def subagent_context(home: Path) -> str:
     lines = [
         "",
         (
-            "Local policy asks the main Codex agent to dynamically spawn bounded "
+            "Local policy asks the main agent to dynamically spawn bounded "
             "read-only helpers when useful; do not wait for "
             "another user prompt."
         ),
-        "Available read-only roles:",
+        "Read-only role candidates (verify exposed tools and local overrides before spawning):",
     ]
     for agent in agents:
         name = agent["name"]
@@ -444,6 +558,13 @@ def subagent_context(home: Path) -> str:
     lines.append(
         "Choose the smallest useful set of targeted roles; do not spawn every role by default."
     )
+    if agent_name() == "claude":
+        lines.append(
+            "Verify the effective native definition and tool allowlist before delegation: "
+            "CLI and managed roles can override these user candidates. Parent permission "
+            "modes can override subagent permissionMode; a read-only label is not enforcement. "
+            "Inherited hooks may maintain private task state."
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -500,7 +621,7 @@ and active instructions permit it.
 Keep current.md summarized; replace stale details instead of appending logs.
 This hook does not route SDLC, select workflow skills, create run state, or
 inject large documents.
-{subagent_context(home)}"""
+{subagent_context(home, Path(str(payload.get('cwd') or root)))}"""
 
     print(
         json.dumps(

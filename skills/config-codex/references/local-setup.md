@@ -588,3 +588,13 @@ the exact role.
 If the explicit probe does not see subagent controls but `tool_search` is
 available, the agent should search for multi-agent/subagent tools before
 reporting delegation unavailable.
+
+## Shared Host Runtime Dependency
+
+Copy `agent_runtime.py` and `hook_runtime.py` from the installed or source
+`global-context-management/scripts/` directory beside the hook payloads.
+The local installer performs this automatically from the selected source.
+Use the shared runtime when configuring hooks; do not invent independent
+Claude and Codex home resolvers. Source templates remain Codex configuration
+assets; the installer and native manifests bind the selected runtime host.
+Existing Codex configuration reconciliation continues to preserve user settings.

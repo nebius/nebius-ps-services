@@ -38,4 +38,4 @@ Connection failures require readiness and server-log inspection. Empty or failed
 
 ## Takeaways and next step
 
-Client measurements need declared arrival/load and output semantics. Use Lab 15 for streaming arrival observations and AIPerf for token-aware metrics, then repeat accepted comparisons across at least three independent engine trials.
+Client measurements need declared arrival/load and output semantics. Use Lab 15 for streaming arrival observations and AIPerf with Lesson 7's metric definitions, then repeat accepted comparisons across at least three independent engine trials.

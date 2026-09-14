@@ -18,21 +18,15 @@ from unittest import mock
 
 
 HOOK_DIR = Path(__file__).resolve().parents[1]
-if str(HOOK_DIR) not in sys.path:
-    sys.path.insert(0, str(HOOK_DIR))
-import prompt_session_storage as storage  # noqa: E402
-
-STATE_PATH = HOOK_DIR / "prompt_session_state.py"
-SPEC = importlib.util.spec_from_file_location("prompt_session_state", STATE_PATH)
-assert SPEC and SPEC.loader
-state = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(state)
 SUBMIT_SPEC = importlib.util.spec_from_file_location(
     "prompt_session_intake_hook", HOOK_DIR / "prompt_session_intake.py"
 )
 assert SUBMIT_SPEC and SUBMIT_SPEC.loader
 submit_hook = importlib.util.module_from_spec(SUBMIT_SPEC)
 SUBMIT_SPEC.loader.exec_module(submit_hook)
+# Use the same verified modules as the production entrypoint.
+storage = sys.modules["prompt_session_storage"]
+state = sys.modules["prompt_session_state"]
 ARBITER_SPEC = importlib.util.spec_from_file_location(
     "prompt_session_stop_arbiter", HOOK_DIR / "stop_lifecycle_arbiter.py"
 )

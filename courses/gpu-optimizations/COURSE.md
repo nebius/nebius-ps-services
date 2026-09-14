@@ -38,13 +38,13 @@ Read-only nvidia-smi and NVIDIA Data Center GPU Manager (DCGM) observations desc
 
 ### Execution and dependencies
 
-GPU Fundamentals supplied execution, memory, timing, and roofline models. Optimization begins by turning those models into a controlled experiment whose inputs, outputs, and completion boundary remain fixed.
+GPU Fundamentals supplied execution, memory, timing, and roofline models. Optimization begins by turning those models into a controlled experiment whose inputs, outputs and timed operations remain fixed.
 
 An optimization changes one part of the path from an input to a usable result. That path can include host preparation, data transfer, launches, GPU kernels, communication and output handling. A stage delays the result when later required work must wait for it. A stage that overlaps independent work may consume resources without adding its full duration to completion time.
 
 The comparison becomes meaningful only when the baseline and candidate perform equivalent work. Shapes, dtypes, seeds, sequence lengths, batch semantics and output tolerances define that work. Warm-up, compilation state, repetitions and environment define the conditions under which it runs. Repeated samples show normal variation; the best sample alone can hide it.
 
-The first explanation to test should connect a resource to an observed delay. Arithmetic demand can limit compute; repeated transfers can limit data movement; slow submission can leave the device waiting; communication or input preparation can delay dependent work. These delays fall into compute, memory/data movement, host/launch, communication, or input/storage limits. Memory capacity answers whether the workload fits at all. Divergence, layout, fragmentation and imbalance describe mechanisms that can produce these constraints, rather than interchangeable names for a bottleneck.
+The first explanation to test should connect a resource to an observed delay. Arithmetic demand can limit compute; repeated transfers can limit data movement; slow submission can leave the device waiting; communication or input preparation can delay dependent work. For diagnosis, this course groups these delays into compute, memory/data movement, host/launch, communication, or input/storage limits. This is a teaching organization, not a set of NVIDIA profiler metric names. Memory capacity answers whether the workload fits at all. Divergence, layout, fragmentation and imbalance describe mechanisms that can produce these constraints, rather than interchangeable names for a bottleneck.
 
 A disconfirming control is a comparison designed to show that an explanation could be wrong. If input preparation appears to starve the GPU, repeat equivalent device work with inputs already resident on it. If the idle gaps remain, input preparation alone does not explain them. The control narrows the cause; it does not replace the full application measurement.
 
@@ -60,7 +60,7 @@ Assume a request spends 6 milliseconds preparing data on the CPU and 4 milliseco
 
 **Practice labs**
 
-- [Lab 01: Choose a valid GPU timing boundary](reference/labs/01_timing_basics.md)
+- [Lab 01: Compare CPU timers and CUDA events](reference/labs/01_timing_basics.md)
 
 **Mental model**
 
@@ -74,11 +74,11 @@ Choose CUDA events, synchronized wall time, or profiler timelines for the questi
 
 **How it works**
 
-GPU submission is asynchronous: a CPU call can finish after requesting work but before the GPU completes it. Wall-clock timing measures elapsed real time between host timestamps. CUDA-event timing measures the interval between markers reached on the device, which can include dependencies, idle gaps and other effects inside that interval; it is not simply a sum of active kernel durations. Synchronization makes the required completion boundary explicit.
+GPU submission is asynchronous: a CPU call can finish after requesting work but before the GPU completes it. Wall-clock timing measures elapsed real time between host timestamps. CUDA-event timing measures the interval between markers reached on the device, which can include dependencies, idle gaps and other effects inside that interval; it is not simply a sum of active kernel durations. Synchronization lets the caller wait for the required GPU work before reading its result or stopping a CPU timer.
 
-Warm-up runs prepare caches, compilation and library choices before steady-state measurement. Lazy initialization defers setup until first use; autotuning tries candidate implementations to choose one. Repeated samples expose variation: the median is the middle ordered value, or the average of the two middle values for an even sample count. A percentile such as p95 marks a value at or below which approximately 95 percent of observations fall. A short isolated kernel and a complete application need different timing boundaries, even when both report milliseconds.
+Warm-up runs prepare caches, compilation and library choices before steady-state measurement. Lazy initialization defers setup until first use; autotuning tries candidate implementations to choose one. Repeated samples expose variation: the median is the middle ordered value, or the average of the two middle values for an even sample count. A percentile such as p95 marks a value at or below which approximately 95 percent of observations fall. A short isolated kernel and a complete application include different operations in their measurements, even when both report milliseconds.
 
-The experiment contract names the completion boundary. This lesson chooses a clock and synchronization placement that actually measures that boundary.
+First identify the operations to measure and where their result is needed. Then choose a timer and synchronization that include completion of those operations.
 
 A GPU operation has two relevant moments: the CPU submits it, and the device finishes the required work. A host timer stopped at the first moment measures submission. To measure a usable result, the stopping point must include the second moment and any other dependencies in the request.
 
@@ -88,16 +88,16 @@ For an end-to-end iteration, a CPU clock surrounds the full request and stops af
 
 Reading a CUDA scalar with `.item()` is a small operation with a significant ordering effect: its value must reach the CPU before the call can return. A reduction such as `square().mean()` first computes the scalar on the device; reading it then adds a host wait. Frequent logging can therefore serialize a loop. Where the application permits it, detached device scalars can be retained and reported together later. Detaching removes an autograd connection; it neither moves data to the CPU nor waits for completion. The final read still belongs in timing when the application requires it.
 
-CUDA submission is asynchronous. A CPU timer can report only enqueue cost, a CUDA event can report elapsed work in a stream, and synchronized wall time can include host and dependency cost. These are different metrics, not contradictory answers.
+CUDA submission is asynchronous. A CPU timer stopped after submission reports enqueue cost. Two timing-enabled CUDA events measure an elapsed stream interval. A CPU timer stopped after required synchronization includes the host-observed wait for completion. These are different metrics, not contradictory answers.
 
 **Practice labs**
 
-- [Lab 01: Choose a valid GPU timing boundary](reference/labs/01_timing_basics.md)
+- [Lab 01: Compare CPU timers and CUDA events](reference/labs/01_timing_basics.md)
 - [Lab 02: Remove unnecessary per-step host synchronization](reference/labs/02_sync_trap.md)
 
 **Mental model**
 
-GPU work is queued asynchronously. CUDA events measure time on a device stream, while synchronized wall time includes host and boundary costs.
+GPU work is queued asynchronously. CUDA events measure an elapsed stream interval, which can include waits and idle gaps. A CPU timer stopped after the required synchronization measures the host-observed duration of the selected operations, including host work and transfers when they occur between its timestamps.
 
 ## 3. Performance evidence and profiling
 
@@ -253,7 +253,7 @@ Reduce layout conversions, non-coalesced access, and materialized intermediates.
 
 **How it works**
 
-A tensor's layout maps logical indices to storage addresses. A producer creates values and a consumer uses them; an intermediate is the producer's result passed between operations. Materializing an intermediate means writing it into an allocation instead of keeping it within an executing kernel. A traffic ledger counts those reads, writes and copies. An implicit conversion happens inside a framework or library call when its preferred layout differs from the supplied one.
+A tensor's layout maps logical indices to storage addresses. A producer creates values and a consumer uses them; an intermediate is the producer's result passed between operations. Materializing an intermediate means writing it into an allocation instead of keeping it within an executing kernel. Read/write accounting counts those reads, writes and copies. An implicit conversion happens inside a framework or library call when its preferred layout differs from the supplied one.
 
 For example, a transpose can initially be a cheap view, but the next operator may need a physical copy. An epilogue is work applied to an operation's result, such as adding bias after matrix multiplication; fusing it may avoid an intermediate allocation. Aliasing or mutation can require preserving shared storage, so a compiler's alias guard checks assumptions before transforming the program. This lesson extends single-access coalescing to the interfaces between several operators.
 
@@ -261,7 +261,7 @@ Fundamentals Lab 04 established strides, packing cost and break-even reuse for o
 
 Consider two operators where the second consumes the first one's output. In an unfused implementation, the first writes an intermediate tensor and the second reads it. Some reads may hit a cache, but the intermediate still creates storage and memory requests. A fused implementation may pass those values within a kernel and avoid materializing that tensor.
 
-Layout adds another possible cost between the operators. A producer may return a view with no copy, while the consumer requires a different physical arrangement and materializes one internally. An operation-by-operation traffic ledger makes these costs visible: input reads, output writes, temporary writes and rereads, packing copies and later reuse. Kernel and allocation evidence can then distinguish a real copy from a metadata-only view.
+Layout adds another possible cost between the operators. A producer may return a view with no copy, while the consumer requires a different physical arrangement and materializes one internally. Accounting for traffic operation by operation makes these costs visible: input reads, output writes, temporary writes and rereads, packing copies and later reuse. Kernel and allocation evidence can then distinguish a real copy from a metadata-only view.
 
 Packing once pays an initial conversion cost for cheaper repeated accesses. It breaks even when `pack_cost < reuse_count × (strided_cost - packed_cost)`: the total saving across later uses must exceed the copy. The shape alone cannot establish that saving; strides and the consumer's lane mapping determine the addresses accessed.
 
@@ -294,7 +294,7 @@ Fragmentation means free storage is divided into pieces that cannot satisfy a pa
 
 An output pipeline moves device results into host buffers and hands completed results to a consumer, such as an encoder or storage client. A buffer pool reuses a bounded set of allocations. Backpressure is the wait imposed when every slot is still owned by a transfer or consumer; it prevents unbounded queued results. A future represents eventual completion or failure of a worker task. This lesson applies allocator lifetime to both GPU and CPU ownership, after Lesson 6 established input-stream dependencies.
 
-The traffic ledger counts bytes moved. A lifetime ledger asks when each allocation must coexist, which determines whether the workload fits and whether allocator state is being mistaken for a leak.
+Read/write accounting counts bytes moved. A allocation-lifetime diagram asks when each allocation must coexist, which determines whether the workload fits and whether allocator state is being mistaken for a leak.
 
 An allocation contributes to memory demand for as long as some operation needs it. Inputs, outputs, workspaces, communication buffers and compiler or graph pools can overlap in lifetime. Peak demand occurs where the largest set must coexist, so shortening one long-lived allocation can matter more than reducing several small ones.
 
@@ -447,7 +447,7 @@ DDP illustrates the dependencies. Each rank holds a model replica and processes 
 
 Backward produces gradients progressively. A bucket groups gradients for communication and becomes ready when all its required gradients have been produced. A smaller bucket may become ready sooner, giving its collective more time to overlap remaining backward computation. It also creates more collectives and pays more fixed latency. A larger bucket amortizes that overhead but may start too late to hide its transfer. The optimizer waits for all gradients it needs, so any unfinished communication remains exposed on the critical path.
 
-An asynchronous collective returns a `Work` handle while the operation is pending. Independent computation can proceed before joining the result. For ordinary CUDA/NVIDIA Collective Communications Library (NCCL) work, `work.wait()` establishes the dependency on the current CUDA stream; it does not universally mean that the CPU waited for every device operation. A host timing boundary still needs the relevant event or device synchronization. Buffers must remain valid, and ranks must preserve matching collective order.
+An asynchronous collective returns a `Work` handle while the operation is pending. Independent computation can proceed before joining the result. For ordinary CUDA/NVIDIA Collective Communications Library (NCCL) work, `work.wait()` establishes the dependency on the current CUDA stream; it does not universally mean that the CPU waited for every device operation. A CPU timer for completed GPU work still needs the relevant event or device synchronization before it stops. Buffers must remain valid, and ranks must preserve matching collective order.
 
 A timeline connects bucket readiness, collective start and end, independent computation and the final consumer wait. It must establish actual overlap; early return from a call cannot do so. The slowest rank sets group completion, and its late arrival must be separated from time spent transferring data.
 

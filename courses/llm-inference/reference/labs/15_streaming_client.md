@@ -18,7 +18,7 @@ Concurrent client tasks open streaming completion requests, parse `data:` events
 
 Given 16 closed-loop clients producing 8,000 output tokens/s with 120-millisecond p95 TTFT, increase to open-loop arrivals beyond service capacity. Change the arrival model while holding requests and generation policy fixed. Expected observation: instantaneous GPU throughput may remain high while queueing and p95 TTFT grow without bound; goodput falls because more requests miss the SLO.
 
-Run Labs 11 and 15 and reconcile their client boundaries with server metrics. Use AIPerf for token-aware ITL/TPOT. Contrast these with Lab 25's synthetic operator timings: batch-row updates per second are not output tokens per second, and neither a recurrent step nor input projection is a service TTFT measurement.
+Run Labs 11 and 15 and reconcile their client boundaries with server metrics. Use AIPerf with the metric definitions in Lesson 7; its ITL is a request average, while ICL describes chunk gaps. Contrast these with Lab 25's synthetic operator timings: batch-row updates per second are not output tokens per second, and neither a recurrent step nor input projection is a service TTFT measurement.
 
 Inspect request-count and concurrency options before changing load. The baseline launcher uses bounded generation and a loopback endpoint, avoiding any requirement to expose the service publicly.
 
@@ -58,11 +58,11 @@ Higher concurrency improves system tokens/s until saturation but reduces per-use
 
 Empty streams, malformed events, or premature termination are failures, not short successful requests. A missing gap statistic may mean too few content arrivals to form an interval; it is not zero token latency.
 
-Avoid calling average decode duration “ITL” without measuring individual token gaps.
+Do not confuse total decode duration, AIPerf's average ITL, and individual token-arrival gaps. Record the tool's formula and token denominator.
 
 ## Takeaways and next step
 
-Measure what the client actually observes and name it accurately. Use the qualified AIPerf workflow for token-aware ITL/TPOT and repeat fixed-workload trials before making a serving-latency claim.
+Measure what the client actually observes and name it accurately. Use the qualified AIPerf workflow with its documented metric definitions and repeat fixed-workload trials before making a serving-latency claim.
 
 Define every metric formula and collection boundary before comparing systems.
 

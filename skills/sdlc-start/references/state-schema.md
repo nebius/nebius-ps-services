@@ -2,12 +2,12 @@
 
 Use this reference when creating, repairing, or reading local SDLC run state.
 All run artifacts are private local state under
-`~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
+`<agent-home>/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
 
 ## Layout
 
 ```text
-~/.codex/sdlc-runs/
+<agent-home>/sdlc-runs/
   <project-id>/
     workspace.json
     activity.json

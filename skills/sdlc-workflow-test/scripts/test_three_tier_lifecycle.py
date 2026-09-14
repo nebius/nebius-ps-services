@@ -42,6 +42,16 @@ def png_bytes(red: int) -> bytes:
 
 
 class ThreeTierLifecycleTests(unittest.TestCase):
+    def test_claude_generation_uses_native_home_and_rejects_cross_host_resume(self):
+        with mock.patch.dict(os.environ, {"SKILLS_AGENT": "claude"}):
+            os.environ.pop("CODEX_THREAD_ID", None)
+            state = lifecycle.prepare(self.root)
+            self.assertTrue((Path(state["private_root"]) / "claude-home").is_dir())
+            lifecycle.validate_state(self.root, state)
+            with mock.patch.dict(os.environ, {"SKILLS_AGENT": "codex"}):
+                with self.assertRaises(lifecycle.LifecycleError):
+                    lifecycle.validate_state(self.root, state)
+
     def setUp(self) -> None:
         # macOS maps /var to /private/var through a system symlink. Use the
         # home directory so lifecycle symlink rejection is exercised without

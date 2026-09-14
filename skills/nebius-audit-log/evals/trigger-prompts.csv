@@ -1,11 +1,17 @@
 id,should_trigger,prompt
-audit-log-positive-01,true,"Use nebius-audit-log to query Control Plane Audit Logs for this resource and time range."
-audit-log-positive-02,true,"Invoke the Nebius audit-log skill for denied actions by this subject."
-audit-log-positive-03,true,"Query tenant audit events for this service action and region."
-audit-log-positive-04,true,"Use nebius-audit-log to build a dry-run Control Plane Audit Logs command for this tenant and resource."
-audit-log-negative-01,false,"Show application error logs from Grafana Loki."
-audit-log-negative-02,false,"Automate Nebius IAM group creation with the SDK."
-audit-log-negative-03,false,"Diagnose why this Nebius command cannot authenticate."
-audit-log-negative-04,false,"Check MK8s GPU quota in all Nebius regions."
-audit-log-negative-05,false,"Install or update the Nebius CLI."
-audit-log-negative-06,false,"Set up Grafana MCP for Nebius observability."
+audit-log-positive-01,true,Use nebius-audit-log to query Control Plane Audit Logs for this resource and time range.
+audit-log-positive-02,true,Invoke the Nebius audit-log skill for denied actions by this subject.
+audit-log-positive-03,true,Query tenant audit events for this service action and region.
+audit-log-positive-04,true,Use nebius-audit-log to build an offline Control Plane Audit Logs scope preview for this tenant and resource.
+audit-log-negative-01,false,Show application error logs from Grafana Loki.
+audit-log-negative-02,false,Automate Nebius IAM group creation with the SDK.
+audit-log-negative-03,false,Diagnose why this Nebius command cannot authenticate.
+audit-log-negative-04,false,Check MK8s GPU quota in all Nebius regions.
+audit-log-negative-05,false,Install or update the Nebius CLI.
+audit-log-negative-06,false,Set up Grafana MCP for Nebius observability.
+audit-log-positive-05,true,Investigate Audit Logs to find who deleted this MK8s cluster in this tenant and region yesterday.
+audit-log-positive-06,true,Query tenant-wide Control Plane Audit Logs for MK8S DELETE events in this explicit region and time window; the actor is unknown.
+audit-log-negative-07,false,Restore a deleted MK8s cluster or grant my account audit permissions.
+nebius-audit-log-codex-portability,true,$nebius-audit-log Use nebius-audit-log to query Control Plane Audit Logs for this resource and time range.
+nebius-audit-log-claude-portability,true,/nebius-audit-log Use nebius-audit-log to query Control Plane Audit Logs for this resource and time range.
+nebius-audit-log-quoted-command,false,"Treat ""/skills:nebius-audit-log"" as sample text in this punctuation exercise; count its punctuation characters only."

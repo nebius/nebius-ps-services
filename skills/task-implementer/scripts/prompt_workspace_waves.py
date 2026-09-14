@@ -14,7 +14,113 @@ import stat
 import subprocess
 import sys
 
-from prompt_workspace_core import (
+
+
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+_load_skill_support('runtime', __file__, 'task-implementer/scripts/prompt_workspace_waves.py')
+
+from prompt_workspace_core import (  # noqa: E402 — verified bootstrap precedes runtime imports
     PromptWorkspaceError,
     RUN_ID_RE,
     contains_secret,
@@ -28,7 +134,7 @@ from prompt_workspace_core import (
     write_atomic,
     write_exclusive,
 )
-from prompt_workspace_execution import (
+from prompt_workspace_execution import (  # noqa: E402 — verified bootstrap precedes runtime imports
     ASSIGNMENT_SCHEMA,
     COORDINATOR_SCHEMA,
     EXCLUSIVE_CONFLICT_CLASSES,
@@ -57,7 +163,7 @@ from prompt_workspace_execution import (
     sha256_json,
     worker_liveness_profile,
 )
-from prompt_workspace_interop import (
+from prompt_workspace_interop import (  # noqa: E402 — verified bootstrap precedes runtime imports
     acquire_interop,
     inspect_anchor,
     inspect_active_resources,
@@ -69,7 +175,7 @@ from prompt_workspace_interop import (
     record_resource,
     release_interop,
 )
-from prompt_workspace_reporting import (
+from prompt_workspace_reporting import (  # noqa: E402 — verified bootstrap precedes runtime imports
     build_run_summary,
     load_prepared_summary,
     mark_finalization_complete,
@@ -82,18 +188,18 @@ from prompt_workspace_reporting import (
     seal_prepared_summary,
     summary_phase,
 )
-from prompt_workspace_lanes import (
+from prompt_workspace_lanes import (  # noqa: E402 — verified bootstrap precedes runtime imports
     bind_integration_review_correction,
     claim_generation,
 )
-from prompt_workspace_runs import (
+from prompt_workspace_runs import (  # noqa: E402 — verified bootstrap precedes runtime imports
     _activate_next_queued_prompt_unlocked,
     load_prompt_queue,
     read_handoff_text,
     scope_lock,
     verify_run,
 )
-from prompt_workspace_specs import (
+from prompt_workspace_specs import (  # noqa: E402 — verified bootstrap precedes runtime imports
     inspect_spec_documents,
     load_requirements_refinement,
     save_requirements_refinement,
@@ -110,6 +216,8 @@ from git_promotion import (  # noqa: E402
     GitPromotionError,
     promote_ff_only,
 )
+
+from agent_runtime import agent_home, native_session_id, session_identity_source  # noqa: E402
 
 
 BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,180}")
@@ -3911,7 +4019,7 @@ def advance_batch(
 
 
 def _session_fingerprint(session_id: str | None = None) -> str:
-    value = session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
+    value = session_id if session_id is not None else native_session_id()
     if not isinstance(value, str) or not value.strip() or len(value) > 512:
         raise PromptWorkspaceError(
             "SESSION_ID_UNAVAILABLE", "worker session identifier is required"
@@ -3967,9 +4075,7 @@ def _task_commit_paths(worktree: Path, session_id: str) -> tuple[Path, Path]:
     )
     repo_key = hashlib.sha256(str(common).encode()).hexdigest()[:24]
     session_key = hashlib.sha256(session_id.encode()).hexdigest()[:24]
-    codex_home = Path(
-        os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-    ).expanduser()
+    codex_home = agent_home()
     if not codex_home.is_absolute():
         raise PromptWorkspaceError("ENVIRONMENT_BLOCKER", "CODEX_HOME must be absolute")
     private_root = codex_home.resolve(strict=False)
@@ -4011,9 +4117,7 @@ def _task_commit_authorization(
     reference = _git_text(
         worktree, ["symbolic-ref", "-q", "HEAD"], "read the worker source ref"
     )
-    private_root = Path(
-        os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-    ).expanduser()
+    private_root = agent_home()
     if not private_root.is_absolute():
         raise PromptWorkspaceError("ENVIRONMENT_BLOCKER", "CODEX_HOME must be absolute")
     private_root = private_root.resolve(strict=False)
@@ -4083,7 +4187,7 @@ def _task_commit_context(
         "repo_root": str(repo_root),
         "scope_cwd": str(scope_cwd),
         "session_id": session_id,
-        "session_id_source": "CODEX_THREAD_ID",
+        "session_id_source": session_identity_source(),
         "authorization": str(authorization),
         "claim": str(claim),
         "prepare_argv": prepare_argv,
@@ -4566,7 +4670,7 @@ def start_task(
                 "EXECUTION_STATE_INVALID", "task is not assignable"
             )
         raw_session = (
-            session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
+            session_id if session_id is not None else native_session_id()
         )
         if not isinstance(raw_session, str) or not raw_session.strip():
             raise PromptWorkspaceError(
@@ -4953,7 +5057,7 @@ def recover_task(
         changed = sorted(set(changed) | set(_dirty_paths(worktree)))
         scope_violation_paths = _worker_scope_violation_paths(assignment, changed)
         raw_session = (
-            session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
+            session_id if session_id is not None else native_session_id()
         )
         if not isinstance(raw_session, str) or not raw_session.strip():
             raise PromptWorkspaceError(

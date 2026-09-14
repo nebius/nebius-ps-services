@@ -5,10 +5,10 @@ import math
 from test_course_content_contract import lab_section, ROOT
 
 
-def test_crossover_evidence_allows_no_winner_for_either_boundary():
+def test_crossover_evidence_allows_no_winner_for_either_gpu_measurement():
     evidence = lab_section("gpu-fundamentals", 1, "Check your results")
-    assert "resident-GPU" in evidence
-    assert "transfer-inclusive" in evidence
+    assert "gpu_resident" in evidence
+    assert "gpu_with_transfers_median_ms" in evidence
     assert "none did" in evidence
 
 

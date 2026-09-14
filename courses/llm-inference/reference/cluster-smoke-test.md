@@ -70,7 +70,7 @@ sbatch slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile smoke
 sbatch slurm/single_gpu.sbatch labs/29_quantization.py --profile smoke
 ```
 
-Define ISL/OSL, arrival pattern, concurrency, TTFT/ITL boundaries, and output
+Define ISL/OSL, arrival pattern, concurrency, TTFT/ITL timestamp endpoints and AIPerf aggregation conventions, and output
 tokens for the later live campaign. Lab 25 itself measures synthetic projection
 and recurrent operator work, with batch rows rather than service requests and
 no generated tokens or TTFT/ITL. Check MHA/GQA/MQA arithmetic, allocation/recycling invariants, and

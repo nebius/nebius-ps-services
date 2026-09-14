@@ -466,7 +466,7 @@ def diagram(row: OverviewDiagram, index: int) -> str:
             + svg_label("Compute tile i+1", 95, 330, width=13)
             + svg_label("Load tile i+1", 280, 165, width=13)
             + arrow("M280 224 V242 H95 V262")
-            + svg_label("Copy ready", 280, 257, width=13)
+            + svg_label("Copy complete", 280, 257, width=13)
             + svg_label("Time runs downward", 180, 430, width=28)
         )
     description = f"{explanation} Diagram concepts: {first}; {second}; {third}."

@@ -45,7 +45,7 @@ sbatch slurm/nsys_single_gpu.sbatch labs/20_d2h_pipeline.py --mode pipeline --wa
 
 Require `every_output_matches_exact_reference` and `all_outputs_consumed_once`. `whole_loop_samples_ms` includes GPU production, D2H, exact CPU checking, synthetic sink delays, backpressure and final drain. Initial device buffers and preallocated host pools are outside the timer. Per-output pinned allocations in serial/workers occur inside it. `in_flight_destination_capacity_bytes` describes the slot capacity; it excludes allocator caching, transient reference tensors and other host objects, and is not a measured peak.
 
-Use the annotations described below to explain where output handling waits. Correctness, complete consumption and the timing boundary above must remain satisfied in every mode.
+Use the annotations described below to explain where output handling waits. Correctness, complete consumption and the included operations and completion checks above must remain satisfied in every mode.
 
 ## Investigate the behavior
 

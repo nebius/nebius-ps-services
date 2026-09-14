@@ -25,6 +25,20 @@ def _owned(resource: Mapping[str, Any], kind: str, owner: Mapping[str, Any]) -> 
     )
 
 
+def auxiliary_storage_matches(actual: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    """Check realized volumes and mounts, including retained user homes."""
+    from .soperator_checks_contract import normalized
+
+    try:
+        actual_pod = actual["jobTemplate"]["spec"]["template"]["spec"]
+        expected_pod = expected["jobTemplate"]["spec"]["template"]["spec"]
+        return normalized(actual_pod["volumes"]) == normalized(expected_pod["volumes"]) and [
+            normalized(row.get("volumeMounts", [])) for row in actual_pod["containers"]
+        ] == [normalized(row.get("volumeMounts", [])) for row in expected_pod["containers"]]
+    except (KeyError, TypeError):
+        return False
+
+
 def scheduling_inventory(
     checks: SoperatorChecksExecution, *, deferred: bool
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -68,6 +82,7 @@ def scheduling_inventory(
             or spec.get("schedule") != expected["schedule"]
             or spec.get("timeZone") != expected.get("timeZone")
             or spec.get("suspend", False) != (True if deferred else expected.get("suspend", False))
+            or not auxiliary_storage_matches(spec, expected)
             or auxiliary_references(cron)
             != {
                 "jail": checks.policy.auxiliary_pvc,

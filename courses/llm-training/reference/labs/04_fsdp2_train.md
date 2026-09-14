@@ -14,7 +14,7 @@ The code constructs the model, applies `fully_shard` to each transformer block a
 
 ## Practice
 
-Run the supplied sharded path through the two-node launcher. When comparing against DDP, independently verify matching global workload, precision, and timing boundaries instead of assuming matching profile names prove equivalence.
+Run the supplied sharded path through the two-node launcher. When comparing against DDP, independently verify matching global workload, precision and timed operations instead of assuming matching profile names prove equivalence.
 
 ```bash
 umask 077

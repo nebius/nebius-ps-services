@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from nebius_cxcli.soperator_install_policy import validate_soperator_install_configuration
+from nebius_cxcli.soperator_values import seed_soperator_values
 from soperator_fixtures import sample_snapshot
 
 
@@ -21,6 +22,7 @@ def test_install_uses_upstream_certificate_owner(override) -> None:
             ]
         }
     }
+    seed_soperator_values(payload, {"slurmNodes": {"login": {"sshRootPublicKeys": []}}})
     validate_soperator_install_configuration(payload, release)
 
 

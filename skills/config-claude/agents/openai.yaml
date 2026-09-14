@@ -1,0 +1,6 @@
+interface:
+  display_name: "Config Claude"
+  short_description: "Configure or recover a personal Claude Code setup"
+  default_prompt: "Use $config-claude to inspect and reconcile my Claude Code setup while preserving personal settings and validating native roles and hooks."
+policy:
+  allow_implicit_invocation: false

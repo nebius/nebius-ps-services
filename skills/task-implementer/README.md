@@ -121,6 +121,12 @@ explicit separate request.
 
 ## Prompt and Planning Contract
 
+Direct prompts are handled normally by the current agent. For an already-bound
+objective, optional `prompt-session-intake` capture may merge a safe
+project-intent projection into its prompt. Workflow operations, commands and
+sensitive material are excluded. Capture never starts or resumes the workflow;
+execution still requires explicit invocation.
+
 Only one meaningful `## Ask` is required. Other headings are optional. An
 explicit run binds the accepted prompt revision and immutable snapshot. Editing
 the same prompt is steering; running a different prompt while work is active
@@ -167,6 +173,16 @@ Internal branches are never pushed. Worker commits merge with
 `git merge --no-ff --no-edit`; promotion uses verified fast-forward only.
 Task Implementer never cherry-picks, rebases, squashes, broad-prunes, runs GC,
 force-removes resources, or cleans ambiguous state.
+
+Native subagents are preferred when available. The sequential fallback uses
+`codex exec --ephemeral` for Codex or `claude --print --no-session-persistence`
+for Claude, with the selected private home and a fresh worker identity. Claude
+retains its configured permissions and hooks; the helper adds no permission
+bypass. Normal workers use medium effort; recovery workers use low effort.
+A successful process exit still requires the exact immutable assignment result.
+Recovery with an existing result verifies the recovery transition and exits
+without repeating implementation. Private launch flags are `--launch-worker`
+and `--launch-recovery-worker`.
 
 ## Cleanliness and Recovery
 

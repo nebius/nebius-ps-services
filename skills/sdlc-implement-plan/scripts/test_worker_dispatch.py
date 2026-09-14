@@ -64,7 +64,7 @@ if os.environ.get("FAKE_CODEX_SECRET_GAP") == assignment["task_id"]:
         "requirement_ids": ["REQ-001"],
         "design_ids": ["FEAT-001"],
     }]
-print(json.dumps({
+result = {
     "task_id": assignment["task_id"],
     "assignment_digest": assignment["assignment_digest"],
     "status": status,
@@ -74,7 +74,15 @@ print(json.dumps({
     "spec_gaps": spec_gaps,
     "validation": "focused tests passed",
     "review": "focused review passed",
-}))
+}
+if os.environ.get("SKILLS_AGENT") == "claude":
+    assert not os.environ.get("CODEX_THREAD_ID")
+    assert not os.environ.get("SKILLS_SESSION_ID")
+    assert Path.cwd().resolve() == Path(assignment["scope_cwd"]).resolve()
+    result = {"type": "result", "subtype": "success", "is_error": False, "structured_output": result}
+    if os.environ.get("FAKE_CLAUDE_ERROR"):
+        result["is_error"] = True
+print(json.dumps(result))
 """,
             encoding="utf-8",
         )
@@ -162,12 +170,30 @@ print(json.dumps({
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
 
+    def test_claude_worker_uses_native_schema_envelope_and_fresh_identity(self) -> None:
+        assignment = self.assignment("TASK-001")
+        with mock.patch.dict(os.environ, {"SKILLS_AGENT": "claude", "SKILLS_SESSION_ID": "parent",
+                                          "FAKE_CODEX_LOG": str(self.log)}):
+            os.environ.pop("CODEX_THREAD_ID", None)
+            result = dispatch.dispatch_sequential([assignment], self.schema, agent_binary=str(self.fake))
+            self.assertEqual(result[0]["status"], "implemented")
+            argv = json.loads(self.log.read_text().splitlines()[0])["argv"]
+            self.assertIn("--print", argv)
+            self.assertIn("--no-session-persistence", argv)
+            self.assertEqual(json.loads(argv[argv.index("--json-schema") + 1]), json.loads(self.schema.read_text()))
+            self.assertNotIn("--sandbox", argv)
+            self.assertNotIn("--dangerously-skip-permissions", argv)
+            with mock.patch.dict(os.environ, {"FAKE_CLAUDE_ERROR": "1"}):
+                with self.assertRaises(dispatch.DispatchError) as failure:
+                    dispatch.dispatch_sequential([assignment], self.schema, agent_binary=str(self.fake))
+                self.assertEqual(failure.exception.code, "WORKER_FAILED")
+
     def test_dispatches_fresh_ephemeral_workers_sequentially(self) -> None:
         first = self.assignment("TASK-001")
         second = self.assignment("TASK-002")
         with mock.patch.dict(os.environ, {"FAKE_CODEX_LOG": str(self.log)}):
             results = dispatch.dispatch_sequential(
-                [first, second], self.schema, codex_binary=str(self.fake)
+                [first, second], self.schema, agent_binary=str(self.fake)
             )
         self.assertEqual(
             [item["task_id"] for item in results], ["TASK-001", "TASK-002"]
@@ -206,7 +232,7 @@ print(json.dumps({
         ):
             with self.assertRaises(dispatch.DispatchError) as caught:
                 dispatch.dispatch_sequential(
-                    [first, second], self.schema, codex_binary=str(self.fake)
+                    [first, second], self.schema, agent_binary=str(self.fake)
                 )
         self.assertEqual(caught.exception.code, "WORKER_FAILED")
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
@@ -220,7 +246,7 @@ print(json.dumps({
             {"FAKE_CODEX_LOG": str(self.log), "FAKE_CODEX_SPEC_GAP": "TASK-001"},
         ):
             results = dispatch.dispatch_sequential(
-                [assignment], self.schema, codex_binary=str(self.fake)
+                [assignment], self.schema, agent_binary=str(self.fake)
             )
         self.assertEqual(results[0]["status"], "replan_required")
         self.assertEqual(results[0]["spec_gaps"][0]["kind"], "design")
@@ -236,7 +262,7 @@ print(json.dumps({
         ):
             with self.assertRaises(dispatch.DispatchError) as caught:
                 dispatch.dispatch_sequential(
-                    [assignment], self.schema, codex_binary=str(self.fake)
+                    [assignment], self.schema, agent_binary=str(self.fake)
                 )
         self.assertEqual(caught.exception.code, "WORKER_FAILED")
 
@@ -244,7 +270,7 @@ print(json.dumps({
         assignment = self.assignment("TASK-001")
         with self.assertRaises(dispatch.DispatchError) as caught:
             dispatch.dispatch_sequential(
-                [assignment], self.schema, codex_binary=str(self.root / "missing")
+                [assignment], self.schema, agent_binary=str(self.root / "missing")
             )
         self.assertEqual(caught.exception.code, "ENVIRONMENT_BLOCKER")
 
@@ -267,7 +293,7 @@ print(json.dumps({
         with mock.patch.dict(os.environ, {"FAKE_CODEX_LOG": str(self.log)}):
             with self.assertRaises(dispatch.DispatchError) as caught:
                 dispatch.dispatch_sequential(
-                    [assignment], self.schema, codex_binary=str(self.fake)
+                    [assignment], self.schema, agent_binary=str(self.fake)
                 )
         self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
         self.assertFalse(self.log.exists())
@@ -282,7 +308,7 @@ print(json.dumps({
 
         with self.assertRaises(dispatch.DispatchError) as caught:
             dispatch.dispatch_sequential(
-                [assignment], self.schema, codex_binary=str(self.fake)
+                [assignment], self.schema, agent_binary=str(self.fake)
             )
 
         self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
@@ -305,7 +331,7 @@ print(json.dumps({
             dispatch.dispatch_sequential(
                 [assignment],
                 self.schema,
-                codex_binary=str(slow),
+                agent_binary=str(slow),
                 watch_interval=0.05,
                 terminate_grace=0.05,
             )
@@ -328,7 +354,7 @@ print(json.dumps({
             dispatch.dispatch_sequential(
                 [assignment],
                 self.schema,
-                codex_binary=str(slow),
+                agent_binary=str(slow),
                 terminate_grace=0.05,
             )
 
@@ -396,7 +422,7 @@ child.wait()
             dispatch.dispatch_sequential(
                 [assignment],
                 self.schema,
-                codex_binary=str(worker),
+                agent_binary=str(worker),
                 watch_interval=1,
                 terminate_grace=1,
             )
