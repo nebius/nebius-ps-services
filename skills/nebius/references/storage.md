@@ -56,6 +56,24 @@ additional checksum, condition and versioning restrictions. Consult the current
 compatibility table before porting an AWS workflow. Object expiry, transfer
 overwrite and bucket policies can destroy or expose data; review exact effects.
 
+## Custom checksum metadata
+
+When a retained backup uses custom S3 metadata, compare metadata names
+case-insensitively, treating `Sha256` and `sha256` as equivalent names.
+Preserve values exactly and report conflicting entries after name normalization.
+This applies to metadata names only; object keys remain case-sensitive.
+
+A missing or differently capitalized metadata field does not establish a failed
+upload. Preserve the object and its recorded version. Verify that exact version's
+bytes against the trusted source digest. For payloads within its size limit,
+use `download_verified` with the recorded `version_id`. Report metadata
+inconsistencies separately from content verification; neither matching custom metadata nor an ETag alone proves content
+integrity. Custom `sha256` metadata is distinct from native S3 checksum fields
+such as `ChecksumSHA256`; preserve their documented encoding and semantics.
+
+See [S3 metadata semantics](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingMetadata.html)
+and [Nebius object integrity](https://docs.nebius.com/object-storage/objects/manage).
+
 ## Registry and PostgreSQL
 
 `assets/storage/managed_services.py` provides typed builders. For registry,
