@@ -80,6 +80,197 @@ def observation(
 
 
 class ResumeDecisionTest(unittest.TestCase):
+    def test_native_worker_launch_preserves_host_and_fresh_identity(self) -> None:
+        for agent in ("codex", "claude"):
+            for recovery_mode in (False, True):
+                with (
+                    self.subTest(agent=agent, recovery=recovery_mode),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    root = Path(temporary).resolve()
+                    scope = root / "worker"
+                    scope.mkdir()
+                    result_path = root / "result.json"
+                    result_path.write_text("{}\n")
+                    assignment_path = root / "assignment.json"
+                    assignment_path.write_text(
+                        json.dumps({"result_path": str(result_path)})
+                    )
+                    context = {
+                        "scope_cwd": str(scope),
+                        "assignment_path": str(assignment_path),
+                        "start_argv": [
+                            "python3",
+                            "/installed/helper.py",
+                            "task-recover" if recovery_mode else "task-start",
+                        ],
+                    }
+                    env = {
+                        "SKILLS_AGENT": agent,
+                        "SKILLS_SESSION_ID": "parent-session",
+                        "CODEX_HOME": str(root / "codex"),
+                        "CLAUDE_CONFIG_DIR": str(root / "claude"),
+                    }
+                    with (
+                        mock.patch.dict(os.environ, env),
+                        mock.patch.object(
+                            cli.shutil, "which", return_value=f"/usr/bin/{agent}"
+                        ) as binary,
+                        mock.patch.object(
+                            cli.subprocess,
+                            "run",
+                            return_value=subprocess.CompletedProcess([], 0),
+                        ) as launched,
+                    ):
+                        if agent == "claude":
+                            os.environ.pop("CODEX_THREAD_ID", None)
+                        else:
+                            os.environ["CODEX_THREAD_ID"] = "parent-session"
+                        result = cli._launch_worker(
+                            {"start_context": context},
+                            reasoning_effort="low" if recovery_mode else "medium",
+                            recovery_mode=recovery_mode,
+                        )
+                        binary.assert_called_once_with(agent)
+                        call = launched.call_args
+                        self.assertEqual(call.kwargs["env"]["SKILLS_AGENT"], agent)
+                        for key in ("CODEX_THREAD_ID", "SKILLS_SESSION_ID"):
+                            self.assertNotIn(key, call.kwargs["env"])
+                        home_key = (
+                            "CODEX_HOME" if agent == "codex" else "CLAUDE_CONFIG_DIR"
+                        )
+                        self.assertEqual(
+                            call.kwargs["env"][home_key], str(root / agent)
+                        )
+                        self.assertEqual(call.kwargs["cwd"], str(scope))
+                        self.assertIn(" ".join(context["start_argv"]), call.args[0][-1])
+                        if agent == "claude":
+                            self.assertEqual(
+                                call.args[0][:5],
+                                [
+                                    "/usr/bin/claude",
+                                    "--print",
+                                    "--no-session-persistence",
+                                    "--effort",
+                                    "low" if recovery_mode else "medium",
+                                ],
+                            )
+                            self.assertNotIn(
+                                "--dangerously-skip-permissions", call.args[0]
+                            )
+                            self.assertNotIn("--permission-mode", call.args[0])
+                            self.assertEqual(result["mode"], "claude-print")
+                        else:
+                            self.assertEqual(result["mode"], "codex-exec")
+                        if recovery_mode:
+                            self.assertIn(
+                                "first and only tool action", call.args[0][-1]
+                            )
+                            self.assertIn("exit immediately", call.args[0][-1])
+
+    def test_native_worker_process_receives_private_home_and_creates_result(
+        self,
+    ) -> None:
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                scope = root / "worker with spaces"
+                scope.mkdir()
+                result_path = scope / "result.json"
+                assignment_path = root / "assignment.json"
+                assignment_path.write_text(
+                    json.dumps({"result_path": str(result_path)})
+                )
+                binary = root / agent
+                binary.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import json, os\nfrom pathlib import Path\n"
+                    "Path('result.json').write_text(json.dumps({\n"
+                    "'cwd': os.getcwd(), 'agent': os.environ['SKILLS_AGENT'],\n"
+                    "'home': os.environ['CODEX_HOME' if os.environ['SKILLS_AGENT'] == 'codex' else 'CLAUDE_CONFIG_DIR'],\n"
+                    "'inherited_identity': any(key in os.environ for key in ('CODEX_THREAD_ID', 'SKILLS_SESSION_ID'))}))\n"
+                )
+                binary.chmod(0o700)
+                env = {
+                    "SKILLS_AGENT": agent,
+                    "CODEX_HOME": str(root / "codex-home"),
+                    "CLAUDE_CONFIG_DIR": str(root / "claude-home"),
+                    "CODEX_THREAD_ID": "parent" if agent == "codex" else "",
+                    "SKILLS_SESSION_ID": "parent",
+                }
+                with (
+                    mock.patch.dict(os.environ, env),
+                    mock.patch.object(cli.shutil, "which", return_value=str(binary)),
+                ):
+                    cli._launch_worker(
+                        {
+                            "start_context": {
+                                "scope_cwd": str(scope),
+                                "assignment_path": str(assignment_path),
+                                "start_argv": [
+                                    "python3",
+                                    "/installed/helper.py",
+                                    "task-start",
+                                ],
+                            }
+                        }
+                    )
+                evidence = json.loads(result_path.read_text())
+                self.assertEqual(
+                    evidence,
+                    {
+                        "cwd": str(scope),
+                        "agent": agent,
+                        "home": str(root / f"{agent}-home"),
+                        "inherited_identity": False,
+                    },
+                )
+
+    def test_claude_worker_failure_boundaries(self) -> None:
+        for binary, code, expected in (
+            (None, 0, "WORKER_EXEC_UNAVAILABLE"),
+            ("claude", 0, "WORKER_EXEC_UNAVAILABLE"),
+            ("/usr/bin/claude", 17, "WORKER_EXEC_FAILED"),
+            ("/usr/bin/claude", 0, "WORKER_EXEC_INCOMPLETE"),
+        ):
+            with (
+                self.subTest(binary=binary, code=code),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary).resolve()
+                assignment_path = root / "assignment.json"
+                assignment_path.write_text(
+                    json.dumps({"result_path": str(root / "missing.json")})
+                )
+                with (
+                    mock.patch.dict(
+                        os.environ, {"SKILLS_AGENT": "claude", "CODEX_THREAD_ID": ""}
+                    ),
+                    mock.patch.object(cli.shutil, "which", return_value=binary),
+                    mock.patch.object(
+                        cli.subprocess,
+                        "run",
+                        return_value=subprocess.CompletedProcess([], code),
+                    ) as launched,
+                    self.assertRaises(PromptWorkspaceError) as raised,
+                ):
+                    cli._launch_worker(
+                        {
+                            "start_context": {
+                                "scope_cwd": str(root),
+                                "assignment_path": str(assignment_path),
+                                "start_argv": [
+                                    "python3",
+                                    "/installed/helper.py",
+                                    "task-start",
+                                ],
+                            }
+                        }
+                    )
+                self.assertEqual(raised.exception.code, expected)
+                if expected == "WORKER_EXEC_UNAVAILABLE":
+                    launched.assert_not_called()
+
     def test_atomic_codex_worker_launch_uses_exact_start_context(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -116,7 +307,7 @@ class ResumeDecisionTest(unittest.TestCase):
                     cli.subprocess, "run", return_value=completed
                 ) as launched,
             ):
-                result = cli._launch_codex_worker(
+                result = cli._launch_worker(
                     {
                         "start_context": {
                             "scope_cwd": str(scope_cwd),
@@ -164,7 +355,7 @@ class ResumeDecisionTest(unittest.TestCase):
                 ),
                 self.assertRaises(PromptWorkspaceError) as raised,
             ):
-                cli._launch_codex_worker(
+                cli._launch_worker(
                     {
                         "start_context": {
                             "scope_cwd": str(scope_cwd),
@@ -191,7 +382,7 @@ class ResumeDecisionTest(unittest.TestCase):
                 ),
                 self.assertRaises(PromptWorkspaceError) as raised,
             ):
-                cli._launch_codex_worker(
+                cli._launch_worker(
                     {
                         "start_context": {
                             "scope_cwd": str(scope_cwd),
@@ -210,10 +401,10 @@ class ResumeDecisionTest(unittest.TestCase):
         }
         with mock.patch.object(
             cli,
-            "_launch_codex_worker",
+            "_launch_worker",
             return_value={"mode": "codex-exec", "returncode": 0},
         ) as launched:
-            result = cli._launch_codex_recovery_worker({"worker_context": context})
+            result = cli._launch_recovery_worker({"worker_context": context})
         self.assertEqual(result, {"mode": "codex-exec", "returncode": 0})
         launched.assert_called_once_with(
             {
@@ -247,7 +438,7 @@ class ResumeDecisionTest(unittest.TestCase):
                     return_value=subprocess.CompletedProcess([], 0),
                 ) as launched,
             ):
-                result = cli._launch_codex_worker(
+                result = cli._launch_worker(
                     {
                         "start_context": {
                             "scope_cwd": str(scope_cwd),
@@ -956,7 +1147,7 @@ class ResumeControlTest(unittest.TestCase):
             mock.patch.object(cli, "resume_run", return_value=next_plan),
             mock.patch.object(
                 cli,
-                "_launch_codex_worker",
+                "_launch_worker",
                 side_effect=launch_worker,
             ) as launched,
             mock.patch.object(cli, "emit") as emitted,
@@ -972,7 +1163,7 @@ class ResumeControlTest(unittest.TestCase):
                     "task-1",
                     "--resume-token",
                     current_token,
-                    "--launch-codex-worker",
+                    "--launch-worker",
                     "--json",
                 ]
             )
@@ -1008,7 +1199,7 @@ class ResumeControlTest(unittest.TestCase):
             mock.patch.object(cli, "resume_run", return_value=plan),
             mock.patch.object(
                 cli,
-                "_launch_codex_recovery_worker",
+                "_launch_recovery_worker",
                 return_value=launched_result,
             ) as launched,
             mock.patch.object(cli, "emit") as emitted,
@@ -1020,7 +1211,7 @@ class ResumeControlTest(unittest.TestCase):
                     "/private/workspace.json",
                     "--run-id",
                     "run-test",
-                    "--launch-codex-recovery-worker",
+                    "--launch-recovery-worker",
                     "--json",
                 ]
             )

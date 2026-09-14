@@ -24,7 +24,9 @@ The CPU remains a good choice for small jobs, branch-heavy control logic, irregu
 
 ### How the CPU, memory and GPU cooperate
 
-The CPU is the host and the GPU is the device. Host RAM and the H100's high-bandwidth memory, or HBM, are distinct storage resources in the discrete-device model used here. A kernel is a function executed by GPU threads. A launch submits that work; it is not the same thing as copying its input data. A stream is an ordered queue of device work. PyTorch uses the tensor's device and the available implementation to dispatch an operation: CPU tensors use a CPU path; CUDA tensors use a GPU path when supported. Moving a tensor with `to("cuda")` transfers its data; it does not move the Python interpreter onto the GPU.
+The CPU is the host and the GPU is the device. Host RAM and the H100's high-bandwidth memory, or HBM, are distinct storage resources in the discrete-device model used here. A kernel is a function executed by GPU threads. A launch submits that work; it is not the same thing as copying its input data. A CUDA stream is a sequence of operations that execute in order. PyTorch uses the tensor's device and the available implementation to dispatch an operation: CPU tensors use a CPU path; CUDA tensors use a GPU path when supported. Moving a CPU tensor with `to("cuda")` transfers its data; it does not move the Python interpreter onto the GPU.
+
+A GPU-resident tensor has its data stored in device memory: HBM on the H100 used here. The data may have been copied from the host, initialized on the GPU or produced by an earlier kernel. Residency describes where the data is stored, not whether it is being processed. Later, a resident thread block will mean something different: work assigned execution resources on an SM.
 
 ### GPU architecture: based on H100 GPU
 
@@ -87,17 +89,17 @@ The overview and enlargement below connect the two hierarchies: blocks are place
 
 ### Execution and dependencies
 
-Start with ordinary program latency: a result is ready only after every required stage finishes. GPU execution adds explicit submission, transfer, device-execution, and synchronization stages to that familiar critical path.
+Start with ordinary program latency: a result is ready only after every required operation finishes. In a CUDA program, distinguish host submission, memory transfers, kernel execution and synchronization. These operations can overlap when their dependencies permit; they are not four mandatory consecutive GPU phases.
 
 Follow one calculation from the application to its result. The CPU prepares the input and asks CUDA to run a kernel. CUDA submits the request to a stream, which keeps device operations in order. The GPU executes the kernel when its dependencies and resources allow. The CPU can continue before that execution finishes: returning from the launch means the work was submitted, not that the answer is ready.
 
 Where the data starts and where the answer is needed determine how much work this request involves. If the input is in host RAM, it must be copied to GPU memory before the kernel uses it. If the CPU needs the output, that output must be copied back after the kernel finishes. If the next operation also runs on the GPU, the output can stay there and become its input.
 
-This gives three useful timing comparisons:
+Choose a timer and state exactly which operations it measures. A CPU timer records elapsed time between two points in the host program. Timing-enabled CUDA events record timestamps when the GPU reaches them in a stream; their difference measures that stream interval. Waiting for the end event makes the timestamps available, but does not copy a result to host memory. Lab 01 uses these tools for three comparisons:
 
-- **CPU time:** start before the CPU calculation and stop when its result is ready.
-- **Resident GPU time:** the inputs are already in GPU memory, and the result stays there. Measure the required device work through its completion. This isolates the computation from host-device transfer costs.
-- **Transfer-inclusive GPU time:** start with inputs on the CPU and stop when the CPU can use the returned result. Include the input copy, launch, device work, output copy and any required waiting.
+- **CPU execution time:** use a CPU timer around the CPU calculation.
+- **GPU time with device-resident inputs:** record CUDA events before and after the GPU operations. Input copies happened earlier, and the result stays on the device. The interval can include waits and idle gaps between the events; it is not necessarily the sum of kernel execution times.
+- **End-to-end time including transfers:** use a CPU timer from the first input copy until the returned output is usable on the CPU. This includes both input copies, host submission, GPU operations, the output copy and required waiting.
 
 A timer stopped immediately after submission misses unfinished GPU work. A completed-work measurement waits for the result required by its chosen comparison. Lesson 8 explains how streams, events and synchronization establish that stopping point.
 
@@ -116,7 +118,7 @@ Suppose a CPU operation takes 2 milliseconds. A resident GPU operation takes 0.3
 
 **Mental model**
 
-The CPU schedules and prepares work while the GPU executes wide batches of similar operations. Transfers and kernel launches are explicit boundaries, so small jobs can spend more time crossing boundaries than computing.
+The CPU prepares data and submits GPU work. Kernels execute on the GPU, transfers move data, and synchronization establishes when dependent work can proceed. For small jobs, transfer and launch overhead can exceed computation time.
 
 ## 2. GPU execution software layers
 
@@ -130,7 +132,7 @@ The GPU software stack is the set of layers that turns an application into work 
 
 Parallel Thread Execution (PTX) is an intermediate GPU instruction language; SASS is target-specific machine code. A cubin contains compiled device code, while a fat binary can carry code for multiple targets. Just-in-time (JIT) compilation translates code when needed at load or execution time. Compute capability names a GPU's hardware feature level, not its driver or toolkit version. These separate meanings explain why matching one version number does not establish compatibility.
 
-Lesson 1 identified a software boundary between submitted work and device execution. This lesson names every layer at that boundary so a version string or error can be assigned to an owner.
+Lesson 1 distinguished host submission from GPU execution. This lesson names the software layers involved so a version string or error can be traced to the component it describes.
 
 Consider a PyTorch operation on a CUDA tensor. PyTorch first selects an implementation, often from a library shipped with the framework package. That implementation uses CUDA runtime or driver APIs to arrange memory and submit GPU work. The user-mode driver loads the device code, while the kernel-mode NVIDIA driver manages access to the GPU. The device then executes the loaded kernel.
 
@@ -201,7 +203,7 @@ The memory hierarchy is a set of storage locations with different capacities, ac
 
 An allocation reserves storage for values. Temporal locality means reusing the same values soon; spatial locality means accessing nearby addresses. A spill places values that cannot stay in registers into thread-private local memory, which is backed by device memory despite its name. Understanding ownership and reuse comes before deciding where data should live.
 
-Resident threads need storage for private values, block cooperation, cached reuse, and the full data set. These are distinct address spaces and lifetime contracts, not simply “fast” and “slow” memory.
+Threads use registers, local memory, shared memory and global memory with different visibility and lifetimes. L1 and L2 caches are hardware storage that services memory accesses; they are not additional CUDA address spaces that the program allocates like a shared-memory array.
 
 Trace a value used by a kernel. Its global-memory allocation normally lives in HBM. When a thread loads the value, caches may satisfy the request without another HBM access. The compiler keeps working values in registers where possible. If values spill into the thread's local-memory address space, they use device-backed storage and caching; the word “local” does not mean on-chip register storage.
 
@@ -264,7 +266,7 @@ Relate registers, shared memory, block size, active warps, and latency hiding.
 
 **How it works**
 
-Occupancy is the fraction of an SM's maximum supported warps that are resident at a time. Resident means their execution state has resources assigned; it does not mean they issue an instruction every cycle. An eligible warp is ready to issue its next instruction. Latency hiding means executing other eligible work while one warp waits, for example for a memory load to complete. More resident warps can provide more choices, but cannot remove a dependency within one calculation.
+Occupancy is the ratio of active warps on an SM to its maximum supported active warps. Here, active means resident: their execution state has resources assigned, even while they wait. Theoretical occupancy is the maximum permitted by a launch's resource requirements; achieved occupancy is measured during execution. An eligible warp is ready to issue its next instruction. Latency hiding means executing other eligible work while one warp waits, for example for a memory load to complete. More resident warps can provide more choices, but cannot remove a dependency within one calculation.
 
 Instruction-level parallelism (ILP) means independent instructions within a thread can make progress without waiting for one another's results. For example, updating two independent accumulators (variables holding separate running results) offers more scheduling freedom than repeatedly updating one accumulator. This supplies ready work within a warp, whereas scheduling another resident warp supplies ready work from other threads. Keeping more independent values live can require more registers.
 
@@ -315,7 +317,7 @@ A PyTorch view can expose such a strided pattern without moving any values. The 
 
 Repacking with `contiguous()` creates a copy when needed. It pays for an extra read and write now in exchange for potentially cheaper later accesses. That trade is useful only when the time saved by later operations exceeds the packing cost.
 
-A kernel can request the same logical number of elements while causing very different physical traffic. Useful bandwidth counts bytes the algorithm needs; transaction traffic includes over-fetch and replay caused by the access pattern.
+A kernel can request the same logical number of elements while causing very different physical traffic. Effective bandwidth divides the counted read and write bytes by elapsed time. The lab calls its logical-byte estimate useful bandwidth. Profiler-observed traffic can differ because of cache reuse, intermediate operations and bytes transferred that no active lane uses.
 
 **Practice labs**
 
@@ -335,7 +337,7 @@ Measure asynchronous work and distinguish overlap from reordered timestamps.
 
 A CUDA stream is an ordered sequence of device work: operations in the same stream obey that order, while independent streams may overlap if resources permit. An event marks progress in a stream. The CPU can wait for an event, or another stream can wait for it to enforce a device-side dependency without blocking the CPU. Nonblocking submission means a host call can return before the requested operation finishes; it does not mean the operation is already complete.
 
-Host-to-device (H2D) and device-to-host (D2H) transfers move data between CPU and GPU memory. Pinned host memory has pages held resident so transfers can use supported direct-memory-access paths; ordinary pageable memory can require staging. Copy engines perform transfers separately from arithmetic execution where supported. Double buffering uses two buffers so a producer can fill the next one while a consumer processes the current one, with events protecting safe reuse.
+Host-to-device (H2D) and device-to-host (D2H) transfers move data between CPU and GPU memory. Pinned host memory is page-locked host memory: its pages cannot be paged out while locked. It supports asynchronous host/device transfers; ordinary pageable memory can require staging through a pinned buffer. Copy engines perform transfers separately from arithmetic execution where supported. Double buffering uses two buffers so a producer can fill the next one while a consumer processes the current one, with events protecting safe reuse.
 
 Lesson 1 separated submission from completion. Streams and events provide the ordering tools needed to make that distinction correct in programs with copies and multiple device operations.
 
@@ -347,7 +349,7 @@ Independent work can overlap when the hardware has resources for both operations
 
 Double buffering uses this independence across successive batches. First fill one buffer. Then compute on it while filling the other. Continue alternating, and finally wait for the remaining work to drain. A buffer cannot be overwritten while a copy or kernel still uses it; tensors and staging storage must stay alive through their last asynchronous use.
 
-Timing follows the same dependencies. Device events can measure a defined interval in a stream. A host timer for the complete request must stop only after all work required by that request finishes, including any result transfer. Submission time alone measures how quickly the CPU queued work.
+Timing follows the same dependencies. Record timing-enabled CUDA events before and after the operations being measured, wait for the end event, then read the elapsed time between them. In PyTorch, these steps use `torch.cuda.Event(enable_timing=True)`, `record()`, `synchronize()` and `elapsed_time()`. For multiple streams, make the stream containing the end event wait for all measured streams first. A CPU timer, such as Python's `time.perf_counter()`, measures host-observed elapsed time. It must stop after the required GPU work and any output transfer complete when measuring the full request. Stopping it after submission instead measures how quickly the CPU queued work.
 
 Apparent overlap can be a timestamp illusion, and accidental synchronization can erase real overlap. Incorrect stream dependencies can also expose partially produced tensors or surface an earlier asynchronous error at an unrelated later call.
 
@@ -416,7 +418,7 @@ The roofline model relates a workload's arithmetic rate to how much data it must
 
 A low-intensity calculation may have to wait for bytes even when arithmetic units are available; a high-intensity one can reuse enough data to approach a compute limit. The ceilings describe upper bounds under declared assumptions, not expected measurements. The chosen precision, operation type and byte-count boundary must match the plotted workload before the model can explain a result.
 
-The previous lessons supplied a byte ledger and compute-path model. Roofline combines them into a bound that helps choose the next experiment without pretending to predict every kernel detail.
+The previous lessons explained how to count data reads and writes and identify the arithmetic performed. Roofline combines those counts into a performance bound that helps choose the next experiment without pretending to predict every kernel detail.
 
 Begin with a count of useful floating-point operations and the bytes needed to perform them. Choose one memory boundary, such as HBM, and include the reads, writes and intermediate traffic that cross it. Dividing operations by bytes gives arithmetic intensity: how much useful arithmetic is performed for each byte moved.
 
@@ -504,7 +506,7 @@ Congestion is competition for a link or queue whose capacity is temporarily insu
 
 ### Understand RDMA before adding GPU memory
 
-Remote direct memory access (RDMA) allows a network adapter to transfer data into or out of registered memory on a remote machine without the receiving CPU copying each payload through the ordinary socket path. Registration establishes which memory the adapter may access and how. A queue pair (QP) holds send and receive work queues; a completion reports that submitted work has reached its defined completion boundary. CPUs and drivers still create connections, register buffers and coordinate work. RDMA does not mean that the application has no CPU activity or synchronization requirements.
+Remote direct memory access (RDMA) allows a network adapter to transfer data into or out of registered memory on a remote machine without the receiving CPU copying each payload through the ordinary socket path. Registration establishes which memory the adapter may access and how. A queue pair (QP) holds send and receive work queues; a completion queue reports completed work requests and their status. CPUs and drivers still create connections, register buffers and coordinate work. RDMA does not mean that the application has no CPU activity or synchronization requirements.
 
 RDMA can operate on host memory. GPUDirect RDMA adds a supported direct path between a network adapter and GPU memory, avoiding a host-memory staging copy for that transfer. Conceptually, the host-staged path is GPU memory → host buffer → NIC → network → NIC → host buffer → remote GPU memory. A qualified direct path is GPU memory → NIC → network → NIC → remote GPU memory. PCIe attachment and registration remain involved; the NIC is not magically connected to GPU high-bandwidth memory (HBM) without an interconnect. GPUDirect peer-to-peer concerns local device access, while GPUDirect Storage concerns supported storage I/O. Those names do not prove that a particular network transfer is GPU-direct.
 

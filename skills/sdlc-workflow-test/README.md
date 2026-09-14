@@ -1,5 +1,8 @@
 # SDLC Workflow Test
 
+Execution supports Codex and Claude through the selected native host context.
+See `SKILL.md` for invocation, required setup and evidence boundaries.
+
 `sdlc-workflow-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks the design contract, source-installed skill parity,
 deterministic prompt and execution capabilities, sequential fallback, Task
@@ -64,6 +67,12 @@ current meaning when no lifecycle action is selected.
   The two measured slow aggregates use explicit bounded budgets: 300 seconds
   for the worktree matrix and 900 seconds for the Task Implementer wave matrix;
   every other capability suite keeps the 120-second default.
+- Compares configured hook payloads against their authoritative source: SDLC
+  hooks come from `sdlc-start`, and shared runtime files come from
+  `global-context-management`. Parity checks cover native wrapper registrations
+  for both Codex and Claude.
+  Both files must be regular and produce successful matching SHA-256 digests;
+  missing or unreadable files never satisfy parity, even on both sides.
 - Statically verifies the exact-SHA Agentic SDLC PR publication/review/merge
   modes and includes bounded observability plus explicit-PR, canonical
   single-action publication and merge authorization in capability regressions.
@@ -84,7 +93,7 @@ current meaning when no lifecycle action is selected.
   directories, remote-backed repositories, malformed or wrong-path hooks,
   synthetic no-change golden-path success, and any private or out-of-scope
   path touched anywhere in the supplied live history.
-- Writes the verification report to `~/.codex/sdlc-verification/report.md`.
+- Writes the verification report to `<agent-home>/sdlc-verification/report.md`.
 - Keeps real repositories, installed skills, hooks, and agent configuration
   unchanged.
 - For explicit create modes, requires a semantic

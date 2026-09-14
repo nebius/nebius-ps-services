@@ -75,7 +75,7 @@ Build a small worksheet for three representative sizes: 8 KiB, 1 MiB and 64 MiB.
 
 Correlate the curve with separate transport diagnostics and read-only link information. If one candidate helps large messages but hurts small ones, inspect actual application collective sizes before choosing it. This harness intentionally inserts barriers and checks; application overlap and asynchronous submission may produce different behavior, which Lesson 12 tests separately.
 
-Diagnostic logging and profilers perturb timing; collect them separately. Blocking on each sample gives a clear isolated completion boundary but differs from pipelined application behavior. More flows consume adapter resources. A network issue requiring PFC/ECN, MTU, firmware, subnet-manager, ACS/IOMMU or system-limit changes must be escalated to the cluster owner, not repaired by a lab script.
+Diagnostic logging and profilers perturb timing; collect them separately. Blocking on each sample measures each collective through completion but differs from pipelined application behavior. More flows consume adapter resources. A network issue requiring PFC/ECN, MTU, firmware, subnet-manager, ACS/IOMMU or system-limit changes must be escalated to the cluster owner, not repaired by a lab script.
 
 ## If something goes wrong
 

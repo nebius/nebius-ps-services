@@ -42,6 +42,118 @@ def git(cwd: Path, *arguments: str) -> str:
 
 
 class VerifierContractTests(unittest.TestCase):
+    def test_native_hook_payload_parity_uses_each_authoritative_source(self) -> None:
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                ctx = replace(
+                    self.source_contract_context(),
+                    agent=agent,
+                    host_home=self.root / agent,
+                    checks=[],
+                )
+                installed = ctx.host_home / "hooks"
+                payloads = {
+                    "sdlc-start/assets/hooks": (
+                        "lib/__init__.py", "lib/sdlc_policy.py", "lib/sdlc_state.py",
+                        "pre_tool_use_sdlc_policy.py", "stop_sdlc_continue.py",
+                        "stop_lifecycle_arbiter.py",
+                    ),
+                    "global-context-management/scripts": (
+                        "agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py",
+                    ),
+                }
+                for source, names in payloads.items():
+                    for name in names:
+                        destination = installed / name
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(ctx.skills_root / source / name, destination)
+                hooks = {}
+                for event, name in (
+                    ("PreToolUse", "pre_tool_use_sdlc_policy.py"),
+                    ("Stop", "stop_lifecycle_arbiter.py"),
+                ):
+                    hooks[event] = [{"hooks": [{
+                        "type": "command",
+                        "command": f"python3 {installed}/hook_runtime.py --agent {agent} --hook {name}",
+                    }]}]
+                settings = "hooks.json" if agent == "codex" else "settings.json"
+                (ctx.host_home / settings).write_text(json.dumps({"hooks": hooks}))
+
+                verifier.check_hook_config(ctx)
+                parity = [check for check in ctx.checks if check.capability_id == "hooks.payload-parity"]
+                self.assertEqual([check.status for check in parity], ["PASS"])
+
+                (installed / "agent_runtime.py").write_text("corrupt fixture\n")
+                ctx.checks.clear()
+                verifier.check_hook_config(ctx)
+                parity = [check for check in ctx.checks if check.capability_id == "hooks.payload-parity"]
+                self.assertEqual([check.status for check in parity], ["FAIL"])
+                self.assertIn("agent_runtime.py", parity[0].detail)
+
+    def test_payload_parity_requires_two_successful_regular_file_digests(self):
+        for agent in ("codex", "claude"):
+            for case in ("both-missing", "source-missing", "installed-missing", "directory",
+                         "symlink", "read-errors", "invalid-digests"):
+                with self.subTest(agent=agent, case=case):
+                    original = self.source_contract_context()
+                    base = self.root / "parity-negative" / agent / case
+                    source_root, home = base / "source", base / "home"
+                    source_hooks = source_root / "sdlc-start/assets/hooks"
+                    shutil.copytree(original.skills_root / "sdlc-start/assets/hooks", source_hooks,
+                                    ignore=shutil.ignore_patterns('__pycache__'))
+                    source_support = source_root / "global-context-management/scripts"
+                    source_support.mkdir(parents=True)
+                    installed = home / "hooks"
+                    shutil.copytree(source_hooks, installed)
+                    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+                        shutil.copyfile(original.skills_root / "global-context-management/scripts" / name,
+                                        source_support / name)
+                        shutil.copyfile(source_support / name, installed / name)
+                    hooks = {"PreToolUse": [{"hooks": [{"type": "command", "command":
+                        f"python3 {installed}/hook_runtime.py --agent {agent} --hook pre_tool_use_sdlc_policy.py"}]}]}
+                    (home / ("hooks.json" if agent == "codex" else "settings.json")).write_text(
+                        json.dumps({"hooks": hooks}))
+                    ctx = replace(original, agent=agent, skills_root=source_root, host_home=home, checks=[])
+                    source = source_hooks / "lib/__init__.py"
+                    target = installed / "lib/__init__.py"
+                    if case in {"both-missing", "source-missing"}:
+                        source.unlink()
+                    if case in {"both-missing", "installed-missing", "directory", "symlink"}:
+                        target.unlink()
+                    if case == "directory":
+                        target.mkdir()
+                    if case == "symlink":
+                        target.symlink_to(source)
+                    if case in {"read-errors", "invalid-digests"}:
+                        with mock.patch.object(verifier, 'file_digest', return_value=(
+                            'missing' if case == 'read-errors' else 'invalid')):
+                            verifier.check_hook_config(ctx)
+                    else:
+                        verifier.check_hook_config(ctx)
+                    parity = [check for check in ctx.checks if check.capability_id == "hooks.payload-parity"]
+                    self.assertEqual([check.status for check in parity], ["FAIL"])
+
+    def test_claude_native_defaults_payloads_and_guard_adapter(self):
+        ctx = replace(self.source_contract_context(), agent="claude")
+        args = verifier.parse_args(["--agent", "claude", "--agent-home", str(ctx.host_home)])
+        self.assertEqual(args.global_skills_dir, ctx.host_home / "skills")
+        payload = verifier.pre_payload(ctx, "Bash", "git status --short")
+        self.assertIn("prompt_id", payload)
+        self.assertNotIn("turn_id", payload)
+        hook = ctx.skills_root / "sdlc-start/assets/hooks/pre_tool_use_sdlc_policy.py"
+        verifier.setup_fixture_state(ctx)
+        result = verifier.run_hook(hook, payload, ctx)
+        self.assertEqual(result, {})
+        denied = verifier.run_hook(hook, verifier.pre_payload(ctx, "Bash", "rm -rf /"), ctx)
+        self.assertIsNotNone(verifier.denied(denied))
+        command = f"python3 {ctx.host_home}/hooks/hook_runtime.py --agent claude --hook pre_tool_use_sdlc_policy.py"
+        self.assertTrue(verifier.hook_command_targets(command, ctx.host_home / "hooks/pre_tool_use_sdlc_policy.py", host_home=ctx.host_home, agent="claude"))
+        self.assertFalse(verifier.hook_command_targets(command.replace("--agent claude", "--agent codex"), ctx.host_home / "hooks/pre_tool_use_sdlc_policy.py", host_home=ctx.host_home, agent="claude"))
+
+    def test_verification_context_cannot_cross_hosts(self):
+        value = verifier.expected_verification_context(self.ctx, self.head)
+        self.assertFalse(verifier.valid_verification_context(replace(self.ctx, agent="claude"), value, current_head=self.head))
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -69,11 +181,11 @@ class VerifierContractTests(unittest.TestCase):
             repo_root=self.root / "source-repo",
             design_path=self.root / "design.md",
             global_skills_dir=self.root / "installed",
-            codex_home=self.root / "codex-home",
+            host_home=self.root / "agent-home",
             verification_root=self.verification_root,
             disposable_project=self.project,
             selected_project=self.selected,
-            fixture_codex_home=self.verification_root / "fixture-codex-home",
+            fixture_host_home=self.verification_root / "fixture-agent-home",
             live_evidence_path=self.verification_root / "live-results.json",
         )
 
@@ -151,6 +263,8 @@ class VerifierContractTests(unittest.TestCase):
             Path("maintain-project-specs/SKILL.md"),
             Path("align/SKILL.md"),
             Path("align-skill/scripts/validate-skill-structure.py"),
+            Path("align-skill/scripts/skill_frontmatter.py"),
+            Path("align-skill/scripts/skill_resources.py"),
         }
         for skill in verifier.REQUIRED_SDLC_SKILLS:
             files.add(Path(skill) / "SKILL.md")
@@ -417,6 +531,9 @@ class VerifierContractTests(unittest.TestCase):
         ]
         self.assertEqual([check.status for check in checks], ["FAIL"])
 
+        # An import/setup error must not masquerade as a catalog rejection.
+        self.assertTrue(checks[0].detail.startswith("Validated "), checks[0].detail)
+
     def test_spec_ownership_contract_accepts_canonical_sources(self) -> None:
         ctx = self.source_contract_context()
         verifier.check_spec_ownership_contract(ctx)
@@ -481,8 +598,8 @@ class VerifierContractTests(unittest.TestCase):
         path = ctx.skills_root / "sdlc-create-requirements" / "README.md"
         path.write_text(
             path.read_text(encoding="utf-8").replace(
-                "- Do not edit `docs/design.md`.",
-                "- Edit `docs/design.md`.",
+                "- Do not change the design managed region.",
+                "- Change the design managed region.",
                 1,
             ),
             encoding="utf-8",
@@ -1364,8 +1481,8 @@ class VerifierContractTests(unittest.TestCase):
         self.assertIsNone(verifier.private_output_path(target, self.verification_root))
 
     def test_malformed_hooks_json_is_a_failure(self) -> None:
-        self.ctx.codex_home.mkdir()
-        (self.ctx.codex_home / "hooks.json").write_text("{bad\n", encoding="utf-8")
+        self.ctx.host_home.mkdir()
+        (self.ctx.host_home / "hooks.json").write_text("{bad\n", encoding="utf-8")
         verifier.check_hook_config(self.ctx)
         self.assertTrue(
             any(
@@ -1377,7 +1494,7 @@ class VerifierContractTests(unittest.TestCase):
         )
 
     def test_semantically_malformed_hook_entry_is_a_failure(self) -> None:
-        self.ctx.codex_home.mkdir()
+        self.ctx.host_home.mkdir()
         value = {
             "hooks": {
                 "PreToolUse": [
@@ -1392,7 +1509,7 @@ class VerifierContractTests(unittest.TestCase):
                 ]
             }
         }
-        (self.ctx.codex_home / "hooks.json").write_text(
+        (self.ctx.host_home / "hooks.json").write_text(
             json.dumps(value), encoding="utf-8"
         )
         verifier.check_hook_config(self.ctx)
@@ -1408,8 +1525,8 @@ class VerifierContractTests(unittest.TestCase):
         )
 
     def test_toml_hook_state_metadata_is_not_an_event(self) -> None:
-        self.ctx.codex_home.mkdir()
-        (self.ctx.codex_home / "config.toml").write_text(
+        self.ctx.host_home.mkdir()
+        (self.ctx.host_home / "config.toml").write_text(
             '[hooks.state]\n"hooks.json:pre_tool_use:0:0" = { decision = "allow" }\n',
             encoding="utf-8",
         )
@@ -1422,7 +1539,7 @@ class VerifierContractTests(unittest.TestCase):
         self.assertEqual([check.status for check in source], ["PASS"])
 
     def test_wrong_hook_entrypoint_path_is_a_failure(self) -> None:
-        self.ctx.codex_home.mkdir()
+        self.ctx.host_home.mkdir()
         value = {
             "hooks": {
                 "PreToolUse": [
@@ -1437,7 +1554,7 @@ class VerifierContractTests(unittest.TestCase):
                 ]
             }
         }
-        (self.ctx.codex_home / "hooks.json").write_text(
+        (self.ctx.host_home / "hooks.json").write_text(
             json.dumps(value), encoding="utf-8"
         )
         verifier.check_hook_config(self.ctx)
@@ -1455,27 +1572,27 @@ class VerifierContractTests(unittest.TestCase):
         )
 
     def test_canonical_hook_template_entrypoint_is_accepted(self) -> None:
-        expected = self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
+        expected = self.ctx.host_home / "hooks" / "pre_tool_use_sdlc_policy.py"
         command = (
             'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_sdlc_policy.py"'
         )
         self.assertTrue(
             verifier.hook_command_targets(
-                command, expected, codex_home=self.ctx.codex_home
+                command, expected, host_home=self.ctx.host_home
             )
         )
 
     def test_canonical_hook_path_as_later_argument_is_rejected(self) -> None:
-        expected = self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
+        expected = self.ctx.host_home / "hooks" / "pre_tool_use_sdlc_policy.py"
         command = f"python3 /tmp/wrapper.py {expected}"
         self.assertFalse(
             verifier.hook_command_targets(
-                command, expected, codex_home=self.ctx.codex_home
+                command, expected, host_home=self.ctx.host_home
             )
         )
 
     def test_shell_wrapped_or_extended_hook_commands_are_rejected(self) -> None:
-        expected = self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
+        expected = self.ctx.host_home / "hooks" / "pre_tool_use_sdlc_policy.py"
         commands = (
             f"bash -c python3 {expected}",
             f'python3 {expected} "$(touch /tmp/unexpected)"',
@@ -1487,7 +1604,7 @@ class VerifierContractTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertFalse(
                     verifier.hook_command_targets(
-                        command, expected, codex_home=self.ctx.codex_home
+                        command, expected, host_home=self.ctx.host_home
                     )
                 )
 

@@ -1,13 +1,14 @@
 ---
 name: commit
 description: "Use only when explicitly asked for one local Git commit without push: inspect the full diff, stage repo-wide, validate, commit, and report. Also handles exact worktree-integration commits; not for PRs."
+disable-model-invocation: true
 ---
 
 # Commit
 
 ## Help
 
-For `$commit --help` or `$commit -h`, return concise help and stop before
+For `$commit --help` or `$commit -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,18 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for selected-home paths, native identity and required runtime setup.
+
+Use `$commit` in Codex, `/commit` in Claude Code, or
+`/skills:commit` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -30,7 +43,7 @@ Agentic SDLC checkpoints.
 
 - Committing all current local changes on the current branch without pushing.
 - Staging complete repository changes with repo-root `git add -A`, regardless
-  of the project, service, chart, app, or package directory where Codex starts.
+  of the project, service, chart, app, or package directory where the agent starts.
 - Using the user's exact commit message when provided.
 - Generating a concise commit message from the staged diff when the user does
   not provide one.
@@ -75,7 +88,7 @@ Agentic SDLC checkpoints.
 
 ## Writes
 
-- One owner-private authorization and claim state under the canonical Codex
+- One owner-private authorization and claim state under the selected agent
   home transaction root; these records contain bounded identities and digests,
   not prompt, message, diff, or repository file content.
 - The real Git index and one local commit only inside the owning transaction
@@ -138,7 +151,8 @@ Agentic SDLC checkpoints.
      current session. Task Implementer returns the same two paths from its
      owner transition inside a transient canonical `commit_context`. A worker
      runs that context's exact `prepare_argv` from its `scope_cwd` and uses
-     the returned raw `session_id` from `CODEX_THREAD_ID`; it must never use the
+     the returned raw `session_id` from the native host adapter (`CODEX_THREAD_ID` on Codex;
+     hook-bound `SKILLS_SESSION_ID` on Claude); it must never use the
      `worker_session_fingerprint_sha256` as `--session-id`. Never invoke a
      source-tree or alternate helper.
    - The helper copies the current real index into a private temporary index,
@@ -156,7 +170,7 @@ Agentic SDLC checkpoints.
      `commit_context`. The hook admits its own interpreter or an exact
      PATH-canonical `python3`/`python3.N`; arbitrary same-name paths and
      wrappers remain denied.
-   - Under the common-repository lock, the helper revalidates ref, `HEAD`, real
+   - Under the selected installation's common-repository lock, the helper revalidates ref, `HEAD`, real
      index, complete porcelain status, candidate tree, and Worktree ownership.
      Any drift makes the claim stale before real staging.
    - The helper alone runs repo-root `git add -A` with no pathspec, verifies the

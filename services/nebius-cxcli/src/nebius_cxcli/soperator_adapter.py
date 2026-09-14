@@ -13,7 +13,10 @@ from typing import Any
 
 from .soperator_checks_binding import bind_checks_jail
 from .soperator_enroot import enroot_profile_document
-from .soperator_jail_mounts import JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS
+from .soperator_jail_mounts import (
+    JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS,
+    validate_retained_home_layout,
+)
 from .soperator_release import SoperatorReleaseSnapshot
 from .soperator_rest_contract import materialize_soperator_rest
 
@@ -822,6 +825,7 @@ def _persistent_mounts(
 ) -> list[dict[str, Any]]:
     if contract["active_source"] == "legacy-rootfs":
         return []
+    validate_retained_home_layout(values)
     raw = values.get("jailPersistentMounts")
     rows = raw if isinstance(raw, list) else []
     mounts: list[dict[str, Any]] = []
@@ -954,8 +958,13 @@ def mount_gate_init_container(
     image: str,
     readiness_script: str = "",
 ) -> dict[str, Any]:
+    gate_name = f"mount-gate-{name}"
+    if len(gate_name) > 50:
+        gate_name = (
+            gate_name[:41].rstrip("-") + "-" + hashlib.sha256(gate_name.encode()).hexdigest()[:8]
+        )
     return {
-        "name": _dns_token(f"mount-gate-{name}", label="mount gate name"),
+        "name": _dns_token(gate_name, label="mount gate name"),
         "image": image,
         "imagePullPolicy": "IfNotPresent",
         "command": ["/bin/sh", "-ec", _MOUNT_GATE_SCRIPT + readiness_script],
@@ -1416,7 +1425,7 @@ def compile_upstream_soperator_values(
     }
     checks = _mapping(values.get("soperator-checks"))
     activechecks = bind_checks_jail(
-        _mapping(values.get("soperator-activechecks")), str(contract["active_pvc"])
+        _mapping(values.get("soperator-activechecks")), str(contract["active_pvc"]), mounts
     )
     unsupported_checks = {"waitForChecks", "srunReadyPartition"} & activechecks.keys()
     if unsupported_checks:

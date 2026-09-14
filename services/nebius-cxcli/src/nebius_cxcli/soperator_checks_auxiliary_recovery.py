@@ -7,7 +7,11 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .soperator_checks import SoperatorChecksExecution
-from .soperator_checks_binding import AUXILIARY_CRONJOB
+from .soperator_checks_binding import (
+    AUXILIARY_CRONJOB,
+    auxiliary_retained_mounts,
+    bind_auxiliary_spec,
+)
 from .soperator_checks_contract import job_execution_digest, normalized
 from .soperator_checks_policy import checks_digest
 
@@ -164,10 +168,11 @@ class AuxiliaryBindingRecovery:
         ):
             raise RuntimeError("auxiliary recovery lost its frozen checks Helm owner")
         expected = copy.deepcopy(dict(self.render(hr["spec"].get("values", {}))))
-        volumes = expected["spec"]["jobTemplate"]["spec"]["template"]["spec"]["volumes"]
-        if volumes[0] != {"name": "jail", "persistentVolumeClaim": {"claimName": "jail-pvc"}}:
-            raise RuntimeError("upstream auxiliary jail template changed")
-        volumes[0]["persistentVolumeClaim"]["claimName"] = parent.policy.auxiliary_pvc
+        expected["spec"] = bind_auxiliary_spec(
+            expected["spec"],
+            parent.policy.auxiliary_pvc,
+            auxiliary_retained_mounts(parent.policy.auxiliary_spec),
+        )
         actual_spec = cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]
         expected_spec = expected["spec"]["jobTemplate"]["spec"]["template"]["spec"]
         if _native_pod_spec(actual_spec) != _native_pod_spec(expected_spec):

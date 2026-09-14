@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .deploy_targets import enabled_cluster_target_refs
+from .soperator_login_keys import explicit_root_keys
 from .soperator_release import SoperatorReleaseSnapshot
 
 
@@ -51,3 +52,8 @@ def validate_soperator_install_configuration(
     cert_manager = soperator[0].get("values", {}).get("certManager", {})
     if not isinstance(cert_manager, Mapping) or cert_manager.get("enabled", True) is not True:
         raise ValueError("Soperator install requires upstream certManager.enabled=true.")
+    if explicit_root_keys(soperator[0]) is None:
+        raise ValueError(
+            "Soperator install requires an explicit root SSH key selection before saving. "
+            "Select a public key or deliberately configure an empty key list."
+        )

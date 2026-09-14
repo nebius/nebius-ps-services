@@ -40,6 +40,18 @@ from task_implementer_reporting import build_report, default_live_stages
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_claude_generation_uses_native_home_and_rejects_cross_host_resume(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"SKILLS_AGENT": "claude"}):
+            os.environ.pop("CODEX_THREAD_ID", None)
+            base = Path(temp).resolve()
+            result = prepare(base / "private", self.make_fixture(base))
+            self.assertEqual(Path(result["agent_home"]).name, "claude-home")
+            self.assertTrue(Path(result["agent_home"]).is_dir())
+            self.assertEqual(status(base / "private")["generation_id"], result["generation_id"])
+            with patch.dict(os.environ, {"SKILLS_AGENT": "codex"}):
+                with self.assertRaises(OwnershipBlockedError):
+                    status(base / "private")
+
     def setUp(self) -> None:
         preflight_patcher = patch.object(lifecycle, "_validate_runtime_preflight")
         self.runtime_preflight = preflight_patcher.start()

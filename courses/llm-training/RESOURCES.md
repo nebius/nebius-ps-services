@@ -27,3 +27,5 @@
 
 - [DDP communication hooks and PowerSGD state](https://docs.pytorch.org/docs/2.14/ddp_comm_hooks.html)
 - [DDP bucket sizing and hook contract](https://docs.pytorch.org/docs/2.14/generated/torch.nn.parallel.DistributedDataParallel.html)
+- [NVIDIA Megatron activation recomputation: full and selective granularity](https://docs.nvidia.com/nemo/megatron-bridge/latest/training/activation-recomputation.html)
+- [CUDA Graphs: explicit construction and stream capture](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html)

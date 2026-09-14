@@ -1,18 +1,21 @@
 id,should_trigger,prompt
-course-positive-01,true,"Use $create-learning-course to create a beginner course with a light HTML textbook and practical labs."
-course-positive-02,true,"Use $create-learning-course to revise this syllabus without losing useful explanations."
-course-positive-03,true,"Use $create-learning-course to create a nontechnical course using cases and reasoned feedback."
-course-positive-04,true,"Use $create-learning-course to align lab guides with their code and concept introductions."
-course-positive-05,true,"Use $create-learning-course --help"
-course-positive-06,true,"Use $create-learning-course -h"
-course-positive-07,true,"Use $create-learning-course to review this lesson for missing definitions and practice; report findings without editing files."
-course-positive-08,true,"Use $create-learning-course to draft only a syllabus for a beginner statistics course."
-course-negative-01,false,"Create a beginner HTML course with practical labs."
-course-negative-02,false,"Teach me Python interactively now."
-course-negative-03,false,"Research current Python validation libraries and compare them."
-course-negative-04,false,"Publish this course to our learning management system."
-course-negative-05,false,"Use $align-skill to update the course-authoring skill itself."
-course-negative-06,false,"Write product reference documentation for this package."
-course-negative-07,false,"Brainstorm course ideas without creating files."
-course-negative-08,false,"Fix this production code bug; the example happens to be used in a course."
+course-positive-01,true,Use $create-learning-course to create a beginner course with a light HTML textbook and practical labs.
+course-positive-02,true,Use $create-learning-course to revise this syllabus without losing useful explanations.
+course-positive-03,true,Use $create-learning-course to create a nontechnical course using cases and reasoned feedback.
+course-positive-04,true,Use $create-learning-course to align lab guides with their code and concept introductions.
+course-positive-05,true,Use $create-learning-course --help
+course-positive-06,true,Use $create-learning-course -h
+course-positive-07,true,Use $create-learning-course to review this lesson for missing definitions and practice; report findings without editing files.
+course-positive-08,true,Use $create-learning-course to draft only a syllabus for a beginner statistics course.
+course-negative-01,false,Create a beginner HTML course with practical labs.
+course-negative-02,false,Teach me Python interactively now.
+course-negative-03,false,Research current Python validation libraries and compare them.
+course-negative-04,false,Publish this course to our learning management system.
+course-negative-05,false,Use $align-skill to update the course-authoring skill itself.
+course-negative-06,false,Write product reference documentation for this package.
+course-negative-07,false,Brainstorm course ideas without creating files.
+course-negative-08,false,Fix this production code bug; the example happens to be used in a course.
 course-positive-09,true,"Use $create-learning-course to revise the lessons in my course with conceptual titles, Objective first, a diagram in each How it works and a final Mental model."
+create-learning-course-codex-portability,true,$create-learning-course Use $create-learning-course to create a beginner course with a light HTML textbook and practical labs.
+create-learning-course-claude-portability,true,/create-learning-course Use $create-learning-course to create a beginner course with a light HTML textbook and practical labs.
+create-learning-course-quoted-command,false,"Treat ""/skills:create-learning-course"" as sample text in this punctuation exercise; count its punctuation characters only."

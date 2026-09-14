@@ -1,4 +1,4 @@
-# Lab 01: Choose a valid GPU timing boundary
+# Lab 01: Compare CPU timers and CUDA events
 
 This lab measures one GPU operation three ways to expose a common benchmarking mistake: timing only the host's submission of asynchronous work. You will compare unsynchronized host time, synchronized host time, and CUDA-event time. The goal is to understand the question answered by each timer before choosing one for an optimization experiment.
 
@@ -16,7 +16,7 @@ Short H100 kernels make timer overhead and accidental synchronization significan
 
 ## Concepts and code path
 
-The program creates resident operands, repeatedly launches the operation, and records separate host and device timing paths. Synchronization makes the host boundary include completion. CUDA events measure an interval on the device timeline. Neither instrument automatically includes application work that occurs outside its start and stop markers.
+The program creates resident operands, repeatedly launches the operation, and records separate host and device timing paths. The synchronized CPU-timer case waits for the GPU operation before stopping the clock. CUDA events measure an interval on the device timeline. Neither instrument automatically includes application work that occurs outside its start and stop markers.
 
 ## Practice
 
@@ -34,7 +34,7 @@ Run Labs 01 and 02 and label every synchronization point.
 
 ### Run the supplied experiment
 
-Run the smoke case first, then the larger profile. Compare timer boundaries within each profile; do not attribute a cross-profile change solely to a timer mechanism.
+Run the smoke case first, then the larger profile. Compare the included operations and completion waits within each profile; do not attribute a cross-profile change solely to a timer mechanism.
 
 ```bash
 umask 077
@@ -60,11 +60,11 @@ Draw where each timer begins and ends relative to host enqueue and device comple
 
 Throughput, latency, memory, numerical error, startup cost, and maintainability can move in opposite directions. Define the primary metric and guardrails before measuring so a candidate cannot choose its own success criterion afterward.
 
-CUDA events measure elapsed time between device markers, not a sum of active kernel durations. They exclude host work and queueing outside the marker interval, but dependency waits and idle gaps caused by delayed host submission between markers can be included. Use a profiler to separate those gaps from active GPU work. Full synchronization is accurate for a boundary but can destroy overlap if placed inside the schedule. Profiler overhead makes traces diagnostic rather than acceptance timing.
+CUDA events measure elapsed time between device markers, not a sum of active kernel durations. They exclude host work and queueing outside the marker interval, but dependency waits and idle gaps caused by delayed host submission between markers can be included. Use a profiler to separate those gaps from active GPU work. Waiting for the required work makes a CPU measurement include completion, but a device-wide wait can destroy overlap if placed inside the schedule. Profiler overhead makes traces diagnostic rather than acceptance timing.
 
 ## If something goes wrong
 
-Unexpectedly large host timings may include queued work, initialization, or contention. Isolate the run and inspect warm-up and synchronization boundaries. Do not discard inconvenient samples without a stated exclusion rule.
+Unexpectedly large host timings may include queued work, initialization, or contention. Isolate the run and inspect warm-up and synchronization placement. Do not discard inconvenient samples without a stated exclusion rule.
 
 Optimizing first and attempting to reconstruct the baseline afterward loses causal evidence.
 
@@ -72,12 +72,12 @@ Synchronizing every operation removes overlap and measures an artificial schedul
 
 ## Takeaways and next step
 
-Every reported duration needs a named boundary. Use device events for scoped device work and synchronized wall time for an application boundary. Next, identify accidental synchronization inside a repeated workload in Lab 02.
+Every reported duration needs a named timer, included operations and completion condition. Use CUDA events for a device interval and a CPU timer with the required synchronization for the complete application request. Next, identify accidental synchronization inside a repeated workload in Lab 02.
 
 Freeze correctness and workload identity, save the baseline, and reject contaminated comparisons.
 
 Name the independent variable and every controlled variable for your next experiment.
 
-Synchronize only at deliberate boundaries and report which boundary each metric spans.
+Synchronize where dependencies or the measurement require it, and report which operations each metric includes.
 
 Explain what a CUDA event excludes that application wall time includes.

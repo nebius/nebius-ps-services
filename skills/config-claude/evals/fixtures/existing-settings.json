@@ -1,0 +1,10 @@
+{
+  "model": "existing-model-choice",
+  "permissions": {
+    "defaultMode": "default",
+    "deny": ["Bash(rm *)"]
+  },
+  "sandbox": {"enabled": true},
+  "enabledPlugins": {"skills@nebius-ps-services": true},
+  "customPreference": "preserve"
+}

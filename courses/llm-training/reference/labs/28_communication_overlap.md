@@ -30,7 +30,7 @@ sbatch slurm/two_node.sbatch labs/28_communication_overlap.py --profile smoke
 
 ## Check your results
 
-Require serialized/overlapped gradient agreement, finite gradients, and finite ratios. Inspect `observed_gradient_ready_bucket_indices`, step medians, and serialized collective timing. A shorter joined step is compatible with overlap but needs a timeline for the causal claim.
+Require serialized/overlapped gradient agreement, finite gradients, and finite ratios. Inspect `observed_gradient_ready_bucket_indices`, step medians, and serialized collective timing. A shorter step time including communication completion is compatible with overlap but needs a timeline for the causal claim.
 
 Retain gradient-ready times, collective ranges, overlap, exposed communication, bucket bytes, and step time.
 

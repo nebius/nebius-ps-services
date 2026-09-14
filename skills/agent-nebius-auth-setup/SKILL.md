@@ -1,13 +1,14 @@
 ---
 name: agent-nebius-auth-setup
 description: "Use only when explicitly invoked to bootstrap or repair current-project Codex Agent Nebius auth: account/tenant access, credentials/profile, repair lease, or separately requested auth hooks."
+disable-model-invocation: true
 ---
 
 # Agent Nebius Auth Setup
 
 ## Help
 
-For `$agent-nebius-auth-setup --help` or `$agent-nebius-auth-setup -h`, return concise help and stop before
+For `$agent-nebius-auth-setup --help` or `$agent-nebius-auth-setup -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$agent-nebius-auth-setup` in Codex, `/agent-nebius-auth-setup` in Claude Code, or
+`/skills:agent-nebius-auth-setup` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 

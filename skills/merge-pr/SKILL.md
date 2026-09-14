@@ -1,13 +1,14 @@
 ---
 name: merge-pr
 description: "Use only when explicitly asked to merge a ready GitHub PR outside Agentic SDLC after verifying checks, reviews, mergeability, branch state, and head SHA; never use admin bypass."
+disable-model-invocation: true
 ---
 
 # Merge PR
 
 ## Help
 
-For `$merge-pr --help` or `$merge-pr -h`, return concise help and stop before
+For `$merge-pr --help` or `$merge-pr -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$merge-pr` in Codex, `/merge-pr` in Claude Code, or
+`/skills:merge-pr` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 

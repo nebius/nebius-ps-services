@@ -144,7 +144,8 @@ def lesson(course, title):
 
 def test_foundations_teaches_basic_timing_before_first_benchmark():
     entry = lesson("gpu-fundamentals", EXPECTED_ORDER["gpu-fundamentals"][0])
-    assert "timing" in entry["How it works"]
+    explanation = entry["How it works"].lower()
+    assert "cpu timer" in explanation and "cuda events" in explanation
     concepts = lab_section("gpu-fundamentals", 1, "Concepts and code path").lower()
     assert "warm-up" in concepts and "cuda events" in concepts
     assert "preflight" in lab_section("gpu-fundamentals", 1, "Practice").lower()

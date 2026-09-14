@@ -1,0 +1,13 @@
+{
+  "name": "nebius-ps-services",
+  "owner": {
+    "name": "Nebius"
+  },
+  "plugins": [
+    {
+      "name": "skills",
+      "source": "./skills",
+      "description": "Reusable engineering skills and workflow hooks."
+    }
+  ]
+}

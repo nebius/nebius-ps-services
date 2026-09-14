@@ -60,7 +60,7 @@ Lab 01 checks gradient presence for every trainable parameter, but measures the
 update delta only for its first tracked parameter. This is not an all-parameter
 update-equivalence test.
 
-Lab 14 compares eager, selective, and full recomputation. Loss and every
+Lab 14 compares no checkpointing, alternate-block checkpointing and all-block checkpointing. Loss and every
 trainable parameter gradient, including token and position embedding weights,
 must agree at BF16 rtol 0.01 and atol 0.01. Its inputs are integer token IDs:
 there is no continuous input gradient to compare. Check the loss and every

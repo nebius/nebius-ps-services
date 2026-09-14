@@ -1,13 +1,14 @@
 ---
 name: install-grafana-mcp-for-nebius
 description: "Use only when explicitly invoked. Install, configure, validate, or repair Grafana MCP for Nebius-managed Grafana with a pinned human profile, Codex config, token wrapper, or requested datasources. Use nebius-grafana-query for queries."
+disable-model-invocation: true
 ---
 
 # Install Grafana MCP for Nebius
 
 ## Help
 
-For `$install-grafana-mcp-for-nebius --help` or `$install-grafana-mcp-for-nebius -h`, return concise help and stop before
+For `$install-grafana-mcp-for-nebius --help` or `$install-grafana-mcp-for-nebius -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,18 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+This skill configures **Codex**, regardless of which agent executes it.
+Keep its native configuration formats and product-specific commands.
+
+Use `$install-grafana-mcp-for-nebius` in Codex, `/install-grafana-mcp-for-nebius` in Claude Code, or
+`/skills:install-grafana-mcp-for-nebius` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 

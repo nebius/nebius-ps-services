@@ -285,11 +285,11 @@ def assert_agent_delegation_context(context: str) -> None:
     if "agents/alpha_mapper.toml" in context:
         raise AssertionError("agent config path leaked into context")
     if (
-        "Local policy asks the main Codex agent to dynamically spawn bounded"
+        "Local policy asks the main agent to dynamically spawn bounded"
         not in context
     ):
         raise AssertionError("delegation policy context missing")
-    if "Available read-only roles:" not in context:
+    if "Read-only role candidates (verify exposed tools and local overrides before spawning):" not in context:
         raise AssertionError("read-only role list missing")
     if "Suggested role timing:" not in context:
         raise AssertionError("role timing hint missing")
@@ -508,7 +508,7 @@ def assert_doc_contracts(root: Path) -> None:
 
     required_skill = (
         "No legacy task-state",
-        "it must allow writes under\n`$CODEX_HOME/task-state`",
+        "it must allow writes under\n`<agent-home>/task-state`",
         "same-workspace prior task-state candidate paths",
         "must not inject\nhistorical task-state contents",
         "rolling summary, not an append-only log",
@@ -619,7 +619,7 @@ def assert_doc_contracts(root: Path) -> None:
         "Related same-workspace task-state candidates (not loaded):",
         "verify against current repo/runtime evidence",
         "the prompt or local policy request authorizes delegation",
-        "Local policy asks the main Codex agent to dynamically spawn bounded",
+        "Local policy asks the main agent to dynamically spawn bounded",
         "Choose the smallest useful set of targeted roles",
     )
     for needle in required_prompt_hook_summary:
@@ -633,7 +633,7 @@ def assert_doc_contracts(root: Path) -> None:
         "do not ask for another user prompt only because the original",
         "close completed helpers when close controls are available",
         "Agents may clean up temporary trees they created during the current task",
-        'find "$task_temp_dir" -depth -delete',
+        'find /tmp/<task-owned-tree> -depth -delete',
         "## Live Product Validation",
         "define and freeze the\n  expected product-owned behavior",
         "Observation is non-intervening only when it cannot alter",
@@ -676,6 +676,8 @@ def assert_doc_contracts(root: Path) -> None:
 def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     hooks_dir = codex_home / "hooks"
     hooks_dir.mkdir(parents=True)
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+        shutil.copyfile(root / "scripts" / name, hooks_dir / name)
 
     session_script = hooks_dir / "session_start_context.py"
     user_script = hooks_dir / "user_prompt_context.py"
@@ -941,7 +943,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         raise AssertionError("UserPromptSubmit should not route sdlc-start")
     if "Apply the `global-context-management` skill" in context:
         raise AssertionError("UserPromptSubmit should not directly select skills")
-    if "Local policy asks the main Codex agent" in context:
+    if "Local policy asks the main agent" in context:
         raise AssertionError("delegation context appeared before policy opt-in")
     if "For every subagent you spawn" in context:
         raise AssertionError("UserPromptSubmit repeated subagent workflow detail")
@@ -1043,7 +1045,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     env_override_context = json.loads(env_override_result.stdout)["hookSpecificOutput"][
         "additionalContext"
     ]
-    if "Local policy asks the main Codex agent" in env_override_context:
+    if "Local policy asks the main agent" in env_override_context:
         raise AssertionError("environment override unexpectedly enabled delegation")
 
     write_agent_fixture(codex_home, enable_policy=True)
@@ -1072,6 +1074,8 @@ def validate_hooks_json_command(root: Path, hooks: dict, temp_dir: Path) -> None
     normal_home = temp_dir / "normal-home"
     hooks_dir = custom_home / "hooks"
     hooks_dir.mkdir(parents=True)
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+        shutil.copyfile(root / "scripts" / name, hooks_dir / name)
     normal_home.mkdir()
     shutil.copyfile(
         root / "assets" / "global_context_state.py.template",
@@ -1084,7 +1088,7 @@ def validate_hooks_json_command(root: Path, hooks: dict, temp_dir: Path) -> None
 
     command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     expected_command = (
-        'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/session_start_context.py"'
+        'SKILLS_AGENT=codex python3 "${CODEX_HOME:-$HOME/.codex}/hooks/session_start_context.py"'
     )
     if command != expected_command:
         raise AssertionError("hooks.json SessionStart command is not canonical")
@@ -1118,6 +1122,8 @@ def validate_security_and_permission_helper(root: Path, temp_dir: Path) -> None:
     codex_home = temp_dir / "security-codex"
     hooks_dir = codex_home / "hooks"
     hooks_dir.mkdir(parents=True)
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+        shutil.copyfile(root / "scripts" / name, hooks_dir / name)
     helper = hooks_dir / "global_context_state.py"
     user_hook = hooks_dir / "user_prompt_context.py"
     shutil.copyfile(root / "assets/global_context_state.py.template", helper)
@@ -1156,7 +1162,7 @@ def validate_security_and_permission_helper(root: Path, temp_dir: Path) -> None:
     audit_command = [
         sys.executable,
         str(helper),
-        "--codex-home",
+        "--agent-home",
         str(codex_home),
     ]
 

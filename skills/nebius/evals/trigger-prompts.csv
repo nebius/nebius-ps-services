@@ -21,3 +21,6 @@ nebius-cxcli,false,Onboard a component into nebius-cxcli and update its wizard s
 nebius-vpngw,false,Repair the vpngw HA controller fencing and failback state machine.
 nebius-soperator,false,Implement cxcli Soperator upgrade recovery checkpoints.
 nebius-python-project,false,Standardize my Python project with uv Ruff and pytest.
+nebius-codex-portability,true,$nebius Build a Python Nebius VM provisioner with explicit disk and subnet identity and bounded readiness.
+nebius-claude-portability,true,/nebius Build a Python Nebius VM provisioner with explicit disk and subnet identity and bounded readiness.
+nebius-quoted-command,false,"Treat ""/skills:nebius"" as sample text in this punctuation exercise; count its punctuation characters only."

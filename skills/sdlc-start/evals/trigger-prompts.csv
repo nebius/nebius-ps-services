@@ -1,7 +1,10 @@
 id,should_trigger,prompt
-sdlc-start-positive-01,true,"Use sdlc-start workspace init for this project."
-sdlc-start-positive-02,true,"Run sdlc-start for the managed feature prompt file."
-sdlc-start-positive-03,true,"Resume the explicitly invoked prompt-bound Agentic SDLC run."
-sdlc-start-negative-01,false,"Implement this feature normally without Agentic SDLC."
-sdlc-start-negative-02,false,"Capture this same-prompt requirement automatically but do not run the workflow."
-sdlc-start-negative-03,false,"Use Task Implementer for these dependency waves."
+sdlc-start-positive-01,true,Use sdlc-start workspace init for this project.
+sdlc-start-positive-02,true,Run sdlc-start for the managed feature prompt file.
+sdlc-start-positive-03,true,Resume the explicitly invoked prompt-bound Agentic SDLC run.
+sdlc-start-negative-01,false,Implement this feature normally without Agentic SDLC.
+sdlc-start-negative-02,false,Capture this same-prompt requirement automatically but do not run the workflow.
+sdlc-start-negative-03,false,Use Task Implementer for these dependency waves.
+sdlc-start-codex-portability,true,$sdlc-start Use sdlc-start workspace init for this project.
+sdlc-start-claude-portability,true,/sdlc-start Use sdlc-start workspace init for this project.
+sdlc-start-quoted-command,false,"Treat ""/skills:sdlc-start"" as sample text in this punctuation exercise; count its punctuation characters only."

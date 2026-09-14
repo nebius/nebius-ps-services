@@ -589,7 +589,7 @@ class HookTestCase(unittest.TestCase):
 
         self.assertEqual(len(matches), 1)
         matcher, hook = matches[0]
-        self.assertEqual(matcher, "Bash|apply_patch|Edit|Write|mcp__.*")
+        self.assertEqual(matcher, "Bash|apply_patch|Edit|Write|mcp__.*|Skill")
         self.assertNotIn("statusMessage", hook)
 
     def test_pretool_allows_git_status(self) -> None:
@@ -705,6 +705,33 @@ class HookTestCase(unittest.TestCase):
             PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home
         )
         self.assertEqual(result, {})
+
+    def test_native_write_and_edit_preserve_secret_guard(self) -> None:
+        self.active_run()
+        for tool, field in (("Write", "content"), ("Edit", "new_string")):
+            for content, denied in (("print('ok')", False), ("-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----", True)):
+                with self.subTest(tool=tool, denied=denied):
+                    payload = self.pre_payload(tool, "")
+                    payload["tool_input"] = {"file_path": str(self.project / "src/new.py"), field: content}
+                    result = run_hook(PRE_TOOL, payload, self.codex_home)
+                    if denied:
+                        self.assert_denied(result, "secret")
+                    else:
+                        self.assertEqual(result, {})
+
+    def test_internal_skill_requires_active_coordinator_context(self) -> None:
+        payload = self.pre_payload("Skill", "")
+        payload["tool_input"] = {"skill": "skills:sdlc-commit"}
+        self.assert_denied(run_hook(PRE_TOOL, payload, self.codex_home), "workflow context")
+        self.active_run()
+        payload["is_subagent"] = True
+        self.assert_denied(run_hook(PRE_TOOL, payload, self.codex_home), "coordinator")
+
+    def test_internal_skill_allows_initial_project_coordinator(self) -> None:
+        self.active_run(phase="requirements", next_skill="sdlc-create-requirements")
+        payload = self.pre_payload("Skill", "")
+        payload["tool_input"] = {"skill": "skills:sdlc-create-requirements"}
+        self.assertEqual(run_hook(PRE_TOOL, payload, self.codex_home), {})
 
     def test_pretool_allows_patch_containing_dockerfile_ownership_text(self) -> None:
         self.active_run()

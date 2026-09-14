@@ -63,7 +63,7 @@ Source inventory and ownership checks pass; target runtime evidence is separate.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=7 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=8 -->
 ### FEAT-002: Shared authoring and publication contract
 
 #### Requirements Covered
@@ -77,6 +77,11 @@ The packages contain long-form lessons, runnable labs and self-contained HTML.
 #### Design Details
 
 Use one renderer and shared light stylesheet, complete source listings, accessible SVGs, supporting guides and official end references. FEAT-011 owns the publication simplification; FEAT-021 defines the current lesson-to-lab boundary and unified Practice section.
+
+Mark maintainer-only README sections with a concise **For course maintainers**
+label. Within mixed-audience sections, label only the authoring or publication
+instructions. Keep learner environment checks and lab execution guidance
+available to learners. Rebuild any course HTML that embeds an edited README.
 
 #### Selected Option
 
@@ -118,9 +123,17 @@ One coherent authoring/presentation contract applies to every course.
 
 The five courses contain 73 lessons, 94 numbered labs and 122 diagrams. FEAT-011 supplies the publication UI; FEAT-019 and FEAT-020 supply the networking and transfer additions, FEAT-021 defines the lesson/lab boundary, and FEAT-023 defines the current lesson presentation and diagram coverage.
 
+The catalog README labels website publication, authoring advice, offline
+validation and lab-guide maintenance for course maintainers. The Fundamentals
+README labels its publication instruction, including in the generated HTML.
+
 #### Verification Evidence
 
 Source checks pass; fresh visual and H100 qualification remain separate.
+
+For the maintainer labels, review of the catalog and all five course READMEs,
+Markdown lint, selected-page source/HTML parity, the Fundamentals standalone
+validator and diff checks passed. These checks cover documentation only.
 
 <!-- /FEATURE: FEAT-002 -->
 
@@ -2871,6 +2884,292 @@ live H100 qualification is claimed. Delivery remains implemented while those
 publication/qualification lanes remain open.
 
 <!-- /FEATURE: FEAT-023 -->
+
+<!-- FEATURE: FEAT-024 reqs=REQ-014 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-024: NVIDIA terminology review and contextual corrections
+
+#### Requirements Covered
+
+- REQ-014: Authoritative technical terminology throughout the catalog.
+
+#### Context Evidence
+
+The catalog has 73 lessons and 94 numbered lab guides. Fundamentals Lab 01 uses
+execution boundary as an unexplained timing label, motivating a complete review
+of related vocabulary rather than a single phrase replacement.
+
+#### Design Details
+
+Read each canonical lesson and guide with its technical sources; inspect lab
+implementations before changing claims. Use CUDA and NVIDIA library/profiler
+references for their concepts and official framework documentation for framework
+semantics. Explain measurement scope through CPU timers, CUDA events and the
+operations included. Separate data storage, launch, execution, transfer and
+synchronization, retaining useful plain-language explanations. Reconcile
+connected glossary entries, SVG labels, captions, metadata and reference links.
+Keep detailed audit inventories outside the learner publication.
+
+#### Selected Option
+
+Contextual corrections in the existing canonical files and deterministic
+regeneration of the five textbooks.
+
+#### Alternatives Considered
+
+A word blacklist cannot establish correct meaning in context. Renaming every
+ordinary word into jargon reduces clarity; verbatim vendor prose loses the
+course's original teaching and can introduce licensing problems.
+
+#### Implementation Boundaries
+
+Courses only; preserve code behavior, identifiers, commands, prerequisites and
+unrelated changes. Read-only helpers may audit independent course groups; the
+root agent owns edits, source decisions and paired spec publication.
+
+#### Test-First Success Criteria
+
+- TDD-001: Existing full-prose/source parity and course validators remain green.
+- TDD-002: Reviewed terminology has the same meaning in lessons, guides,
+  glossary entries and related diagrams; concrete timing labels name what runs.
+
+#### Validation Plan
+
+Verify official definitions, read corrected passages in context, regenerate all
+pages, run the existing offline checks and inspect changed visuals when permitted.
+
+#### Test Plan
+
+Use existing editorial, diagram-fit, navigation, source-parity and full offline
+regression checks. Avoid tests that merely freeze replacement prose.
+
+#### Evaluation Plan
+
+Confirm complete lesson/lab audit coverage and check that students can relate
+terms to official references and actual supplied implementations.
+
+#### Rollout And Rollback
+
+Atomic local HTML generation and focused version-controlled source changes;
+no external publication in this task.
+
+#### Done Definition
+
+All lessons and guides reviewed, actionable terminology gaps corrected, related
+sources aligned and verification lanes reported independently.
+
+#### Implementation Evidence
+
+Reviewed all 73 lessons and 94 lab guides against official NVIDIA and owning
+framework definitions, checking actual implementations before changing claims.
+Contextual corrections distinguish CPU timers and CUDA events, storage residency
+and execution residency, memory spaces and caches, coalescing and contiguity,
+theoretical and achieved occupancy, warp participation masks, thread-block
+clusters, asynchronous copy APIs, checkpoint variants and serving metrics.
+
+Aligned glossaries, related diagrams/captions, syllabuses, worksheets, references
+and authoring guidance; rebuilt all five textbooks. Seventeen SVG figures changed.
+Lab source behavior, commands and result keys remain unchanged. Three existing
+editorial tests now check the clarified concepts or exact result keys instead of
+obsolete prose; the renderer change only updates an asynchronous-copy label.
+
+#### Verification Evidence
+
+All 766 offline tests, five standalone/catalog validators, generated-source
+parity, changed-source lint/format and whitespace checks pass. Source listing
+membership and bytes match all 94 canonical lab sources. Independent read-only
+review found no outstanding defect in the corrected technical material.
+
+Rendered and inspected all 17 changed figures and corrected a roofline-label
+collision. Browser checks loaded all five textbooks at desktop, 390 and 320 pixel
+widths without document-level horizontal overflow or missing fragment targets.
+Sampled text/reflow, lab navigation, keyboard TOC operation and source scrolling
+passed; exhaustive page-by-page accessibility and zoom testing remain unclaimed.
+
+The installed course-skill checker reports eight identical format failures on
+current and task-start snapshots. This is baseline-equivalent failure, not a
+passing checker gate. Per-course PUBLICATION-REVIEW.md records these evidence
+limits. Installed-environment, runtime activation and live CUDA/H100/Slurm
+qualification remain separate and pending.
+
+<!-- /FEATURE: FEAT-024 -->
+
+<!-- FEATURE: FEAT-025 reqs=REQ-015 status=ready delivery=verified priority=P1 version=5 -->
+### FEAT-025: Portable incremental course sync over SSH
+
+#### Requirements Covered
+
+- REQ-015: Incremental local course sync to a Slurm login node.
+
+#### Context Evidence
+
+The five standalone courses keep numbered lab files beside shared helpers,
+Slurm launchers, requirements, runtime tools, instructions and CUDA build
+metadata. Their Git ignore rules exclude environments, caches and results.
+Copying only labs would omit required runtime dependencies.
+
+#### Design Details
+
+Add `sync-labs.sh` at the course catalog root using Bash 3.2-compatible syntax.
+Resolve that root from the executable location and discover immediate real
+course directories containing `reference/course.json` and `labs/`. Create a
+checked NUL-delimited manifest from Git tracked and non-ignored untracked files,
+using current working contents and skipping local deletions. Include catalog
+HTML and preserve each complete course package and original folder name.
+
+The positional target accepts DNS names, IPv4/IPv6 literals and SSH aliases,
+with optional `user@`. Preserve the normalized target for SSH configuration and resolution. A private
+transport passes the real host directly to SSH and quotes each receiver argument
+for the remote shell, while rsync uses a fixed internal endpoint. This avoids
+rsync-specific host and command tokenization for every target, including IPv6.
+Without an explicit account use `root`. Options are `--dry-run`, `--dest NAME`,
+`--port PORT`, `--identity FILE`, `-h`/`--help` and `--`. The destination defaults
+to a real `courses` directory directly beneath remote home; validate safe
+single-component names and refuse a symlink destination.
+
+Normalize every target to `user@host` in `parse_target`: initialize the user to
+`root`, replace it only with a validated explicit username, and share that target
+between preflight and the transfer transport. The command-line account takes
+precedence over SSH configuration `User`; other SSH settings remain available.
+When a bare target fails preflight, explain the root default and `user@target`
+override. The selected account must already permit SSH login and have a usable
+home; syncing does not provision accounts, home directories or authorized keys.
+
+Check local tools and source before read-only remote preflight. Use the same SSH
+settings for preflight and one rsync transfer covering all courses. Preserve
+paths, permissions, timestamps and safe links, enable compression and itemized
+statistics, and rely on size/mtime quick checks. Local files overwrite matching
+remote versions; omit deletion, update-only and in-place writes. Temporary
+manifests and SSH argument transport are private and cleaned on exit. Report
+partial failures nonzero and direct the learner to rerun before starting jobs.
+Wait asynchronously so INT, TERM and HUP can stop the active local command and
+SSH transport promptly. Preserve stdin for authentication, return the signal's
+nonzero status and retain files already transferred for the next sync.
+Idempotency means that a settled repeat preserves file contents, permissions and
+modification times without transferring regular-file contents. Changed metadata
+may converge on the next run. After interruption, rerun the same transfer to
+finish the selected sources; completed files and remote-only results remain.
+
+#### Selected Option
+
+Deterministic Bash, Git, OpenSSH and rsync with one portable execution path.
+OpenSSH performs DNS resolution and normal account/key/host verification. Git
+owns file selection; rsync owns incremental transfer and file replacement.
+
+#### Alternatives Considered
+
+Manual scp repeats copying and selection. Remote Git pulls omit uncommitted
+local work. Separate per-course transfers add connection overhead. A sync
+state database or custom DNS resolver adds maintenance without learner value.
+Delegating the account default to SSH made behavior depend on each workstation;
+the selected root default follows the explicit CLI contract. Requiring a username
+for every invocation would remove the requested bare-target convenience.
+
+#### Implementation Boundaries
+
+New script and focused tests, course README and paired specs only. Preserve
+existing edits. No dependency installs, Slurm jobs, live cluster writes or
+application/AI stack changes. Learners complete sync before submitting jobs;
+remote home accessibility from workers is an environment prerequisite.
+
+#### Test-First Success Criteria
+
+- TDD-001: All packages retain required relative paths and current local bytes.
+- TDD-002: Unchanged repeats transfer no regular-file contents; one edited lab
+  transfers only that file; remote-only outputs survive.
+- TDD-003: Dry runs leave missing and existing destinations unchanged; all target
+  forms select root by default or preserve an explicit user in both SSH calls;
+  SSH options propagate safely and failures return nonzero.
+- TDD-004: Settled repeats preserve destination snapshots, permission-only edits
+  converge, and a partially completed real transfer can be rerun to completion.
+
+#### Validation Plan
+
+Run Bash 3.2 syntax, ShellCheck, focused pytest, catalog/source checks and align
+on changed surfaces; validate the paired canonical specs.
+
+#### Test Plan
+
+Exercise real rsync via a controlled local SSH transport in temporary Git
+fixtures, including new/uncommitted/deleted files, ignored outputs, spaces,
+unsafe destinations and symlinks, failed preflight and interrupted transfer.
+
+#### Evaluation Plan
+
+Verify help and README lead from a local hostname/IP command to a remote course
+root and the existing lab launch workflow. Keep live runtime proof separate.
+
+#### Rollout And Rollback
+
+Ship an executable script with no installation step. Run a dry preview before
+first transfer if desired. Existing callers that need a non-root account must
+use `user@target`, including when SSH config has a `User` entry. Rerun after
+interruption. Re-sync a chosen local
+revision to restore matching sources; remote-only data is never removed.
+
+#### Done Definition
+
+Documented hostname/IP/alias commands, incremental transfer semantics and
+isolated functional tests pass with preserved course runtime layout.
+
+#### Implementation Evidence
+
+Added executable `sync-labs.sh`, isolated transfer tests and the catalog README
+workflow. The script dynamically selects complete course packages with a checked
+Git manifest, runs read-only SSH preflight and a single real rsync transfer, and
+cleans private temporary files. The same transport preserves hostname/IP/user
+and key-path arguments across all calls. Local-wins, no-deletion, safe-link and
+dry-run behaviors are implemented without dependency or cluster mutations.
+Signal handling terminates the tracked command and SSH transport before private
+temporary-file cleanup; cancellation never reports a successful sync.
+Target normalization inserts `root` for bare targets and preserves validated
+explicit usernames. The resulting `user@host` is shared by both SSH calls.
+Help, preflight guidance and README describe the root default and explicit
+`user@target` overrides, including precedence over SSH configuration `User`.
+The transfer implementation already satisfied the expanded idempotency checks;
+no alternate transfer path or account guessing was introduced.
+
+#### Verification Evidence
+
+All 52 focused sync tests pass. Transfer fixtures use real Apple rsync with
+Bash 3.2 and a controlled SSH endpoint; they verify initial and
+incremental bytes, one-file updates, newer remote overwrite, retained remote-only
+files, source exclusions, custom course names, IPv4/IPv6/DNS/aliases, quoted key
+paths, preflight failures, retry and unchanged destinations during dry runs.
+Six signal regressions cover INT, TERM and HUP during pending preflight and
+transfer startup. The cancellation regression failed before the repair and
+passes after it. Expanded tests compare complete settled destination snapshots,
+verify permission-only convergence and interrupt a rate-limited real receiver
+after a partial write, then rerun to completion and verify an unchanged repeat.
+The root-default target regression failed against the earlier parser and passed
+after normalization changed. The target matrix verifies root for bare DNS,
+IPv4/IPv6 and aliases, plus explicit root, nebius and student accounts, on both
+preflight and transfer. A local OpenSSH configuration-only check independently
+confirmed explicit root/student selection overrides a configured `User` without
+opening a network connection.
+
+For the previous SSH-default revision, a bounded live comparison rejected the
+default local account and accepted the cluster account with the same existing
+keys. A host-specific client `User`
+setting corrected that environment's bare-target selection. That revision's
+bare-IP dry run then passed SSH preflight and remote rsync 3.2.7 negotiation;
+independent checks confirmed the destination was absent before and after.
+Strict host verification remained enabled and no remote data or authorization
+was changed. That earlier preview is not live proof of the root-default revision.
+
+Bash syntax, ShellCheck, Ruff lint/format and canonical spec validation pass.
+Implementation validation also passed 37 catalog tests, generated HTML parity
+and all five course validators. Markdown lint passes with MD013
+disabled for existing long-line and canonical marker conventions; no unrelated
+prose was reformatted. Independent read-only review found no blocking issue and
+verified nested destination symlinks cannot redirect writes into their outside
+target. Task-start content in the previously dirty README and specs is retained.
+
+Live DNS resolution, interactive authentication, Linux execution of the local
+script, live course uploads and H100/Slurm jobs were not exercised. The fixture
+and earlier read-only live checks do not establish cluster readiness. The current
+root-default revision was not run against a live login node.
+
+<!-- /FEATURE: FEAT-025 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

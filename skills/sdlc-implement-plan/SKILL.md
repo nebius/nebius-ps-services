@@ -1,13 +1,14 @@
 ---
 name: sdlc-implement-plan
 description: "Use only as part of the Agentic SDLC workflow; after sdlc-tdd, coordinate one feature's dependency waves with isolated agents, branches, and worktrees, ordered integration, combined validation, and non-force cleanup."
+user-invocable: false
 ---
 
 # Implement Plan
 
 ## Help
 
-For `$sdlc-implement-plan --help` or `$sdlc-implement-plan -h`, return concise help and stop before
+For `$sdlc-implement-plan --help` or `$sdlc-implement-plan -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,27 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for the selected agent home, native identity and required runtime setup.
+
+Use `$sdlc-implement-plan` in Codex, `/sdlc-implement-plan` in Claude Code, or
+`/skills:sdlc-implement-plan` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
+
+## Coordinator Invocation Boundary
+
+This skill requires verified workflow context from the active Agentic SDLC
+coordinator. Before acting, verify the selected project, active run, phase and
+coordinator ownership through the workflow's existing state helpers. Without
+that evidence, return without mutation; a skill mention or automatic selection
+is not workflow authorization. In Claude Code this skill is hidden from the
+public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
@@ -75,7 +97,8 @@ Coordinate isolated task agents to implement one locked feature safely.
    capacity batch. Every `TASK-*` must use its own fresh agent operating from
    its immutable worker cwd; never reuse one agent for multiple parallel tasks.
    Prefer native isolated agents. When they are unavailable, use the private
-   sequential `codex exec` fallback: one fresh `--ephemeral` process per task,
+   sequential native CLI fallback: one fresh process per task (`codex exec
+   --ephemeral` or `claude --print --no-session-persistence`),
    exact `--cd <scope_cwd>`, `--sandbox workspace-write`, schema-bound output,
    and no session resume or extra writable directories.
    Invoke private `task-arm` only after a real worker slot exists. From dispatch
@@ -209,7 +232,7 @@ Coordinate isolated task agents to implement one locked feature safely.
   `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
   write their respective managed records; all other phase skills route changes
   through those adapters and return validation to the shared owner.
-- Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
+- Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
 - Work on one feature at a time unless the user explicitly asks for a different SDLC shape.

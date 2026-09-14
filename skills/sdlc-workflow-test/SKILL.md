@@ -1,13 +1,14 @@
 ---
 name: sdlc-workflow-test
 description: "Use only when explicitly asked, outside Agentic SDLC, to verify the workflow with the no-flag check or --create/--keep/--resume/--destroy for one owned local three-tier Docker app plus GUI UAT and sanitized cleanup."
+disable-model-invocation: true
 ---
 
 # SDLC Workflow Test
 
 ## Help
 
-For `$sdlc-workflow-test --help` or `$sdlc-workflow-test -h`, return concise help and stop before
+For `$sdlc-workflow-test --help` or `$sdlc-workflow-test -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,20 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before stateful verification, read `../global-context-management/references/agent-hosts.md`.
+The lifecycle binds the selected agent through its isolated native home (`codex-home/` or `claude-home/`);
+set that host's native home variable for the public workflow. Resume and cleanup
+require the recorded host. Never transfer a trial or infer live proof from fixtures.
+
+Use `$sdlc-workflow-test` in Codex, `/sdlc-workflow-test` in Claude Code, or
+`/skills:sdlc-workflow-test` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -57,28 +72,28 @@ the SDLC system itself.
   root is initialized with an ownership marker; an existing custom root must
   already contain that valid marker.
 - Existing required Agentic SDLC phase skills under `~/.agents/skills`.
-- Existing Codex hook configuration under `~/.codex/hooks.json` or
-  `~/.codex/config.toml`.
+- Existing selected-host hook registration: Codex `hooks.json`/`config.toml`,
+  or Claude `settings.json`, under `<agent-home>`.
 - Optional prior verification report and disposable state under
-  `~/.codex/sdlc-verification/`.
+  `<agent-home>/sdlc-verification/`.
 - Optional private live-results manifest passed with `--live-evidence PATH`.
 - Canonical retained three-tier semantic result passed with
   `--three-tier-results PATH` whenever the three-tier profile claims PASS.
-  The default is `~/.codex/sdlc-verification/live-results.json`; its contract
+  The default is `<agent-home>/sdlc-verification/live-results.json`; its contract
   is `assets/live-results.schema.json`.
 
 The default report path is:
 
 ```text
-~/.codex/sdlc-verification/report.md
+<agent-home>/sdlc-verification/report.md
 ```
 
 ## Must Not
 
 - Do not create a new SDLC CLI or make hooks orchestrate phases.
 - Do not create project-local skills.
-- Do not modify installed global skills under `~/.agents/skills`.
-- Do not edit, delete, install, trust, or rewrite hooks under `~/.codex/hooks`
+- Do not modify either host's installed skill catalog.
+- Do not edit, delete, install, trust, or rewrite hooks under `<agent-home>/hooks`
   or hook configuration.
 - Do not run on a production or user project. Use only the disposable
   verification project.
@@ -98,7 +113,8 @@ The default report path is:
   the `sdlc-start` skill's hook bundle when hook verification is in scope.
 - `scripts/verify_agentic_sdlc.py` before patching or relying on verifier
   behavior beyond its command-line help.
-- For a three-tier mode only: `references/three-tier-live.md`,
+- For a three-tier mode only: `references/three-tier-process.md`,
+  `references/three-tier-live.md`,
   `assets/three-tier-prompt.md.template`,
   `assets/three-tier-results.schema.json`, and
   `scripts/three_tier_lifecycle.py` help for the needed private action. Read
@@ -108,14 +124,14 @@ The default report path is:
 
 Allowed writes:
 
-- `~/.codex/sdlc-verification/`.
+- `<agent-home>/sdlc-verification/`.
 - A disposable verification project under
-  `~/.codex/sdlc-verification/disposable-project/`.
+  `<agent-home>/sdlc-verification/disposable-project/`.
 - Disposable local state for the verification project only.
-- `~/.codex/sdlc-verification/report.md`.
+- `<agent-home>/sdlc-verification/report.md`.
 - An explicitly selected report path only when it remains under the private
   verification root and has no symlinked component.
-- `~/.codex/sdlc-verification/verification-context.json` and optional
+- `<agent-home>/sdlc-verification/verification-context.json` and optional
   `live-results.json` plus referenced evidence artifacts, all private local
   files outside the disposable Git root.
 - A private verification-root ownership marker and a committed public fixture
@@ -232,106 +248,17 @@ remotes.
 
 ## Three-Tier Live Process
 
-Use this process only after explicit `--create`, `--create --keep`, or
-`--resume`:
-
-1. Read and follow `references/three-tier-live.md`. Confirm Docker Engine,
-   Docker Compose, Git, installed-source skill parity, canonical Google Chrome,
-   and the `computer-use` capability before live mutation. The lifecycle helper
-   must launch Chrome directly with a fresh verifier-owned user-data directory,
-   new process group, and verification-ID window marker; never use or close an
-   existing Chrome instance. Prove Computer Use with a successful real
-   `get_app_state` that exposes the exact marker before every action. Tool or
-   process discovery alone is not proof. Missing required live capability
-   before an attempt is PARTIAL. A failed attempted action is FAIL.
-2. For create modes, prepare one owned lifecycle with
-   `scripts/three_tier_lifecycle.py`. Its `prepare` action serializes lifecycle
-   changes, destroys the previous active environment through the same exact
-   ownership-checked cleanup path as standalone destroy, and only then creates
-   a fresh verification ID and project. If ownership, project safety, or
-   cleanup cannot be proven, stop without creating a replacement. Cleanup must
-   canonicalize and deduplicate every recorded/discovered Docker alias by
-   resource identity after validating both exact ownership labels, covering a
-   prior run interrupted before inventory capture. Its cumulative ledger must
-   survive failed retries, and an already-absent resource counts as success only
-   when a fresh inspect proves absence. Retain the returned verification ID as
-   this invocation's immutable
-   generation fence. Pass it as `--expected-verification-id` to every later
-   mutating helper action; never refresh it from a newer status response. Run
-   the helper's `prepare-images` action to pull only the fixed
-   public base images through an owned empty Docker CLI config; do not reuse
-   that config for Compose. For resume mode, require the existing lifecycle to
-   be owned, KEPT, and previously FAIL or PARTIAL; revalidate its project
-   boundary and recorded resources without creating replacements. Use the
-   private root's isolated Codex home for all prompt workspace and phase state;
-   never reuse or delete the user's ordinary Agentic SDLC run directory.
-3. Create the project through the normal prompt-bound Agentic SDLC workflow:
-   first run `$sdlc-start workspace init <project-folder>`, then use
-   `scripts/render_three_tier_prompt.py` to replace the generated starter body
-   while preserving its managed identity, and finally run
-   `$sdlc-start run <prompt-ref-or-file>`. Follow the returned phase
-   skill; do not make the lifecycle helper or hooks orchestrate phases.
-4. Build all three logical layers: browser GUI, Django/Gunicorn web/API server,
-   and PostgreSQL. Run exactly two labelled Compose containers, dynamically
-   publish only the web port on loopback, and keep PostgreSQL private to the
-   Compose network. Run every Compose action through the helper's
-   generation-locked `run-compose` action with the immutable expected
-   verification ID; never invoke a mutating `docker compose` command directly.
-   This makes a replacement wait for an in-flight action and prevents a
-   superseded invocation from starting or changing a stack. Record containers
-   with the role-specific `--web-container` and `--database-container`
-   arguments; the helper verifies Compose service labels before accepting them.
-5. Execute every phase and test class in the scenario reference. Local ship
-   means build and run the promoted clean SHA locally; it never means push,
-   publish, PR creation, or PR merge.
-6. For GUI evaluation and UAT, explicitly route through `sdlc-gui-test` with
-   `harness: computer-use`. Immediately before the first navigation in
-   `sdlc-evaluate`, and again immediately before `sdlc-uat-tests`, require a
-   fresh successful `get_app_state` for the exact selected browser. Unless the
-   current Codex surface explicitly confirms locked Computer Use is enabled for
-   this session, the host must be unlocked. A normal browser window must be
-   visible, unminimized, foreground, and on the current macOS Space.
-   Lock/unlock, display, Space, or browser-window changes invalidate earlier
-   readiness. Refresh accessibility state after every successful action.
-   Correlate GUI observations with
-   independent API and PostgreSQL results and prove persistence across a
-   service restart.
-7. If a just-in-time capture returns `cgWindowNotFound` or another visibility
-   failure, record `ENVIRONMENT_DEFECT` with the explicit stage
-   `pre-navigation-window-capture` and state that no GUI navigation or action
-   was attempted. Record only bounded sanitized diagnostics: selected browser,
-   whether lock/window visibility/frontmost/current-Space state is known, and
-   whether the call returned an error or timed out. If a Computer Use call
-   hangs or times out, or fresh capture loses responses, treat
-   the shared service as unhealthy and stop all further Computer Use calls for
-   that attempt. Do not use the same path for `list_apps`, new-window recovery,
-   repeated browser retries, browser restart, or service restart. Exact owned
-   process cleanup remains available without Computer Use. Fresh-session or
-   service recovery remains a separate explicitly authorized action.
-8. Persist semantic results incrementally using
-   `agentic-sdlc/three-tier-results-v2`. Failed runs retain validated partial
-   layer/test status; the lifecycle helper derives PASS from
-   required phases, tests, Git identity, GUI actions, API/database correlation,
-   restart persistence, and distinct artifacts. Record canonical per-phase JSON
-   results and the three structured Computer Use readiness stages. Never accept
-   placeholder `{"result":"pass"}` evidence or screenshots as the only oracle.
-9. Write the complete sanitized report with layer inventory, resolved ports
-   and endpoints, baseline/promoted SHAs, phase/test/UAT outcomes, exact owned
-   resource IDs, recorded validation commands, top issues and recommended
-   fixes, and cleanup/retention result.
-10. With `--keep`, preserve the owned project, private SDLC state/evidence, two
-   running containers, network, database volume, built web image, and exact
-   verifier-owned Chrome instance/profile; report `KEPT` and the later destroy
-   invocation. Without `--keep`, revalidate and close only its recorded process
-   group, then destroy every exact owned live resource in a finally-style path.
-   Browser or Docker identity ambiguity persists resumable `CLEANUP_FAILED`
-   state before ambiguous mutation. Any cleanup failure makes the result FAIL.
+For explicit `--create`, `--create --keep`, or `--resume`, read and follow
+`references/three-tier-process.md` before any live operation. It owns all ten
+steps, including capability proof, immutable generation fencing, normal SDLC
+execution, GUI readiness, evidence collection and exact-resource cleanup.
+The mode, authority, failure and completion rules in this file remain required.
 
 ## Idempotency
 
 - The verifier may be rerun at any time.
 - Reuse the same verification root and overwrite only generated verification
-  files under `~/.codex/sdlc-verification/`.
+  files under `<agent-home>/sdlc-verification/`.
 - Preserve or supersede prior reports by writing the current report atomically.
 - Do not duplicate requirements, design, plans, tests, commits, or evidence in
   the disposable project when inputs are unchanged.
@@ -376,7 +303,7 @@ Use this process only after explicit `--create`, `--create --keep`, or
   Git fixture or canonical flat migration source, fail closed without chmod,
   file writes, or commits. Any disposable Git remote is also a failure.
 - If hook configuration is malformed or an SDLC hook command does not target
-  the canonical payload under `$CODEX_HOME/hooks`, report FAIL rather than
+  the canonical payload under `<agent-home>/hooks`, report FAIL rather than
   treating registration as missing or comparing an unrelated canonical file.
 - If the golden-path SDLC run fails, route through `sdlc-classify-failure` and
   record the earliest responsible phase in the report. Use `troubleshoot` only
@@ -409,7 +336,7 @@ Use this process only after explicit `--create`, `--create --keep`, or
 
 The helper script is limited to static inspection, local fixture setup, local
 Git operations inside the disposable verification project, and hook execution
-with a disposable `CODEX_HOME`. Full workflow verification may create local
+with a disposable selected agent home. Full workflow verification may create local
 commits only inside the disposable project. It must never push, open real PRs,
 merge, publish, alter credentials, or mutate installed hooks or skills.
 
@@ -445,7 +372,7 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Completion Criteria
 
-- `~/.codex/sdlc-verification/report.md` exists.
+- `<agent-home>/sdlc-verification/report.md` exists.
 - Static skill discovery and hook configuration checks are recorded.
 - PreToolUse and Stop hook fixture results are recorded.
 - Prompt workspace initialization, revision, steering, terminal, and legacy

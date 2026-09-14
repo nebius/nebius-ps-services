@@ -1,13 +1,14 @@
 ---
 name: sdlc-uat-tests
 description: "Use only as part of the Agentic SDLC workflow; after all feature commits, run whole-system product-level acceptance testing in any confirmed safe live experiment environment before PR creation."
+user-invocable: false
 ---
 
 # UAT Tests
 
 ## Help
 
-For `$sdlc-uat-tests --help` or `$sdlc-uat-tests -h`, return concise help and stop before
+For `$sdlc-uat-tests --help` or `$sdlc-uat-tests -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,27 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for the selected agent home, native identity and required runtime setup.
+
+Use `$sdlc-uat-tests` in Codex, `/sdlc-uat-tests` in Claude Code, or
+`/skills:sdlc-uat-tests` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
+
+## Coordinator Invocation Boundary
+
+This skill requires verified workflow context from the active Agentic SDLC
+coordinator. Before acting, verify the selected project, active run, phase and
+coordinator ownership through the workflow's existing state helpers. Without
+that evidence, return without mutation; a skill mention or automatic selection
+is not workflow authorization. In Claude Code this skill is hidden from the
+public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
@@ -124,7 +146,7 @@ Validate the full product, not just individual features, before PR creation.
   `sdlc-create-requirements` and `sdlc-create-design` authoring adapters may
   write their respective managed records; all other phase skills route changes
   through those adapters and return validation to the shared owner.
-- Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
+- Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
 - Work on one feature at a time unless the user explicitly asks for a different SDLC shape.

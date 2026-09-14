@@ -341,6 +341,20 @@ def _runtime_config_path(recorded: dict[str, object]) -> Path:
     )
 
 
+def _recorded_agent(recorded: dict[str, object]) -> str:
+    path = _runtime_config_path(recorded)
+    raw = _read_regular(path, "native runtime declaration")
+    config = dict(recorded["config_context"])
+    if _sha256_bytes(raw) != config["runtime_config_sha256"]:
+        raise ProjectInstructionsError("CONCURRENT_MODIFICATION", "runtime declaration changed")
+    declaration = json.loads(raw)
+    schemas = {"project-agent-instructions.runtime-config.v1": "codex",
+               "project-agent-instructions.claude-runtime-config.v1": "claude"}
+    if not isinstance(declaration, dict) or declaration.get("schema") not in schemas:
+        raise ProjectInstructionsError("DISCOVERY_CONTEXT_UNVERIFIED", "unknown native declaration")
+    return schemas[declaration["schema"]]
+
+
 def _fresh_manifest(
     recorded: dict[str, object],
     permitted_backup_sha256: Optional[str] = None,
@@ -355,6 +369,7 @@ def _fresh_manifest(
         Path(str(receipt["path"])),
         _runtime_config_path(recorded),
         permitted_backup_sha256,
+        agent=_recorded_agent(recorded),
     )
 
 

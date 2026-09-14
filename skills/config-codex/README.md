@@ -632,7 +632,13 @@ setup.
   printing config values. It checks required global hook registrations as a
   subset so extra reviewed workflow hooks can coexist, and validates the
   current managed `AGENTS.md` block content when the whole file does not match
-  the template. Exact `AGENTS.md` template parity and public MCP baseline
+  the template. Hook comparisons use the source-owned canonical projection
+  for both direct template commands and installer-generated runtime wrappers;
+  the complete normalized entry must match, including options and matchers.
+  Nested task-state permission inspection runs the reviewed source audit with
+  repair disabled. Installed helper drift is reported without executing the
+  installed helper or its dependencies.
+  Exact `AGENTS.md` template parity and public MCP baseline
   parity are explicit audit modes, not normal laptop setup requirements.
   Private task-implementer directory and workspace access checks are likewise
   opt-in through `--require-task-implementer-workspace`.
@@ -684,3 +690,17 @@ real customer/project identifiers before publishing.
 - OpenAI Codex config reference:
   <https://developers.openai.com/codex/config-reference>
 - OpenAI Codex hooks: <https://developers.openai.com/codex/hooks>
+
+## Shared Host Runtime
+
+Hook installations carry `agent_runtime.py` and `hook_runtime.py` from the
+sibling `global-context-management/scripts/` directory. Native plugins render
+complete reviewed hook payloads into their own plugin data directory. Both
+routes use the same helpers, selected host's private state and native identity;
+never edit an installed plugin cache. Claude's Bash identity binding composes
+with the authentication hook and keeps worker identities distinct. Use the
+complete hook bundle for Task Implementer and SDLC on Claude.
+
+Codex configuration reconciliation remains owned by `config-codex`. Its copied
+hook templates require these shared support files even though the configured
+product and user home remain Codex. See the [catalog installation guide](../README.md#skills-installer).

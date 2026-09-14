@@ -1,13 +1,14 @@
 ---
 name: sdlc-start
 description: "Use only as part of the Agentic SDLC workflow; on explicit workspace init or run, initialize, resume, continue, or steer one prompt-bound run by exact ref/file. Prompt capture may refine but never invokes this coordinator."
+disable-model-invocation: true
 ---
 
 # Start SDLC
 
 ## Help
 
-For `$sdlc-start --help` or `$sdlc-start -h`, return concise help and stop before
+For `$sdlc-start --help` or `$sdlc-start -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,18 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for the selected agent home, native identity and required runtime setup.
+
+Use `$sdlc-start` in Codex, `/sdlc-start` in Claude Code, or
+`/skills:sdlc-start` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -83,8 +96,8 @@ $sdlc-start run <prompt-ref-or-file>
 - `docs/design.md`.
 - `references/prompt-workspace.md` before prompt initialization, intake,
   binding, steering, or legacy-run decisions.
-- `~/.codex/sdlc-runs/<project-id>/active-run.json` when present.
-- Active run state under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
+- `<agent-home>/sdlc-runs/<project-id>/active-run.json` when present.
+- Active run state under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - `current-state.json`, `feature-queue.json`, `fingerprints.json`,
   `checkpoints/latest.json`, and the latest checkpoint file.
 - `STEERING.md`.
@@ -416,9 +429,9 @@ $sdlc-start run <prompt-ref-or-file>
   skills write only as its Agentic SDLC adapters; spec receipts are project
   truth evidence, not lifecycle authority.
   Explicit project-instruction changes remain outside the automatic workflow.
-- Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
+- Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - Keep editable prompts and project-level prompt workspace metadata under the
-  matching private `~/.codex/sdlc-runs/<project-id>/` directory.
+  matching private `<agent-home>/sdlc-runs/<project-id>/` directory.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
 - Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
@@ -429,12 +442,12 @@ $sdlc-start run <prompt-ref-or-file>
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.
 - Keep optional SDLC hook source under `assets/hooks/`. Patch that source first,
-  validate it with its local tests, then intentionally sync it to `$CODEX_HOME/hooks`
-  with `install-skills.sh --install-all-hooks`, or with
-  `install-skills.sh --install-hooks sdlc-start/assets/hooks` for an SDLC-only
+  validate it with its local tests, then intentionally sync it to `<agent-home>/hooks`
+  with `install-skills.sh --agent <codex|claude> --install-all-hooks`, or with
+  `install-skills.sh --agent <codex|claude> --install-hooks sdlc-start/assets/hooks` for an SDLC-only
   hook sync. Add `--register-hooks` only when the operator explicitly wants the
   installer to merge the SDLC `PreToolUse` and `Stop` registrations into
-  `$CODEX_HOME/hooks.json`.
+  the selected host registration file described in `agent-hosts.md`.
 
 ## Learning Loop
 

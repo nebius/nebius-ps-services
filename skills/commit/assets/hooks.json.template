@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/commit_intent.py\"",
+            "command": "SKILLS_AGENT=codex python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/commit_intent.py\"",
             "timeout": 30,
             "statusMessage": "Binding explicit commit intent",
             "additionalContextLimit": 1200

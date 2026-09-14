@@ -18,6 +18,9 @@ wizard:
     write_default_to_config: true
     options:
       from: soperator_nodesets_profiles
+  values.slurmNodes.login.sshRootPublicKeys:
+    type_hint: list(string)
+    write_default_to_config: true
   values.partitionProfile:
     default: shape-default
     write_default_to_config: true

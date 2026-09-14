@@ -2,11 +2,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*|Skill",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_sdlc_policy.py\"",
+            "command": "SKILLS_AGENT=codex python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_sdlc_policy.py\"",
             "timeout": 30
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/stop_lifecycle_arbiter.py\"",
+            "command": "SKILLS_AGENT=codex python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/stop_lifecycle_arbiter.py\"",
             "timeout": 30,
             "statusMessage": "Arbitrating workflow completion"
           }

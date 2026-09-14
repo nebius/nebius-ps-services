@@ -7,7 +7,7 @@
 
 #### User Story
 
-Codex users and repository maintainers need each workflow to remain a public,
+Codex and Claude Code users and repository maintainers need each workflow to remain a public,
 reusable skill with deterministic discovery, bounded instructions, and
 reviewable supporting assets.
 
@@ -17,8 +17,9 @@ reviewable supporting assets.
   `SKILL.md`, with optional scripts, references, assets, evaluations, and agent
   metadata kept within that skill boundary.
 - AC-002: The repository installer places user skills in the canonical
-  `${HOME}/.agents/skills` discovery root unless the caller explicitly selects
-  another destination.
+  `${HOME}/.agents/skills` discovery root for Codex and
+  `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills` for Claude unless the caller
+  explicitly selects another destination.
 - AC-003: Skill instructions, examples, and generated public artifacts contain
   no secrets, private endpoints, customer data, or environment-specific
   credentials.
@@ -33,8 +34,8 @@ reviewable supporting assets.
 #### Validation Method
 
 Validate the source catalog, installer defaults, skill metadata, and installed
-layout against repository checks and current official Codex skill-location
-guidance.
+layout against repository checks and current official Codex and Claude
+skill-location guidance.
 
 #### Test Method
 
@@ -43,8 +44,9 @@ including idempotency and ownership-conflict cases.
 
 #### Evaluation Method
 
-Review source-to-install parity and confirm a fresh Codex runtime discovers the
-installed skill from the canonical user root.
+Review source-to-install parity and confirm fresh Codex and Claude runtimes
+discover installed skills from their selected roots; missing runtime evidence
+remains explicit.
 
 <!-- /REQUIREMENT: REQ-001 -->
 
@@ -2590,5 +2592,175 @@ quality cases. Fresh model/runtime and live target proof are separate optional
 lanes and cannot be inferred from deterministic checks.
 
 <!-- /REQUIREMENT: REQ-028 -->
+<!-- REQUIREMENT: REQ-029 status=satisfied priority=P1 type=feature -->
+### REQ-029: Verify and bound explicit Nebius audit investigations
+
+#### User Story
+
+Cloud investigators need to identify the caller, establish effective tenant
+Audit Logs read access, and investigate resource changes without silent actor
+or region substitutions, sensitive output, or false completeness claims.
+
+#### Acceptance Criteria
+
+- AC-001: Every live query resolves the configured or explicit CLI profile and verifies the caller for the selected tenant before querying; the first validated audit page proves effective access and is retained.
+- AC-002: Exactly one resource, explicit subject, current subject or tenant-wide selector is required. Region is explicit or verified from a project in the selected tenant; missing or failed discovery stops.
+- AC-003: Authentication, permission denial, invalid responses, complete empty results and partial results are distinct. Requests, output, pagination and total time are bounded; continuation preserves the original absolute window.
+- AC-004: Summary and JSON expose safe identity, scope, status, correlation and completeness. Names require explicit inclusion; raw payloads, credentials, stderr and sensitive filter literals are never printed.
+- AC-005: Dry runs are entirely offline and identify unresolved inputs and unverified access. No compatibility aliases preserve removed flags or implicit selectors.
+
+#### Negative Criteria
+
+- NC-001: Never create credentials, repair authentication, enumerate or modify IAM grants, export logs, install the skill, or perform live validation implicitly.
+- NC-002: Do not infer audit permission from whoami or dry-run success, substitute the current caller into unknown-actor investigations, or infer a human from a service-account actor alone.
+
+#### Validation Method
+
+Run focused helper, privacy, CLI/help, skill structure and evaluation checks,
+canonical spec validation and changed-scope alignment.
+
+#### Test Method
+
+Use an isolated fake CLI for ordered identity/access calls, tenant selection,
+negative permission controls, offline previews, malformed results, bounded
+pagination and time/output failures. No cloud credentials or network required.
+
+#### Evaluation Method
+
+Review explicit-only routing and investigation cases. Keep offline source,
+isolated-copy portability, installed runtime and live access proof separate.
+
+<!-- /REQUIREMENT: REQ-029 -->
+<!-- REQUIREMENT: REQ-030 status=active priority=P0 type=feature -->
+### REQ-030: Distribute skills and hooks across Codex and Claude without losing behavior
+
+#### User Story
+
+Users need one in-place skill catalog installable through native Codex and
+Claude plugins, the skills CLI, and the local installer, with agent-neutral
+alignment and independently verified runtime behavior.
+
+#### Acceptance Criteria
+
+- AC-001: Git-root Codex and Claude marketplace catalogs reference native manifests under skills; existing skill directories stay in place and explicit paths exclude fixtures.
+- AC-002: The local installer defaults to all skills, reviewed hooks and registration for Codex; --agent claude selects Claude skills, hooks and settings. Combined installation reconciles exact managed registrations automatically and reruns without content changes or additional backups. Explicit hook-only and removal modes retain their documented boundaries.
+- AC-003: Preflight, source ownership, backups and idempotency preserve unrelated files and settings. Claude hook replacement changes only the hooks member of settings.json.
+- AC-004: All seven hook owners support native host identity, isolated state, tool effects and Stop arbitration through shared adapters. Missing identity never grants authority; Codex state paths and workflow semantics remain intact.
+- AC-005: align-skill has a portable core and separate Codex/Claude checks, preserves optional host metadata and intentional product-specific capabilities, and provides common trigger and quality evaluation interfaces.
+- AC-006: Public explicit-only and coordinator-only invocation boundaries survive packaging. Source, installed, fresh runtime and comparative quality evidence remain distinct.
+- AC-007: Every source skill has host-neutral execution guidance and native Codex/Claude invocation, while product-specific configuration targets, protocol identifiers, public actions, resources, authorization, worker ownership, state and recovery remain intact. Shared workflow paths resolve through the selected host adapter; unsupported capabilities are explicit and never replaced by weaker behavior.
+- AC-008: Catalog alignment records a working-byte behavior inventory for every skill, validates both host profiles and installation resource parity, and keeps Help, Learning Loop and target-owned trigger evals. Hook runtime reuse rejects unsafe writable paths or payloads on either host.
+
+- AC-009: Codex and Claude installations are used independently. Within-agent worker, Commit and Worktree coordination remains supported; cross-agent concurrent execution, state transfer and handoff are outside this contract.
+- AC-010: Shared runtime loading uses declared complete bundles, validates the loader and transitive support before execution, and rejects unsafe candidates without ambient import or partial-bundle fallback.
+- AC-011: Configuration permission inspection executes reviewed source only with repair disabled; installed helper drift remains a failure. Hook parity requires independently successful regular-file reads and valid matching digests.
+
+#### Negative Criteria
+
+- NC-001: Do not duplicate or relocate the skill catalog, redirect CODEX_HOME into Claude, transfer active workflows between agents, or change worker/commit ownership and recovery gates.
+- NC-002: Do not claim that skills-only npx installation registers hooks, or that packaging and static alignment prove native triggering or complete workflow behavior.
+- NC-003: Do not install into a real user home or publish the marketplace as part of source alignment. The separately owned config-claude skill remains in scope for preservation, not personal configuration application.
+
+- NC-004: Do not add legacy aliases, mixed-version runtime fallbacks, shared cross-agent locks or cross-agent workflow coordination.
+
+#### Validation Method
+
+Validate both native manifests and catalogs, host-aware skill contracts,
+installer syntax, deterministic adapters and the canonical specification pair.
+
+#### Test Method
+
+Use isolated homes and fixture payloads for mode selection, ownership,
+configuration preservation, native plugin loading, identity, tool and Stop
+boundaries; preserve the existing Codex regression suites.
+
+#### Evaluation Method
+
+Run align-skill triggers and baseline quality comparisons in fresh Codex and
+Claude contexts when safe authenticated runners are available. Report missing
+runtime capabilities or credentials as unavailable, never as passing evidence.
+
+<!-- /REQUIREMENT: REQ-030 -->
+<!-- REQUIREMENT: REQ-031 status=active priority=P1 type=feature -->
+### REQ-031: Reconcile a Claude-native personal configuration
+
+#### User Story
+
+Users need an explicitly invoked config-claude skill with the setup,
+reconciliation, recovery and validation capabilities of config-codex, using
+Claude-native files while preserving personal configuration and shared workflows.
+
+#### Acceptance Criteria
+
+- AC-001: One sibling skill works from Codex and Claude, targeting CLAUDE_CONFIG_DIR or the native default, with explicit-only invocation and inspection-free help.
+- AC-002: Reconciliation preserves unrelated instructions and settings, patches only requested differences, backs up changed files only, and produces a no-write second run. Missing settings recover through exclusive private creation; malformed, unsafe or concurrently changed targets are rejected.
+- AC-003: Native user roles restrict tools to Read, Grep and Glob and inherit models. Context hooks advertise validated role candidates subject to effective override checks; existing Codex behavior remains intact.
+- AC-004: Trusted-local full access, automatic delegation, private Task Implementer storage and applicable MCP integrations are explicitly selected. Existing permissions and integrations remain unchanged absent specific authorization. Hook reinstalls preserve an existing operator delegation policy.
+- AC-005: Existing installer and plugin hook owners are reused, dependencies preflight before effects, competing installation routes are reported, and complete installations retain exactly one Stop arbiter.
+- AC-006: Deterministic tests and common two-host trigger/quality cases distinguish source, installed, runtime and comparative evidence. Missing authentication never counts as passing runtime evidence.
+
+#### Negative Criteria
+
+- NC-001: Do not relocate the catalog, add a duplicate hook bundle, copy private Codex state, or change Task Implementer and Agentic SDLC ownership or workflow protocol markers.
+- NC-002: Do not translate Codex config keys or AGENTS discovery rules into unsupported Claude settings, rewrite Claude application/auth state, or treat a subagent permissionMode as enforced read-only tools under a bypass parent.
+- NC-003: Source implementation does not install into real user homes, weaken managed restrictions, publish plugins, or copy secrets into recovery templates and logs.
+
+#### Validation Method
+
+Validate both host skill profiles, native assets, Python helpers, package
+manifests and the canonical pair. Check only the requested convergence subset.
+
+#### Test Method
+
+Use temporary homes for bootstrap, no-op reruns, preservation, conflicts,
+recovery, concurrent creation, role overrides, private modes, dependencies,
+local/plugin routes and cross-host isolation. Preserve Codex regression tests.
+
+#### Evaluation Method
+
+Run common fresh-host invocation and output cases when authenticated isolated
+runners are available; otherwise report unavailable runtime/quality lanes.
+Observe runtime effects independently of fixture setup and static checks.
+
+<!-- /REQUIREMENT: REQ-031 -->
+<!-- REQUIREMENT: REQ-032 status=active priority=P0 type=feature -->
+### REQ-032: Validate portable skills without losing supported behavior
+
+#### User Story
+
+Skill maintainers need each align-skill application to assess Agent Skills,
+Codex, Claude Code and skills CLI installation while preserving the target's
+supported functionality and its current source layout.
+
+#### Acceptance Criteria
+
+- AC-001: Standard-field validation is independent of repository conventions and host checks. Safe typed YAML parsing rejects duplicate keys and malformed input; declared dependencies do not cause hidden network installation.
+- AC-002: Native extensions and strict whole-file conformity are reported separately. Required invocation restrictions and product-specific capabilities are retained; unknown or unavailable host support is never a universal compatibility pass.
+- AC-003: Actual pinned skills CLI discovery and copied installation for Codex and Claude run only in disposable locations and preserve required payloads and executable permissions. Missing resources, collisions or repeat-install divergence fail the check.
+- AC-004: Before editing each target, alignment captures its current working bytes and inventories actions, outputs, dependencies, metadata, hooks, authorization, state, idempotency and recovery. Compatibility changes preserve these contracts and use proportionate regression evidence.
+- AC-005: config-codex and config-claude retain their configured products. Task Implementer and Agentic SDLC retain worker/commit ownership, native identity, continuation and recovery. Unsupported capabilities are disclosed without weaker substitutions.
+- AC-006: Format, host policy, installation, runtime and comparative quality have separate evidence. Hook/runtime setup stays with native plugins and the existing local installer.
+
+#### Negative Criteria
+
+- NC-001: Do not relocate or duplicate the catalog, discard host controls to satisfy a validator, or introduce feature removal or redesign without explicit user direction.
+- NC-002: Missing tooling, authentication or comparison evidence is not passing proof. Preserve unrelated working changes and real user homes.
+
+#### Validation Method
+
+Validate the canonical pair, both repository host policies and minimal external
+skills; exercise standalone installed validation and isolated CLI payload parity.
+
+#### Test Method
+
+Use typed YAML and distribution negative fixtures, retained catalog tests and
+focused configuration, Task Implementer and SDLC regressions.
+
+#### Evaluation Method
+
+Compare changed instruction behavior against captured working bytes in clean
+native contexts when available; disclose unavailable model lanes independently.
+
+<!-- /REQUIREMENT: REQ-032 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

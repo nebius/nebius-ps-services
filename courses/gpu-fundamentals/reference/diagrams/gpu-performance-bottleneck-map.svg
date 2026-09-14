@@ -9,7 +9,7 @@
 <g text-anchor="middle">
 <rect x="35" y="220" width="180" height="80" rx="12" fill="#e0edfa" stroke="#245880" stroke-width="2"/>
 <text x="125" y="251" font-weight="700">user metric</text>
-<text x="125" y="278" class="diagram-label">defined boundary</text>
+<text x="125" y="278" class="diagram-label">timed operations</text>
 <rect x="265" y="220" width="190" height="80" rx="12" fill="#e0f0e6" stroke="#206757" stroke-width="2"/>
 <text x="360" y="251" font-weight="700">critical-path</text>
 <text x="360" y="278" class="diagram-label">timeline</text>

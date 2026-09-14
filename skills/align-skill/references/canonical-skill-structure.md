@@ -13,9 +13,9 @@ Codex best practices, and the open Agent Skills specification:
 
 ## Structure Profiles
 
-### OpenAI Portable Minimum
+### Agent Skills Portable Minimum
 
-OpenAI Codex requires a skill directory with `SKILL.md`. The front matter must
+The portable Agent Skills core requires a directory with `SKILL.md`. The front matter must
 include `name` and `description`.
 
 ```text
@@ -26,7 +26,7 @@ skill-name/
 Use this for instruction-only skills that do not need metadata, scripts,
 references, or output assets.
 
-### OpenAI Portable Standard
+### Optional Host Metadata And Resources
 
 Use optional folders only when they serve the skill. A common portable layout is:
 
@@ -62,7 +62,8 @@ skill-name/
 `-- scripts/
 ```
 
-Every repo-owned skill must keep `agents/openai.yaml`. Every authorized
+Preserve existing `agents/openai.yaml` for Codex support; the portable core
+and Claude profiles do not require it. Every authorized
 writable target that completes `align-skill` also keeps a canonical
 `evals/trigger-prompts.csv`; legacy skills acquire that contract incrementally
 when aligned. Do not remove metadata because upstream OpenAI docs classify it
@@ -79,14 +80,15 @@ Front matter must include:
 - `description`: concise trigger-rich summary of what the skill does and when
   to use it.
 
-The `name` should match the parent folder.
+The `name` must match the parent folder. Standard naming permits lowercase
+Unicode alphanumerics; this catalog uses the narrower ASCII intersection
+accepted without npx name normalization.
 
 ## Metadata and Optional Folders
 
 - `agents/`: OpenAI metadata. Upstream Codex treats `agents/openai.yaml` as
-  optional, but this repository requires it for source-owned skills so UI
-  metadata, default prompts, dependencies, and invocation policy can be
-  validated. Use `agents/openai.yaml`, not `agents.openai.yaml`.
+  optional. Preserve it for Codex support and require it only in this repository's Codex
+  validation profile; other hosts may ignore this file. Use `agents/openai.yaml`, not `agents.openai.yaml`.
 - `references/`: longer docs, rubrics, policies, vendor notes, and technical
   references loaded only when needed.
 - `scripts/`: executable repeatable checks or helpers. Use when deterministic
@@ -102,7 +104,7 @@ The `name` should match the parent folder.
 | Path | OpenAI status | This repo | Purpose |
 | --- | --- | --- | --- |
 | `SKILL.md` | Required | Required | Runtime instructions plus front matter `name` and `description`. |
-| `agents/openai.yaml` | Optional | Required and preserved for every source-owned skill | UI metadata, default prompt, invocation policy, and tool dependencies. |
+| `agents/openai.yaml` | Optional | Required in Codex profile; preserved when present | UI metadata, default prompt, invocation policy, and tool dependencies. |
 | `references/` | Optional | Optional | Long guidance loaded only when relevant. |
 | `scripts/` | Optional | Optional | Deterministic helpers or validators. |
 | `assets/` | Optional | Optional | Templates and reusable output/input resources. |
@@ -361,3 +363,17 @@ Repository-local skills folder:
 For GitHub repositories or tree URLs, first detect whether the provided path is
 a single skill or a parent folder containing multiple skills before proposing
 changes.
+
+## Executable Policy Selection
+
+`--policy agentskills` checks standard fields without Help, Learning Loop,
+SDLC naming conventions or mandatory OpenAI metadata. `--policy repository`
+(the default) retains those local contracts. Select the host independently with
+`--agent core|codex|claude`; adding `--require-evals` explicitly requires our
+canonical trigger CSV on either policy. Use the matrix and npx checks in
+[agent portability](agent-portability.md) on every alignment.
+
+Preserve recognized native fields and report their strict standard-only
+limitations. Repository or host extensions are not additions to the upstream
+standard. Use typed YAML, retain useful resources, and compare behavior against
+the current working version before claiming the target is aligned.

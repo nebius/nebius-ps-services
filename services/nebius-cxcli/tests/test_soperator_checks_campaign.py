@@ -518,6 +518,16 @@ def test_policy_restoration_requires_auxiliary_schedule_and_active_claim(
             },
         },
     }
+    actual = cluster.crons["run-extensive-check-on-reservations"]["spec"]
+    actual["jobTemplate"]["spec"]["template"]["spec"]["containers"] = [
+        {"name": "check", "volumeMounts": [{"name": "jail", "mountPath": "/mnt/jail"}]}
+    ]
+    expected_spec = copy.deepcopy(actual)
+    expected_spec["suspend"] = False
+    expected_spec["jobTemplate"]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"][
+        "claimName"
+    ] = "active-jail"
+    policy = replace(policy, auxiliary_spec=expected_spec)
     assert (
         campaign_module.SoperatorCampaignChecks._policy_restored(
             execution(tmp_path, policy, cluster)
@@ -558,6 +568,10 @@ def test_auxiliary_effective_deferral_checks_exact_scheduling(tmp_path, policy, 
             }
         },
     }
+    spec["jobTemplate"]["spec"]["template"]["spec"]["containers"] = [
+        {"name": "check", "volumeMounts": [{"name": "jail", "mountPath": "/mnt/jail"}]}
+    ]
+    policy = replace(policy, auxiliary_spec=copy.deepcopy(spec))
     if drift:
         spec[drift] = (
             False if drift == "suspend" else "0 1 * * *" if drift == "schedule" else "Europe/Paris"

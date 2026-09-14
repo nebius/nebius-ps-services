@@ -7,7 +7,7 @@
 
 #### Requirements Covered
 
-- REQ-001: Keep reusable skill source portable and install user skills into the canonical Codex discovery root.
+- REQ-001: Keep reusable skill source portable and install user skills into the selected host discovery root.
 - REQ-005: Treat source, installation, and fresh-runtime activation as separate proof surfaces.
 
 #### Context Evidence
@@ -22,15 +22,16 @@ the installer idempotency suite verify those boundaries.
 The repository remains the semantic source of public skills. The installer
 copies a reviewed skill into one selected user root, preserves unmanaged and
 differently owned entries, and records source identity for safe convergence.
-Hook payloads remain a separate opt-in installation into
-`${CODEX_HOME}/hooks`; hook registration and trust are not implied by skill
-installation.
+The default local installation combines skills, reviewed hook payloads and
+registration for the selected host. Explicit hook-only modes remain available.
+Native plugin installation carries hooks; npx installation carries skills only.
+Fresh-process activation and host trust remain separate evidence.
 
 #### Selected Option
 
-Use `${HOME}/.agents/skills` as the single default user-skill installation and
-discovery root, matching current Codex behavior and avoiding parallel installed
-copies.
+Use `${HOME}/.agents/skills` as the Codex default discovery root and
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills` for Claude. Select one installation
+route per host; FEAT-029 owns the native plugin and hook adapters.
 
 #### Alternatives Considered
 
@@ -152,7 +153,7 @@ trusted Python path and the literal absolute installed coordinator discovered
 under the user skills root. Do not advertise repo-relative checkout helpers,
 shell variables, substitutions, symlinks, or basename lookalikes. A malformed
 coordinator denial names the installed-helper mismatch separately from the
-additional absolute bundle and `--codex-home` bindings required by
+additional absolute bundle and `--agent-home` bindings required by
 project-instructions inspect. The hook remains fail-closed; this is a guidance
 and diagnostic correction, not an alternate trust path.
 
@@ -750,7 +751,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 #### Context Evidence
 
-`install-skills.sh` provides idempotent skill and opt-in hook synchronization,
+`install-skills.sh` provides idempotent combined skill and hook synchronization,
 registration merging, provenance, backups, and restart guidance. The
 project-spec observer and global-context references distinguish source tests
 from runtime activation.
@@ -1855,8 +1856,8 @@ private `review` transitions. `prepare` copies the current index into a private
 temporary index, applies whole-repository `git add -A`, writes the candidate
 tree, and persists only repository/worktree/ref identities, head and tree IDs,
 bounded digests, explicit authorization source, status, and a
-token hash. `execute` acquires the shared common-directory/ref lock, recomputes
-and compares the candidate, stages the real index, runs cached checks and the
+token hash. `execute` acquires the selected installation's shared
+common-directory/ref lock, recomputes and compares the candidate, stages the real index, runs cached checks and the
 normal-hook commit, then proves unchanged branch, one direct child, matching
 commit tree, and the expected final checkout state. If a successful hook
 changes the committed tree, `review` can complete only the retained current,
@@ -5000,5 +5001,746 @@ The isolated copy demonstrates source portability, not real installation or
 cloud behavior.
 
 <!-- /FEATURE: FEAT-027 -->
+<!-- FEATURE: FEAT-028 reqs=REQ-029 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-028: Verified and bounded Nebius Audit Logs queries
+
+#### Requirements Covered
+
+- REQ-029: Verify caller and effective tenant audit access, make scope explicit, bound execution and report safe complete or partial evidence.
+
+#### Context Evidence
+
+The original helper delegates credentials to the CLI, calls whoami only for
+its implicit current-subject filter, guesses a region after discovery errors,
+and permits raw/unbounded output. Eight baseline fake-CLI tests pass but do
+not cover mandatory identity verification or denied access.
+
+#### Design Details
+
+Keep the Python standard-library helper and Nebius CLI. Validate input locally,
+resolve one CLI profile/environment and tenant, parse the documented user
+profile tenant mapping or service-account identity, and resolve explicit region
+or exact project metadata and spec.region. Anonymous, ambiguous and failed
+identity/discovery responses stop before audit. The first bounded audit list
+is both effective read-access proof and page one; no broad IAM probe is needed.
+
+Require exactly one of --resource-id, --subject-id, --current-subject and
+--tenant-wide. Preserve narrowing filters; parse raw filters as documented
+AND-only predicates over noncredential fields. Use a single action value.
+Remove implicit current-user and eu-north1 fallbacks, --all, --raw and raw-only
+formats without aliases. Keep only summary and JSON, with opt-in names.
+
+Default to 24 hours, 100 items and one page; API maximum page size is 500.
+--max-pages allows 1 to 100 pages. --timeout defaults to 120 seconds with a
+600-second maximum; each subprocess has at most 30 seconds, one attempt, no
+interactive input/browser, 8 MiB output and 32 MiB cumulative output. Bound
+reads while collecting and reap failed children. Validate canonical items and
+next_page_token responses, honoring omitted protobuf defaults. Preserve prior
+valid pages on failure or bounds, detect repeated tokens and return incomplete
+coverage with a safe continuation where available. Resumption requires explicit
+absolute start/end and unchanged original query parameters.
+
+Every report identifies mode, safe scope/caller, access outcome, events,
+completeness, errors and continuation. Errors use documented CLI exit codes
+and safe messages, never stderr. Event summaries include source/request/status
+correlation, never credential or arbitrary request/response payload fields.
+Dry run makes no subprocess calls and does not echo sensitive filter literals.
+Exit 0 means complete query or valid offline preview, 1 live failure/partial,
+and 2 invalid arguments. Historical event authorization is not reader access.
+
+#### Selected Option
+
+Strengthen the existing deterministic CLI helper. Reuse its first query page
+as authorization proof to avoid extra broad reads and duplicated requests.
+
+#### Alternatives Considered
+
+Documentation-only changes leave failures unenforced. A separate permission
+probe duplicates requests; role enumeration requires unnecessary IAM access.
+A new SDK or AI stack adds migration cost without serving this bounded task.
+
+#### Implementation Boundaries
+
+Own only nebius-audit-log source, tests, metadata, references and evals, plus
+catalog/changelog and this spec pair. Preserve unrelated changes. No new AI
+subsystem, credential mechanism, installation, export or live audit invocation.
+
+#### Test-First Success Criteria
+
+- TDD-001: Existing unverified resource queries and implicit subject/region fallbacks fail the new ordered-access and explicit-scope tests before repair.
+- TDD-002: Authentication denial, audit denial, malformed data and later-page failures cannot become authorized empty or complete output.
+- TDD-003: A fake executable is bound explicitly; previews execute no subprocess, and sensitive stderr/filter fixtures never appear in outputs.
+
+#### Validation Plan
+
+Run helper tests, strict skill validation with evals, Ruff/Markdown checks,
+canonical specification validation, and align with read-only code/security review.
+
+#### Test Plan
+
+Cover user tenant mapping, service accounts, identity-before-query ordering,
+profile consistency, region parent verification, API response shape, all
+selectors, conjunction parsing, finite input bounds, continuation windows,
+first-page reuse, repeated tokens, timeout/byte limits and removed flags.
+
+#### Evaluation Plan
+
+Update canonical trigger cases and process cases for unknown-actor MK8s
+deletions, denied audit access, offline plans, partial coverage and privacy.
+Do not infer live permissions or fresh runtime loading from static tests.
+
+#### Rollout And Rollback
+
+Deliver source changes and offline proof. Real installation and bounded live
+validation are separate requested steps. Restore only owned changes if a
+regression is proven; no cloud rollback or compatibility layer is needed.
+
+#### Done Definition
+
+Helper, instructions, help, metadata, tests and docs implement one agreed
+contract; focused checks and independent review pass with evidence limits.
+
+#### Implementation Evidence
+
+The helper now separates bounded CLI transport, filter validation and query
+orchestration. All live paths verify the tenant-aware caller before the first
+audit page, pin the selected profile, and require an explicit selector and
+verified region. Safe summary/JSON reports preserve prior validated pages,
+identify access and coverage separately, and emit typed input/runtime errors.
+Offline previews run no subprocesses. Removed flags have no compatibility aliases;
+argument abbreviation is disabled so only full documented flags are accepted.
+
+Instructions, CLI/help, README examples, references, metadata, trigger/process
+cases and quality-evaluation definitions now describe the same contract. The
+catalog, changelog and REQ-029 traceability are aligned. No installed skill,
+credentials, IAM grants or external systems were changed.
+
+#### Verification Evidence
+
+All 35 fake-CLI tests pass from source and from an isolated copy launched
+outside the repository. Independent read-only code/security review reran all
+35 tests and approved the final source; documentation/interface review also
+completed. Four targeted tests fail against the original helper and pass on the
+new implementation: identity ordering, mandatory selector, malformed-response
+handling and zero-subprocess offline preview.
+
+Review found empty explicit selectors could broaden scope, empty timestamps
+could select defaults, summaries omitted identifying scope, and argument errors
+lacked typed diagnostics. Each defect has a failing-before/passing-after
+regression. The final full suite includes those repairs.
+
+A subsequent alignment pass reproduced acceptance of removed --raw as an
+abbreviation of --raw-filter, plus an undocumented tenant-wide abbreviation.
+The focused regression failed before disabling parser abbreviation and passes
+afterward, including positive checks for canonical flag names. The final
+35-test suite passes from source, an isolated copy and independent review.
+
+Strict skill structure/evaluation validation reports zero failures and warnings.
+Ruff lint and formatting, Markdown lint, whitespace checks, CLI/help-to-README
+flag parity, Python 3.10 syntax parsing and canonical paired-spec validation
+pass. Tests ran with Python 3.12; syntax parsing is not Python 3.10 runtime proof.
+The isolated offline preview succeeds with a deliberately unavailable CLI.
+
+Installed skill loading, fresh agent routing, model-quality comparison, CI
+execution and live Nebius authentication/authorization are NOT_RUN. Trigger
+and quality cases are definitions, not model-evaluation results. These source
+and offline checks do not establish any real tenant permission or live audit
+coverage.
+
+<!-- /FEATURE: FEAT-028 -->
+<!-- FEATURE: FEAT-029 reqs=REQ-030 status=ready delivery=implemented priority=P0 version=2 -->
+### FEAT-029: Agent-neutral distribution and alignment
+
+#### Requirements Covered
+
+- REQ-030: Cross-agent packaging, installation, hook parity and full-catalog neutral execution guidance.
+
+#### Context Evidence
+
+The initial distribution baseline contained 70 skills and seven hook payload
+owners; the current catalog contains 71 skills including config-claude.
+The Bash installer has ownership, backups and registration preflight.
+Before this change, align-skill required OpenAI metadata unconditionally and
+runtime readers were bound to Codex. Current adapters retain native identity
+and selected-host state without weakening workflow authorization.
+
+#### Design Details
+
+Independent-host security remediation (implemented):
+Codex and Claude installations operate independently. Retain selected-home
+Commit/Worktree locks, private claims, native identity and within-agent
+worker/recovery contracts; cross-agent concurrency and handoff are unsupported.
+Use a GCM-owned stdlib trusted loader with closed dependency groups, declared
+source/flat-hook/selected-home layouts, complete-bundle selection, current-user
+payload ownership, safe ancestry, bounded no-follow reads and verified-byte
+execution. Validate the initial loader before import and all transitive group
+members before execution; reject unverified module-cache entries and roll back
+only new bindings on failure. Preserve root-owned system alias/sticky-temp
+ancestor exceptions, not root-owned executable payloads. Retain no generic
+import finder, permanent runtime sys.path injection or compatibility fallback.
+Extract the existing permission audit into a stdlib source module; both hook
+templates retain audit/explicit-repair CLI behavior, while config inspection
+uses source-only loading and repair=False, never installed executable code.
+Require successful regular-file payload digests before parity comparison;
+keep the separate verification-identity digest contract unchanged. Update
+runtime packaging inventories and dependency detection together. Preserve the
+independent Nebius auth owner and subprocess Stop delegates.
+Validate malicious source selection/import/cache cases, audit non-execution
+and no-mutation, parity failure combinations, independent host installation,
+within-agent workflow regressions and full-catalog structure. Run scoped
+code/security review and alignment. Source, installation, fresh native
+activation and comparative quality remain separate evidence lanes. No legacy
+support or state migration is introduced; incomplete installations require a
+complete current bundle. Prior evidence below describes the preceding version.
+
+Keep Git-root .agents/plugins/marketplace.json and .claude-plugin/marketplace.json,
+with native plugin manifests beneath skills and explicit skill path arrays.
+Use marketplace nebius-ps-services and plugin skills version 0.1.0.
+Extend the Bash installer with --agent codex|claude (default codex), combined
+default installation, preserved explicit modes and preflight before effects.
+Combined preflight and application both enable targeted registration refresh:
+normalize exact managed direct commands to the host adapter, update source-owned
+matchers/status metadata, and retain unrelated hooks/settings. Refuse foreign
+paths, custom arguments, changed handler options, mixed handlers, ambiguous
+matches or loss of custom entry options before any payload/skill mutation.
+After convergence, repeated installation preserves content and adds no backups.
+Explicit hook-only registration retains its separate refresh flag.
+Use shared Python host adapters in global-context-management for hook loading,
+private roots, native turn identity, tool effects and native outputs.
+Both hook writers and CLI readers consume the selected context. Package-local
+runtime support takes precedence; standalone copied helpers use validated
+support in the selected home, never ambient module discovery. The installer
+preflights dependencies and installs support even for selected script skills
+without hook bundles. External instruction-only skills need no shared runtime.
+Worktree ownership transitions and Commit share the selected-agent repository
+lock. Verified project-root and registered SDLC coordinators may invoke internal
+phase skills; workers and invalid execution identities remain excluded. Preserve
+Codex roots; use Claude configuration home for Claude state. Map Claude
+prompt_id without synthesizing identity. Bind worker CLI identity to the native
+session_id and agent_id; only the authentication PreToolUse adapter rewrites
+Claude Bash commands, composing identity with authentication. One Stop arbiter
+owns ordering and bounds Claude continuation at eight requests per prompt.
+Plugin payloads execute independently of a separate local installation;
+source caches are immutable and generated payloads use private data roots.
+Convert align-skill instructions and checks with --agent core|codex|claude,
+independent of basic/stateful-workflow profiles. Preserve openai.yaml and
+product-specific config-codex capabilities. Add bounded CLI evaluation
+adapters with canonical CSV/JSON cases and separate evidence states. Reject
+symlinks and special files in candidate/baseline payloads before model launch;
+Codex command loading evidence must expose actual skill-body output through a
+recognized simple read. Require Python 3.11 or newer. Installer-owned projection must not import selected-source
+payloads during preflight; exact managed refresh preserves unrelated handlers.
+Reject symlinked hook targets, unsafe home/runtime ownership or write modes,
+and competing native/local installations.
+Native policy falls back to bundled runtime policy; configured-home overrides
+remain authoritative. Offer Claude Explore as a read-only candidate subject
+to exposed tools, permissions and local overrides.
+
+#### Selected Option
+
+Reuse source-owned skills and deterministic Bash/Python tooling with small
+host adapters and native manifests. Align every source skill against a captured
+working-byte inventory. Each skill declares native invocation without weakening
+explicit-only or internal-phase controls. Shared state paths use the selected
+agent home, and native session identity remains supplied by the host adapter.
+Keep intentional product configuration and stable protocol identifiers intact.
+Capability-specific commands remain conditional and unsupported runtime paths
+are disclosed without inventing identity or bypassing a workflow gate.
+Reject writable runtime directories, unsafe ancestors and unsafe reused payload
+or continuation-counter metadata before loading or changing private hook data.
+
+#### Alternatives Considered
+
+Duplicated generated skill trees and relocating all skills introduce drift
+and violate the accepted layout. Treating Claude as a renamed Codex home
+breaks identity and authority. Blanket provider-name replacement would also
+change configured products and stable protocol identifiers. A shared invocation
+contract plus focused owner-specific edits preserves these distinctions.
+
+#### Implementation Boundaries
+
+Own all source skill instructions and their referenced resources, installer,
+manifests/catalogs, shared host helpers, seven hook bundles and dependent
+readers, invocation metadata, align-skill and related docs/tests.
+Preserve unrelated dirty work. Do not install in real user homes or publish.
+
+#### Test-First Success Criteria
+
+- TDD-001: Core validation accepts a portable skill without OpenAI metadata while Codex validation retains its policy checks.
+- TDD-002: Both combined installations converge and preserve unrelated settings and hooks.
+- TDD-003: Missing native identity cannot authorize writes; hook behavior and Stop ordering remain equivalent.
+- TDD-004: Combined installation upgrades existing managed registrations on both hosts, preserves unrelated configuration and rejects custom conflicts before effects; a second run changes no installed file content or backup inventory.
+
+#### Validation Plan
+
+Run focused Python tests, shell syntax/lint, native schema validation,
+strict skill profiles, paired spec validation and changed-scope alignment.
+
+#### Test Plan
+
+Test disposable homes, source ownership, malformed configuration, collision
+preflight, backup/refresh semantics, plugin paths and discovery, host roots,
+identity and invocation boundaries, tool effects, Stop delegates and CLI errors.
+
+#### Evaluation Plan
+
+Compare align-skill against captured working bytes in fresh isolated agent
+contexts; record observed skill loading and concrete quality assertions.
+Record version, model and bounds without persisting credentials or raw logs.
+
+#### Rollout And Rollback
+
+Deliver source and documentation together. Use native plugin management or
+the backed-up local installer for subsequent explicitly selected installation.
+One active route per agent avoids duplicate execution; report conflicts
+without silently disabling another route.
+
+#### Done Definition
+
+Source and isolated installation checks pass; available runtime lanes are
+executed and unavailable lanes are explicit. No unsupported whole-catalog
+Claude parity or live activation claim is inferred from static results.
+
+#### Implementation Evidence
+
+Implemented Git-root catalogs and native manifests without moving any of the
+70 skills. Extended install-skills.sh with selected-agent homes, combined
+default installation and preserved explicit modes. Added shared host/runtime
+modules, dependency closure and source-owned hook/reader integration. Claude
+metadata retains explicit public and internal coordinator boundaries.
+
+Converted align-skill's core, host validation profiles, authoring references,
+README and portability evals. Added bounded native trigger/quality runner and
+independent evidence checks. Preserved intentional config-codex target behavior
+and Task Implementer versus SDLC commit ownership. Updated the existing CI
+workflow with cross-agent static/installed checks; real user homes and external
+publication were not changed.
+
+#### Full-Catalog Execution Alignment
+
+All 71 skills share native invocation and capability boundaries. Codex metadata
+and Claude frontmatter policies remain source-owned and unchanged. Shared state
+uses the selected native home; intentional configured products, protocol names,
+worker ownership, commit claims, recovery and Stop ordering remain intact.
+
+The SDLC CLI fallback uses the selected native binary: Codex retains its exec
+schema flow; Claude uses print-mode structured output and validates a successful
+result envelope. Fresh subprocesses clear inherited session identities. Test
+lifecycles retain existing Codex `codex-home` state and use `claude-home` for
+Claude. Cross-host reuse fails before mutation; existing Codex verification
+context shapes remain unchanged and Claude has a distinct context schema.
+
+Project instruction inspection requires `--agent` and `--agent-home`. Codex
+native discovery remains unchanged. Claude consumes a private session-bound
+source declaration, validates native instruction/import/settings digests and an
+existing tracked CLAUDE.md import of the managed AGENTS.md target. It preserves
+private local conflict context, ownership approval and recovery. The existing
+v3 transaction's `codex_home` protocol key remains stable; replay selects the
+host from the hashed native declaration schema. Static declarations never prove
+actual host loading. The generated-body budget is independent of Claude's
+inherited context size.
+
+Cached hook runtime roots and their ancestors must satisfy owner/type/write-mode
+rules. Payload files must be regular, singly linked, safely owned and not group
+or world writable. Continuation counters reject unsafe writable state. Required
+runtime or tool capabilities are not bypassed to satisfy portability checks.
+
+#### Verification Evidence
+
+Independent-host security remediation verified locally on 2026-09-12:
+
+- The closed runtime loader and canonical bootstrap cover source, flat-hook
+  and individual-skill layouts. Fourteen focused tests pass for both selected
+  hosts, including unsafe files/ancestors, incomplete bundles, transitive
+  capture, module-cache poisoning, replacement during reads and failed-load
+  cleanup. Source-only audit tests prove installed Python never executes and
+  inspection preserves target bytes/modes. Negative parity tests reject missing,
+  unreadable and nonregular payloads, including equal error sentinels.
+- Configuration checks (Codex 72; Claude 25), installed distribution (27),
+  Claude role mapping (8), SDLC verification (87), global-context template
+  validation and existing workflow/ownership/recovery regressions pass. These
+  exercise deterministic fixtures and installed entrypoints independently for
+  each host; they do not establish authenticated native model activation.
+- All 71 skills pass core, Codex and Claude repository profiles with their
+  existing three review warnings. Native manifests/catalogs, changed Python
+  Ruff, Bash/ShellCheck, Markdown and workflow YAML checks pass. The pinned
+  skills CLI 1.5.26 verifies discovery, complete copied payload parity, repeated
+  installation and isolation for all 71 skills on both hosts in disposable
+  locations.
+- Scoped independent code/security review found no actionable remaining defect.
+  The focused CI matrix covers macOS/Linux and Python 3.11/3.12; its commands
+  pass locally on macOS with Python 3.11.16 and 3.12.14, but the hosted matrix
+  has not run in this task. Fresh
+  authenticated runtime activation and comparative output quality were not
+  verified. No real-home installation, workflow handoff or shared cross-agent
+  state was performed or introduced. Prior W001/H002/R001 repairs and unrelated
+  working bytes remain preserved.
+
+Historical verification performed in disposable environments on 2026-09-11:
+
+- Static: all 70 skills pass both Codex and Claude profiles; three existing
+  soft-budget warnings remain. Validator self-tests (35), eval-adapter tests
+  (6), native manifests/catalogs, Python syntax/Ruff, ShellCheck/bash syntax,
+  changed Markdown lint and workflow YAML parsing pass.
+- Installed: cross-agent installation/runtime suite covers both defaults,
+  idempotency, settings preservation, refresh/backups, selected-source trust,
+  symlink rejection, worker identity/auth composition, plugin drift/concurrency
+  and bounded Stop behavior. All seven owners' nine entrypoints execute from
+  each native installed package. All 70 installed skill definitions and shared
+  runtime files match source.
+- Existing regression suites pass: installer (29), config-codex (70), commit
+  transaction (22), remediation guard (97), Task Implementer waves (65), SDLC
+  hooks (110), SDLC execution (79), prompt sessions (27), project hooks (38),
+  and global-context template validation.
+- Native CLI: Codex 0.154.0 and Claude Code 2.1.236 marketplace installation,
+  uninstall/reinstall and installed hook smoke pass in isolated homes. Claude
+  native manifest validation passes. npx discovers 70 skills and installs the
+  current align-skill bytes for both hosts; this route registers no hooks.
+- Fresh-model trigger and baseline-quality samples were attempted for both
+  agents. All report UNAVAILABLE because isolated homes lack authentication;
+  no RUNTIME_PASS or QUALITY_PASS is claimed. No whole-catalog Claude semantic
+  parity or real-user activation claim is made. CI has been wired and parsed,
+  not executed on GitHub during this task.
+
+A subsequent scoped alignment repaired five gaps with negative regressions:
+standalone runtime dependency loading, selected-host Worktree/Commit lock
+agreement, initial SDLC coordinator Skill routing, symlink/special-file eval
+payloads, and discarded/empty Codex read evidence. Both bounded read-only
+reviews found no serious remaining issue in those repaired paths.
+
+The alignment rechecked both 70-skill host profiles and native manifests;
+validator (35), eval adapters (9), cross-agent runtime/installation (21),
+installer (29), config-codex (70), Commit (22), Worktree (91), Task Implementer
+waves (65), SDLC hooks (111), SDLC execution (79), prompt-session (27), project-hook (38), and context-template
+checks pass. Python AST/Ruff, Bash/ShellCheck, changed Markdown and workflow YAML
+also pass. Fresh isolated native installs for both hosts match all 70 skill
+definitions and shared payload bytes; all nine installed entrypoints execute,
+and generated runtime initialization leaves each plugin cache unchanged.
+These are deterministic and installed-package checks; authenticated model
+triggering and comparative quality remain unavailable. CI is wired, not run
+remotely.
+
+Working bytes were captured before implementation; unrelated existing changes
+were retained. Read-only reviews led to fixes for selected-source execution,
+Claude worker identity, bundled policy resolution and successful trace/quality
+correlation. Delivery is implemented; authenticated model evaluation remains
+unverified.
+
+Default-registration follow-up: combined preflight and application now enable
+safe managed refresh, with custom entry options protected alongside handler
+options. The original duplicate-registration failure was reproduced for both
+hosts before repair. Frozen-source tests cover direct-command upgrades,
+matcher/status updates, all 70 skill definitions and hook payload bytes,
+unrelated settings preservation, unchanged second-run content/backup inventory,
+and refusal of five custom-conflict variants before writes. The two added
+regressions and 50 existing installer/runtime tests pass, as do shell/Python
+lint, Markdown, and scoped review. Read-only registration preflight against the
+reported existing configuration passes without changing that file. Full
+installation into the user's real home remains unrun; no live activation claim
+is made. One run interrupted by an in-flight source edit was excluded and
+replayed successfully against the unchanged candidate.
+
+Full-catalog alignment on 2026-09-12 preserves all baseline skill/resource paths,
+adds native invocation evals to every skill and extends deterministic tests for
+both hosts. See [the per-skill preservation and evidence report](agent-portability-alignment.md)
+for current checks, repaired findings, progressive disclosure and explicit
+runtime limits. Historical results above remain historical evidence.
+
+<!-- /FEATURE: FEAT-029 -->
+<!-- FEATURE: FEAT-030 reqs=REQ-031 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-030: Claude-native configuration skill
+
+#### Requirements Covered
+
+- REQ-031: Reconcile a Claude-native personal configuration.
+
+#### Context Evidence
+
+config-codex already defines patch-only instructions/settings, missing-file
+recovery, three read-only roles and a structural idempotency checker. Shared
+host adapters and seven existing hook owners support Claude installation.
+Claude context discovery currently offers only the built-in Explore role.
+Current official settings, memory, permissions, subagent and MCP documentation
+establish native scopes and the permission-mode inheritance boundary.
+
+#### Design Details
+
+Add a single config-claude skill with explicit-only metadata for both hosts.
+Target CLAUDE_CONFIG_DIR independently of the invoking host. Manage a compact
+CLAUDE.md block, requested settings.json keys, three native agent Markdown
+files, and private task-state storage. Keep native model selection inherited.
+Provide optional trusted-local settings (permissions.defaultMode
+bypassPermissions and sandbox.enabled false), preserving existing stricter
+values unless their change is expressly authorized. Native managed policy
+remains authoritative. MCP integration is selected per server and uses the
+native user-scope CLI with environment references rather than raw credentials;
+application and authentication state remain Claude-owned.
+
+Keep the skill-led inspect, patch, validate sequence. Add a read-only checker
+and a no-clobber private recovery renderer, not another installer. Existing
+files receive narrow patches, changed-file backups only, and a fresh identity
+and byte comparison before publication. Serialize native CLI and installer
+steps and reread after each writer. Never replay stale backups over new edits.
+
+Native repo-mapper, test-strategist and risk-reviewer roles use only Read,
+Grep and Glob with model inherit. Restrict tools because parent bypass, auto
+and acceptEdits modes can override subagent permissionMode. Extend canonical
+shared hook discovery and its existing Codex mirror to check native role files
+recursively by declared name, suppress ambiguous duplicate identities and
+discoverable project overrides. Advertise candidates pending runtime
+capability and CLI/managed override checks. Permitted private hook effects are
+separate from agent tool restrictions.
+
+Reuse existing hooks without adding a new owner or source copy. Preflight the
+full source/runtime dependency closure before hook setup. Local and plugin
+routes remain exclusive; plugin configuration must not add local duplicates.
+Preserve one Stop arbiter and all existing workflow authority. Delegation policy
+and private Task Implementer workspace remain opt-in. Before a first hook
+installation, create a missing disabled local policy unless delegation was
+selected. The existing installer treats global_context_policy.json as
+operator-owned data: create it when absent, preserve it on reinstalls for both
+hosts. Executable payload refresh behavior remains intact. Missing dependencies and
+unsupported host capabilities are reported without partial completion claims.
+
+#### Selected Option
+
+Sibling host-specific setup skill plus shared installation/runtime owners.
+Python and Bash remain fixed; deterministic helpers support a host-agent-led
+workflow. No new model services or agent topology are introduced.
+
+#### Alternatives Considered
+
+Copying every Codex asset introduces duplicate ownership and unsupported
+settings. Documentation alone does not provide recovery/idempotency checks.
+A generic cross-agent configuration engine would expand the accepted scope.
+
+#### Implementation Boundaries
+
+Own config-claude, shared role discovery and its existing mirror, native skill
+manifest entries, operator-policy preservation in the existing installer,
+directly affected context documentation, CI and focused tests.
+Keep all unrelated dirty work and existing Codex setup semantics.
+
+#### Test-First Success Criteria
+
+- TDD-001: Native configured roles appear as candidates, while writable or shadowed roles do not acquire read-only status.
+- TDD-002: Missing recovery preserves private modes and concurrent existing files; malformed/custom configuration is never replaced.
+- TDD-003: Repeated successful setup is byte- and backup-identical, and local/plugin ownership conflicts are found before mutation.
+
+#### Validation Plan
+
+Run strict skill checks for Codex and Claude, Python tests/lint, native manifest
+checks, canonical pair validation and changed-scope align.
+
+#### Test Plan
+
+Cover synthetic existing homes, malformed/duplicate JSON, unsafe paths,
+managed-block drift, three role policies and overrides, target identity races,
+no-op snapshots, optional integrations and storage, isolated local/plugin
+installation and existing Codex/context regressions.
+
+#### Evaluation Plan
+
+Provide shared positive and negative trigger cases and setup/recovery quality
+cases. Isolate host configuration, credentials and writable outputs. A fresh
+native runtime must independently show loaded instructions/roles/hooks before
+runtime success; comparative quality needs a valid baseline. Unavailable
+credentials or runners remain explicitly unverified.
+
+#### Rollout And Rollback
+
+Validate source then disposable homes, preserving real machine state. Package
+through both existing manifests. Operators review the target-specific patch,
+use changed-file backups and restart/review native loaded configuration.
+Restore only reviewed backups after verifying no intervening user change.
+
+#### Done Definition
+
+Source, documentation, deterministic and isolated installation checks pass.
+Runtime and comparative quality status are reported independently. No real
+installation or publication is implied by source completion.
+
+#### Implementation Evidence
+
+Implemented config-claude with compact native workflow instructions, setup,
+recovery and MCP references, minimal/opt-in settings templates, three native
+role templates, a data-only checker and exclusive recovery helper. Added both
+plugin catalog entries, README/changelog coverage and CI tests/lint. Shared
+role discovery recursively inspects bounded user/project definitions; context
+hook mirrors remain identical. Existing installer preserves operator policy.
+No new hook bundle or real-user configuration was created.
+
+#### Verification Evidence
+
+Initial implementation validation passed 23 config-claude tests, 8 native role
+tests, 70 existing config-codex tests, 25 shared installation/runtime tests, 29 hook-registration tests and
+9 evaluation-adapter tests. The nested override regression failed before its
+source repair, then passed. Strengthened the installed checker case to inspect
+actual installed hooks from both invoking catalogs against one native Claude
+home; that targeted case also passed. These are disposable-fixture and static
+evidence, not observed fresh-model activation.
+
+Both strict skill profiles, native manifests/catalogs, shared local templates,
+Python/shell/Markdown checks, mirrored hook syntax/bytes and CI YAML pass.
+Nested code/security review reports no remaining serious issue. Shared trigger
+CSV has seven cases and quality definitions have four cases. Isolated
+explicit-help probes using Codex 0.154.0 and Claude Code 2.1.236 both returned
+UNAVAILABLE for authentication. The shared dollar-form Claude print probe does
+not establish native slash dispatch for an explicit-only skill; documented
+fresh native trials must submit the equivalent slash invocation and capture
+loading evidence. Comparative quality is unrun without an independent baseline
+and authenticated runners. No runtime or quality pass is
+claimed; installation into the real user home and publication remain unrun.
+
+Follow-up alignment repaired two false STATIC_PASS cases: ALGN-001 required
+private storage roots could be regular files, and ALGN-002 malformed native
+role delimiters could pass. Two regression methods produced four expected
+failures before the checker repair; both now pass, with valid role-body rules
+and no-write inspection preserved. The 25-test configuration suite, 8 native
+role tests and actual-installed-checker integration case pass on this aligned
+source. Strict profiles for both hosts, manifests/catalogs, scoped lint,
+mirrored hook syntax/bytes, CI YAML and final nested review also pass. No fresh
+model evaluation was repeated because these repairs affect deterministic
+inspection and the prior authentication/baseline limitations remain unresolved.
+
+<!-- /FEATURE: FEAT-030 -->
+<!-- FEATURE: FEAT-031 reqs=REQ-032 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-031: Standards-aware alignment with behavior preservation
+
+#### Requirements Covered
+
+- REQ-032: Standard, host and installation checks with per-skill behavior preservation.
+
+#### Context Evidence
+
+The existing validator mixes repository conventions into core checks and parses
+YAML as strings. Native host controls already protect explicit-only and SDLC
+routing. Existing plugins and the local installer own hook/runtime setup.
+
+#### Design Details
+
+Add --policy agentskills|repository (repository default) independently of
+--agent core|codex|claude and existing eval/stateful profiles. Use declared
+PyYAML 6.0.3 safe parsing, duplicate explicit-key detection and standard field
+types. Preserve valid YAML merge precedence, explicit overrides and reused aliases.
+Separate strict whole-file conformity from recognized native extensions.
+Add a standalone checker for skill folders or catalogs using skills 1.5.26,
+Codex and claude-code targets, --copy and --yes. Isolate homes, project and npm
+cache; disable telemetry and bound subprocesses. Check discovery, collisions,
+required resource hashes, executable modes and repeat-install convergence.
+Use Node 24 in a network-dependent CI lane separate from offline checks.
+Alignment captures current working bytes and a semantic behavior inventory,
+compares affected behavior and refuses silent functional weakening. Preserve
+product-specific configuration, workflow authority, hooks, state and recovery.
+Keep one source tree; document full-catalog and runtime setup prerequisites.
+
+#### Selected Option
+
+Extend existing Python validators and alignment references in place; preserve
+native controls with explicit standard-only limitations.
+
+#### Alternatives Considered
+
+Generated host trees introduce drift. Removing native fields weakens controls.
+Treating npx as a host or copying files as runtime proof confuses ownership.
+
+#### Implementation Boundaries
+
+Own align-skill helpers, docs, evals and directly related catalog docs/CI. Repair
+other skills only when a proven compatibility defect requires it. Preserve all
+unrelated dirty files and do not install to real homes or publish.
+
+#### Test-First Success Criteria
+
+- TDD-001: Minimal standard skills pass without repository sections; invalid field types, duplicate keys and unsafe resources fail safely.
+- TDD-002: Native explicit-only/coordinator controls retain behavior and disclose strict-format exceptions.
+- TDD-003: Actual isolated installs discover all expected skills, preserve required payloads and converge; exclusions, collisions and missing tools never pass.
+- TDD-004: Existing configuration and workflow guard regressions continue passing; changed instruction cases compare with captured source or report unavailable.
+
+#### Validation Plan
+
+Run focused unit tests, both catalog policies, isolated installation, scoped
+lint, canonical-pair checks and final align plus independent risk review.
+
+#### Test Plan
+
+Cover valid/invalid YAML, extensions, resource integrity, catalog and single-skill
+installation, repeat installation, unrelated sentinels and runtime prerequisites.
+
+#### Evaluation Plan
+
+Update canonical triggers and behavior assertions. Use fresh native evaluation
+only when safe runners and comparison baselines are available. Do not conflate
+static, installation, native loading or comparative quality evidence.
+
+#### Rollout And Rollback
+
+Deliver source and documentation together. Preserve captured working baselines
+and repair only task-owned changes if checks fail. Existing installation routes
+remain explicit; no real-home or marketplace publication is part of this work.
+
+#### Done Definition
+
+Implemented deterministic and isolated installation checks pass, functional
+regressions are resolved, unavailable native evidence is explicit, and no
+unrelated skill behavior has been changed.
+
+#### Implementation Evidence
+
+Implemented independent standard/repository policy, safe typed YAML with a
+pinned PyYAML dependency, native-extension reporting and bounded resource
+validation. Added the standalone pinned npx checker and offline regression
+suite. Updated alignment instructions, behavior inventories, reports, templates,
+quality/trigger cases, catalog documentation and a separate Node 24 CI lane.
+Native evaluation now resolves agent-created temporary-root aliases before
+containment checks, preserving rejection of links within the skill payload.
+
+Current working-byte comparison confirms config-codex, config-claude, Task
+Implementer, SDLC runtime and shared hook/runtime sources were not changed by
+this work. The SDLC catalog-test fixture now includes the validator helpers and
+distinguishes a catalog rejection from an import/setup error.
+No catalog relocation, generated host tree, real-home installation or publication
+occurred. Existing native controls and installer interfaces remain intact.
+
+#### Verification Evidence
+
+Passed 35 existing validator checks, 13 standard/YAML/resource tests, 11 offline
+installation-harness tests and 10 evaluation-adapter tests. Configuration and
+workflow regressions passed: Codex 70, Claude 25, Task Implementer recovery 22,
+SDLC contract 11, SDLC dispatch 12, installed runtime/hooks 25 and Claude roles 8,
+plus the Task Implementer contract smoke and native manifest/catalog checks.
+Both host policies validate all 71 skills with no failures; the three existing
+soft size warnings remain. Scoped Python/Markdown lint, syntax, CI YAML and
+canonical-pair validation passed.
+
+Actual skills CLI 1.5.26 discovery, copied resource/executable parity, repeated
+installation and unrelated-file/home/config isolation passed for a single skill
+and the 71-skill catalog on Codex and Claude targets in disposable locations.
+Local execution used Python 3.12, PyYAML 6.0.3 and Node 26; Node 24 is configured
+for CI but remote CI has not run. The checker executes no target skill scripts.
+
+Independent read-only review reproduced and verified fixes for Markdown link
+parsing and malformed-path catalog aborts, then cleared the final scoped code
+and security review. The temporary-root regression has failing-before and
+passing-after evidence for both adapters; unsafe payload tests still pass.
+
+Fresh quality-case probes reached Codex CLI 0.154.0 and Claude Code 2.1.236 but
+both reported authentication unavailable. Native trigger/quality behavior is
+therefore UNAVAILABLE; deterministic and installation results do not prove it.
+Requirement status remains active and delivery implemented, not verified.
+
+Follow-up alignment preserved YAML merge semantics while retaining duplicate-key,
+unsafe-tag and complexity checks. New merge/alias/implicit-key regressions and
+the SDLC fixture dependency regression have failing-before/passing-after evidence.
+All 72 focused validator, frontmatter, installer-harness and eval-adapter tests
+passed. The broader SDLC verifier suite passed 81 of 83 tests; both ownership
+assertion failures also reproduced with the captured pre-alignment test source
+and unchanged contract inputs. They remain outside this portability repair.
+Fresh full-catalog npx discovery, copy parity, repeat installation and isolation
+passed for all 71 skills on both hosts. Both host validators, native manifests,
+scoped lint and an independent final code/security review passed. Native model
+evidence remains unavailable; remote CI was not run.
+
+<!-- /FEATURE: FEAT-031 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

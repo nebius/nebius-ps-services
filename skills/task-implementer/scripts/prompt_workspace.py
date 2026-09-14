@@ -18,6 +18,112 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+
+
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+_load_skill_support('runtime', __file__, 'task-implementer/scripts/prompt_workspace.py')
+
 from prompt_workspace_core import (  # noqa: E402
     MAX_PROMPT_BYTES,
     PROMPT_SCHEMA,
@@ -102,6 +208,8 @@ from prompt_workspace_specs import (  # noqa: E402
     load_current_prompt_impact,
     resolve_steering_revision,
 )
+
+from agent_runtime import agent_home, agent_name, runtime_environment  # noqa: E402
 
 
 __all__ = [
@@ -250,7 +358,7 @@ def add_common_workspace(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true")
 
 
-def _launch_codex_worker(
+def _launch_worker(
     result: dict[str, object],
     *,
     reasoning_effort: str = "medium",
@@ -285,11 +393,12 @@ def _launch_codex_worker(
             "WORKER_EXEC_CONTEXT_INVALID",
             "worker launch resources are unavailable before process start",
         )
-    codex = shutil.which("codex")
-    if codex is None or not Path(codex).is_absolute():
+    agent = agent_name()
+    binary = shutil.which(agent)
+    if binary is None or not Path(binary).is_absolute():
         raise PromptWorkspaceError(
             "WORKER_EXEC_UNAVAILABLE",
-            "codex executable is unavailable for the sequential worker fallback",
+            f"{agent} executable is unavailable for the sequential worker fallback",
         )
     exact_start = shlex.join(start_argv)
     preexisting_result: Path | None = None
@@ -348,9 +457,9 @@ def _launch_codex_worker(
             "completion requires the assignment's exact immutable result file. Do not "
             "access network, credentials, external services, or live runtimes."
         )
-    completed = subprocess.run(
-        [
-            codex,
+    if agent == "codex":
+        command = [
+            binary,
             "exec",
             "--ephemeral",
             "-C",
@@ -362,7 +471,20 @@ def _launch_codex_worker(
             "-c",
             f'model_reasoning_effort="{reasoning_effort}"',
             prompt,
-        ],
+        ]
+    else:
+        command = [
+            binary,
+            "--print",
+            "--no-session-persistence",
+            "--effort",
+            reasoning_effort,
+            prompt,
+        ]
+    completed = subprocess.run(
+        command,
+        cwd=str(scope_cwd),
+        env=runtime_environment(agent, fresh_session=True),
         check=False,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -391,17 +513,20 @@ def _launch_codex_worker(
             "WORKER_EXEC_INCOMPLETE",
             "sequential worker exited without its exact immutable result",
         )
-    return {"mode": "codex-exec", "returncode": completed.returncode}
+    return {
+        "mode": "codex-exec" if agent == "codex" else "claude-print",
+        "returncode": completed.returncode,
+    }
 
 
-def _launch_codex_recovery_worker(result: dict[str, object]) -> dict[str, object]:
+def _launch_recovery_worker(result: dict[str, object]) -> dict[str, object]:
     context = result.get("worker_context")
     if not isinstance(context, dict):
         raise PromptWorkspaceError(
             "WORKER_EXEC_CONTEXT_INVALID",
             "recovery worker launch requires the exact recovery context",
         )
-    return _launch_codex_worker(
+    return _launch_worker(
         {
             "start_context": {
                 "scope_cwd": context.get("scope_cwd"),
@@ -453,9 +578,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     init_parser.add_argument("project_path", nargs="?", type=Path, default=Path.cwd())
     init_parser.add_argument(
-        "--codex-home",
+        "--agent-home",
+        dest="codex_home",
         type=Path,
-        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+        default=agent_home(),
     )
     init_parser.add_argument("--no-open", action="store_true")
     init_parser.add_argument(
@@ -468,9 +594,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     reuse_parser.add_argument("project_path", nargs="?", type=Path, default=Path.cwd())
     reuse_parser.add_argument(
-        "--codex-home",
+        "--agent-home",
+        dest="codex_home",
         type=Path,
-        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+        default=agent_home(),
     )
     reuse_parser.add_argument("--no-open", action="store_true")
     reuse_parser.add_argument(
@@ -486,9 +613,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "project_path", nargs="?", type=Path, default=Path.cwd()
     )
     integrate_parser.add_argument(
-        "--codex-home",
+        "--agent-home",
+        dest="codex_home",
         type=Path,
-        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+        default=agent_home(),
     )
     integrate_parser.add_argument("--validated-head", help=argparse.SUPPRESS)
     integrate_parser.add_argument(
@@ -503,9 +631,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     remove_parser.add_argument("project_path", nargs="?", type=Path, default=Path.cwd())
     remove_parser.add_argument(
-        "--codex-home",
+        "--agent-home",
+        dest="codex_home",
         type=Path,
-        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+        default=agent_home(),
     )
     remove_parser.add_argument("--json", action="store_true")
 
@@ -515,9 +644,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     intake_parser.add_argument("prompt")
     intake_parser.add_argument("--project-path", type=Path, default=Path.cwd())
     intake_parser.add_argument(
-        "--codex-home",
+        "--agent-home",
+        dest="codex_home",
         type=Path,
-        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+        default=agent_home(),
     )
     intake_parser.add_argument("--json", action="store_true")
     intake_parser.add_argument(
@@ -649,7 +779,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_arm.add_argument("--run-id", required=True)
     task_arm.add_argument("--task-id", required=True)
     task_arm.add_argument(
-        "--launch-codex-worker", action="store_true", help=argparse.SUPPRESS
+        "--launch-worker", action="store_true", help=argparse.SUPPRESS
     )
 
     task_heartbeat = subparsers.add_parser(
@@ -696,7 +826,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_rearm.add_argument("--expected-start-lease", required=True)
     task_rearm.add_argument("--confirmed-stopped", action="store_true")
     task_rearm.add_argument(
-        "--launch-codex-worker", action="store_true", help=argparse.SUPPRESS
+        "--launch-worker", action="store_true", help=argparse.SUPPRESS
     )
 
     task_recover = subparsers.add_parser(
@@ -771,7 +901,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_resume.add_argument("--capacity", type=int)
     run_resume.add_argument("--alignment")
     run_resume.add_argument(
-        "--launch-codex-recovery-worker",
+        "--launch-recovery-worker",
         action="store_true",
         help=argparse.SUPPRESS,
     )
@@ -1167,7 +1297,7 @@ def main(argv: list[str]) -> int:
                 )
             result = {**result, "resume": next_resume}
         if args.command in {"task-arm", "task-rearm"} and getattr(
-            args, "launch_codex_worker", False
+            args, "launch_worker", False
         ):
             if not isinstance(result, dict):
                 raise PromptWorkspaceError(
@@ -1177,9 +1307,9 @@ def main(argv: list[str]) -> int:
             if resume_guard is not None:
                 resume_guard.__exit__(None, None, None)
                 resume_guard = None
-            result = {**result, "worker_launch": _launch_codex_worker(result)}
+            result = {**result, "worker_launch": _launch_worker(result)}
         if args.command == "run-resume" and getattr(
-            args, "launch_codex_recovery_worker", False
+            args, "launch_recovery_worker", False
         ):
             if (
                 not isinstance(result, dict)
@@ -1192,7 +1322,7 @@ def main(argv: list[str]) -> int:
                 )
             result = {
                 **result,
-                "worker_launch": _launch_codex_recovery_worker(result),
+                "worker_launch": _launch_recovery_worker(result),
             }
     except PromptWorkspaceError as exc:
         if resume_context is not None:

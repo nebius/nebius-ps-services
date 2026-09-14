@@ -88,6 +88,20 @@ class WorktreeManagerTest(unittest.TestCase):
             os.environ["CODEX_HOME"] = self.previous_codex_home
         self.temporary.cleanup()
 
+    def test_worktree_and_commit_share_selected_agent_lock(self) -> None:
+        script = Path(__file__).resolve().parents[2] / "commit/scripts/commit_transaction.py"
+        spec = importlib.util.spec_from_file_location("commit_lock_fixture", script)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent), mock.patch.dict(os.environ, {
+                "SKILLS_AGENT": agent, "CLAUDE_CONFIG_DIR": str(self.root / "claude")
+            }):
+                os.environ.pop("CODEX_THREAD_ID", None)
+                expected = module._transaction_root(module._common_dir(self.repo))
+                self.assertEqual(interop_state._commit_transaction_root(self.repo), expected)
+
     def add(
         self, task_slug: str | None = "fix-triggers", project: str | None = None
     ) -> dict[str, object]:

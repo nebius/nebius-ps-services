@@ -303,7 +303,7 @@ class PromptWorkspaceTest(unittest.TestCase):
             sys.executable,
             str(SCRIPT),
             "init",
-            "--codex-home",
+            "--agent-home",
             str(project_home),
             "--no-open",
             "--json",
@@ -374,7 +374,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 str(SCRIPT),
                 "init",
                 str(self.scope),
-                "--codex-home",
+                "--agent-home",
                 str(project_home),
                 "--editor",
                 "task-implementer-editor-that-does-not-exist",
@@ -489,7 +489,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 [
                     "reuse",
                     str(self.lane_scope),
-                    "--codex-home",
+                    "--agent-home",
                     str(self.codex_home),
                     "--json",
                 ]
@@ -513,7 +513,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 [
                     "reuse",
                     str(self.scope),
-                    "--codex-home",
+                    "--agent-home",
                     str(self.codex_home),
                     "--json",
                 ]
@@ -537,7 +537,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 [
                     "reuse",
                     str(self.scope),
-                    "--codex-home",
+                    "--agent-home",
                     str(self.codex_home),
                     "--json",
                 ]
@@ -554,7 +554,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 str(SCRIPT),
                 "reuse",
                 str(self.scope),
-                "--codex-home",
+                "--agent-home",
                 str(self.codex_home),
                 "--editor",
                 "task-implementer-editor-that-does-not-exist",
@@ -583,7 +583,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 sys.executable,
                 str(SCRIPT),
                 "reuse",
-                "--codex-home",
+                "--agent-home",
                 str(self.codex_home),
                 "--no-open",
             ],
@@ -713,7 +713,7 @@ class PromptWorkspaceTest(unittest.TestCase):
             str(SCRIPT),
             "remove",
             str(self.scope),
-            "--codex-home",
+            "--agent-home",
             str(self.codex_home),
             "--json",
         ]
@@ -759,7 +759,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                         str(SCRIPT),
                         "remove",
                         str(self.scope),
-                        "--codex-home",
+                        "--agent-home",
                         str(self.codex_home),
                         "--json",
                     ],
@@ -782,7 +782,7 @@ class PromptWorkspaceTest(unittest.TestCase):
             str(SCRIPT),
             "init",
             str(self.scope),
-            "--codex-home",
+            "--agent-home",
             str(project_home),
             "--no-open",
             "--json",
@@ -2887,7 +2887,7 @@ class PromptWorkspaceTest(unittest.TestCase):
             prompt.name,
             "--project-path",
             str(self.scope),
-            "--codex-home",
+            "--agent-home",
             str(self.codex_home),
         ]
         public = subprocess.run(

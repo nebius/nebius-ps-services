@@ -61,12 +61,12 @@ gradient settings; it proves the counting logic, not BF16 H100 performance.
 
 If utilization rises while tokens/s falls, check whether the work convention
 changed or extra recomputation was counted. If it exceeds 100 percent, check
-units, peak type, clock assumptions, timing boundaries, and double counting
+units, peak type, clock assumptions, included timed operations, and double counting
 before claiming exceptional hardware behavior. A low estimate alone does not
 identify memory, launch, input-pipeline, or communication bottlenecks: use the
 profiler and training phase evidence to distinguish them.
 
 Review answer: the numerator follows the graph actually executed, while the
-denominator follows the declared completion boundary. General transformer MFU
+denominator includes completion of the stated operations. General transformer MFU
 analysis must account for architecture, active parameters, token counts and
 the chosen recomputation convention; this small capstone does not establish it.

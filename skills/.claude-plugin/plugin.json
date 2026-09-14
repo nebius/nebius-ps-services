@@ -1,0 +1,199 @@
+{
+  "name": "skills",
+  "version": "0.1.0",
+  "description": "Reusable engineering skills and workflow hooks for Codex and Claude Code.",
+  "skills": [
+    "./agent-nebius-auth-diagnose",
+    "./agent-nebius-auth-setup",
+    "./ai-agent-design",
+    "./ai-stack",
+    "./align",
+    "./align-skill",
+    "./app-stack",
+    "./apply-security",
+    "./attach-ubuntu",
+    "./brainstorm",
+    "./code-info",
+    "./code-review",
+    "./commit",
+    "./commit-push",
+    "./config-claude",
+    "./config-codex",
+    "./container",
+    "./create-learning-course",
+    "./create-pr",
+    "./design",
+    "./frontend-project",
+    "./github-workflows",
+    "./gitignore",
+    "./global-context-management",
+    "./helmchart",
+    "./install-grafana-mcp-for-nebius",
+    "./linter",
+    "./maintain-project-specs",
+    "./merge-pr",
+    "./nebius",
+    "./nebius-audit-log",
+    "./nebius-grafana-query",
+    "./nosleep4mac",
+    "./optimize-pytest",
+    "./project-agent-instructions",
+    "./prompt-session-intake",
+    "./publish-helm",
+    "./publish-image",
+    "./publish-release",
+    "./python-project",
+    "./research",
+    "./review-pr",
+    "./scaffold-project",
+    "./sdlc-align-specs",
+    "./sdlc-auto-steering",
+    "./sdlc-classify-failure",
+    "./sdlc-commit",
+    "./sdlc-create-design",
+    "./sdlc-create-plan",
+    "./sdlc-create-requirements",
+    "./sdlc-evaluate",
+    "./sdlc-gather-context",
+    "./sdlc-gui-test",
+    "./sdlc-implement-plan",
+    "./sdlc-merge-pr",
+    "./sdlc-prepare-execution",
+    "./sdlc-start",
+    "./sdlc-tdd",
+    "./sdlc-tui-test",
+    "./sdlc-uat-tests",
+    "./sdlc-unit-tests",
+    "./sdlc-update-documents",
+    "./sdlc-validate-codes",
+    "./sdlc-workflow-test",
+    "./shell-scripting",
+    "./system-design-rules",
+    "./task-implementer",
+    "./task-implementer-test",
+    "./terraform",
+    "./troubleshoot",
+    "./worktree"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook pre_tool_use_nebius_auth.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*|Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook pre_tool_use_sdlc_policy.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook remediation_attempt_guard.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook commit_intent.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30,
+            "additionalContextLimit": 1200
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook user_prompt_context.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook project_specs_lifecycle.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30,
+            "additionalContextLimit": 1600
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook prompt_session_intake.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook remediation_attempt_guard.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30,
+            "additionalContextLimit": 800
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook session_start_context.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook project_specs_lifecycle.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30,
+            "additionalContextLimit": 1600
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook stop_lifecycle_arbiter.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "author": {
+    "name": "Nebius"
+  }
+}

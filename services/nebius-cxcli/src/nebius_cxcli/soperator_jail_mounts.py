@@ -29,6 +29,7 @@ JAIL_DEFAULT_SHARED_MOUNT_PATHS = (
     "/data",
     "/scripts",
     "/models",
+    "/opt/soperator-home",
 )
 JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS = (
     JAIL_PERSISTENT_HOME_MOUNT_PATH,
@@ -593,6 +594,39 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
             ),
         )
     return patched
+
+
+def validate_retained_home_layout(values: Mapping[str, Any]) -> None:
+    """Reject incomplete saved slot layouts; never redirect existing user homes."""
+    if jail_rootfs_active_source(values) != "slot":
+        return
+    mounts = _sequence_of_mappings(values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY))
+    by_path = {row.get("mountPath"): row.get("localPath") for row in mounts}
+    missing = set(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS) - set(by_path)
+    external = _mapping(values.get("externalNfs"))
+    if external.get("enabled") is True:
+        if external.get("mountPath", "/home") == "/opt/soperator-home":
+            raise ValueError("externalNfs conflicts with canonical /opt/soperator-home storage")
+        if external.get("mountPath", "/home") == "/home":
+            missing.discard(JAIL_PERSISTENT_HOME_MOUNT_PATH)
+    if missing:
+        raise ValueError("Canonical retained jail layout is missing: " + ", ".join(sorted(missing)))
+    store = _mapping(_mapping(values.get("jailRootfs")).get("store"))
+    expected = (
+        JAIL_MANAGED_STORE_PATH + "/shared/opt/soperator-home"
+        if store.get("mountPath") == JAIL_MANAGED_STORE_PATH
+        else JAIL_LEGACY_ROOT_PATH + "/opt/soperator-home"
+    )
+    store_path = str(store.get("mountPath") or "")
+    normalize_jail_persistent_mounts(
+        mounts,
+        include_home=False,
+        store_path=store_path,
+        rootfs_path=str(store.get("rootfsPath") or store_path + "/rootfs"),
+        system_path=store_path + "/.cxcli",
+    )
+    if by_path.get("/opt/soperator-home") != expected:
+        raise ValueError("Canonical /opt/soperator-home backing must be " + expected)
 
 
 def apply_jail_persistent_mount_values(

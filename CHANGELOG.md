@@ -8,6 +8,9 @@ project folder.
 
 ### Changed
 
+- Added Git-root Codex and Claude skill marketplace catalogs pointing to the
+  existing `skills/` project, with native manifests and installation guidance.
+
 - Added a static repository welcome page and a five-course learning catalog,
   with direct course switching and embedded Apache-2.0 notices. Prepared
   GitHub Pages publication from the root of `main` using `.nojekyll`, without

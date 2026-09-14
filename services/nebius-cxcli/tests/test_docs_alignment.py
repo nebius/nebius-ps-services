@@ -37,12 +37,12 @@ def test_specs_expose_only_the_current_canonical_contracts() -> None:
         f"REQ-{number:03d}" for number in range(13, 31)
     ]
     assert re.findall(r"^### (FEAT-\d+):", design, re.MULTILINE) == [
-        f"FEAT-{number:03d}" for number in range(13, 33)
+        f"FEAT-{number:03d}" for number in range(13, 34)
     ]
     assert requirements.count("<!-- REQUIREMENT:") == 18
     assert requirements.count("<!-- /REQUIREMENT:") == 18
-    assert design.count("<!-- FEATURE:") == 20
-    assert design.count("<!-- /FEATURE:") == 20
+    assert design.count("<!-- FEATURE:") == 21
+    assert design.count("<!-- /FEATURE:") == 21
 
 
 def test_docs_separate_bounded_discovery_summary_from_complete_json() -> None:

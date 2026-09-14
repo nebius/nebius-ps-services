@@ -83,7 +83,7 @@ this is not a required two-H100 exercise.
 
 Goodput counts acceptable requests completed per unit time. Service-level
 attainment is the fraction of requests meeting a stated target, such as both
-first-token and inter-token latency limits. These measures complement
+time-to-first-token and AIPerf per-request inter-token latency limits. These measures complement
 aggregate throughput: more acceptable completions per second can coexist
 with an unacceptable fraction of slow requests.
 **Investigate**: Can the highest-goodput configuration fail a requirement

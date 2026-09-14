@@ -334,6 +334,16 @@ def compile_checks_policy(source_dir: Path, values: Mapping[str, Any]) -> Sopera
         raise ValueError("Soperator target has no required acceptance checks")
     temporary = policy.effective_values(values, installing=False)
     specs = _render_execution_specs(chart, temporary["soperatorActiveChecks"]["overrideValues"])
+    from .soperator_checks_binding import (
+        active_checks_pvc,
+        retained_check_mounts,
+        validate_rendered_check_storage,
+    )
+
+    retained_mounts = retained_check_mounts(values)
+    if retained_mounts:
+        for spec in specs.values():
+            validate_rendered_check_storage(spec, active_checks_pvc(values), retained_mounts)
     if set(specs) != {rule.name for rule in policy.rules}:
         raise ValueError("rendered upstream check inventory differs from the compiled policy")
     missing_schedules = [spec for spec in specs.values() if "schedule" not in spec]
@@ -364,7 +374,14 @@ def compile_checks_policy(source_dir: Path, values: Mapping[str, Any]) -> Sopera
         ]
         if len(auxiliary) != 1 or not auxiliary[0].get("schedule"):
             raise ValueError("upstream auxiliary scheduling contract is unavailable")
-        auxiliary_spec = auxiliary[0]
+        from .soperator_checks_binding import bind_auxiliary_spec
+
+        auxiliary_spec = bind_auxiliary_spec(
+            auxiliary[0],
+            auxiliary_pvc,
+            retained_check_mounts(values),
+            cluster=values["slurmCluster"]["overrideValues"]["clusterName"],
+        )
     return replace(
         policy, execution_specs=specs, auxiliary_pvc=auxiliary_pvc, auxiliary_spec=auxiliary_spec
     )

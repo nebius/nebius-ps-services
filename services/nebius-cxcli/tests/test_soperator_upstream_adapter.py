@@ -185,7 +185,11 @@ def _values() -> dict[str, Any]:
                 "name": "jail-home",
                 "mountPath": "/home",
                 "localPath": "/mnt/jail-store/shared/home",
-            }
+            },
+            *[
+                {"mountPath": path, "localPath": "/mnt/jail-store/shared" + path}
+                for path in ("/data", "/scripts", "/models", "/opt/soperator-home")
+            ],
         ],
         "volume": {
             "jail": {
@@ -244,7 +248,17 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
     assert [
         (item.mount_path, item.pv_name, item.pvc_name)
         for item in soperator_persistent_mount_bindings(_values())
-    ] == [("/home", "jail-home-pv", "jail-home-pvc")]
+    ] == [
+        ("/home", "jail-home-pv", "jail-home-pvc"),
+        *[
+            (
+                path,
+                "jail-persistent-" + path.strip("/").replace("/", "-") + "-pv",
+                "jail-persistent-" + path.strip("/").replace("/", "-") + "-pvc",
+            )
+            for path in ("/data", "/scripts", "/models", "/opt/soperator-home")
+        ],
+    ]
     worker_mounts = umbrella["nodesets"]["overrideValues"]["nodesets"][0]["slurmd"]["volumes"][
         "customVolumeMounts"
     ]
@@ -268,6 +282,10 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
         "accounting-pv",
         "controller-spool-pv",
         "jail-home-pv",
+        "jail-persistent-data-pv",
+        "jail-persistent-scripts-pv",
+        "jail-persistent-models-pv",
+        "jail-persistent-opt-soperator-home-pv",
         "jail-rootfs-slot-a-pv",
         "jail-rootfs-slot-b-pv",
     }
@@ -291,7 +309,17 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
     assert [
         (item.mount_path, item.pv_name, item.pvc_name)
         for item in soperator_persistent_mount_bindings_from_adapter_state(parsed_state)
-    ] == [("/home", "jail-home-pv", "jail-home-pvc")]
+    ] == [
+        ("/home", "jail-home-pv", "jail-home-pvc"),
+        *[
+            (
+                path,
+                "jail-persistent-" + path.strip("/").replace("/", "-") + "-pv",
+                "jail-persistent-" + path.strip("/").replace("/", "-") + "-pvc",
+            )
+            for path in ("/data", "/scripts", "/models", "/opt/soperator-home")
+        ],
+    ]
 
     lifecycle_by_kind = {
         document["kind"]: document.get("metadata", {})
@@ -330,6 +358,10 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
         "rootfs/slot-a",
         "rootfs/slot-b",
         "shared/home",
+        "shared/data",
+        "shared/scripts",
+        "shared/models",
+        "shared/opt/soperator-home",
     }
     assert env["VERIFY_DIRS"]["value"] == ""
     assert mount_container["startupProbe"]["exec"]["command"][-1] == "verify"
@@ -377,7 +409,13 @@ def test_adapter_compiles_upstream_values_without_owning_product_resources() -> 
         for item in exporter["customInitContainers"]
     )
     login = umbrella["slurmCluster"]["overrideValues"]["slurmNodes"]["login"]
-    assert [item["mountPath"] for item in login["volumes"]["jailSubMounts"]] == ["/home"]
+    assert [item["mountPath"] for item in login["volumes"]["jailSubMounts"]] == [
+        "/home",
+        "/data",
+        "/scripts",
+        "/models",
+        "/opt/soperator-home",
+    ]
     worker = umbrella["nodesets"]["overrideValues"]["nodesets"][0]
     assert {item["name"] for item in worker["customInitContainers"]} >= {
         "mount-gate-worker-jail",
@@ -906,7 +944,7 @@ def test_adapter_rejects_shell_delimiters_in_mount_paths() -> None:
     values = _values()
     values["jailPersistentMounts"][0]["localPath"] = "/mnt/jail-store/shared;unsafe"
 
-    with pytest.raises(ValueError, match="normalized absolute path"):
+    with pytest.raises(ValueError, match="shell-safe path components"):
         compile_upstream_soperator_values(values)
 
 
@@ -915,7 +953,7 @@ def test_adapter_rejects_shell_globs_in_mount_paths(unsafe: str) -> None:
     values = _values()
     values["jailPersistentMounts"][0]["localPath"] = f"/mnt/jail-store/shared/{unsafe}"
 
-    with pytest.raises(ValueError, match="normalized absolute path"):
+    with pytest.raises(ValueError, match="shell-safe path components"):
         compile_upstream_soperator_values(values)
 
 

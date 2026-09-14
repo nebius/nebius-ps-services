@@ -334,7 +334,7 @@ Accumulation reduces per-microbatch activations but does not remove parameter/op
 **Practice labs**
 
 - [Lab 02: Trade microbatch size for peak memory](reference/labs/02_gradient_accumulation.md)
-- [Lab 14: Compare no, selective, and full recomputation](reference/labs/14_activation_checkpointing.md)
+- [Lab 14: Compare checkpointing on alternate blocks and all blocks](reference/labs/14_activation_checkpointing.md)
 
 **Mental model**
 
@@ -630,7 +630,7 @@ Uncertainty describes how much the evidence leaves unresolved, including run-to-
 
 Every earlier lesson supplied one causal model and evidence type. The capstone joins them into a complete training decision rather than a collection of unrelated speed tips.
 
-A causal report connects an observed delay to one change that should remove it. The baseline defines model, tokenizer and data revisions, global valid tokens, sequence distribution, optimizer, precision and the completion boundary. At least three independent runs expose variation in step time, valid tokens/s, phase memory peaks and per-rank timing.
+A causal report connects an observed delay to one change that should remove it. The baseline defines model, tokenizer and data revisions, global valid tokens, sequence distribution, optimizer, precision and which operations must finish before timing stops. At least three independent runs expose variation in step time, valid tokens/s, phase memory peaks and per-rank timing.
 
 A short profiler window identifies a plausible limiting stage. The candidate changes that stage, while a disconfirming control tests whether the proposed explanation survives an alternative. DistributedDataParallel (DDP) versus Fully Sharded Data Parallel, second-generation interface (FSDP2) or eager versus checkpointed comparisons are meaningful only when they preserve the same work and update semantics. A keep/reject decision combines numerical gates, the complete-step result, uncertainty and the next unresolved question.
 

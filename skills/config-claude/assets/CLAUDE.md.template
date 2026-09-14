@@ -1,0 +1,61 @@
+# Personal Working Instructions
+
+<!-- BEGIN config-claude managed context -->
+## Working Defaults
+
+- Preserve unrelated changes. Prefer one canonical behavior over compatibility
+  shims unless the user asks for compatibility.
+- Use global-context-management for non-trivial planning, implementation,
+  debugging, review and multi-file work. Invoke skills using the host's native
+  syntax; plugin skills in this package use the skills namespace in Claude.
+- After code, configuration or documentation changes, invoke align for the
+  changed surfaces before the final response.
+- Agents may remove their own task-specific temporary trees only after
+  resolving and validating the exact path under the system temporary directory.
+  Use scoped, non-forced deletion; never target the temporary root or an
+  unresolved variable.
+
+## Live Product Validation
+
+- Freeze expected behavior and the declared product workflow before a live
+  trial. Separate fixture setup, recovery and independent verification.
+  Classify observation by its effect on tested state, not its read-only label.
+- An outside mutation that performs, bypasses or pre-satisfies a product step
+  marks the trial and dependent evidence as intervened. Changing the declaration
+  starts a new trial; recovery permission does not validate earlier evidence.
+- Production and unconfirmed targets remain read-only without exact action
+  authorization. Destructive, credential, IAM, data, exposure, deletion,
+  material-cost and availability actions need action-specific approval.
+- Repair the proven causal owner, then replay from before the earliest product
+  divergence or contamination. Verify prior writers are quiescent and observe
+  the product transition before claiming a verified fix.
+
+## Nested Project Instructions
+
+- Before modifying a project, read the applicable CLAUDE.md and CLAUDE.local.md
+  files along its directory hierarchy, plus applicable .claude rules and any
+  explicit imports. Claude loads ancestor and project instructions together;
+  it does not automatically discover AGENTS.md or AGENTS.override.md.
+- Preserve higher-priority security, privacy, authorization and publication
+  constraints. Stop before mutation when applicable instructions conflict and
+  cannot be reconciled; identify the conflict and request direction.
+- Read a newly created or refreshed instruction file explicitly. Do not assume
+  that a running session automatically loaded a changed policy.
+
+## Context Management
+
+- Read the hook-advertised private task-state file at task start, resume and
+  compaction when prior decisions matter. Keep it a concise rolling summary;
+  replace stale details and exclude raw prompts, logs and secrets.
+- Preserve an active codex-remediation-budget:v1 marker exactly. This existing
+  workflow protocol is shared across hosts; its name does not select a home.
+- Use bounded read-only helpers when the user requests delegation or an enabled
+  local hook policy requests it. Choose useful roles dynamically and verify
+  their effective tools and overrides. A policy request is sufficient authority
+  for that delegation; do not ask again only to obtain a role name.
+- Keep repository edits owned by the parent or authorized workflow workers.
+  The repo-mapper, test-strategist and risk-reviewer roles only inspect with
+  Read, Grep and Glob. Inherited hooks may still maintain private task state.
+- Task state is distinct from native auto memory and transcripts. Keep private
+  directories at 0700 and files at 0600; do not create repo-local task state.
+<!-- END config-claude managed context -->

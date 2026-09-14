@@ -4,8 +4,7 @@ This directory contains five standalone, practical courses for engineers using
 NVIDIA H100 GPUs on Linux and Slurm.
 
 [Browse the course catalog](https://nebius.github.io/nebius-ps-services/courses/)
-for introductions, prerequisites and direct links to all five courses. The
-same catalog is available locally in [index.html](index.html).
+for introductions, prerequisites and direct links to all five courses.
 
 ```text
 gpu-fundamentals
@@ -27,6 +26,118 @@ The catalog order is:
 Fundamentals and Optimizations are prerequisites for all three specialized
 courses. LLM Training and LLM Inference are not prerequisites for Custom CUDA
 Kernels.
+
+## Sync labs to a Slurm login node
+
+Run [sync-labs.sh](sync-labs.sh) **on your local computer**, from the `courses`
+directory of your Git clone. Open a second local terminal if your current
+terminal is already connected to the login node. Supply the node's DNS name,
+IP address or an existing SSH alias:
+
+```bash
+./sync-labs.sh login.example.com
+./sync-labs.sh 192.0.2.10
+./sync-labs.sh slurm-login
+```
+
+Use the actual address of your login node. SSH resolves DNS names and uses your
+normal SSH settings for keys, ports, proxies and host verification. A bare target
+always selects **root**, even if SSH configuration specifies a different `User`.
+An explicit **user@target** selects that account for both preflight and transfer:
+
+```bash
+./sync-labs.sh 192.0.2.10             # root@192.0.2.10
+./sync-labs.sh nebius@192.0.2.10      # nebius@192.0.2.10
+./sync-labs.sh student@login.example.com
+```
+
+IPv6 addresses are also accepted, for example
+`./sync-labs.sh student@2001:db8::10`. Command-line account selection takes
+precedence over SSH configuration; see the
+[OpenSSH configuration documentation](https://man.openbsd.org/ssh_config.5).
+
+If SSH reports `Permission denied (publickey)`, verify that the selected account
+permits SSH login with your key. For a cluster using a non-root account, supply
+that `user@target` and, when needed, `--identity FILE`. Syncing uses the selected
+account's home; it does not create accounts or authorize keys.
+
+The script requires Bash 3.2 or later, Git, SSH and rsync locally, plus rsync and
+a POSIX shell on the login node. It works from another directory when invoked
+using its path inside the clone.
+
+```bash
+./sync-labs.sh --dry-run user@login.example.com
+./sync-labs.sh --port 2222 --identity ~/.ssh/id_ed25519 user@login.example.com
+./sync-labs.sh --dest training-courses user@login.example.com
+./sync-labs.sh --help
+```
+
+| Option | Behavior |
+| --- | --- |
+| `--dry-run` | Preview without changing the remote destination. |
+| `--dest NAME` | Direct subfolder of remote home; default `courses`. |
+| `--port PORT` | Override the SSH port with a value from 1 through 65535. |
+| `--identity FILE` | Supply an SSH private-key file. |
+| `-h`, `--help` | Show usage and examples. |
+| `--` | End option parsing before the target. |
+
+`NAME` starts with a letter or digit; remaining characters can also be dots,
+underscores or hyphens.
+
+The default destination preserves the source course names:
+
+```text
+~/courses/
+├── index.html
+├── gpu-fundamentals/
+│   ├── labs/
+│   ├── slurm/
+│   ├── tools/
+│   ├── reference/
+│   ├── README.md
+│   └── requirements.txt
+├── gpu-optimizations/
+├── llm-training/
+├── llm-inference/
+└── custom-cuda-kernels/
+```
+
+All courses retain their supporting source files, including applicable build
+metadata and instructions. New course folders containing `reference/course.json`
+and `labs/` are discovered automatically. The transfer includes current tracked
+files, uncommitted edits and new non-ignored files. Git ignore rules exclude
+untracked environments, builds, caches, results and profiler outputs; tracked
+files remain included even if an ignore pattern matches them. Git internals are
+not copied. Safe relative symlinks are preserved; links outside the transferred
+tree are skipped, and course source directories must not be symlinks.
+
+Repeat the same command after local edits. One rsync transfer handles the entire
+catalog, comparing file size and modification time to skip unchanged contents.
+Edits that deliberately preserve both attributes are not detected by this quick
+check. Matching remote files are overwritten from the local source, including
+newer remote edits. Remote-only experiments and results remain, as do remote
+copies of files deleted locally. The destination itself must not be a symlink.
+
+Sync is idempotent: once a run completes, repeating it with unchanged source and
+destination state transfers no file contents and leaves destination contents,
+permissions and modification times unchanged. A permission-only local edit is
+applied without retransferring file contents. After an interrupted transfer,
+rerun the same command to finish syncing; completed files and remote-only
+results are retained.
+
+After a successful sync, use your SSH terminal to enter a course:
+
+```bash
+cd ~/courses/gpu-fundamentals
+ls labs/
+```
+
+Run that course's documented `sbatch` commands from its course root. The remote
+home directory must be accessible to the compute nodes. Set up dependencies on
+the cluster using the course instructions; syncing does not install packages or
+submit jobs. Ctrl+C stops the local sync; files already transferred remain.
+Finish syncing before starting jobs, and rerun after an interrupted transfer
+before using the updated files.
 
 ## Open a course
 
@@ -56,6 +167,8 @@ layout to use cross-course links; each course's lessons, styles, diagrams and
 license remain readable on their own.
 
 ## Website publication
+
+**For course maintainers.**
 
 The repository welcome page links to this catalog. For initial publication,
 merge the reviewed website files into `main`, then open the repository's
@@ -123,7 +236,19 @@ intermediate reasoning and limits. The renderer embeds diagrams within the
 explanation and validators check every lesson's order, diagram coverage and
 complete source-to-HTML narrative parity.
 
-The same sequence applies when a new topic starts inside a lesson, practical
+**For course maintainers:** Technical vocabulary follows NVIDIA documentation for CUDA, GPU architecture,
+profiling, communication and NVIDIA libraries. Framework-specific concepts use
+the owning framework's official names. Define each term in context and verify
+its meaning against the relevant source before revising lessons or labs. Plain
+explanations and teaching models remain useful, but must not be presented as
+formal GPU mechanisms. For timing, name the CPU timer or CUDA events, the
+operations included and how completion is established. Distinguish data in GPU
+memory from thread blocks resident on an SM, and document tool-specific metric
+formulas and aggregation. Review connected glossary entries and diagram labels
+together; a keyword replacement or passing validator cannot prove terminology
+accuracy.
+
+**For course maintainers:** The same sequence applies when a new topic starts inside a lesson, practical
 guide or optional study entry. First explain what kind of thing it is and how
 its essential parts work together; then introduce its purpose, mechanics,
 trade-offs and application. Expand acronyms in context and distinguish nearby
@@ -146,7 +271,7 @@ keep every rank participating through the shared verdict. The theory and
 lab guide explain both the comparison and its limits; successful samples
 do not establish whole-model equivalence or target-runtime qualification.
 
-Before running a lab, explain its operation, dependencies, timing boundary and
+Before running a lab, explain its operation, dependencies, timer, included work and
 numerical acceptance check in your own words. Reused profiler skills transfer
 to a new workload, but its measured
 bottleneck does not: collect evidence from the actual baseline and candidate.
@@ -159,7 +284,7 @@ supported commands, result fields, numerical gates, and meaningful extensions.
 Exact lab titles link both ways between their lessons and the practical section.
 
 Throughout the catalog, explanations distinguish supplied experiments from
-optional extensions, state units and timing boundaries, and use code formatting
+optional extensions, state units, included operations and completion checks, and use code formatting
 for exact commands, options and implementation names.
 
 Each syllabus provides an ordered lesson-by-lesson route, the competency to
@@ -204,6 +329,8 @@ contain environment details and remain private; only reviewed summaries belong
 in public course material.
 
 ## Offline validation
+
+**For course maintainers.**
 
 ```bash
 python3 tools/build_course_html.py
@@ -269,6 +396,8 @@ the CUDA course's device-independent argument parser. This does not compile or
 validate its CUDA kernels; use the separate target build and H100 gates.
 
 ## Maintain a lab guide
+
+**For course maintainers.**
 
 Edit the canonical guide at `COURSE/reference/labs/SOURCE_STEM.md`, beside the
 course's existing reference guides. Its heading is `# Lab NN: Descriptive title`;

@@ -143,3 +143,62 @@ from static files.
 
 This order keeps ordinary alignment fast while preserving truthful evidence
 for changes that need more than static inspection.
+
+## Native Codex and Claude Runner
+
+`scripts/run-skill-evals.py <skill_dir> --agent codex|claude --suite
+triggers|quality --output-dir <absolute-external-directory>` runs native CLI
+sessions in temporary homes and workspaces. Use `--case-id <id>` for one case.
+Quality runs additionally require `--baseline-dir <captured-skill-directory>`;
+capture working bytes before modifying the target. Keep the baseline folder's
+skill name identical to the candidate's.
+
+The runner reads the canonical trigger CSV or `evals/evals.json`, validates
+contained fixtures, rejects symlinks and special files throughout the skill
+payload, and installs the selected skill into the temporary project. `.git` and
+`__pycache__` are excluded. It validates the copied payload before launching
+the agent and bounds each process to 180 seconds and eight MiB per output
+stream. It retains a small sanitized report with CLI version, available model identity,
+skill hash and per-case evidence state. It does not reuse the user's skill
+catalog, configuration or credential files. `OPENAI_API_KEY`, `CODEX_API_KEY`
+and `ANTHROPIC_API_KEY` can supply authentication through native CLI behavior;
+normal account login is not copied into test homes.
+
+Trigger activation requires successful native Skill or file-read results,
+correlated to their tool-use IDs; denied or incomplete attempts do not count.
+For Codex command traces, only simple `cat`, `head`, or `sed` reads with actual
+skill-body content in the captured output count. Discarded output, empty reads,
+metadata-only output, and unsupported command forms remain unconfirmed.
+Self-reported activation does not count. Quality checks require confirmed skill
+loading in both arms, run candidate and captured baseline independently, then
+use a fresh judge session with no target
+skill installed. The judge checks assertions and preserved behavior against
+sanitized responses and bounded output files; a baseline comparison alone is
+not deterministic proof of every semantic guarantee.
+
+`STATIC_PASS`, installed-package proof, native CLI installation, `RUNTIME_PASS`
+and `QUALITY_PASS` are separate. Missing credentials, native trace, baseline or
+valid independent assertions yield `UNAVAILABLE`, which is not a passing eval.
+A completed contradictory trigger or quality judgment yields `FAIL`.
+
+Run `scripts/test-skill-evals.py` to verify the adapters' deterministic evidence
+boundary. Run the native suites separately on each host. Portability cases must
+preserve intentionally Codex-specific configuration and Task Implementer versus
+SDLC commit ownership; replacing provider names is not a preservation test.
+
+## Compatibility Preservation Cases
+
+For every aligned target, map changed fields, resources or instructions to the
+pre-edit behavior inventory in [agent portability](agent-portability.md).
+Choose assertions for the actual actions, outputs, authorization, idempotency,
+state, hook prerequisites and recovery affected. Configuration skills retain
+the configured product; workflow skills retain worker/coordinator ownership.
+Use deterministic tests where sufficient and fresh matched previous-version
+runs for material instruction behavior when available. A known regression
+blocks acceptance; missing native evidence stays UNAVAILABLE.
+
+Record standard-field checks, strict-frontmatter exceptions, host checks and
+actual npx installation separately. Offline `test-npx-compatibility.py` tests
+the checker with fixtures; only `check-npx-compatibility.py` invokes the real
+pinned CLI. Its JSON PASS covers installation, never native triggering or
+output quality. Keep network setup separate from the offline unit suite.

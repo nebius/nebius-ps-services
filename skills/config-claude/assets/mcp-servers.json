@@ -1,0 +1,36 @@
+{
+  "context7": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@upstash/context7-mcp@3.2.4"],
+    "env": {"CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"}
+  },
+  "playwright": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@playwright/mcp@0.0.78"]
+  },
+  "terraform": {
+    "type": "stdio",
+    "command": "docker",
+    "args": ["run", "-i", "--rm", "hashicorp/terraform-mcp-server:0.5.2"]
+  },
+  "markitdown": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": ["markitdown-mcp==0.0.1a4"]
+  },
+  "microsoftdocs": {
+    "type": "http",
+    "url": "https://learn.microsoft.com/api/mcp"
+  },
+  "github": {
+    "type": "http",
+    "url": "https://api.githubcopilot.com/mcp/",
+    "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}
+  },
+  "openaiDeveloperDocs": {
+    "type": "http",
+    "url": "https://developers.openai.com/mcp"
+  }
+}

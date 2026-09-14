@@ -2379,6 +2379,27 @@ uv run nebius-cxcli soperator install ./deployments \
   --dry-run
 ```
 
+The login wizard selects a public key for `root`, preferring `~/.ssh/id_ed25519.pub`,
+then `id_ecdsa.pub`, `id_rsa.pub`, and other supported public key files. Fresh
+headless installs use the same preference and fail before installation if no key
+is available. Supply `slurmNodes.login.sshRootPublicKeys` in the values file to
+choose an explicit list, including `[]` to disable root SSH keys. Existing lists
+are preserved unless deliberately replaced in the wizard. The chosen keys are
+saved inline; render, resume, and upgrade use the saved selection.
+Leaving the wizard before making a key choice writes no installation config and
+creates no install plan. Explicitly choosing an empty list still permits installation.
+
+Upstream named users such as `nebius` use `/opt/soperator-home/<username>`.
+`/home/ubuntu` belongs to the separate `ubuntu` account. Root-key selection does
+not configure named-user access. New managed installations retain
+`/opt/soperator-home` at `/mnt/jail-store/shared/opt/soperator-home`, alongside
+`/home`, `/data`, `/scripts`, and `/models`. Login, worker, and bootstrap/check
+workloads share these retained mounts. Home files persist across rootfs changes;
+account definitions under `/etc` remain owned by the target image and upstream
+bootstrap. Incomplete or conflicting saved layouts fail validation; cxcli does
+not migrate earlier layouts. Check mount paths must be canonical absolute paths;
+aliases and overlapping mounts cannot shadow retained directories.
+
 Optional advanced configuration belongs to this dedicated path. Add
 `--values-file ./soperator-values.yaml` to the fresh-install command. The file
 contains one values-only YAML mapping, without a `values:` wrapper or
@@ -2935,8 +2956,9 @@ Kubernetes identities, adopts the exact controller/accounting storage and SSH
 identity, and seals a content-free target-wins admission over the official
 target image, selected persistent paths, active rootfs PVC identity, and exact
 passive-slot PVC storage contract. It does not extract or inventory a source or
-reference image before commit. `/home`, `/data`, `/scripts`, and `/models` are
-always retained as path-specific PVC mounts outside the versioned slots. The
+reference image before commit. `/home`, `/data`, `/scripts`, `/models`, and
+`/opt/soperator-home` are always retained as path-specific PVC mounts outside the
+versioned slots. The
 interactive upgrade wizard can add dedicated data directories; its normalized
 selection is approval-bound and persisted only with successful promotion. New
 optional paths are zero-copy selections available during first rootfs adoption;
@@ -3962,8 +3984,6 @@ nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-
     `config.yaml`.
   - Interactive `create` offers app chart selection only after the infra selection
     includes an MK8s target.
-  - The saved config stores the inline public key text so rendered login nodes can
-    authorize `root` SSH with the matching private key.
   - Non-interactive subnet-attached infra can receive VPC IDs with
     `--network-id` and `--subnet-id`. A bare value is valid only when exactly
     one applicable infra row is selected. With multiple applicable rows, scope

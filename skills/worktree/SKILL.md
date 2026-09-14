@@ -1,13 +1,14 @@
 ---
 name: worktree
 description: "Requires explicit invocation to add, integrate, reuse, or remove full-repo linked Git worktrees with exact branch, commit, and cleanup checks. Not for push, PRs, publication, or parallel-agent orchestration."
+disable-model-invocation: true
 ---
 
 # Worktree
 
 ## Help
 
-For `$worktree --help` or `$worktree -h`, return concise help and stop before
+For `$worktree --help` or `$worktree -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +19,18 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Before workflow reads, load `../global-context-management/references/agent-hosts.md`
+for selected-home paths, native identity and required runtime setup.
+
+Use `$worktree` in Codex, `/worktree` in Claude Code, or
+`/skills:worktree` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -93,12 +106,14 @@ $worktree remove <generated-worktree-name>
   coordinator lease acquisition, removal, and source publication until the
   exact candidate reservation consumes it or an explicit reviewed restart
   drops only the claim while retaining every commit.
-- Worktree ownership transitions also take the same Codex-private
+- Worktree ownership transitions also take the same selected-host private
   common-repository lock used by direct `$commit` transactions. A direct
   transaction that acquires it first is revalidated before Worktree proceeds;
   an existing preparation or reservation for the source ref blocks the direct
   transaction. This serializes ownership without sharing or replacing either
   workflow's claim schema.
+- Codex and Claude installations operate independently; cross-agent concurrent
+  execution, synchronization and workflow handoff are not supported.
 - Removal non-forcibly removes the child worktree, deletes its unchanged local
   ref with an expected-old SHA, deletes any exact released nested-lease
   receipt, and deletes its private manifest.
@@ -153,7 +168,7 @@ $worktree remove <generated-worktree-name>
    whose state the agent owns. From that directory, re-observe `pwd`, the child
    branch, exact `HEAD`, and cleanliness before reporting readiness.
 5. Keep later lifecycle actions anchored to the clean primary checkout. A
-   helper subprocess cannot change its parent process, the Codex workspace, or
+   helper subprocess cannot change its parent process, the agent workspace, or
    an editor window, so never claim a persistent shell/editor switch unless it
    is independently observed. Never launch or reopen an editor unless the user
    explicitly asks.
@@ -317,7 +332,7 @@ $worktree remove <generated-worktree-name>
   must route to the owning local promotion and integration workflow.
 - Never treat `--project` as a staging or changed-path boundary. Git operations
   see the full linked checkout.
-- Never treat a subprocess-local `cd` as proof that the parent shell, Codex
+- Never treat a subprocess-local `cd` as proof that the parent shell, agent
   workspace, or editor changed directories or selected the child branch.
 - Never launch, reopen, or retarget an editor as an implicit side effect of
   `add` or `--reuse`.

@@ -671,7 +671,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
                 [
                     "integrate",
                     str(self.outer_scope),
-                    "--codex-home",
+                    "--agent-home",
                     str(self.codex_home),
                     "--json",
                 ]
@@ -701,7 +701,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
                 [
                     "integrate",
                     str(self.outer_scope),
-                    "--codex-home",
+                    "--agent-home",
                     str(self.codex_home),
                     "--json",
                 ]
@@ -745,7 +745,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
                     [
                         "integrate",
                         str(self.outer_scope),
-                        "--codex-home",
+                        "--agent-home",
                         str(self.codex_home),
                         "--json",
                     ]

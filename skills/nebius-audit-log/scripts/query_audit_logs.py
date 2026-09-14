@@ -1,418 +1,366 @@
 #!/usr/bin/env python3
-"""Read-only Nebius Control Plane Audit Logs query helper."""
+"""Verify and query explicit Nebius Control Plane Audit Logs scope."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from audit_cli import AuditError, Cli, InputError, invalid_response, object_value
+from audit_filters import (
+    ID,
+    REGION,
+    compile_filter,
+    equality,
+    parse_extra,
+    require_id,
+    subject_field,
+)
 
-DEFAULT_EVENT_TYPE = "control_plane"
-DEFAULT_HOURS = 24.0
-DEFAULT_PAGE_SIZE = 100
-DEFAULT_REGION = "eu-north1"
-SAFE_FILTER_VALUE_RE = re.compile(r"^[A-Za-z0-9._:/@+=,~-]{1,512}$")
-REGION_RE = re.compile(r"^[a-z]+-[a-z]+[0-9]$")
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        # argparse's original text may quote a secret-bearing invalid argument.
+        raise InputError(
+            "Invalid arguments. Run --help for supported options and required selectors."
+        )
 
 
-class AuditLogError(RuntimeError):
-    """Raised for expected user-facing failures."""
-
-
-@dataclass(frozen=True)
-class QueryPlan:
-    tenant_id: str
-    region: str
-    start: str
-    end: str
-    filter_expr: str
-    command: list[str]
+class Once(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest) is not None:
+            raise InputError("--action accepts exactly one value.")
+        setattr(namespace, self.dest, values)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Query Nebius Control Plane Audit Logs through the Nebius CLI. "
-            "The helper is read-only and sanitizes output unless --raw is set."
-        )
+    parser = Parser(description=__doc__, allow_abbrev=False)
+    selector = parser.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--resource-id", help="Investigate this resource ID.")
+    selector.add_argument(
+        "--subject-id", help="Investigate a tenantuseraccount-* or serviceaccount-* ID."
     )
-    parser.add_argument("--resource-id", help="Nebius resource ID to query.")
-    parser.add_argument("--tenant-id", help="Nebius tenant ID. Defaults to CLI config tenant-id.")
-    parser.add_argument("--project-id", help="Project ID used only for region discovery.")
-    parser.add_argument("--region", help="Audit Logs region. Defaults to discovered project region, then eu-north1.")
-    parser.add_argument("--start", help="Start timestamp in ISO 8601 format. Defaults to now minus --hours.")
-    parser.add_argument("--end", help="End timestamp in ISO 8601 format. Defaults to now.")
+    selector.add_argument(
+        "--current-subject",
+        action="store_true",
+        help="Investigate the verified caller explicitly.",
+    )
+    selector.add_argument(
+        "--tenant-wide",
+        action="store_true",
+        help="Search all actors/resources in the selected tenant, region and window.",
+    )
+    parser.add_argument(
+        "--tenant-id", help="Tenant ID; otherwise use selected CLI configuration."
+    )
+    parser.add_argument(
+        "--project-id",
+        help="Project ID for region discovery only; does not filter events.",
+    )
+    parser.add_argument(
+        "--region",
+        help="Origin region; otherwise discover from a project in the selected tenant.",
+    )
+    parser.add_argument(
+        "--profile", help="CLI profile; otherwise resolve the configured profile once."
+    )
+    parser.add_argument(
+        "--start", help="ISO 8601 window start; timestamps without offsets use UTC."
+    )
+    parser.add_argument(
+        "--end", help="ISO 8601 window end; defaults to current UTC time."
+    )
     parser.add_argument(
         "--hours",
         type=float,
-        default=DEFAULT_HOURS,
-        help="Trailing time window when --start is omitted. Default: 24.",
+        help="Trailing window in hours; default 24. Cannot accompany --page-token.",
     )
-    parser.add_argument("--action", action="append", default=[], help="Audit action filter, for example DELETE.")
-    parser.add_argument("--service", help="Service filter, for example COMPUTE.")
-    parser.add_argument("--resource-type", help="Resource type filter, for example computeinstance.")
-    parser.add_argument("--status", help="Operation status filter.")
-    parser.add_argument("--raw-filter", help="Additional Nebius Audit Logs filter text appended with AND.")
+    parser.add_argument(
+        "--action", action=Once, help="One action filter, for example DELETE."
+    )
+    parser.add_argument("--service", help="Service filter, for example MK8S.")
+    parser.add_argument("--resource-type", help="Resource type filter.")
+    parser.add_argument(
+        "--status",
+        choices=("STARTED", "DONE", "ERROR"),
+        help="Operation status filter.",
+    )
+    parser.add_argument(
+        "--raw-filter",
+        help="Additional AND-connected noncredential comparisons or regex predicates.",
+    )
     parser.add_argument(
         "--page-size",
         type=int,
-        default=DEFAULT_PAGE_SIZE,
-        help="Bounded page size for live queries. Default: 100.",
+        default=100,
+        help="Items per page, 1..500; default 100.",
     )
-    parser.add_argument("--page-token", help="Page token for continuing a previous query.")
-    parser.add_argument("--all", action="store_true", help="Ask the Nebius CLI to retrieve all pages.")
-    parser.add_argument("--profile", help="Nebius CLI profile to use.")
-    parser.add_argument("--dry-run", action="store_true", help="Print the resolved command and do not query Audit Logs.")
+    parser.add_argument(
+        "--max-pages", type=int, default=1, help="Maximum pages, 1..100; default 1."
+    )
+    parser.add_argument(
+        "--page-token",
+        help="Resume the same query; requires explicit --start and --end and unchanged filters.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=120,
+        help="Overall deadline in seconds, >0..600; default 120.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Offline preview; makes no CLI calls and never verifies access.",
+    )
     parser.add_argument(
         "--format",
-        choices=("summary", "json", "yaml", "table", "text"),
+        choices=("summary", "json"),
         default="summary",
-        help="Output format. summary/json are sanitized unless --raw is set.",
+        help="Sanitized output format; default summary.",
     )
-    parser.add_argument("--raw", action="store_true", help="Pass through raw Nebius CLI output.")
     parser.add_argument(
         "--include-pii",
         action="store_true",
-        help="Include PII-bearing summary fields such as subject names.",
+        help="Include subject and resource names in event summaries.",
     )
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+@dataclass(frozen=True)
+class Query:
+    selector: dict[str, str]
+    filters: dict[str, str]
+    extra: str
+    extra_metadata: list[dict[str, str]]
+    start: str
+    end: str
+
+
+def timestamp(value: str) -> datetime:
     try:
-        plan = build_query_plan(args)
-        if args.dry_run:
-            print_dry_run(plan, profile=args.profile)
-            return 0
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return (
+            result.replace(tzinfo=timezone.utc)
+            if result.tzinfo is None
+            else result.astimezone(timezone.utc)
+        )
+    except (ValueError, OverflowError) as exc:
+        raise InputError("Timestamps must be valid ISO 8601 dates and times.") from exc
 
-        if args.raw:
-            stdout = run_nebius(plan.command, profile=args.profile)
-            sys.stdout.write(stdout)
-            return 0
 
-        if args.format not in {"summary", "json"}:
-            raise AuditLogError(
-                "--format yaml/table/text requires --raw because only JSON output can be sanitized."
+def utc(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def validate(args: argparse.Namespace) -> Query:
+    if not 1 <= args.page_size <= 500 or not 1 <= args.max_pages <= 100:
+        raise InputError("page-size must be 1..500 and max-pages must be 1..100.")
+    if not math.isfinite(args.timeout) or not 0 < args.timeout <= 600:
+        raise InputError("timeout must be finite, positive and at most 600 seconds.")
+    hours = 24 if args.hours is None else args.hours
+    if not math.isfinite(hours) or hours <= 0:
+        raise InputError("hours must be finite and positive.")
+    if args.page_token is not None:
+        if not args.start or not args.end or args.hours is not None:
+            raise InputError(
+                "page-token requires explicit start/end, unchanged query parameters and no hours option."
             )
-
-        stdout = run_nebius(plan.command, profile=args.profile)
-        payload = parse_json_output(stdout)
-        sanitized = sanitize_payload(payload, include_pii=args.include_pii)
-        if args.format == "json":
-            print(json.dumps(sanitized, indent=2, sort_keys=True))
-        else:
-            print_summary(sanitized)
-        return 0
-    except AuditLogError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
-
-def build_query_plan(args: argparse.Namespace) -> QueryPlan:
-    validate_args(args)
-    tenant_id = resolve_tenant_id(args.tenant_id, args.profile)
-    region = resolve_region(args.region, args.project_id, args.profile)
-    start, end = resolve_time_range(args.start, args.end, args.hours)
-    filter_expr = build_filter(args)
-    cli_format = cli_output_format(args)
-    command = build_audit_list_command(
-        tenant_id=tenant_id,
-        region=region,
-        start=start,
-        end=end,
-        filter_expr=filter_expr,
-        page_size=args.page_size,
-        page_token=args.page_token,
-        all_pages=args.all,
-        output_format=cli_format,
-    )
-    return QueryPlan(
-        tenant_id=tenant_id,
-        region=region,
-        start=start,
-        end=end,
-        filter_expr=filter_expr,
-        command=command,
-    )
-
-
-def validate_args(args: argparse.Namespace) -> None:
-    if args.hours <= 0:
-        raise AuditLogError("--hours must be greater than zero.")
-    if args.page_size <= 0:
-        raise AuditLogError("--page-size must be greater than zero.")
-    if args.all and args.page_token:
-        raise AuditLogError("--all cannot be combined with --page-token.")
-
-
-def cli_output_format(args: argparse.Namespace) -> str:
-    if args.raw:
-        return "json" if args.format == "summary" else args.format
-    return "json"
-
-
-def nebius_binary() -> str:
-    return os.environ.get("NEBIUS_BIN", "nebius")
-
-
-def with_global_options(command: list[str], profile: str | None) -> list[str]:
-    full_command = [nebius_binary(), *command, "--no-progress", "--no-check-update"]
-    if profile:
-        full_command.extend(["--profile", profile])
-    return full_command
-
-
-def run_nebius(command: list[str], profile: str | None = None) -> str:
-    full_command = with_global_options(command, profile)
-    try:
-        proc = subprocess.run(
-            full_command,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        if not valid_token(args.page_token) or not args.page_token:
+            raise InputError("Invalid continuation token.")
+    for field, prefix in (("tenant_id", "tenant-"), ("project_id", "project-")):
+        value = getattr(args, field)
+        if value is not None:
+            require_id(value, field.replace("_", "-"), prefix)
+    if args.region is not None and not REGION.fullmatch(args.region):
+        raise InputError("region must be a Nebius region identifier.")
+    if args.profile is not None and not valid_profile(args.profile):
+        raise InputError(
+            "profile must be a nonempty CLI profile name without control characters."
         )
-    except FileNotFoundError as exc:
-        raise AuditLogError("Nebius CLI not found on PATH. Install or configure nebius first.") from exc
-
-    if proc.returncode != 0:
-        stderr = redact_error_text(proc.stderr.strip())
-        detail = f" Nebius stderr: {stderr}" if stderr else ""
-        raise AuditLogError(f"Nebius CLI command failed with exit code {proc.returncode}.{detail}")
-    return proc.stdout
-
-
-def redact_error_text(text: str) -> str:
-    if not text:
-        return ""
-    redacted = re.sub(r"ne1[a-zA-Z0-9._-]+", "<redacted-token>", text)
-    redacted = re.sub(r"NAKI[A-Za-z0-9._-]+", "<redacted-static-key>", redacted)
-    redacted = re.sub(r"(?i)(private[-_ ]?key\s*[:=]\s*)\S+", r"\1<redacted>", redacted)
-    redacted = re.sub(r"(?i)(--filter(?:=|\s+))\S+", r"\1<redacted-filter>", redacted)
-    redacted = re.sub(r"(?im)^.*filter.*$", "<redacted-filter-error-line>", redacted)
-    return redacted[-1000:]
-
-
-def resolve_tenant_id(explicit_tenant_id: str | None, profile: str | None) -> str:
-    if explicit_tenant_id:
-        return explicit_tenant_id
-    tenant_id = config_get("tenant-id", profile)
-    if tenant_id:
-        return tenant_id
-    raise AuditLogError(
-        "tenant ID was not provided and `nebius config get tenant-id` returned no value. "
-        "Pass --tenant-id or select a configured Nebius profile."
-    )
-
-
-def resolve_region(
-    explicit_region: str | None,
-    explicit_project_id: str | None,
-    profile: str | None,
-) -> str:
-    if explicit_region:
-        return explicit_region
-
-    project_id = explicit_project_id or configured_project_id(profile)
-    if project_id:
-        region = project_region(project_id, profile)
-        if region:
-            return region
-
-    for prop in ("region", "default-region"):
-        configured = config_get(prop, profile)
-        if configured:
-            return configured
-
-    return DEFAULT_REGION
-
-
-def config_get(property_name: str, profile: str | None) -> str | None:
-    try:
-        output = run_nebius(["config", "get", property_name], profile=profile)
-    except AuditLogError:
-        return None
-    value = output.strip()
-    return value or None
-
-
-def configured_project_id(profile: str | None) -> str | None:
-    parent_id = config_get("parent-id", profile)
-    if parent_id and parent_id.startswith("project-"):
-        return parent_id
-    return None
-
-
-def project_region(project_id: str, profile: str | None) -> str | None:
-    try:
-        output = run_nebius(
-            ["iam", "v2", "project", "get", "--id", project_id, "--format", "json"],
-            profile=profile,
-        )
-    except AuditLogError:
-        return None
-    try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
-        return None
-    return find_region_value(payload)
-
-
-def find_region_value(value: Any) -> str | None:
-    if isinstance(value, dict):
-        for key in ("region", "region_id", "regionId", "project_region", "projectRegion"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and REGION_RE.fullmatch(candidate):
-                return candidate
-            if isinstance(candidate, dict):
-                nested = find_region_value(candidate)
-                if nested:
-                    return nested
-        for child in value.values():
-            nested = find_region_value(child)
-            if nested:
-                return nested
-    elif isinstance(value, list):
-        for item in value:
-            nested = find_region_value(item)
-            if nested:
-                return nested
-    return None
-
-
-def resolve_time_range(
-    explicit_start: str | None,
-    explicit_end: str | None,
-    hours: float,
-) -> tuple[str, str]:
-    now = utc_now()
-    end_dt = parse_time(explicit_end) if explicit_end else now
-    start_dt = parse_time(explicit_start) if explicit_start else end_dt - timedelta(hours=hours)
-    if start_dt >= end_dt:
-        raise AuditLogError("--start must be earlier than --end.")
-    return format_utc(start_dt), format_utc(end_dt)
-
-
-def utc_now() -> datetime:
-    override = os.environ.get("NEBIUS_AUDIT_LOG_NOW")
-    if override:
-        return parse_time(override)
-    return datetime.now(timezone.utc).replace(microsecond=0)
-
-
-def parse_time(value: str) -> datetime:
-    raw = value.strip()
-    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError as exc:
-        raise AuditLogError(f"invalid ISO 8601 timestamp: {value}") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).replace(microsecond=0)
-
-
-def format_utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def build_filter(args: argparse.Namespace) -> str:
-    parts: list[str] = []
-    if args.resource_id:
-        parts.append(equals_filter("resource.metadata.id", args.resource_id))
+    if args.resource_id is not None:
+        selector = {
+            "kind": "resource",
+            "id": require_id(args.resource_id, "resource-id"),
+        }
+    elif args.subject_id is not None:
+        subject_field(args.subject_id)
+        selector = {"kind": "subject", "id": args.subject_id}
     else:
-        parts.append(resolve_current_subject_filter(args.profile))
+        selector = {
+            "kind": "current_subject" if args.current_subject else "tenant_wide"
+        }
+    filters = {}
+    for attribute, field in (
+        ("action", "action"),
+        ("service", "service.name"),
+        ("resource_type", "resource.metadata.type"),
+        ("status", "status"),
+    ):
+        value = getattr(args, attribute)
+        if value is not None:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", value):
+                raise InputError(
+                    "Structured filters require service/action/type/status identifiers."
+                )
+            equality(field, value)
+            filters[field] = value
+    extra, metadata = parse_extra(args.raw_filter)
+    try:
+        now = (
+            timestamp(os.environ["NEBIUS_AUDIT_LOG_NOW"])
+            if "NEBIUS_AUDIT_LOG_NOW" in os.environ
+            else datetime.now(timezone.utc)
+        )
+        end = timestamp(args.end) if args.end is not None else now
+        start = (
+            timestamp(args.start)
+            if args.start is not None
+            else end - timedelta(hours=hours)
+        )
+    except (OverflowError, ValueError) as exc:
+        raise InputError("The requested time window is out of range.") from exc
+    if start >= end:
+        raise InputError("start must precede end.")
+    return Query(selector, filters, extra, metadata, utc(start), utc(end))
 
-    for action in args.action:
-        parts.append(equals_filter("action", action))
-    if args.service:
-        parts.append(equals_filter("service.name", args.service))
-    if args.resource_type:
-        parts.append(equals_filter("resource.metadata.type", args.resource_type))
-    if args.status:
-        parts.append(equals_filter("status", args.status))
-    if args.raw_filter:
-        parts.append(args.raw_filter.strip())
 
-    return " AND ".join(part for part in parts if part)
+def valid_profile(value: str) -> bool:
+    return (
+        bool(value.strip())
+        and len(value) <= 256
+        and all(ord(c) >= 32 and ord(c) != 127 for c in value)
+    )
 
 
-def equals_filter(field: str, value: str) -> str:
-    return f"{field}='{safe_filter_value(value)}'"
+def valid_token(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= 8192
+        and all(32 <= ord(c) < 127 for c in value)
+    )
 
 
-def safe_filter_value(value: str) -> str:
-    if not SAFE_FILTER_VALUE_RE.fullmatch(value):
-        raise AuditLogError(
-            f"unsafe filter value {value!r}; use --raw-filter for advanced Nebius filter syntax."
+def parse_object(output: str, stage: str) -> dict[str, Any]:
+    def no_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate")
+            result[key] = value
+        return result
+
+    def no_constant(value):
+        raise ValueError("nonfinite")
+
+    try:
+        return object_value(
+            json.loads(
+                output, object_pairs_hook=no_duplicates, parse_constant=no_constant
+            ),
+            stage,
+        )
+    except (ValueError, RecursionError) as exc:
+        raise invalid_response(stage) from exc
+
+
+def config_value(cli: Cli, key: str) -> str:
+    value = cli.run(["config", "get", key], "configuration").strip()
+    if not value:
+        raise AuditError(
+            "missing_scope",
+            "configuration",
+            "Required CLI scope is absent; provide tenant-id and region or project-id.",
         )
     return value
 
 
-def resolve_current_subject_filter(profile: str | None) -> str:
-    try:
-        output = run_nebius(["iam", "whoami", "--format", "json"], profile=profile)
-    except AuditLogError as exc:
-        raise AuditLogError(
-            "resource ID was not provided and current Nebius principal could not be resolved. "
-            "Pass --resource-id or fix `nebius iam whoami --format json`."
-        ) from exc
+def resolve_caller(payload: dict[str, Any], tenant: str) -> dict[str, str]:
+    variants = [
+        name
+        for name in ("user_profile", "service_account_profile", "anonymous_profile")
+        if name in payload
+    ]
+    if len(variants) != 1:
+        raise invalid_response("identity")
+    if variants[0] == "anonymous_profile":
+        raise AuditError(
+            "authentication_failed",
+            "identity",
+            "Nebius returned an anonymous identity.",
+        )
+    profile = object_value(payload[variants[0]], "identity")
+    if variants[0] == "user_profile":
+        tenants = profile.get("tenants", [])
+        if not isinstance(tenants, list) or not all(
+            isinstance(item, dict) for item in tenants
+        ):
+            raise invalid_response("identity")
+        matches = [item for item in tenants if item.get("tenant_id") == tenant]
+        if len(matches) != 1:
+            raise AuditError(
+                "tenant_identity_unresolved",
+                "identity",
+                "Exactly one user identity for the selected tenant is required.",
+            )
+        identity = matches[0].get("tenant_user_account_id")
+        kind, prefix = "tenant_user", "tenantuseraccount-"
+    else:
+        info = object_value(profile.get("info"), "identity")
+        identity = object_value(info.get("metadata"), "identity").get("id")
+        kind, prefix = "service_account", "serviceaccount-"
+    if (
+        not isinstance(identity, str)
+        or not ID.fullmatch(identity)
+        or not identity.startswith(prefix)
+    ):
+        raise invalid_response("identity")
+    return {"kind": kind, "id": identity}
 
-    try:
-        payload = json.loads(output)
-    except json.JSONDecodeError as exc:
-        raise AuditLogError("`nebius iam whoami --format json` did not return valid JSON.") from exc
 
-    tenant_user_id = find_prefixed_value(payload, "tenantuseraccount-")
-    if tenant_user_id:
-        return equals_filter("authentication.subject.tenant_user_id", tenant_user_id)
-
-    service_account_id = find_prefixed_value(payload, "serviceaccount-")
-    if service_account_id:
-        return equals_filter("authentication.subject.service_account_id", service_account_id)
-
-    raise AuditLogError(
-        "resource ID was not provided and `nebius iam whoami` did not expose a "
-        "tenantuseraccount-* or serviceaccount-* subject ID."
+def resolve_region(args, cli: Cli, tenant: str) -> str:
+    if args.region:
+        return args.region
+    project = args.project_id or config_value(cli, "parent-id")
+    if not ID.fullmatch(project) or not project.startswith("project-"):
+        raise AuditError(
+            "missing_region",
+            "region",
+            "Provide region or a project in the selected tenant.",
+        )
+    payload = parse_object(
+        cli.run(
+            ["iam", "v2", "project", "get", "--id", project, "--format", "json"],
+            "region",
+        ),
+        "region",
     )
+    metadata = object_value(payload.get("metadata"), "region")
+    if metadata.get("id") != project or metadata.get("parent_id") != tenant:
+        raise AuditError(
+            "scope_mismatch",
+            "region",
+            "The discovered project does not match the requested project and tenant.",
+        )
+    region = object_value(payload.get("spec"), "region").get("region")
+    if not isinstance(region, str) or not REGION.fullmatch(region):
+        raise AuditError(
+            "missing_region",
+            "region",
+            "The project has no valid origin region; provide region explicitly.",
+        )
+    return region
 
 
-def find_prefixed_value(value: Any, prefix: str) -> str | None:
-    if isinstance(value, str):
-        return value if value.startswith(prefix) else None
-    if isinstance(value, dict):
-        for child in value.values():
-            found = find_prefixed_value(child, prefix)
-            if found:
-                return found
-    if isinstance(value, list):
-        for child in value:
-            found = find_prefixed_value(child, prefix)
-            if found:
-                return found
-    return None
-
-
-def build_audit_list_command(
-    *,
-    tenant_id: str,
-    region: str,
-    start: str,
-    end: str,
-    filter_expr: str,
-    page_size: int,
-    page_token: str | None,
-    all_pages: bool,
-    output_format: str,
+def audit_command(
+    args, query: Query, tenant: str, region: str, expression: str, token: str | None
 ) -> list[str]:
     command = [
         "audit",
@@ -420,149 +368,294 @@ def build_audit_list_command(
         "audit-event",
         "list",
         "--parent-id",
-        tenant_id,
-        "--start",
-        start,
-        "--end",
-        end,
-        "--event-type",
-        DEFAULT_EVENT_TYPE,
+        tenant,
         "--region",
         region,
-        "--filter",
-        filter_expr,
+        "--start",
+        query.start,
+        "--end",
+        query.end,
+        "--event-type",
+        "control_plane",
+        "--page-size",
+        str(args.page_size),
         "--format",
-        output_format,
+        "json",
     ]
-    if all_pages:
-        command.append("--all")
-    else:
-        command.extend(["--page-size", str(page_size)])
-        if page_token:
-            command.extend(["--page-token", page_token])
+    if expression:
+        command.extend(["--filter", expression])
+    if token:
+        command.extend(["--page-token", token])
     return command
 
 
-def print_dry_run(plan: QueryPlan, *, profile: str | None) -> None:
-    payload = {
-        "command": with_global_options(plan.command, profile=profile),
-        "query": {
-            "event_type": DEFAULT_EVENT_TYPE,
-            "filter": plan.filter_expr,
-            "region": plan.region,
-            "start": plan.start,
-            "end": plan.end,
-            "tenant_id": plan.tenant_id,
-        },
-    }
-    print(json.dumps(payload, indent=2, sort_keys=True))
+def parse_page(output: str, page_size: int) -> tuple[list[dict[str, Any]], str | None]:
+    payload = parse_object(output, "audit")
+    if payload and not ({"items", "next_page_token"} & payload.keys()):
+        raise invalid_response("audit")
+    events = payload.get("items", [])
+    token = payload.get("next_page_token", "")
+    if (
+        not isinstance(events, list)
+        or len(events) > page_size
+        or not valid_token(token)
+    ):
+        raise invalid_response("audit")
+    for event in events:
+        if not isinstance(event, dict):
+            raise invalid_response("audit")
+        if not all(
+            isinstance(event.get(key), str) and event[key]
+            for key in ("id", "time", "type", "action", "status", "source")
+        ):
+            raise invalid_response("audit")
+        if not isinstance(event.get("service"), dict) or not isinstance(
+            event["service"].get("name"), str
+        ):
+            raise invalid_response("audit")
+        for key in (
+            "authentication",
+            "authorization",
+            "resource",
+            "request",
+            "response",
+        ):
+            if key in event and not isinstance(event[key], dict):
+                raise invalid_response("audit")
+    return events, token or None
 
 
-def parse_json_output(stdout: str) -> Any:
-    text = stdout.strip()
-    if not text:
-        return {}
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise AuditLogError("Nebius CLI did not return JSON output; retry with --raw to inspect it.") from exc
-
-
-def sanitize_payload(payload: Any, *, include_pii: bool) -> dict[str, Any]:
-    events = extract_events(payload)
-    return {
-        "events": [sanitize_event(event, include_pii=include_pii) for event in events],
-        "next_page_token": next_page_token(payload),
-    }
-
-
-def extract_events(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if isinstance(payload, dict):
-        for key in ("items", "events", "audit_events", "auditEvents", "results"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-        if any(key in payload for key in ("id", "type", "action", "resource")):
-            return [payload]
-    return []
-
-
-def next_page_token(payload: Any) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("next_page_token", "nextPageToken", "next_token", "nextToken"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
+def text_field(value: Any) -> str | None:
+    # Safe protocol identifiers only. Names have their own explicit opt-in below.
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:/+@=\-]{1,512}", value):
+        return value
     return None
-
-
-def sanitize_event(event: dict[str, Any], *, include_pii: bool) -> dict[str, Any]:
-    authentication = as_dict(event.get("authentication"))
-    subject = as_dict(authentication.get("subject"))
-    resource = as_dict(event.get("resource"))
-    metadata = as_dict(resource.get("metadata"))
-    service = as_dict(event.get("service"))
-    project_region = as_dict(event.get("project_region"))
-    authorization = as_dict(event.get("authorization"))
-
-    resource_summary: dict[str, Any] = {
-        "id": scalar(metadata.get("id")),
-        "type": scalar(metadata.get("type")),
-    }
-    if include_pii:
-        resource_summary["name"] = scalar(metadata.get("name"))
-
-    sanitized: dict[str, Any] = {
-        "id": scalar(event.get("id")),
-        "time": scalar(event.get("time")),
-        "type": scalar(event.get("type")),
-        "service": scalar(service.get("name")),
-        "action": scalar(event.get("action")),
-        "status": scalar(event.get("status")),
-        "project_region": scalar(project_region.get("name")),
-        "resource": resource_summary,
-        "subject": {
-            "tenant_user_id": scalar(subject.get("tenant_user_id")),
-            "service_account_id": scalar(subject.get("service_account_id")),
-        },
-        "authorized": scalar(authorization.get("authorized")),
-    }
-    if include_pii:
-        sanitized["subject"]["name"] = scalar(subject.get("name"))
-    return sanitized
 
 
 def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def scalar(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return None
+def sanitize_event(event: dict[str, Any], include_pii: bool) -> dict[str, Any]:
+    subject = as_dict(as_dict(event.get("authentication")).get("subject"))
+    metadata = as_dict(as_dict(event.get("resource")).get("metadata"))
+    result = {
+        key: text_field(event.get(key))
+        for key in ("id", "time", "type", "source", "action", "status")
+    }
+    result.update(
+        {
+            "service": text_field(as_dict(event.get("service")).get("name")),
+            "resource": {key: text_field(metadata.get(key)) for key in ("id", "type")},
+            "subject": {
+                key: text_field(subject.get(key))
+                for key in ("tenant_user_id", "service_account_id")
+            },
+            "request_id": text_field(as_dict(event.get("request")).get("request_id")),
+            "response_status_code": text_field(
+                as_dict(event.get("response")).get("status_code")
+            ),
+            "event_authorized": as_dict(event.get("authorization")).get("authorized")
+            if isinstance(as_dict(event.get("authorization")).get("authorized"), bool)
+            else None,
+        }
+    )
+    if include_pii:
+        for target, source in (
+            (result["resource"], metadata),
+            (result["subject"], subject),
+        ):
+            if isinstance(source.get("name"), str):
+                target["name"] = source["name"][:512]
+    return result
 
 
-def print_summary(payload: dict[str, Any]) -> None:
-    events = payload.get("events", [])
-    print(f"Events: {len(events)}")
-    for event in events:
-        resource = event.get("resource") or {}
-        subject = event.get("subject") or {}
-        subject_id = subject.get("tenant_user_id") or subject.get("service_account_id") or "-"
-        print(
-            " - "
-            f"{event.get('time') or '-'} "
-            f"{event.get('action') or '-'} "
-            f"{event.get('service') or '-'} "
-            f"{resource.get('type') or '-'} "
-            f"{resource.get('id') or '-'} "
-            f"subject={subject_id}"
+def new_report(args, query: Query) -> dict[str, Any]:
+    return {
+        "mode": "dry_run" if args.dry_run else "query",
+        "scope": {
+            "tenant_id": args.tenant_id,
+            "region": args.region,
+            "start": query.start,
+            "end": query.end,
+            "event_type": "control_plane",
+            "selector": dict(query.selector),
+            "filters": query.filters,
+            "extra_predicates": query.extra_metadata,
+            "profile_source": "explicit" if args.profile else "configured",
+        },
+        "caller": None,
+        "access": {"status": "not_checked", "verified_pages": 0},
+        "events": [],
+        "complete": False,
+        "errors": [],
+        "next_page_token": args.page_token,
+    }
+
+
+def execute(args, query: Query, report: dict[str, Any]) -> None:
+    cli = Cli(args.timeout)
+    cli.profile = args.profile
+    selected = cli.run(["profile", "current"], "configuration").strip()
+    if not valid_profile(selected) or (
+        args.profile is not None and selected != args.profile
+    ):
+        raise AuditError(
+            "configuration_error",
+            "configuration",
+            "The CLI did not resolve the selected profile consistently.",
         )
-    if payload.get("next_page_token"):
-        print("Next page token is available; rerun with --page-token to continue.")
+    cli.profile = selected
+    tenant = args.tenant_id or config_value(cli, "tenant-id")
+    if not ID.fullmatch(tenant) or not tenant.startswith("tenant-"):
+        raise AuditError(
+            "missing_scope",
+            "configuration",
+            "Provide a valid tenant-id or configure the selected CLI profile.",
+        )
+    report["scope"]["tenant_id"] = tenant
+    caller = resolve_caller(
+        parse_object(
+            cli.run(["iam", "whoami", "--format", "json"], "identity"), "identity"
+        ),
+        tenant,
+    )
+    report["caller"] = caller
+    region = resolve_region(args, cli, tenant)
+    report["scope"]["region"] = region
+    expression = compile_filter(
+        query.selector, query.filters, query.extra, caller["id"]
+    )
+    if query.selector["kind"] == "current_subject":
+        report["scope"]["selector"]["id"] = caller["id"]
+    token = args.page_token
+    seen = {token} if token else set()
+    for _ in range(args.max_pages):
+        output = cli.run(
+            audit_command(args, query, tenant, region, expression, token), "audit"
+        )
+        events, following = parse_page(output, args.page_size)
+        report["events"].extend(
+            sanitize_event(event, args.include_pii) for event in events
+        )
+        report["access"]["status"] = "verified"
+        report["access"]["verified_pages"] += 1
+        if following in seen:
+            report["next_page_token"] = None
+            raise AuditError(
+                "pagination_cycle",
+                "audit",
+                "Nebius repeated a continuation token; narrow the query and retry.",
+            )
+        report["next_page_token"] = following
+        if following is None:
+            report["complete"] = True
+            return
+        seen.add(following)
+        token = following
+    raise AuditError(
+        "page_limit",
+        "audit",
+        "The page limit was reached; results cover only part of the query.",
+    )
+
+
+def print_report(report: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=True))
+        return
+    scope = report["scope"]
+    print(
+        f"Mode: {report['mode']}; audit access: {report['access']['status']}; complete: {report['complete']}"
+    )
+    print(
+        f"Tenant: {scope['tenant_id'] or 'unresolved'}; region: {scope['region'] or 'unresolved'}"
+    )
+    print(
+        f"Window: {scope['start']} to {scope['end']}; selector: {scope['selector']['kind']}"
+    )
+    if scope["selector"].get("id"):
+        print(f"Selector ID: {scope['selector']['id']}")
+    print("Filters: " + json.dumps(scope["filters"], sort_keys=True))
+    if scope["extra_predicates"]:
+        print(
+            "Extra predicates (values omitted): "
+            + json.dumps(scope["extra_predicates"], sort_keys=True)
+        )
+    if report["caller"]:
+        print(f"Caller: {report['caller']['id']}")
+    print(f"Events: {len(report['events'])}")
+    for event in report["events"]:
+        actor = (
+            event["subject"].get("tenant_user_id")
+            or event["subject"].get("service_account_id")
+            or "unknown"
+        )
+        print(
+            f" - {event['time']} {event['service']} {event['action']} {event['status']} resource={event['resource']['id']} actor={actor} request={event['request_id']} response={event['response_status_code']}"
+        )
+        if "name" in event["subject"] or "name" in event["resource"]:
+            print(
+                "   Names: "
+                + json.dumps(
+                    {
+                        "subject": event["subject"].get("name"),
+                        "resource": event["resource"].get("name"),
+                    },
+                    ensure_ascii=True,
+                )
+            )
+    if report["next_page_token"]:
+        print("Continuation token: " + json.dumps(report["next_page_token"]))
+        print(
+            "Resume with the same tenant, region, filters, selector, absolute start/end and --page-token."
+        )
+    if report["mode"] == "dry_run":
+        print(
+            "Offline preview only. Identity and audit access are unverified; configured values remain unresolved."
+        )
+    for error in report["errors"]:
+        print(f"Error [{error['stage']}/{error['code']}]: {error['message']}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    report = None
+    args = None
+    try:
+        args = build_parser().parse_args(argv)
+        query = validate(args)
+        report = new_report(args, query)
+        if not args.dry_run:
+            execute(args, query, report)
+        print_report(report, args.format)
+        return 0
+    except AuditError as exc:
+        if report is None:
+            print(
+                json.dumps({"errors": [exc.record()]}, ensure_ascii=True),
+                file=sys.stderr,
+            )
+        else:
+            report["errors"].append(exc.record())
+            if exc.stage == "audit":
+                report["access"]["status"] = (
+                    "denied"
+                    if exc.code == "permission_denied"
+                    else report["access"]["status"]
+                )
+            print_report(report, args.format)
+        return 2 if isinstance(exc, InputError) else 1
+    except KeyboardInterrupt:
+        if report is not None and args is not None:
+            report["errors"].append(
+                {
+                    "code": "cancelled",
+                    "stage": "query",
+                    "message": "The query was interrupted.",
+                }
+            )
+            print_report(report, args.format)
+        return 1
 
 
 if __name__ == "__main__":

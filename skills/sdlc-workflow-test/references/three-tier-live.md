@@ -121,8 +121,9 @@ ownership from a name prefix alone.
    PostgreSQL images with a bounded timeout and an owned empty Docker CLI config
    so a user credential helper cannot block public pulls. Never export or reuse
    that private config for `docker compose`; Compose uses the ordinary CLI
-   configuration after the images are local. Use `<private-root>/codex-home` as
-   the isolated `CODEX_HOME`/`--codex-home` for prompt workspace and phase state
+   configuration after the images are local. Use `<private-root>/<agent>-home` as
+   the selected isolated native home (`CODEX_HOME` or `CLAUDE_CONFIG_DIR`,
+   passed to the verifier with `--agent-home`) for prompt workspace and phase state
    so destroy never targets the user's ordinary `~/.codex/sdlc-runs` tree.
 5. Use the existing prompt-bound workflow only. Initialize the workspace first,
    then run `scripts/render_three_tier_prompt.py` against the returned starter.

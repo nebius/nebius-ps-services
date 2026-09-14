@@ -73,7 +73,8 @@ def _parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--design", default="docs/design.md")
     inspect_parser.add_argument("--spec-receipt", type=Path, required=True)
     inspect_parser.add_argument("--runtime-config", type=Path, required=True)
-    inspect_parser.add_argument("--codex-home", type=Path, required=True)
+    inspect_parser.add_argument("--agent", choices=("codex", "claude"), required=True)
+    inspect_parser.add_argument("--agent-home", type=Path, required=True)
     inspect_parser.add_argument("--private-root", type=Path, required=True)
     inspect_parser.add_argument("--output", type=Path, required=True)
     apply_parser = subparsers.add_parser(
@@ -122,9 +123,10 @@ def main(argv: list[str]) -> int:
                     args.spec_owner,
                     args.requirements,
                     args.design,
-                    args.codex_home,
+                    args.agent_home,
                     spec_receipt,
                     runtime_config,
+                    agent=args.agent,
                 )
                 output_path = private_state._private_member(
                     private_root, args.output, "manifest"

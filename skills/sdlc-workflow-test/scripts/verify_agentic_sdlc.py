@@ -24,6 +24,115 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
 
+
+
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+_load_skill_support('runtime', __file__, 'sdlc-workflow-test/scripts/verify_agentic_sdlc.py')
+
+from agent_runtime import agent_home, agent_name, installed_skills_dir, runtime_environment  # noqa: E402
+
+
 SEMANTICS_PATH = Path(__file__).resolve().with_name("three_tier_semantics.py")
 SEMANTICS_SPEC = importlib.util.spec_from_file_location(
     "sdlc_workflow_test_three_tier_semantics", SEMANTICS_PATH
@@ -455,12 +564,13 @@ class Context:
     repo_root: Path
     design_path: Path
     global_skills_dir: Path
-    codex_home: Path
+    host_home: Path
     verification_root: Path
     disposable_project: Path
     selected_project: Path
-    fixture_codex_home: Path
+    fixture_host_home: Path
     live_evidence_path: Path
+    agent: str = field(default_factory=agent_name)
     three_tier_results_path: Path | None = None
     checks: list[Check] = field(default_factory=list)
 
@@ -582,19 +692,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     skill_dir = Path(__file__).resolve().parents[1]
     skills_root = skill_dir.parents[0]
     repo_root = skills_root.parent
-    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
     parser = argparse.ArgumentParser(
         description="Run safe Agentic SDLC static and hook preflight verification.",
     )
+    parser.add_argument("--agent", choices=("codex", "claude"), default=agent_name())
     parser.add_argument("--skills-root", type=Path, default=skills_root)
     parser.add_argument("--repo-root", type=Path, default=repo_root)
     parser.add_argument("--design", type=Path, default=default_design_path(skills_root))
     parser.add_argument(
-        "--global-skills-dir", type=Path, default=Path.home() / ".agents" / "skills"
+        "--global-skills-dir", type=Path, default=None
     )
-    parser.add_argument("--codex-home", type=Path, default=codex_home)
+    parser.add_argument("--agent-home", dest="host_home", type=Path, default=None)
     parser.add_argument(
-        "--verification-root", type=Path, default=codex_home / "sdlc-verification"
+        "--verification-root", type=Path, default=None
     )
     parser.add_argument(
         "--report",
@@ -614,7 +724,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="Canonical retained three-tier-results.json used to validate the copied three-tier profile source.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.host_home = args.host_home or agent_home(args.agent)
+    args.global_skills_dir = args.global_skills_dir or (args.host_home / "skills" if args.agent == "claude" else installed_skills_dir(args.agent))
+    args.verification_root = args.verification_root or args.host_home / "sdlc-verification"
+    return args
 
 
 def default_design_path(skills_root: Path) -> Path:
@@ -803,17 +917,18 @@ def setup_context(ns: argparse.Namespace) -> Context:
     verification_root = ns.verification_root.expanduser().resolve(strict=False)
     disposable_project = verification_root / "disposable-project"
     selected_project = disposable_project / "services" / "resource-validator"
-    fixture_codex_home = verification_root / "fixture-codex-home"
+    fixture_host_home = verification_root / "fixture-agent-home"
     return Context(
+        agent=ns.agent,
         skills_root=ns.skills_root.expanduser().resolve(strict=False),
         repo_root=ns.repo_root.expanduser().resolve(strict=False),
         design_path=ns.design.expanduser().resolve(strict=False),
         global_skills_dir=ns.global_skills_dir.expanduser().resolve(strict=False),
-        codex_home=ns.codex_home.expanduser().resolve(strict=False),
+        host_home=ns.host_home.expanduser().resolve(strict=False),
         verification_root=verification_root,
         disposable_project=disposable_project,
         selected_project=selected_project,
-        fixture_codex_home=fixture_codex_home,
+        fixture_host_home=fixture_host_home,
         live_evidence_path=(
             ns.live_evidence.expanduser().absolute()
             if ns.live_evidence is not None
@@ -851,11 +966,11 @@ def verification_root_problem(ctx: Context, requested_root: Path) -> str | None:
     resolved_root = lexical_root.resolve(strict=False)
     if lexical_root.is_symlink() or resolved_root != lexical_root:
         return "Verification root must not contain symlinked path components."
-    canonical_root = (ctx.codex_home / "sdlc-verification").resolve(strict=False)
+    canonical_root = (ctx.host_home / "sdlc-verification").resolve(strict=False)
     broad_roots = {
         Path("/").resolve(strict=False),
         Path.home().resolve(strict=False),
-        ctx.codex_home.resolve(strict=False),
+        ctx.host_home.resolve(strict=False),
         ctx.repo_root.resolve(strict=False),
         ctx.skills_root.resolve(strict=False),
         Path.cwd().resolve(strict=False),
@@ -987,15 +1102,17 @@ def check_spec_ownership_contract(ctx: Context) -> None:
     design_terms = (
         "`maintain-project-specs` is the single semantic, schema, template, validation, and receipt owner",
         "`sdlc-create-requirements` and `sdlc-create-design` are routed authoring adapters",
-        "adapter invokes that shared validator only to produce an advisory snapshot",
+        "adapter invokes that shared validator without defining a second spec schema or receipt authority",
+        "The canonical result is required before spec-dependent planning and dispatch",
+        "historical private lifecycle-phase evidence remains advisory and never becomes an independent SDLC gate",
     )
     for term in design_terms:
         if term not in design:
             problems.append(f"design contract missing: {term}")
 
     adapters = {
-        "sdlc-create-requirements": "This skill may write requirements only while routed as its Agentic SDLC authoring adapter",
-        "sdlc-create-design": "This skill may write design only while routed as its Agentic SDLC authoring adapter",
+        "sdlc-create-requirements": "This skill may change requirements only while routed as its Agentic SDLC authoring adapter",
+        "sdlc-create-design": "This skill may change design only while routed as its Agentic SDLC authoring adapter",
     }
     for skill, term in adapters.items():
         text = normalized(ctx.skills_root / skill / "SKILL.md")
@@ -1013,20 +1130,21 @@ def check_spec_ownership_contract(ctx: Context) -> None:
     }
     for skill in sorted(common_phases):
         text = normalized(ctx.skills_root / skill / "SKILL.md")
-        if common_owner_term not in text:
+        if not (common_owner_term in text or
+                "`maintain-project-specs` is the sole semantic, schema, paired-publication, and validation owner of both canonical specs" in text):
             problems.append(f"{skill}: positive shared-owner invariant is missing")
 
     start = normalized(ctx.skills_root / "sdlc-start" / "SKILL.md")
     if (
-        "`maintain-project-specs` is the sole semantic, schema, and validation owner" not in start
+        "`maintain-project-specs` is the sole semantic, schema, paired-publication, and validation owner" not in start
         or "write only as its Agentic SDLC adapters" not in start
     ):
         problems.append("sdlc-start: shared-owner coordinator invariant is missing")
 
     owner = normalized(ctx.skills_root / "maintain-project-specs" / "SKILL.md")
     if (
-        "It is the only semantic owner of project spec schemas" not in owner
-        or "traceability rules, and the strict validator" not in owner
+        "This skill is the only semantic owner of project-spec schemas" not in owner
+        or "stable IDs, traceability, paired publication, and strict validation" not in owner
     ):
         problems.append("maintain-project-specs: authoritative owner contract is missing")
 
@@ -1090,7 +1208,8 @@ def check_spec_ownership_contract(ctx: Context) -> None:
             f"<!-- markdownlint-enable {MARKDOWNLINT_TEMPLATE_ENVELOPE} -->"
         )
         required_terms = (
-            f"<!-- maintain-project-specs:{kind}:start schema=maintain-project-specs/{kind}-v1 -->",
+            f"<!-- maintain-project-specs:{kind}:start schema=maintain-project-specs/{kind}-v2 -->",
+            f"schema: maintain-project-specs/{kind}-v2",
             f"<!-- maintain-project-specs:{kind}:end -->",
             'created_by_skill: "maintain-project-specs"',
             'updated_by_skill: "maintain-project-specs"',
@@ -1807,12 +1926,13 @@ def hook_command_targets(
     command: str,
     expected_path: Path,
     *,
-    codex_home: Path,
+    host_home: Path,
+    agent: str = "codex",
 ) -> bool:
-    expanded = command.replace("${CODEX_HOME:-$HOME/.codex}", str(codex_home)).replace(
-        "${CODEX_HOME}", str(codex_home)
+    expanded = command.replace("${CODEX_HOME:-$HOME/.codex}", str(host_home)).replace(
+        "${CODEX_HOME}", str(host_home)
     )
-    expanded = expanded.replace("$CODEX_HOME", str(codex_home))
+    expanded = expanded.replace("$CODEX_HOME", str(host_home))
     if any(token in expanded for token in ("\n", "\r", "$(", "`")):
         return False
     try:
@@ -1821,6 +1941,11 @@ def hook_command_targets(
         return False
     shell_controls = {";", "&&", "||", "|", "&", ">", ">>", "<", "<<"}
     if not words or any(word in shell_controls for word in words):
+        return False
+    if words == ["python3", str(host_home / "hooks/hook_runtime.py"), "--agent", agent,
+                 "--hook", expected_path.name]:
+        return not has_symlink_component(host_home / "hooks/hook_runtime.py", host_home)
+    if agent == "claude":
         return False
     expected_root = expected_path.parent
     if expected_root.is_symlink() or expected_path.is_symlink():
@@ -1857,8 +1982,8 @@ def hook_command_targets(
 def check_hook_config(ctx: Context) -> None:
     hooks_sources: list[tuple[Path, dict[str, Any]]] = []
     malformed_sources: list[Path] = []
-    hooks_json = ctx.codex_home / "hooks.json"
-    config_toml = ctx.codex_home / "config.toml"
+    hooks_json = ctx.host_home / ("hooks.json" if ctx.agent == "codex" else "settings.json")
+    config_toml = ctx.host_home / "config.toml"
     if hooks_json.exists():
         parsed = load_hooks_json(hooks_json)
         hooks = parsed.get("hooks", {}) if parsed is not None else None
@@ -1866,7 +1991,7 @@ def check_hook_config(ctx: Context) -> None:
             hooks_sources.append((hooks_json, hooks))
         else:
             malformed_sources.append(hooks_json)
-    if config_toml.exists():
+    if ctx.agent == "codex" and config_toml.exists():
         hooks = load_toml_hooks(config_toml)
         if hooks is None:
             malformed_sources.append(config_toml)
@@ -1885,7 +2010,7 @@ def check_hook_config(ctx: Context) -> None:
             "Hook configuration results",
             "Hook config source",
             "WARN",
-            f"Optional SDLC hook registration is not configured under {ctx.codex_home}",
+            f"Optional SDLC hook registration is not configured under {ctx.host_home}",
             capability_id="hooks.registration",
         )
         return
@@ -1916,11 +2041,11 @@ def check_hook_config(ctx: Context) -> None:
             for hook_event, command in all_commands
             if hook_event == event and filename in command
         ]
-        expected = ctx.codex_home / "hooks" / filename
+        expected = ctx.host_home / "hooks" / filename
         valid = [
             command
             for command in matching
-            if hook_command_targets(command, expected, codex_home=ctx.codex_home)
+            if hook_command_targets(command, expected, host_home=ctx.host_home, agent=ctx.agent)
         ]
         invalid = [command for command in matching if command not in valid]
         if invalid:
@@ -1955,7 +2080,7 @@ def check_hook_config(ctx: Context) -> None:
         "PreToolUse SDLC hook configured",
     )
     stop_found, _ = registration(
-        "Stop", "stop_sdlc_continue.py", "Stop SDLC hook configured"
+        "Stop", "stop_lifecycle_arbiter.py", "Stop SDLC hook configured"
     )
     session_found = any(event == "SessionStart" for event, _ in all_commands)
     ctx.add(
@@ -1991,7 +2116,7 @@ def check_hook_config(ctx: Context) -> None:
 
     if pre_found or stop_found:
         source_hook_root = ctx.skills_root / "sdlc-start" / "assets" / "hooks"
-        installed_hook_root = ctx.codex_home / "hooks"
+        installed_hook_root = ctx.host_home / "hooks"
         hook_files = [
             "lib/__init__.py",
             "lib/sdlc_policy.py",
@@ -2000,21 +2125,32 @@ def check_hook_config(ctx: Context) -> None:
         if pre_found:
             hook_files.append("pre_tool_use_sdlc_policy.py")
         if stop_found:
-            hook_files.append("stop_sdlc_continue.py")
+            hook_files.extend(["stop_sdlc_continue.py", "stop_lifecycle_arbiter.py"])
+        if any("hook_runtime.py" in command for _, command in all_commands):
+            hook_files.extend(["agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"])
         mismatches: list[str] = []
         unsafe_symlinks: list[str] = []
         for relative in hook_files:
-            source_path = source_hook_root / relative
+            source_root = (
+                ctx.skills_root / "global-context-management/scripts"
+                if relative in {"agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"}
+                else source_hook_root
+            )
+            source_path = source_root / relative
             installed_path = installed_hook_root / relative
-            if source_hook_root.is_symlink() or has_symlink_component(
-                source_path, source_hook_root
+            if source_root.is_symlink() or has_symlink_component(
+                source_path, source_root
             ):
                 unsafe_symlinks.append(f"source:{relative}")
             if installed_hook_root.is_symlink() or has_symlink_component(
                 installed_path, installed_hook_root
             ):
                 unsafe_symlinks.append(f"installed:{relative}")
-            if file_digest(source_path) != file_digest(installed_path):
+            source_digest = file_digest(source_path) if source_path.is_file() else "missing"
+            installed_digest = file_digest(installed_path) if installed_path.is_file() else "missing"
+            if (not re.fullmatch(r"[0-9a-f]{64}", source_digest)
+                    or not re.fullmatch(r"[0-9a-f]{64}", installed_digest)
+                    or source_digest != installed_digest):
                 mismatches.append(relative)
         ctx.add(
             "Hook configuration results",
@@ -2052,7 +2188,7 @@ def ensure_private_directory(path: Path) -> None:
 
 def expected_verification_context(ctx: Context, baseline_head: str) -> dict[str, Any]:
     return {
-        "schema": VERIFICATION_CONTEXT_SCHEMA,
+        "schema": VERIFICATION_CONTEXT_SCHEMA if ctx.agent == "codex" else "agentic-sdlc/verification-context-claude-v1",
         "verification_id": verification_id(ctx, baseline_head),
         "project_root": str(ctx.selected_project),
         "git_root": str(ctx.disposable_project),
@@ -2074,7 +2210,7 @@ def valid_verification_context(ctx: Context, value: Any, *, current_head: str) -
         return False
     baseline = str(value.get("baseline_head") or "")
     if (
-        value.get("schema") != VERIFICATION_CONTEXT_SCHEMA
+        value.get("schema") != (VERIFICATION_CONTEXT_SCHEMA if ctx.agent == "codex" else "agentic-sdlc/verification-context-claude-v1")
         or value.get("project_root") != str(ctx.selected_project)
         or value.get("git_root") != str(ctx.disposable_project)
         or value.get("live_results") != str(ctx.live_evidence_path)
@@ -2352,7 +2488,7 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
-    run_dir = ctx.fixture_codex_home / "sdlc-runs" / DEFAULT_PROJECT_ID / DEFAULT_RUN_ID
+    run_dir = ctx.fixture_host_home / "sdlc-runs" / DEFAULT_PROJECT_ID / DEFAULT_RUN_ID
     write_json(
         run_dir.parent / "active.lock",
         {
@@ -3224,14 +3360,16 @@ def run_hook(
     payload: dict[str, Any],
     ctx: Context,
     *,
-    codex_home: Path | None = None,
+    host_home: Path | None = None,
 ) -> dict[str, Any]:
-    env = os.environ.copy()
-    env["CODEX_HOME"] = str(codex_home or ctx.fixture_codex_home)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    result = run(
-        ["python3", str(script)], input_text=json.dumps(payload), env=env, timeout=10
-    )
+    env = runtime_environment(ctx.agent, home=host_home or ctx.fixture_host_home, fresh_session=True)
+    command = ["python3", str(script)]
+    if ctx.agent == "claude":
+        env["CLAUDE_PLUGIN_DATA"] = str(ctx.verification_root / "fixture-plugin-data")
+        hook = "stop_lifecycle_arbiter.py" if script.name == "stop_sdlc_continue.py" else script.name
+        command = ["python3", str(ctx.skills_root / "global-context-management/scripts/hook_runtime.py"),
+                   "--agent", ctx.agent, "--hook", hook, "--plugin-root", str(ctx.skills_root)]
+    result = run(command, input_text=json.dumps(payload), env=env, timeout=40)
     if result.returncode != 0:
         return {"_error": result.stderr.strip() or result.stdout.strip()}
     if not result.stdout.strip():
@@ -3243,10 +3381,19 @@ def run_hook(
 
 
 def pre_payload(ctx: Context, tool_name: str, command: str) -> dict[str, Any]:
+    if ctx.agent == "claude" and tool_name == "apply_patch":
+        matched = re.search(r"\*\*\* Update File: (.+)\n@@\n-(.+)\n\+(.+)\n", command)
+        if matched is None:
+            raise ValueError("unsupported native edit fixture")
+        return {"hook_event_name": "PreToolUse", "cwd": str(ctx.selected_project),
+                "prompt_id": "550e8400-e29b-41d4-a716-446655440000", "session_id": "verification-session",
+                "tool_name": "Edit", "tool_use_id": "verification-tool",
+                "tool_input": {"file_path": matched[1], "old_string": matched[2], "new_string": matched[3]}}
     return {
         "hook_event_name": "PreToolUse",
         "cwd": str(ctx.selected_project),
-        "turn_id": "verification-turn",
+        ("turn_id" if ctx.agent == "codex" else "prompt_id"): "550e8400-e29b-41d4-a716-446655440000",
+        "session_id": "verification-session",
         "tool_name": tool_name,
         "tool_use_id": "verification-tool",
         "tool_input": {"command": command},
@@ -3257,7 +3404,8 @@ def stop_payload(ctx: Context, active: bool = False) -> dict[str, Any]:
     return {
         "hook_event_name": "Stop",
         "cwd": str(ctx.selected_project),
-        "turn_id": "verification-turn",
+        ("turn_id" if ctx.agent == "codex" else "prompt_id"): "550e8400-e29b-41d4-a716-446655440000",
+        "session_id": "verification-session",
         "stop_hook_active": active,
         "last_assistant_message": "verification",
     }
@@ -3276,7 +3424,7 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
     # instead of the deterministic fixture and mutate or misread its state.
     ctx = replace(
         ctx,
-        fixture_codex_home=ctx.verification_root / "hook-fixture-codex-home",
+        fixture_host_home=ctx.verification_root / "hook-fixture-agent-home",
     )
     hook_dir = ctx.skills_root / "sdlc-start" / "assets" / "hooks"
     pre_tool = hook_dir / "pre_tool_use_sdlc_policy.py"
@@ -3359,7 +3507,7 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
         reason or json.dumps(deny_delete, sort_keys=True),
     )
     plan = (
-        ctx.fixture_codex_home
+        ctx.fixture_host_home
         / "sdlc-runs"
         / DEFAULT_PROJECT_ID
         / DEFAULT_RUN_ID
@@ -3375,9 +3523,9 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
         json.dumps(allow_plan, sort_keys=True),
     )
 
-    empty_codex_home = ctx.verification_root / "empty-fixture-codex-home"
-    empty_codex_home.mkdir(parents=True, exist_ok=True)
-    no_active = run_hook(stop_hook, stop_payload(ctx), ctx, codex_home=empty_codex_home)
+    empty_host_home = ctx.verification_root / "empty-fixture-agent-home"
+    empty_host_home.mkdir(parents=True, exist_ok=True)
+    no_active = run_hook(stop_hook, stop_payload(ctx), ctx, host_home=empty_host_home)
     ctx.add(
         "Stop continuation test results",
         "No active run",

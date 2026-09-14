@@ -94,7 +94,7 @@ capacity for free. The lab charges its occupied quanta explicitly.
    control. Request-order prefill selection is simple, not a production fairness
    algorithm; short requests can wait behind earlier requests.
 5. Run `slurm/vllm_chunked_prefill_ab.sbatch` only in the qualified serving
-   environment to measure actual TTFT, ITL, throughput, quality and memory.
+   environment to measure actual TTFT, ITL, throughput, quality and memory, using Lesson 7's tool-specific metric definitions.
    Its independent server restarts and at least three trials per policy are
    separate evidence from these deterministic mechanics.
 

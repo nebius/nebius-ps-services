@@ -1,5 +1,12 @@
 # Global Context Management
 
+Execution supports Codex and Claude through the selected native host context.
+See `SKILL.md` for invocation, required setup and evidence boundaries.
+
+Shared runtime loading and source-only permission inspection follow the
+[trusted runtime contract](references/trusted-runtime.md). Install and use each
+agent independently; within-agent workflow coordination remains supported.
+
 `global-context-management` is a reusable Codex skill plus local runtime setup
 for keeping long or complex coding sessions focused.
 It reduces context pollution by separating runtime policy, task-state
@@ -21,6 +28,9 @@ that matter:
 This skill is designed to be global and repo-independent. Public skill files
 stay generic. Machine-local hooks, task-state files, and custom agent config
 belong under `$CODEX_HOME`, which normally defaults to `$HOME/.codex`.
+For Claude personal setup, use `config-claude`. It owns native instructions,
+settings and restricted user roles while reusing the existing hook runtime.
+
 For full `$CODEX_HOME` bootstrapping, use `config-codex`; this skill documents
 the runtime workflow that setup enables.
 
@@ -496,3 +506,24 @@ not mention a specific subagent. The hook should discover read-only agents from
 `$CODEX_HOME/config.toml` and request bounded read-only delegation by
 configured name. Codex should then dynamically choose and spawn targeted roles
 when useful, or state the active runtime/tool reason it cannot spawn them.
+
+## Shared Host Runtime
+
+Hook installations carry `agent_runtime.py` and `hook_runtime.py` from the
+sibling `global-context-management/scripts/` directory. Native plugins render
+complete reviewed hook payloads into their own plugin data directory. Both
+routes use the same helpers, selected host's private state and native identity;
+never edit an installed plugin cache. Claude's Bash identity binding composes
+with the authentication hook and keeps worker identities distinct. Use the
+complete hook bundle for Task Implementer and SDLC on Claude.
+
+Standalone copied helpers resolve support from the selected home's `hooks/`
+when package-local support is absent. That fallback requires owned, regular
+runtime files without symlinks or group/world write access. Missing support
+fails with an installation diagnostic; the current directory is never a
+fallback import source. The local installer supplies these files even for a
+selected script skill with no hook bundle of its own.
+
+Codex configuration reconciliation remains owned by `config-codex`. Its copied
+hook templates require these shared support files even though the configured
+product and user home remain Codex. See the [catalog installation guide](../README.md#skills-installer).

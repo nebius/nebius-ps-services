@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private sequential Codex worker fallback for Agentic SDLC assignments."""
+"""Private sequential native-agent worker fallback for Agentic SDLC assignments."""
 
 from __future__ import annotations
 
@@ -20,7 +20,116 @@ SDLC_EXECUTION_SCRIPTS = (
 )
 if str(SDLC_EXECUTION_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SDLC_EXECUTION_SCRIPTS))
+
+
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+_load_skill_support('runtime', __file__, 'sdlc-implement-plan/scripts/worker_dispatch.py')
+
 from sdlc_evidence_security import contains_sensitive  # noqa: E402
+
+
+from agent_runtime import agent_name, runtime_environment  # noqa: E402
 
 
 class DispatchError(RuntimeError):
@@ -339,18 +448,18 @@ def _stop_worker(
         return process.communicate()
 
 
-def _codex_available(codex_binary: str) -> bool:
-    candidate = Path(codex_binary)
+def _agent_available(agent_binary: str) -> bool:
+    candidate = Path(agent_binary)
     if candidate.parent != Path("."):
         return candidate.is_file() and os.access(candidate, os.X_OK)
-    return shutil.which(codex_binary) is not None
+    return shutil.which(agent_binary) is not None
 
 
 def dispatch_sequential(
     assignment_paths: list[Path],
     output_schema: Path,
     *,
-    codex_binary: str = "codex",
+    agent_binary: str | None = None,
     watch_interval: float = 30,
     terminate_grace: float = 5,
 ) -> list[dict[str, object]]:
@@ -358,15 +467,17 @@ def dispatch_sequential(
         raise DispatchError(
             "EXECUTION_STATE_INVALID", "worker output schema is unavailable"
         )
+    selected = agent_name()
+    agent_binary = agent_binary or selected
     results: list[dict[str, object]] = []
     for assignment_path in assignment_paths:
         assignment = load_assignment(assignment_path)
-        if not _codex_available(codex_binary):
+        if not _agent_available(agent_binary):
             raise DispatchError(
-                "ENVIRONMENT_BLOCKER", "codex executable is unavailable"
+                "ENVIRONMENT_BLOCKER", "selected agent executable is unavailable"
             )
         command = [
-            codex_binary,
+            agent_binary,
             "exec",
             "--cd",
             str(assignment["scope_cwd"]),
@@ -377,9 +488,14 @@ def dispatch_sequential(
             str(output_schema.resolve()),
             "-",
         ]
+        if selected == "claude":
+            command = [agent_binary, "--print", "--output-format", "json",
+                       "--no-session-persistence", "--json-schema", output_schema.read_text()]
         try:
             process = subprocess.Popen(
                 command,
+                cwd=str(assignment["scope_cwd"]),
+                env=runtime_environment(selected, fresh_session=True),
                 stdin=subprocess.PIPE,
                 text=True,
                 stdout=subprocess.PIPE,
@@ -388,7 +504,7 @@ def dispatch_sequential(
             )
         except OSError as exc:
             raise DispatchError(
-                "ENVIRONMENT_BLOCKER", "codex executable is unavailable"
+                "ENVIRONMENT_BLOCKER", "selected agent executable is unavailable"
             ) from exc
         try:
             _transition(assignment, "task-arm")
@@ -428,6 +544,11 @@ def dispatch_sequential(
                 )
             try:
                 result = json.loads(stdout)
+                if selected == "claude":
+                    if (not isinstance(result, dict) or result.get("type") != "result"
+                            or result.get("subtype") != "success" or result.get("is_error") is not False):
+                        raise DispatchError("WORKER_FAILED", "native worker result is unsuccessful")
+                    result = result.get("structured_output")
             except json.JSONDecodeError as exc:
                 raise DispatchError(
                     "WORKER_FAILED", "sequential worker returned invalid JSON"
@@ -473,7 +594,7 @@ def parse_args() -> argparse.Namespace:
         / "assets"
         / "worker-result.schema.json",
     )
-    parser.add_argument("--codex-binary", default="codex")
+    parser.add_argument("--agent-binary", default=None)
     parser.add_argument("--watch-interval", type=float, default=30)
     parser.add_argument("--terminate-grace", type=float, default=5)
     return parser.parse_args()
@@ -485,7 +606,7 @@ def main() -> int:
         results = dispatch_sequential(
             args.assignment,
             args.output_schema,
-            codex_binary=args.codex_binary,
+            agent_binary=args.agent_binary,
             watch_interval=args.watch_interval,
             terminate_grace=args.terminate_grace,
         )

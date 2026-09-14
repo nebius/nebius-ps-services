@@ -6,6 +6,18 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Reject unfinished root-key selection before saving or planning a fresh
+  Soperator installation, and reject check mount-path aliases that could hide
+  retained home directories.
+- Select root login keys during fresh Soperator installation, defaulting to the
+  preferred local public key while preserving explicit lists, including empty
+  lists. Persist the selection for render, resume, and upgrades; remove implicit
+  inheritance from MK8s node keys.
+- Retain `/opt/soperator-home` alongside the other mandatory jail directories in
+  fresh managed installations. Bind bootstrap, ActiveChecks, and auxiliary jobs
+  to the same retained storage, reject conflicting consumer mounts and incomplete
+  saved layouts, and keep upstream named-user home locations.
+
 - Match ExternalSecret readiness by its exact Kubernetes API group and verify
   removed install options in both colored and plain CLI output.
 - Reject FIFO/device inputs for Soperator values and SSSD runtime files before

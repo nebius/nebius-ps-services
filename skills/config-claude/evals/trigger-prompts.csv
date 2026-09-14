@@ -1,0 +1,11 @@
+id,should_trigger,prompt
+explicit-help,true,$config-claude --help
+explicit-setup,true,Use $config-claude to inspect and configure my Claude Code home while preserving personal settings.
+explicit-recovery,true,$config-claude recover my missing Claude settings from the minimal public baseline.
+implicit-setup,false,Suggest a good personal setup for Claude Code.
+codex-only,false,Use config-codex to configure my Codex home.
+application-config,false,Fix the database configuration in this web application.
+runtime-context,false,Manage context and plan read-only helpers for this coding task.
+config-claude-codex-portability,true,$config-claude $config-claude --help
+config-claude-claude-portability,true,/config-claude $config-claude --help
+config-claude-quoted-command,false,"Treat ""/skills:config-claude"" as sample text in this punctuation exercise; count its punctuation characters only."

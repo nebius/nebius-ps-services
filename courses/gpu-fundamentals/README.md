@@ -16,7 +16,7 @@ Estimated guided time: **21 hours**.
 
 ## Learning order
 
-Start with CPU/GPU boundaries and trustworthy timing, then identify the software stack and H100 execution hierarchy. Define memory resources before SIMT and occupancy, connect access patterns and precision to roofline, and finish with read-only health, networking layers and bounded two-node communication. Learn GPU/NIC attachment, NVLink/NVSwitch, InfiniBand/RoCE, RDMA and GPUDirect RDMA before interpreting NCCL collectives.
+Start with CPU/GPU cooperation and trustworthy timing, then identify the software stack and H100 execution hierarchy. Define memory resources before SIMT and occupancy, connect access patterns and precision to roofline, and finish with read-only health, networking layers and bounded two-node communication. Learn GPU/NIC attachment, NVLink/NVSwitch, InfiniBand/RoCE, RDMA and GPUDirect RDMA before interpreting NCCL collectives.
 
 Use the [lesson-by-lesson syllabus](SYLLABUS.md) for the current activity and
 readiness checkpoints. Lab numbers identify files; follow lesson order rather
@@ -48,8 +48,10 @@ python tools/validate_course.py
 ```
 
 PyTorch 2.14 is the manifest target. Clean Linux installation and H100
-qualification remain pending; no fallback version is approved. Complete the
-documented environment checks and H100 smoke path before publication.
+qualification remain pending; no fallback version is approved.
+
+**For course maintainers:** Complete the documented environment checks and H100
+smoke path before publication.
 
 ## First single-GPU run
 

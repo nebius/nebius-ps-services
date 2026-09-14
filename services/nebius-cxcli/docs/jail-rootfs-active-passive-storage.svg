@@ -44,9 +44,10 @@
   <text class="head" x="66" y="446">Protected customer state stays outside both rootfs slots</text>
   <rect class="data" x="64" y="470" width="330" height="128" rx="14"/>
   <text class="head" x="229" y="499" text-anchor="middle">Mandatory protected paths</text>
-  <text class="small" x="229" y="526" text-anchor="middle">/data · /home · /models · /scripts</text>
-  <text class="body" x="229" y="550" text-anchor="middle">plus admitted optional paths</text>
-  <text class="body" x="229" y="574" text-anchor="middle">retained path-specific PV/PVC identities</text>
+  <text class="small" x="229" y="523" text-anchor="middle">/data · /home · /models · /scripts</text>
+  <text class="small" x="229" y="543" text-anchor="middle">/opt/soperator-home</text>
+  <text class="body" x="229" y="565" text-anchor="middle">plus admitted optional paths</text>
+  <text class="body" x="229" y="586" text-anchor="middle">retained path-specific PV/PVC identities</text>
   <rect class="data" x="435" y="470" width="300" height="128" rx="14"/>
   <text class="head" x="585" y="499" text-anchor="middle">Protected service state</text>
   <text class="body" x="585" y="526" text-anchor="middle">controller spool + accounting DB</text>

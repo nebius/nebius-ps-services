@@ -4,7 +4,7 @@ A CUDA Graph is a reusable plan of device operations and their dependencies. Cap
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 4–5 for compilation versus graph capture, stable storage and replay. Apply Lesson 2's completion boundary. The matrix-multiplication and SiLU workload is explained below.
+**Theory preparation:** Read Lessons 4–5 for compilation versus graph capture, stable storage and replay. Apply Lesson 2's timing and completion checks. The matrix-multiplication and SiLU workload is explained below.
 
 Use one H100 and the approved environment. Review stream ordering and tensor lifetime. The supplied experiment has one input shape and does not implement shape buckets, dynamic routing, or an eager fallback service.
 

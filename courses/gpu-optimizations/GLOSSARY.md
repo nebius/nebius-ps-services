@@ -2,7 +2,7 @@
 
 - **CPU/GPU pipeline:** dependent host preparation, transfer, device computation and output stages; optimizing only a kernel may leave the end-to-end bottleneck unchanged.
 - **Host-to-device transfer:** copying input bytes from CPU-accessible memory into GPU memory; distinct from submitting the command that starts a kernel.
-- **Optimization contract:** the workload, correctness tolerance, timing boundary and success metric held fixed during a comparison.
+- **Benchmark configuration:** the workload, correctness tolerance, timed operations and success metric held fixed during a comparison.
 
 - **Amdahl bound:** the maximum end-to-end gain possible when only one fraction of the critical path is accelerated.
 - **Arithmetic intensity (AI):** work divided by data movement for the same boundary, expressed in FLOP/byte. An algorithmic estimate and a profiler's measured traffic are different quantities and must be labeled.
@@ -16,8 +16,8 @@
 - **Effective workload TFLOP/s:** declared useful floating-point operations divided by elapsed time. It is an application estimate, not hardware peak throughput or a count of all issued instructions.
 - **Exposed communication:** collective time that remains on the critical path after any useful overlap.
 - **Fusion:** combining operations so intermediate traffic or launch overhead is reduced.
-- **Good benchmark:** equivalent work measured with explicit correctness and timing boundaries.
-- **Graph break:** a point where compilation cannot keep a region in one captured graph, potentially reducing optimization scope.
+- **Good benchmark:** equivalent work measured with explicit correctness checks and specified timed operations.
+- **Graph break:** a point where PyTorch cannot represent code in one compiler graph and resumes Python execution. This is distinct from CUDA stream capture, although it can reduce optimization opportunities.
 - **Graph-private pool:** memory retained at stable virtual addresses for CUDA Graph capture and replay.
 - **Inactive split bytes:** allocator-reserved bytes in split blocks that are not currently serving a live allocation; useful fragmentation evidence only in context.
 - **Inductor:** PyTorch's default compiler backend for many `torch.compile` workflows.
@@ -35,7 +35,7 @@
 - **Roofline model:** a plot of achieved FLOP/s against arithmetic intensity with memory-bandwidth and compute ceilings. It classifies a measured kernel or boundary; it does not prove the end-to-end bottleneck.
 - **Speedup:** baseline time divided by candidate time for an equivalent declared boundary.
 - **Strong scaling:** adding ranks while total useful work remains fixed.
-- **Synchronization trap:** an operation that forces host/device or device/device completion and distorts a measurement or prevents overlap.
+- **Unnecessary synchronization:** a wait that delays submission or prevents useful overlap without being required at that point.
 - **Tail wave:** a final scheduling wave with fewer blocks than available execution slots.
 - **Throughput:** completed useful work per unit time, defined only after the unit and boundary are declared.
 - **Warm-up:** untimed execution used to exclude initialization, compilation, allocation, and cache setup according to a declared policy.
@@ -53,4 +53,4 @@
 - **Egress stream:** a CUDA stream dedicated here to copying completed GPU outputs toward the CPU.
 - **Backpressure:** a producer wait imposed when bounded slots are still owned by transfers or consumers.
 - **Drain:** completion of all required asynchronous work and consumers before a loop is declared complete.
-- **Pinned buffer:** host memory kept resident for suitable direct memory access; pinning and allocation have costs.
+- **Pinned buffer:** page-locked host memory used for asynchronous host/device transfers; pinning and allocation have costs.

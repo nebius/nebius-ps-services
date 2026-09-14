@@ -21,7 +21,7 @@
 - **SM90a:** architecture-accelerated Hopper target with non-forward-compatible features.
 - **Tail wave:** a final partially filled grid wave; its idle fraction depends on the remaining blocks and resource-limited capacity.
 - **TMA:** Tensor Memory Accelerator, which moves tensor regions asynchronously using a descriptor that specifies their layout and dimensions.
-- **Warp shuffle:** direct register exchange among participating lanes in one warp, with valid active masks and source lanes.
+- **Warp shuffle:** direct register exchange among participating lanes in one warp, with an explicit participation mask, matching calls by named non-exited threads, and valid participating source lanes.
 - **GEMM:** general matrix multiplication, commonly including alpha/beta scaling of the product and existing output.
 - **PTX / SASS:** intermediate GPU instruction representation / target-specific machine instructions.
 - **PTXAS:** CUDA assembler component that produces target device code and compiler resource reports.

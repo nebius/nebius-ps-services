@@ -1,7 +1,10 @@
 id,should_trigger,prompt
-sdlc-uat-positive-01,true,"Run whole-product user acceptance tests after all Agentic SDLC feature commits complete."
-sdlc-uat-positive-02,true,"Validate the full system in the confirmed safe live experiment environment before PR creation."
-sdlc-uat-positive-03,true,"Execute the declared product-level UAT harness for this completed SDLC run."
-sdlc-uat-negative-01,false,"Run unit tests for the current SDLC feature."
-sdlc-uat-negative-02,false,"Evaluate one acceptance criterion before feature commits are complete."
-sdlc-uat-negative-03,false,"Test production with an unapproved live workload."
+sdlc-uat-positive-01,true,Run whole-product user acceptance tests after all Agentic SDLC feature commits complete.
+sdlc-uat-positive-02,true,Validate the full system in the confirmed safe live experiment environment before PR creation.
+sdlc-uat-positive-03,true,Execute the declared product-level UAT harness for this completed SDLC run.
+sdlc-uat-negative-01,false,Run unit tests for the current SDLC feature.
+sdlc-uat-negative-02,false,Evaluate one acceptance criterion before feature commits are complete.
+sdlc-uat-negative-03,false,Test production with an unapproved live workload.
+sdlc-uat-tests-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-uat-tests for its assigned phase. Run whole-product user acceptance tests after all Agentic SDLC feature commits complete."
+sdlc-uat-tests-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-uat-tests for its assigned phase. Run whole-product user acceptance tests after all Agentic SDLC feature commits complete."
+sdlc-uat-tests-quoted-command,false,"Treat ""/skills:sdlc-uat-tests"" as sample text in this punctuation exercise; count its punctuation characters only."

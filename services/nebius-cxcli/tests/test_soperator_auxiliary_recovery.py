@@ -22,7 +22,12 @@ def fixture():
             "template": {
                 "spec": {
                     "containers": [
-                        {"name": AUXILIARY_CRONJOB, "image": "native", "command": ["native-script"]}
+                        {
+                            "name": AUXILIARY_CRONJOB,
+                            "image": "native",
+                            "command": ["native-script"],
+                            "volumeMounts": [{"name": "jail", "mountPath": "/mnt/jail"}],
+                        }
                     ],
                     "initContainers": [{"name": "munge", "image": "native-munge"}],
                     "volumes": [
@@ -127,6 +132,7 @@ def fixture():
         policy=SimpleNamespace(
             sha256="policy",
             auxiliary_pvc="active-jail",
+            auxiliary_spec=copy.deepcopy(cron["spec"]),
             execution_specs={"check": {"slurmClusterRefName": "lab"}},
         ),
         emit=lambda _: None,

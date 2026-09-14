@@ -32,7 +32,7 @@ For the optional FP8 extension in [Lab 22](22_transformer_engine_fp8.md), consid
 
 Given a BF16 baseline with finite gradients, run a warmed FP8 `te.autocast` region on matched inputs while retaining FP32 optimizer state. Change only the recipe and supported modules. Expected observation: selected GEMMs may use FP8 and activation bytes may fall, but loss/gradient/update tolerances, amax history, and kernel evidence—not the context manager alone—decide acceptance.
 
-Run Lab 21 and, after qualifying Transformer Engine, optional Lab 22. Each lab creates matched state and data within its own comparison. Lab 21 uses a tiny transformer while Lab 22 uses a Transformer Engine linear layer; their results are not a cross-lab matched-model comparison. Record each lab's numerical thresholds and timing boundary independently.
+Run Lab 21 and, after qualifying Transformer Engine, optional Lab 22. Each lab creates matched state and data within its own comparison. Lab 21 uses a tiny transformer while Lab 22 uses a Transformer Engine linear layer; their results are not a cross-lab matched-model comparison. Record each lab's numerical thresholds and included operations independently.
 
 ### Run the supplied experiment
 
@@ -52,7 +52,7 @@ Retain a dtype-by-state ledger, phase peaks, allocator statistics, and shape con
 
 Optimize the state that owns the actual peak rather than applying a generic memory technique.
 
-Record dtype ledger, recipe, warm-up, selected kernels, loss, gradient/update error, time, and memory.
+Record input, accumulation and output dtypes, recipe, warm-up, selected kernels, loss, gradient/update error, time, and memory.
 
 Accept precision only when the intended fast path runs and the training signal remains within declared tolerance.
 

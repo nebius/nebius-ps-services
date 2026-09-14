@@ -1,6 +1,6 @@
 interface:
   display_name: "Align Skill"
-  short_description: "Align Codex skills with lean guidance and evals"
-  default_prompt: "Use $align-skill to make this existing or scaffolded Codex skill lean, safe, and independently evaluable."
+  short_description: "Align portable skills while preserving behavior"
+  default_prompt: "Use $align-skill to align this existing skill for Agent Skills, Codex, Claude Code, and npx installation while preserving its functionality."
 policy:
   allow_implicit_invocation: true

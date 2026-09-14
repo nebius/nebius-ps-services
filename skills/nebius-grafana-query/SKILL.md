@@ -7,7 +7,7 @@ description: "Run read-only Nebius Grafana MCP queries for scoped dashboards, Pr
 
 ## Help
 
-For `$nebius-grafana-query --help` or `$nebius-grafana-query -h`, return concise help and stop before
+For `$nebius-grafana-query --help` or `$nebius-grafana-query -h` (including native Claude forms), return concise help and stop before
 any workflow step. State the purpose and invocation policy. Show exact usage
 for every public action. Describe each public action, positional
 argument, and flag in one concise line, including `-h, --help`; say "No
@@ -18,6 +18,15 @@ and that no standalone public workflow action exists. After the selected
 inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
+
+## Agent Compatibility
+
+Use `$nebius-grafana-query` in Codex, `/nebius-grafana-query` in Claude Code, or
+`/skills:nebius-grafana-query` in the Claude plugin. Dollar-prefixed skill examples
+refer to the same named skill on either host; use the native invocation syntax.
+Preserve the declared invocation policy, approvals and workflow ownership.
+Use available native tools; an unavailable required capability is a blocker,
+never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
@@ -220,7 +229,7 @@ URLs, customer data, raw logs, or one-off local state.
 
 Static validation and trigger evals prove the source contract. Do not claim
 runtime activation or live Grafana access unless it was observed in the target
-Codex session. Live queries require an explicit safe read-only target. Use
+agent session. Live queries require an explicit safe read-only target. Use
 frozen or mocked sanitized telemetry and tool traces for offline skill evals.
 
 ## Output Contract

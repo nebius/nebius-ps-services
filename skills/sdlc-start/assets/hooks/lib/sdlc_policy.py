@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .sdlc_state import (
+    CODEX_HOME,
     ActiveRun,
     detect_current_branch,
     detect_default_branch,
@@ -284,7 +285,7 @@ def is_sdlc_private_path(path: Path, active: ActiveRun | None = None) -> bool:
         if any(part in PRIVATE_STATE_PARTS for part in relative.parts):
             return True
         return resolved.name in PRIVATE_STATE_FILES or resolved.name.endswith(".lock")
-    home_sdlc = resolve_path(Path.home() / ".codex" / "sdlc-runs")
+    home_sdlc = resolve_path(CODEX_HOME / "sdlc-runs")
     if is_inside(resolved, home_sdlc):
         return True
     if active and is_inside(resolved, active.run_dir):

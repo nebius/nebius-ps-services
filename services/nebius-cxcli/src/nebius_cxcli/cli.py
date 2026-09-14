@@ -568,7 +568,6 @@ from .soperator_config_materialization import (
     _config_bool,
     _default_soperator_profile_name,
     _default_soperator_target_mode,
-    _external_mk8s_inputs_by_target,
     _mapping_path_value,
     _materialize_soperator_component_defaults,
     _materialize_soperator_nodeset_runtime_mounts,
@@ -717,7 +716,9 @@ from .soperator_jail_mounts import (
     apply_jail_persistent_mount_values,
     jail_persistent_mounts_from_paths,
     jail_rootfs_active_source,
+    validate_retained_home_layout,
 )
+from .soperator_login_keys import explicit_root_keys, prompt_root_keys
 from .soperator_operation import (
     SoperatorOperationAnchor,
     SoperatorOperationSpec,
@@ -12918,6 +12919,7 @@ def _configure_soperator_upgrade_persistent_paths(
     current_values = chart_row.get("values")
     if not isinstance(current_values, Mapping):
         raise RuntimeError("protected Soperator upgrade requires chart values for jail mounts")
+    validate_retained_home_layout(current_values)
     raw_mounts = current_values.get("jailPersistentMounts")
     current_rows = raw_mounts if isinstance(raw_mounts, list) else []
     current_rows_by_path = {
@@ -12954,7 +12956,7 @@ def _configure_soperator_upgrade_persistent_paths(
             required=False,
             missing="additional persistent data paths",
             prompt_hint=(
-                "optional data-only directories; /home, /data, /scripts, and /models "
+                "optional data-only directories; /home, /data, /scripts, /models, and /opt/soperator-home "
                 "are always protected"
             ),
         )
@@ -26501,105 +26503,6 @@ def _retarget_soperator_sfs_profile_defaults(
     return changed
 
 
-def _mk8s_inputs_by_target(payload: dict[str, Any]) -> dict[str, Mapping[str, Any]]:
-    inputs_by_target: dict[str, Mapping[str, Any]] = _external_mk8s_inputs_by_target(payload)
-    for row in _scope_rows(payload, scope="infra"):
-        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
-            continue
-        if component_type_id(row) != "mk8s":
-            continue
-        inputs = row.get("inputs")
-        if isinstance(inputs, Mapping):
-            inputs_by_target[component_instance_id(row)] = inputs
-    return inputs_by_target
-
-
-def _first_node_group_ssh_public_key(group: object) -> str:
-    if not isinstance(group, Mapping):
-        return ""
-    ssh = group.get("ssh")
-    if not isinstance(ssh, Mapping):
-        return ""
-    public_keys = ssh.get("public_keys")
-    if not isinstance(public_keys, list):
-        return ""
-    return next((_non_empty_text(key) for key in public_keys if _non_empty_text(key)), "")
-
-
-def _soperator_login_ssh_public_key_from_mk8s_inputs(
-    inputs: Mapping[str, Any],
-    *,
-    placements: Mapping[str, list[str]],
-) -> str:
-    node_groups = inputs.get("node_groups")
-    if not isinstance(node_groups, Mapping):
-        return ""
-
-    candidate_group_keys: list[str] = []
-    for group_key in placements.get("login", []):
-        if group_key and group_key not in candidate_group_keys:
-            candidate_group_keys.append(group_key)
-    if "login" not in candidate_group_keys:
-        candidate_group_keys.append("login")
-    candidate_group_keys.extend(
-        str(group_key) for group_key in node_groups if str(group_key) not in candidate_group_keys
-    )
-
-    for group_key in candidate_group_keys:
-        public_key = _first_node_group_ssh_public_key(node_groups.get(group_key))
-        if public_key:
-            return public_key
-    return ""
-
-
-def _seed_soperator_login_ssh_root_public_keys(
-    payload: dict[str, Any],
-    *,
-    app_identities: set[tuple[str, str]] | None = None,
-) -> bool:
-    mk8s_inputs_by_target = _mk8s_inputs_by_target(payload)
-    changed = False
-    for row in _scope_rows(payload, scope="apps"):
-        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
-            continue
-        if component_type_id(row) != _SOPERATOR_APP_ID:
-            continue
-        identity = (component_type_id(row), component_instance_id(row))
-        if app_identities is not None and identity not in app_identities:
-            continue
-        values = row.setdefault("values", {})
-        if not isinstance(values, dict):
-            continue
-        slurm_nodes = values.setdefault("slurmNodes", {})
-        if not isinstance(slurm_nodes, dict):
-            continue
-        login = slurm_nodes.setdefault("login", {})
-        if not isinstance(login, dict):
-            continue
-        existing_keys = login.get("sshRootPublicKeys")
-        if isinstance(existing_keys, list) and any(_non_empty_text(key) for key in existing_keys):
-            continue
-        if existing_keys not in (None, [], ""):
-            continue
-        target_ref = app_chart_target_ref(row) or component_instance_id(row)
-        public_key = _soperator_login_ssh_public_key_from_mk8s_inputs(
-            mk8s_inputs_by_target.get(target_ref, {}),
-            placements=_soperator_row_placements(row),
-        )
-        if not public_key:
-            continue
-        login["sshRootPublicKeys"] = [public_key]
-        changed = True
-    return changed
-
-
-def _materialize_create_soperator_component_defaults(payload: dict[str, Any]) -> bool:
-    changed = _materialize_soperator_component_defaults(payload)
-    if _seed_soperator_login_ssh_root_public_keys(payload):
-        changed = True
-    return changed
-
-
 def _enabled_component_add_label(
     *,
     payload: dict[str, Any],
@@ -32993,6 +32896,26 @@ def _prompt_scalar_override(
     prompt_hint: str | None = None,
     blank_text: str | None = None,
 ) -> tuple[object, bool]:
+    if path_label.endswith(".values.slurmNodes.login.sshRootPublicKeys"):
+        console.print(
+            "[dim]These keys authorize root on login pods. "
+            "Named users keep their upstream account configuration.[/dim]"
+        )
+        return prompt_root_keys(
+            current,
+            choose_action=lambda count: _prompt_choice_override(
+                path_label=path_label,
+                current="keep",
+                choices=[
+                    OptionChoice(value="keep", label=f"Keep all {count} configured root keys"),
+                    OptionChoice(value="replace", label="Select a replacement public key"),
+                    OptionChoice(value="disable", label="Disable root SSH keys (empty list)"),
+                ],
+                required=True,
+            ),
+            choose_key=lambda: _prompt_ssh_public_key_override(path_label, None, required=True),
+            backtrack=_WIZARD_BACKTRACK,
+        )
     if _is_ssh_public_key_prompt(path_label):
         return _prompt_ssh_public_key_override(
             path_label,
@@ -36509,6 +36432,12 @@ def _run_component_field_wizard(
                         full_path_label=full_path_label,
                     )
                 )
+                if (
+                    entry.id == _SOPERATOR_APP_ID
+                    and component_path is not None
+                    and full_path_label.endswith(".values.slurmNodes.login.sshRootPublicKeys")
+                ):
+                    current = explicit_root_keys(_get_payload_value(payload, component_path))
                 updated, should_stop = _prompt_scalar_override(
                     full_path_label,
                     current,
@@ -55865,7 +55794,7 @@ _create_project = ProjectCreationWorkflow(
         expand_soperator_app_selection=_expand_soperator_app_selection,
         expand_soperator_component_selection=_expand_soperator_component_selection,
         identity_values_from_payload=_identity_values_from_payload,
-        materialize_create_soperator_component_defaults=_materialize_create_soperator_component_defaults,
+        materialize_soperator_component_defaults=_materialize_soperator_component_defaults,
         materialize_mk8s_image_defaults=_materialize_mk8s_image_defaults,
         materialize_planned_vpc_binding_tokens=_materialize_planned_vpc_binding_tokens,
         materialize_singleton_provider_defaults=_materialize_singleton_provider_defaults,

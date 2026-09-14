@@ -28,7 +28,7 @@ Require `topology` and `all_reduce` correctness, world size two, and one H100 pe
 
 ## Investigate the behavior
 
-Write the invariants that must remain fixed in a later comparison: device variant, rank count, global work, dtype, environment, and timing boundary. Which of these would invalidate a direct baseline/candidate ratio if changed?
+Write the invariants that must remain fixed in a later comparison: device variant, rank count, global work, dtype, environment and timed operations. Which of these would invalidate a direct baseline/candidate ratio if changed?
 
 ## If something goes wrong
 

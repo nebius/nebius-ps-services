@@ -15,7 +15,12 @@ import yaml
 from .paths import ProjectPaths
 from .project_bundle_transaction import ProjectBundleTransaction
 from .soperator_adapter import _MOUNT_GATE_SCRIPT, _REST_JWT_CONFIG_GATE_SCRIPT
-from .soperator_checks_binding import CHECKS_RELEASE, bind_checks_jail, checks_post_renderers
+from .soperator_checks_binding import (
+    CHECKS_RELEASE,
+    bind_checks_jail,
+    checks_post_renderers,
+    retained_check_mounts,
+)
 from .soperator_checks_login import bind_checks_login
 from .soperator_flux_graph import _source_name
 from .soperator_install_render_repair import (
@@ -60,7 +65,7 @@ def checks_repair_candidate(previous: Mapping[str, bytes]) -> dict[str, bytes]:
     old = active.get("overrideValues") or {}
     if "jobContainer" in old:
         raise RuntimeError("Checks repair requires the proven missing global jail binding")
-    active["overrideValues"] = bind_checks_jail(old, pvc)
+    active["overrideValues"] = bind_checks_jail(old, pvc, retained_check_mounts(values))
     patches = outer[0]["spec"]["postRenderers"][0]["kustomize"]["patches"]
     rows = [row for row in patches if row.get("target", {}).get("name") == CHECKS_RELEASE]
     if len(rows) != 1:
@@ -69,7 +74,11 @@ def checks_repair_candidate(previous: Mapping[str, bytes]) -> dict[str, bytes]:
     if any(op.get("path") == "/spec/postRenderers" for op in operations):
         raise RuntimeError("Checks repair cannot overwrite an existing child postrenderer")
     operations.append(
-        {"op": "add", "path": "/spec/postRenderers", "value": checks_post_renderers(pvc)}
+        {
+            "op": "add",
+            "path": "/spec/postRenderers",
+            "value": checks_post_renderers(pvc, retained_check_mounts(values)),
+        }
     )
     rows[0]["patch"] = yaml.safe_dump(operations, sort_keys=False)
     outer[0]["spec"]["values"] = copy.deepcopy(values)

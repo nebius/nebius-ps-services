@@ -22,6 +22,110 @@ import sys
 import tomllib
 
 
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+
+
 REQUIRED_AGENT_NAMES = ("repo_mapper", "test_strategist", "risk_reviewer")
 REQUIRED_MAX_CONCURRENT_THREADS_PER_SESSION = 16
 MANAGED_BEGIN = "<!-- BEGIN config-codex managed context -->"
@@ -77,6 +181,10 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     ),
 )
 TEMPLATE_ASSETS = {
+    "hooks/task_state_permissions.py": "../../global-context-management/scripts/task_state_permissions.py",
+    "hooks/trusted_runtime.py": "../../global-context-management/scripts/trusted_runtime.py",
+    "hooks/agent_runtime.py": "../../global-context-management/scripts/agent_runtime.py",
+    "hooks/hook_runtime.py": "../../global-context-management/scripts/hook_runtime.py",
     "hooks/global_context_state.py": "hooks/global_context_state.py.template",
     "hooks/session_start_context.py": "hooks/session_start_context.py.template",
     "hooks/user_prompt_context.py": "hooks/user_prompt_context.py.template",
@@ -818,24 +926,18 @@ def check_runtime_files(codex_home: Path, failures: list[str]) -> None:
     else:
         fail(f"task-state directory mode is {oct(mode)}, expected 0o700", failures)
 
-    helper = codex_home / "hooks/global_context_state.py"
-    if helper.is_file():
-        audit = subprocess.run(
-            [
-                sys.executable,
-                str(helper),
-                "--codex-home",
-                str(codex_home),
-                "audit-permissions",
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if audit.returncode == 0:
-            ok("nested task-state permissions and types are private")
-        else:
+    try:
+        permission_module = _load_skill_support(
+            "permissions", __file__, "config-codex/scripts/check-local-idempotency.py",
+            source_only=True,
+        )["task_state_permissions"]
+        audit = permission_module.permission_audit(codex_home, repair=False)
+        if audit["unsafe"]:
             fail("nested task-state permissions or types are unsafe", failures)
+        else:
+            ok("nested task-state permissions and types are private")
+    except (ImportError, OSError, ValueError):
+        fail("reviewed source task-state permission audit is unavailable", failures)
 
     policy = codex_home / "hooks/global_context_policy.json"
     if policy.exists():
@@ -880,6 +982,20 @@ def check_hooks_json(codex_home: Path, failures: list[str]) -> None:
         fail("hooks.json.template hooks table is missing", failures)
         return
 
+    try:
+        project_hook_entries = _load_skill_support(
+            "projector", __file__, "config-codex/scripts/check-local-idempotency.py",
+            source_only=True,
+        )["hook_runtime"].project_hook_entries
+    except (ImportError, OSError, ValueError):
+        fail("reviewed source hook projection cannot be loaded", failures)
+        return
+    try:
+        expected_hooks = project_hook_entries(expected_hooks, codex_home, "codex")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        fail("hooks.json.template hook entries are invalid", failures)
+        return
+
     for event_name, expected_entries in sorted(expected_hooks.items()):
         actual_entries = actual_hooks.get(event_name)
         if not isinstance(expected_entries, list) or not expected_entries:
@@ -890,8 +1006,17 @@ def check_hooks_json(codex_home: Path, failures: list[str]) -> None:
                 f"hooks.json missing required {event_name} hook registration", failures
             )
             continue
+        normalized_entries = []
+        for entry in actual_entries:
+            try:
+                normalized_entries.extend(project_hook_entries(
+                    {event_name: [entry]}, codex_home, "codex"
+                )[event_name])
+            except (AttributeError, KeyError, TypeError, ValueError):
+                # Unrelated malformed entries cannot satisfy a required entry.
+                continue
         for expected_entry in expected_entries:
-            if expected_entry in actual_entries:
+            if expected_entry in normalized_entries:
                 ok(f"hooks.json includes required {event_name} hook registration")
             else:
                 fail(

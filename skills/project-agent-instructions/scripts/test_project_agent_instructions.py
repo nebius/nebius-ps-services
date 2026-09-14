@@ -159,10 +159,10 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         self.repo = self.root / "repo"
         self.private = self.root / "private"
-        self.codex_home = self.root / "codex-home"
+        self.agent_home = self.root / "codex-home"
         self.repo.mkdir()
         self.private.mkdir()
-        self.codex_home.mkdir()
+        self.agent_home.mkdir()
         os.chmod(self.private, 0o700)
         subprocess.run(
             ["git", "init", "-q", "-b", "feature/test"], cwd=self.repo, check=True
@@ -345,16 +345,120 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         *,
         project: Optional[Path] = None,
         runtime_config: Optional[Path] = None,
+        agent: str = "codex",
     ) -> dict[str, object]:
         return discovery._manifest(
             project or self.repo,
             "maintain-project-specs",
             "docs/requirements.md",
             "docs/design.md",
-            self.codex_home,
+            self.agent_home,
             self.receipt_path,
             runtime_config or self.runtime_path,
+            agent=agent,
         )
+
+    def test_claude_import_discovery_and_replay_preserve_target_ownership(self) -> None:
+        from project_agent_instructions_lib import claude_discovery
+        import hashlib
+
+        bridge = self.repo / "CLAUDE.md"
+        bridge.write_text("See @AGENTS.md for shared instructions.\n" + "Long native context. " * 250, encoding="utf-8")
+        subprocess.run(["git", "add", "CLAUDE.md"], cwd=self.repo, check=True)
+        private_note = self.repo / "CLAUDE.local.md"
+        private_note.write_text("Private local rule\n")
+        (self.repo / ".gitignore").write_text("CLAUDE.local.md\n")
+        runtime = self.write_json("claude-runtime.json", {
+            "schema": claude_discovery.SCHEMA,
+            "session_sha256": hashlib.sha256(b"native-session").hexdigest(),
+            "instruction_files": [{"path": str(bridge), "sha256": contracts._sha256_bytes(bridge.read_bytes())},
+                                  {"path": str(private_note), "sha256": contracts._sha256_bytes(private_note.read_bytes())}],
+            "settings_files": [],
+        })
+        with mock.patch.dict(os.environ, {"SKILLS_AGENT": "claude", "SKILLS_SESSION_ID": "native-session"}):
+            os.environ.pop("CODEX_THREAD_ID", None)
+            manifest = self.inspect(agent="claude", runtime_config=runtime)
+            contracts._validate_manifest_shape(manifest)
+            self.assertEqual(workflow._recorded_agent(manifest), "claude")
+            self.assertEqual(manifest["generated_body_max_bytes"], contracts.MAX_BODY_BYTES)
+            self.assertEqual(manifest["target"]["path"], str(self.repo / "AGENTS.md"))
+            self.assertEqual(workflow._fresh_manifest(manifest), manifest)
+            (self.repo / "AGENTS.md").write_text("# Existing project rules\n")
+            subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+            changed = workflow._fresh_manifest(manifest)
+            self.assertEqual(manifest["config_context"], changed["config_context"])
+            self.assertEqual(manifest["ancestor_project_instructions"], changed["ancestor_project_instructions"])
+            self.assertNotEqual(manifest["target"], changed["target"])
+            (self.repo / "AGENTS.md").write_text("See @docs/policy.md for local policy.\n")
+            with self.assertRaises(contracts.ProjectInstructionsError):
+                workflow._fresh_manifest(manifest)
+            (self.repo / "AGENTS.md").write_text("# Existing project rules\n")
+            bridge.write_text("@AGENTS.md\nSee @docs/policy.md for local policy.\n")
+            runtime_value = json.loads(runtime.read_text())
+            runtime_value["instruction_files"][0]["sha256"] = contracts._sha256_bytes(bridge.read_bytes())
+            runtime.write_text(json.dumps(runtime_value))
+            with self.assertRaises(contracts.ProjectInstructionsError):
+                self.inspect(agent="claude", runtime_config=runtime)
+            bridge.write_text("@OTHER.md\n")
+            with self.assertRaises(contracts.ProjectInstructionsError):
+                workflow._fresh_manifest(manifest)
+
+    def test_claude_create_verify_and_approved_retirement_preserve_bridge(self) -> None:
+        from project_agent_instructions_lib import claude_discovery
+        import hashlib
+
+        bridge = self.repo / "CLAUDE.md"
+        bridge.write_text("See @AGENTS.md for shared project rules.\n")
+        subprocess.run(["git", "add", "CLAUDE.md"], cwd=self.repo, check=True)
+        before = bridge.read_bytes()
+        runtime = self.write_json("claude-runtime.json", {
+            "schema": claude_discovery.SCHEMA,
+            "session_sha256": hashlib.sha256(b"native-session").hexdigest(),
+            "instruction_files": [{"path": str(bridge), "sha256": contracts._sha256_bytes(before)}],
+            "settings_files": [],
+        })
+        with mock.patch.dict(os.environ, {"SKILLS_AGENT": "claude", "SKILLS_SESSION_ID": "native-session"}):
+            os.environ.pop("CODEX_THREAD_ID", None)
+            initial = self.inspect(agent="claude", runtime_config=runtime)
+            self.assertEqual(self.apply(initial, self.decision(initial, "needed"))["outcome"], "created")
+            target = self.repo / "AGENTS.md"
+            self.assertIsNotNone(contracts._parse_generated(target.read_bytes()))
+            self.assertEqual(workflow.verify_state(self.private / "state.json", self.private)["outcome"], "created")
+            current = self.inspect(agent="claude", runtime_config=runtime)
+            with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+                self.apply(current, self.decision(current, "not-needed"))
+            self.assertEqual(caught.exception.code, "RETIREMENT_APPROVAL_REQUIRED")
+            decision = self.decision(current, "not-needed", approval={
+                "action": "retire", "target_sha256": str(current["target"]["sha256"]),
+            })
+            self.assertEqual(self.apply(current, decision)["outcome"], "retired")
+            self.assertFalse(target.exists())
+            self.assertEqual(workflow.verify_state(self.private / "state.json", self.private)["outcome"], "retired")
+            self.assertEqual(bridge.read_bytes(), before)
+
+    def test_claude_discovery_rejects_missing_import_or_stale_identity(self) -> None:
+        from project_agent_instructions_lib import claude_discovery
+        import hashlib
+
+        runtime = self.write_json("claude-runtime.json", {
+            "schema": claude_discovery.SCHEMA,
+            "session_sha256": hashlib.sha256(b"native-session").hexdigest(),
+            "instruction_files": [], "settings_files": [],
+        })
+        for session in ("native-session", "different-session"):
+            with self.subTest(session=session), mock.patch.dict(os.environ, {"SKILLS_AGENT": "claude", "SKILLS_SESSION_ID": session}):
+                os.environ.pop("CODEX_THREAD_ID", None)
+                with self.assertRaises(contracts.ProjectInstructionsError):
+                    self.inspect(agent="claude", runtime_config=runtime)
+
+    def test_claude_import_parser_preserves_mixed_fence_boundaries(self):
+        from project_agent_instructions_lib.claude_discovery import imports
+        text = "```text\n~~~\n@ignored.md\n```\nSee @real.md below.\n`@inline-code.md`\n<!-- @comment.md -->\n"
+        self.assertEqual(imports(text), ["real.md"])
+        self.assertEqual(imports("``code ` @ignored.md`` and @real.md"), ["real.md"])
+        self.assertEqual(imports("`<!--`\nSee @real.md"), ["real.md"])
+        self.assertEqual(imports("```html\n<!--\n```\nSee @real.md"), ["real.md"])
+        self.assertEqual(imports("<!--\n```\n@ignored.md\n-->\nSee @real.md"), ["real.md"])
 
     def evidence(self, project: Optional[Path] = None) -> list[dict[str, str]]:
         selected = project or self.repo
@@ -513,7 +617,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
     def test_render_is_deterministic_and_does_not_copy_global_instructions(
         self,
     ) -> None:
-        (self.codex_home / "AGENTS.md").write_text(
+        (self.agent_home / "AGENTS.md").write_text(
             "# Global\n\n- Do not preserve backward compatibility by default.\n",
             encoding="utf-8",
         )
@@ -2555,10 +2659,10 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
                 self.apply(manifest, decision)
 
     def test_layered_profile_and_runtime_overrides_are_fingerprinted(self) -> None:
-        (self.codex_home / "config.toml").write_text(
+        (self.agent_home / "config.toml").write_text(
             "project_doc_max_bytes = 8000\n", encoding="utf-8"
         )
-        profile = self.codex_home / "small.config.toml"
+        profile = self.agent_home / "small.config.toml"
         profile.write_text("project_doc_max_bytes = 7000\n", encoding="utf-8")
         base_manifest = self.inspect()
         self.assertEqual(
@@ -2579,7 +2683,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(
             [Path(item["path"]).resolve() for item in config["sources"]],
             [
-                (self.codex_home / "config.toml").resolve(),
+                (self.agent_home / "config.toml").resolve(),
                 profile.resolve(),
                 runtime.resolve(),
             ],
@@ -2594,7 +2698,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
 
     def test_trusted_project_config_overrides_user_config_in_order(self) -> None:
-        (self.codex_home / "config.toml").write_text(
+        (self.agent_home / "config.toml").write_text(
             f'[projects."{self.repo}"]\ntrust_level = "trusted"\n'
             "project_doc_max_bytes = 9000\n",
             encoding="utf-8",
@@ -2608,7 +2712,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(
             [Path(item["path"]).resolve() for item in config["sources"]],
             [
-                (self.codex_home / "config.toml").resolve(),
+                (self.agent_home / "config.toml").resolve(),
                 project_config.resolve(),
                 self.runtime_path.resolve(),
             ],
@@ -2646,11 +2750,11 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         )
 
     def test_config_change_after_inspect_blocks_apply(self) -> None:
-        (self.codex_home / "config.toml").write_text(
+        (self.agent_home / "config.toml").write_text(
             "project_doc_max_bytes = 9000\n", encoding="utf-8"
         )
         manifest = self.inspect()
-        (self.codex_home / "config.toml").write_text(
+        (self.agent_home / "config.toml").write_text(
             "project_doc_max_bytes = 8000\n", encoding="utf-8"
         )
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
@@ -2873,7 +2977,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
                 self.apply(manifest, changed_decision)
 
     def test_symlinked_project_config_directory_is_rejected(self) -> None:
-        (self.codex_home / "config.toml").write_text(
+        (self.agent_home / "config.toml").write_text(
             f'[projects."{self.repo}"]\ntrust_level = "trusted"\n',
             encoding="utf-8",
         )
@@ -2928,8 +3032,9 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
                 str(self.repo),
                 "--spec-owner",
                 "maintain-project-specs",
-                "--codex-home",
-                str(self.codex_home),
+                "--agent", "codex",
+                "--agent-home",
+                str(self.agent_home),
                 "--private-root",
                 str(self.private),
                 "--spec-receipt",
@@ -2970,8 +3075,9 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
                 str(self.repo),
                 "--spec-owner",
                 "maintain-project-specs",
-                "--codex-home",
-                str(self.codex_home),
+                "--agent", "codex",
+                "--agent-home",
+                str(self.agent_home),
                 "--private-root",
                 str(current_private),
                 "--spec-receipt",
@@ -2994,7 +3100,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         )
         self.assertTrue((current_private / "ownership.json").exists())
 
-    def test_cli_inspect_requires_explicit_codex_home(self) -> None:
+    def test_cli_inspect_requires_explicit_agent_home(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,
@@ -3019,7 +3125,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
         self.assertEqual(result.returncode, 2)
-        self.assertIn("--codex-home", result.stderr)
+        self.assertIn("--agent-home", result.stderr)
 
 
 if __name__ == "__main__":

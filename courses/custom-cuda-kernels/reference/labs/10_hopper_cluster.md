@@ -50,7 +50,7 @@ Avoid shipping an `sm_90a`-dependent binary as though it were forward-compatible
 
 ## Takeaways and next step
 
-Advanced hardware features need separately scoped activation and correctness evidence. Add one real cluster-shared or TMA operation only after defining a portable reference, synchronization contract, resource report, and matched timing boundary.
+Advanced hardware features need separately scoped activation and correctness evidence. Add one real cluster-shared or TMA operation only after defining a portable reference, synchronization contract, resource report, and the same timed operations.
 
 Keep the advanced target isolated and provide a correct portable path.
 

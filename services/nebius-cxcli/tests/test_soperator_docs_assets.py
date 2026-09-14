@@ -94,6 +94,7 @@ def test_soperator_svg_semantics_match_current_upgrade_and_rootfs_contracts() ->
         "Target-wins admission",
         "no source/reference comparison",
         "/data · /home · /models · /scripts",
+        "/opt/soperator-home",
         "physical SFS (canonical)",
         "VM-NFS (optional)",
         "exact unconsumed inactive slot",
